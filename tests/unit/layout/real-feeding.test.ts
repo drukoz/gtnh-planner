@@ -233,17 +233,24 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
     // kinds or more, so R5a, R5d, R6, R5c and R2 have nothing to find. What stops each line is research C19 as the plan's E6
     // reads Project Red: an empty machine with Multi Stack Input Off is credited a stack per empty slot, so a kind the input
     // chest sends (a stack an act, from stock) overshoots it; the overshoot circles its pipe and stays counted on its way there,
-    // and the responder then answers for the other kinds with no room: they never come (until a restart). So every machine fed
-    // two kinds or more, one of them from the input chest, starves of one kind while another circles.
+    // and the responder then answers for the other kinds with no room: they never come (until a restart). So every basic machine
+    // fed two kinds or more, one of them from the input chest, starves of one kind while another circles. C19 is for basic
+    // machines with Multi Stack Input Off: a multiblock fed through an input bus (an Electric Blast Furnace) is another case, so
+    // a machine that is not basic is left out and logged by its mteId (12 x 17 T1).
     for (const line of of('routed')) {
       const { report, model } = line.main;
       expect(report.findings.filter((f) => f.phase === 'static').map((f) => brief(model, f)), `${line.name}: static findings`).toEqual([]);
       expect(model.unknowns.filter((u) => u.code === 'routed_text' || u.code === 'extractor_new').map((u) => u.code), `${line.name}: chips read from text`).toEqual([]);
       const steady = inScenario(report, 'steady');
       let deadlocked = 0;
+      const skipped: string[] = [];
       for (const node of machines(model)) {
         const kinds = kindsOf(line.plan, node);
         if (kinds.length < 2 || !fromChest(model, node).some((k) => kinds.includes(k))) continue;
+        if (node.kind !== 'basic') {
+          skipped.push(`${node.kind} mteId ${node.mteId}`);
+          continue;
+        }
         deadlocked++;
         const starved = steady.filter((f) => f.code === 'feed_starved' && f.machine === node.label && kinds.includes(f.key!)).map((f) => f.key);
         const circling = steady.filter((f) => f.code === 'feed_churn' && f.machine === node.label && kinds.includes(f.key!)).map((f) => f.key);
@@ -251,9 +258,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
         expect(circling.length, `${line.name}: ${who(model, node)} has the first kind's overshoot circling its pipe`).toBeGreaterThan(0);
         expect(itemIds(model, starved.filter((k) => circling.includes(k))), `${line.name}: ${who(model, node)} starves of another kind than the one that circles`).toEqual([]);
       }
-      // every line has one (red-alloy its two Alloy Smelters, motor-lv its Chemical Reactor, vacuum-tube its Mixer and Electric
-      // Blast Furnaces, the Electronic Circuit lines their Alloy Smelter), so no line makes its product, and every one fails the gate
-      expect(deadlocked, `${line.name}: machines fed two kinds or more, one from the input chest`).toBeGreaterThan(0);
+      if (skipped.length > 0) {
+        console.log(`real-feeding ${line.name} routed: ${machinesText(skipped.length)} fed two kinds or more, one from the input chest, not basic (C19 not checked): ${skipped.join(', ')}`);
+      }
+      // every line has one (red-alloy its two Alloy Smelters, motor-lv its Chemical Reactor, vacuum-tube its Mixer, the
+      // Electronic Circuit lines their Alloy Smelter), so no line makes its product, and every one fails the gate
+      expect(deadlocked, `${line.name}: basic machines fed two kinds or more, one from the input chest`).toBeGreaterThan(0);
       const product = productOf(line.plan);
       expect(report.scenarios.find((s) => s.name === 'steady')!.out[product.key] ?? 0, `${line.name}: its product out`).toBe(0);
       expect(report.ok, `${line.name}: ok`).toBe(false);
@@ -307,13 +317,17 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding checker on the rese
       }
 
       // the job: AE2 cannot plan only a request whose item comes only by chance (a by-product that no pattern of whole, guaranteed
-      // outputs lists), and that request alone is left out. The Electronic Circuit lines' Sticky Resin is one: their product's
-      // bench takes it with crafting automated, the Resistors made by hand without (compared, not printed: a reason names items)
+      // outputs lists), and that request alone is left out (compared, not printed: a reason names items). The Electronic Circuit
+      // line made by hand hands its centrifuges' Sticky Resin to the Resistors it makes by hand, a request of its own, so Sticky
+      // Resin is left out. With crafting automated the line's one request, its product, is left out on the first such item its
+      // planning meets: its Sticky Resin with farm kinds off, its Carbon Dust with add-on 17's farms on (12 x 17 T1). A farm's
+      // own Sticky Resin goes to sink (12 x 17 F5), so ME holds none either way.
       const cannot = [...new Set(steady.map((f) => /the AE2 job cannot be planned: (.*)$/.exec(f.text)?.[1]).filter((x) => x !== undefined))];
       const lacking = cannot.map((why) => /^nothing makes (.*) and ME holds none$/.exec(why)?.[1]);
       const byChance = new Set(machines(model).flatMap((n) => n.recipes.flatMap((r) => r.outputs.filter((o) => o.chance < 1).map((o) => model.nameOf(o.key)))));
       expect(lacking.every((name) => name !== undefined && byChance.has(name)), `${line.name}: ${cannot.length} unplanned requests, each an item made only by chance`).toBe(true);
-      expect(lacking.includes(model.nameOf(STICKY_RESIN)), `${line.name}: Sticky Resin unplanned`).toBe(line.name === 'ec-user' || line.name === 'ec-user-auto');
+      if (line.name === 'ec-user-auto') expect(lacking.length, 'ec-user-auto: its one request left out').toBe(1);
+      else expect(lacking.includes(model.nameOf(STICKY_RESIN)), `${line.name}: Sticky Resin unplanned`).toBe(line.name === 'ec-user');
       // by hand, the line's other requests are planned and pushed: some machine runs
       if (line.name === 'ec-user') expect(Object.values(made.runs).some((n) => n > 0), 'ec-user: a machine the job pushes into runs').toBe(true);
       // with crafting automated, the line's one request (its product) needs it, and then nothing is pushed anywhere

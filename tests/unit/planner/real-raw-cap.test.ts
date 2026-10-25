@@ -14,6 +14,7 @@ import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanSettings } from '../../../src/shared/types/plan.ts';
 
@@ -36,6 +37,8 @@ const BEYOND_STOCK_PER_DAY = 1000;
 const PLAN_SECONDS = 5;
 /** The machines the user's poly plan reuses (the live scan's): Steam Separator, Advanced Compressor, Basic Chemical Reactor, Pyrolyse Oven. */
 const POLY_OWNED = [{ mteId: 31080, count: 1 }, { mteId: 242, count: 1 }, { mteId: 421, count: 1 }, { mteId: 15546, count: 1 }];
+/** Add-on 17's farms off (its ruling S15: an expectation its farms change keeps its subject, its farms-on plan logged beside it). */
+const FARMS_OFF = { ...defaultFarmSettings(), kinds: [] };
 
 const poly = (more: Partial<PlanSettings> = {}): PlanSettings => ({
   ...defaultSettings(), target: MOLTEN_POLYETHYLENE, amount: 1, per: 'min', tier: 3, logistics: 'enderio', ownedManual: POLY_OWNED, ...more,
@@ -84,10 +87,14 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the raw cap on the real 2.9 exp
 
   it("keeps the user's poly line on Rubber Wood at Least raw material and at Fewest machines: its leanest line, not its least raw material", async () => {
     for (const stepCharge of [0, 0.5]) {
-      const plan = await planLine(pack, poly({ stepCharge }), emptyContext());
+      // Farms off (add-on 17 ruling S15): with them on, the default, S1 is 0 with a farm column, so Acacia and Rubber Wood
+      // tie; that plan is logged.
+      const plan = await planLine(pack, poly({ stepCharge, farms: FARMS_OFF }), emptyContext());
       console.log(line(`poly at ${stepCharge}`, plan));
+      const on = await planLine(pack, poly({ stepCharge, farms: defaultFarmSettings() }), emptyContext());
+      console.log(line(`poly at ${stepCharge}, farms on (S15: Acacia and Rubber Wood tie when S1 is 0 with a farm column, logged)`, on));
       expect(plan.status).toBe('ok');
-      // The user's acceptance of owned steps (ledger 265, controller OQ24): near 4–5 steps, reuse on (no farms on this branch).
+      // The user's acceptance of owned steps (ledger 265, controller OQ24): near 4–5 steps, reuse on (farms off, S15).
       expect(plan.steps.length).toBeGreaterThanOrEqual(4);
       expect(plan.steps.length).toBeLessThanOrEqual(5);
       expect(plan.rawInputs.map((r) => r.key)).toEqual([RUBBER_WOOD]);

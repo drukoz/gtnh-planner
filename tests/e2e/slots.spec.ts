@@ -95,7 +95,9 @@ test('a slot in the materials list is veiled under the pointer, and sits centred
 
 test('the icons of the Flow diagram stay bare 16px images, not framed slots', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Flow slots', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 });
+  // No limit: at the default +25 % cap the line makes its plates two ways on purpose (plan.spec.ts's 4-step pin); this test
+  // only needs a drawn diagram (fix wave 3 (A)).
+  await createProject(page, 'Flow slots', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1, rawCap: null });
   await expect(page.locator('svg [data-step-id]')).toHaveCount(3);
   const icons = page.locator('svg.flow-canvas foreignObject .item-icon');
   await expect(icons.first()).toBeVisible();

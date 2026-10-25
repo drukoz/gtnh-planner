@@ -25,6 +25,7 @@ import { emptyContext, obtainableIn, planLine } from '../../../src/server/planne
 import { tierName } from '../../../src/shared/gt/tiers.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type Plan, type PlanSettings, type PlanStep } from '../../../src/shared/types/plan.ts';
 
@@ -132,6 +133,16 @@ const COLD_PRICES_PLAN_SECONDS = 11;
 const EC_MV_MAX_STEPS = 41;    // 36 steps
 const GEC_HV_MAX_STEPS = 56;   // 51 steps
 const STEEL_MV_MAX_STEPS = 14; // 9 steps at default settings, the cast iron made from ore too
+/**
+ * The LV Machine Hull's steps with farms on, measured on the integrated planner (add-on 12 × 17), where the raw cap's
+ * leanest line counts the farms the group could build (the user's ruling U1): 12, its Steel Ingot made two ways (a full
+ * Bricked Blast Furnace), against 11 with farms off; its leanest line 27.040404 against 27.707071 raw a minute. On ab850b8
+ * the cap forced a farm and its chain (26 steps, leanest 10.93); 12 x 17 F2 (a farm-made leaf starts no second estimate
+ * pass) no longer walks that route.
+ */
+const LV_HULL_FARMS_ON_MAX_STEPS = 12;
+/** Add-on 17's farms off (its ruling S15: an expectation its farms change keeps its subject, its farms-on plan logged beside it). */
+const FARMS_OFF = { ...defaultFarmSettings(), kinds: [] };
 
 const perMinute = (plan: Plan, key: string): number => 60 * (plan.rawInputs.find((r) => r.key === key)?.perSecond ?? 0);
 
@@ -206,6 +217,18 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     const expanded = await expandBomLines(pack, topLines(p), { ...defaultSettings(), per: 'min', ...s }, emptyContext());
     expect(expanded.totals).toEqual(p.buildTotals);
   };
+  /**
+   * A case whose expectations add-on 17's farms change keeps its subject with farms off (its ruling S15); this plans `s` with
+   * farms on, the default, first, as the case planned it, logs it with `why`, and holds its plan time to the case's `limit`
+   * (12 x 17 F2: plan times are judged with farms on).
+   */
+  const farmsOnLogged = async (name: string, why: string, s: Partial<PlanSettings>, limit: number): Promise<Plan> => {
+    const { plan: p, seconds } = await plan({ ...s, farms: defaultFarmSettings() });
+    console.log(`real-acceptance ${name} farms on (${why}, logged): ${p.status}, ${p.steps.length} steps (${p.steps.filter((st) => st.farm !== undefined).length} farm), `
+      + `${seconds.toFixed(2)} s; raw ${p.rawInputs.map((r) => r.key).join(' ')}`);
+    expect(seconds, `${name} with farms on`).toBeLessThan(limit);
+    return p;
+  };
   /** The recipes of the export that make a net amount of `key`, by id (a swap list's "ways", plan 09). */
   const makersOf = (key: string): string[] => {
     const ids = new Set<string>();
@@ -225,7 +248,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 120_000);
 
   it(`plans 1 Electronic Circuit a minute at MV from ordinary materials, in under ${EC_MV_MAX_STEPS} steps and ${BUILD_COST_PLAN_SECONDS} s`, async () => {
-    const settings = { target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2 };
+    // Farms off (add-on 17 ruling S15): with them on, the default, the line plants a crop farm, and a farm step's swap list
+    // holds the export's recipes only (add-on 17 ruling S5), never its own.
+    const settings = { target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2, farms: FARMS_OFF };
+    await farmsOnLogged('Electronic Circuit MV', "S15: a farm step's swap list holds the export's recipes only", settings, BUILD_COST_PLAN_SECONDS);
     const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, BUILD_COST_PLAN_SECONDS, EC_MV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
@@ -317,8 +343,11 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // Before fix wave 3 (C) the line etched its Good Circuit Board in a chemical reactor with Iron III Chloride. With
     // byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their price it crafts the board from gold
     // wire on an Auto Workbench, in 49 steps, and makes no Iron III Chloride (real-build-cost.test.ts plans the line with
-    // build cost counted).
-    const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, buildHorizonHours: null };
+    // build cost counted). Farms off (add-on 17 ruling S15): with them on, the default, the line plants a crop farm, and a
+    // farm step's swap list holds the export's recipes only (add-on 17 ruling S5), never its own.
+    const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, buildHorizonHours: null, farms: FARMS_OFF };
+    await farmsOnLogged('Good Electronic Circuit HV x2, build cost ignored', "S15: a farm step's swap list holds the export's recipes only", settings,
+      COLD_PRICES_PLAN_SECONDS);
     const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, COLD_PRICES_PLAN_SECONDS, GEC_HV_MAX_STEPS);
     await expectSameBreakdown(p, settings);
@@ -348,7 +377,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 60_000);
 
   it("follows GTNH's own Electronic Circuit recipe when the group pins it: red alloy, vacuum tubes from sand glass, steel", async () => {
-    const { plan: p, seconds } = await plan({ target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2, recipeChoice: { [ELECTRONIC_CIRCUIT]: EC_CIRCUIT_ASSEMBLER } });
+    // Farms off (add-on 17 ruling S15): with them on, the default, the line plants a crop farm, and a farm step's swap list
+    // holds the export's recipes only (add-on 17 ruling S5), never its own; before 12 x 17 F2 the farm walk also widened the
+    // graph so that the line bought Magnesium (@2018) and Certus Quartz Dust (@2516). The farms-on plan's bought keys are logged.
+    const settings = { target: ELECTRONIC_CIRCUIT, amount: 1, tier: 2, recipeChoice: { [ELECTRONIC_CIRCUIT]: EC_CIRCUIT_ASSEMBLER }, farms: FARMS_OFF };
+    await farmsOnLogged('pinned Electronic Circuit MV', "S15: a farm step's swap list holds the export's recipes only", settings, BUILD_COST_PLAN_SECONDS);
+    const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, BUILD_COST_PLAN_SECONDS, 40);
     expect(indexPlan(p).issues).toEqual([]);
     expect(p.steps.find((s) => s.mainOutput === ELECTRONIC_CIRCUIT)?.recipeId).toBe(EC_CIRCUIT_ASSEMBLER);
@@ -363,7 +397,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 60_000);
 
   it('plans an LV Machine Hull at LV on LV machines: 8 steel plates, tin cable', async () => {
-    const settings = { target: LV_MACHINE_HULL, amount: 1, tier: 1 };
+    // Farms off (add-on 17 ruling S15). With farms on, the default, the raw cap's leanest line counts the farms the group
+    // could build (the user's ruling U1): that line is held to its measured steps, its leanest line leaner than the
+    // farms-off line's (LV_HULL_FARMS_ON_MAX_STEPS).
+    const settings = { target: LV_MACHINE_HULL, amount: 1, tier: 1, farms: FARMS_OFF };
+    const on = await farmsOnLogged('LV Machine Hull', 'U1: the leanest line counts the farms the group could build, so the +25 % cap is measured against it',
+      settings, BUILD_COST_PLAN_SECONDS);
     const { plan: p, seconds } = await plan(settings);
     expectSane(p, seconds, BUILD_COST_PLAN_SECONDS, 12);
     await expectSameBreakdown(p, settings);
@@ -373,6 +412,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     expect(casing?.inputs.filter((i) => i.key === STEEL_PLATE).reduce((n, i) => n + i.amount, 0)).toBe(8);
     expect(takenPerMinute(p, STEEL_PLATE)).toBeGreaterThanOrEqual(8 - 1e-6);
     expect(perMinute(p, 'gregtech:gt.metaitem.01@11057')).toBeGreaterThan(0);
+    // U1, farms on: it also bounds what U1 costs (the measure-then-pin rule).
+    const [leanOn, leanOff] = [on.rawCost?.leanestPerSecond, p.rawCost?.leanestPerSecond];
+    console.log(`real-acceptance LV Machine Hull farms on (U1: the leanest line counts the farms the group could build): ${on.steps.length} steps against ${p.steps.length}, `
+      + `leanest ${leanOn === undefined ? '-' : (leanOn * 60).toFixed(6)} against ${leanOff === undefined ? '-' : (leanOff * 60).toFixed(6)} raw a minute farms off`);
+    expect(on.status, JSON.stringify(on.warnings)).toBe('ok');
+    expect(on.steps.length).toBeLessThanOrEqual(LV_HULL_FARMS_ON_MAX_STEPS);
+    expect(leanOn as number).toBeLessThan(leanOff as number);
   }, 60_000);
 
   it('makes steel at MV in one Electric Blast Furnace step from a base material, its oxygen from free air', async () => {
@@ -497,9 +543,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
     // acetic acid, 480 EU/t). At the 2 % default (and at 5 %) the plain line makes no acetone and holds no Calcite, so
     // there would be nothing to keep out. The least raw material is plan 09's objective, so build cost is ignored, as in
     // this file's other checks of it: with build cost counted the build MIP's pick at 0 % holds no Calcite since fix wave
-    // 3 Task 7, 2.2 % cheaper by its own measure than the pick that held it.
+    // 3 Task 7, 2.2 % cheaper by its own measure than the pick that held it. Farms off (add-on 17 ruling S15): with them on,
+    // the default, the plain line plants a crop farm and makes no acetone (since 12 x 17 F2), so there is nothing to keep out.
     const avoid = ['Calcite'];
-    const { plan: p, seconds } = await plan({ target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0, buildHorizonHours: null });
+    const settings = { target: GOOD_ELECTRONIC_CIRCUIT, amount: 2, tier: 3, avoid, stepCharge: 0, buildHorizonHours: null, farms: FARMS_OFF };
+    await farmsOnLogged('Good Electronic Circuit HV x2 avoiding Calcite', 'S15: the farms-on line makes no acetone, so it holds no Calcite', settings,
+      COLD_PRICES_PLAN_SECONDS);
+    const { plan: p, seconds } = await plan(settings);
     expectAvoided(p, seconds, avoid, COLD_PRICES_PLAN_SECONDS);
     expect(p.avoided?.map((a) => a.key)).toContain(CALCITE_DUST);   // the plain plan's catalyst
   }, 60_000);

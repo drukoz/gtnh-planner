@@ -17,13 +17,14 @@ import { loadPack } from '../../../src/server/pack/load.ts';
 import { benchCapBy } from '../../../src/server/planner/benches.ts';
 import { buildKeys, itemPrices, machineBuildCost, machineGap } from '../../../src/server/planner/build-cost.ts';
 import type { CandidateGraph } from '../../../src/server/planner/candidates.ts';
-import { lineBuildModel, optionMachines, type BuildModel } from '../../../src/server/planner/machine-options.ts';
+import { lineBuildModel, optionMachines, sharesMachines, type BuildModel } from '../../../src/server/planner/machine-options.ts';
 import { emptyContext, groupStock, planLine, solveOptions, stockForm } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { solveLine, type Solution } from '../../../src/server/planner/solve.ts';
 import { tierName, V } from '../../../src/shared/gt/tiers.ts';
-import type { StuffKey } from '../../../src/shared/keys.ts';
+import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
 import { defaultSettings, normalizeSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Machine, Pack } from '../../../src/shared/types/pack.ts';
 import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, type Plan, type PlanContext, type PlanSettings } from '../../../src/shared/types/plan.ts';
 import { buildObjective } from '../../helpers/build-objective.ts';
@@ -72,12 +73,17 @@ const AE2_POOL_MAX_STEPS = 9;
 /** `GTNH_BUILD_NODES`: the build MIP's node limit for a calibration run the controller asks for (`SolveOptions.buildMaxNodes`). */
 const NODES = process.env.GTNH_BUILD_NODES === undefined ? undefined : Number(process.env.GTNH_BUILD_NODES);
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
+/** Add-on 17's farms off (its ruling S15: a pin its farms change keeps its subject, and logs its farms-on plan beside it). */
+const FARMS_OFF = { ...defaultFarmSettings(), kinds: [] };
 
 /** One calibration plan: its settings and whether two of every candidate machine of its line are owned (`owning`). */
 interface Case { name: string; settings: PlanSettings; owned: boolean }
 
 const at = (target: StuffKey, tier: number, amount: number, more: Partial<PlanSettings> = {}): PlanSettings =>
   ({ ...defaultSettings(), per: 'min', target, tier, amount, ...more });
+/** Farms off (add-on 17 ruling S15): the listed pins keep their subject and log their farms-on plan. */
+const atOff = (target: StuffKey, tier: number, amount: number, more: Partial<PlanSettings> = {}): PlanSettings =>
+  at(target, tier, amount, { farms: FARMS_OFF, ...more });
 
 /**
  * The eleven calibration plans of plan 12 (seven nothing owned, two of them routed; four through `owning`), the
@@ -140,13 +146,20 @@ const leanestOf = (plan: Plan): number => plan.rawCost?.leanestPerSecond ?? 0;
  * 09's plan where that plan is within the project's cap") on the line's own build-cost graph: the build stage's plan
  * (`buildStats.objective`) against plan 09's plan of that graph rounded up (`buildStats.ignoredObjective`), both by the
  * build MIP's own measure. That plan is within STEP_CHARGE_CAP (+25 %) of the graph's least raw material, so within the
- * default raw cap and at "No limit": every line asserts it. `run` is the line's build MIP as planLine solves it
- * (`buildRun`). Logs both; returns the failure in words, undefined where the plan holds.
+ * default raw cap and at "No limit": every line asserts it, but an AE2 line whose plan 09's plan makes an item good two
+ * ways, which 12 x 17 F6 forbids the build stage (one maker per item good, the controller's ruling of 2026-10-24): it has
+ * no yardstick and is logged (ruling R9). `run` is the line's build MIP as planLine solves it (`buildRun`). Logs both;
+ * returns the failure in words, undefined where the plan holds.
  */
 const worseThanPlan09 = (label: string, run: BuildRun): string | undefined => {
   const stats = run.sol.buildStats;
   const [mine, theirs] = [stats?.objective, stats?.ignoredObjective];
   console.log(`real-build-cost ${label}: ruling 187 on its build-cost graph, by the build MIP ${mine?.toFixed(9) ?? '-'} against plan 09's plan ${theirs?.toFixed(9) ?? '- (beyond the cap)'}`);
+  if (mine !== undefined && theirs === undefined && run.model.share) {
+    console.log(`real-build-cost ${label}: no yardstick on AE2: plan 09's plan of its graph makes an item good two ways, which F6 forbids the build stage `
+      + '(ruling R9: ruling 187 logged, not asserted)');
+    return undefined;
+  }
   if (mine === undefined || theirs === undefined) return `${label}: no objective, or plan 09's plan of its graph beyond the cap (${mine} against ${theirs})`;
   return mine <= theirs * (1 + 1e-9) + 1e-9 ? undefined : `${label}: ${mine} > ${theirs}, plan 09's plan of its graph, by the build MIP`;
 };
@@ -158,9 +171,16 @@ const worseThanPlan09 = (label: string, run: BuildRun): string | undefined => {
  * where `plan` reports no leanest line. That plan is planned on its own graph: on a Project Red or AE2 line it digs the
  * gathered blocks the build-cost graph makes (`gatheredRecipesOn`), so the build-cost graph's leanest line can use less
  * raw material and that plan can be beyond the cap, where the build stage cannot take it; the line is then held to plan
- * 09's plan of its own graph only (`worseThanPlan09`). Logs such a line.
+ * 09's plan of its own graph only (`worseThanPlan09`). On an AE2 line the build stage cannot take it either where it
+ * makes an item good two ways (12 x 17 F6, ruling R9: `itemsMadeTwoWays`), at any cap. Logs such a line.
  */
 const ignoredWithinCap = (label: string, plan: Plan, ignored: Plan, s: PlanSettings): boolean => {
+  const split = sharesMachines(s) ? itemsMadeTwoWays(ignored) : [];
+  if (split.length > 0) {
+    console.log(`real-build-cost ${label}: the plan that ignores build cost makes ${split.join(' ')} two ways on AE2, which F6 forbids the build stage: `
+      + "held to plan 09's plan of its own graph only (ruling R9)");
+    return false;
+  }
   const cap = s.rawCap === undefined ? DEFAULT_RAW_CAP : s.rawCap;
   const leanest = plan.rawCost?.leanestPerSecond;
   if (cap === null || !((s.stepCharge ?? DEFAULT_STEP_CHARGE) > 0) || leanest === undefined) return true;
@@ -176,6 +196,20 @@ function sourceOf(plan: Plan, key: StuffKey): 'dug' | 'made' | 'both' | 'none' {
   const dug = plan.rawInputs.some((r) => r.key === key);
   const made = plan.steps.some((s) => s.outputs.some((o) => o.key === key));
   return dug && made ? 'both' : dug ? 'dug' : made ? 'made' : 'none';
+}
+
+/**
+ * The item goods `plan` makes on two steps or more, sorted: each step's recipe's first output where that is an item, a farm
+ * step aside, as the build MIP's one-maker rows of an AE2 line count makers (12 x 17 F6, build-mip.ts `oneMakerGood`).
+ */
+function itemsMadeTwoWays(plan: Plan): StuffKey[] {
+  const makers = new Map<StuffKey, number>();
+  for (const st of plan.steps) {
+    const made = st.farm === undefined ? st.outputs[0]?.key : undefined;
+    if (made === undefined || isFluidKey(made)) continue;
+    makers.set(made, (makers.get(made) ?? 0) + 1);
+  }
+  return [...makers].filter(([, n]) => n > 1).map(([key]) => key).sort();
 }
 
 /** The plan's sharing pools as `<n>× <machine>: <steps>`, one each. */
@@ -385,9 +419,12 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     // 09's plan of its own build-cost graph, which is within the default +25 % cap (`worseThanPlan09`), nor, where it is
     // within the cap too, than the plan that ignores build cost (`ignoredWithinCap`: on Project Red and AE2 that plan digs
     // the gathered blocks the build-cost graph makes, and can be beyond the cap). Failures are asserted after the loop.
+    // Farms off (add-on 17 ruling S15, `atOff`): with farms on, the default, the raw cap's leanest line counts the farms the
+    // group could build (the user's ruling U1), so the cap may force a farm and its chain; each line's farms-on plans, with
+    // build cost and ignoring it, are logged.
     const lines: Array<[string, PlanSettings]> = [
-      ['Electronic Circuit LV', at(ELECTRONIC_CIRCUIT, 1, 1)], ['Electronic Circuit LV on Project Red', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' })],
-      ['Electronic Circuit LV on AE2', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' })], ['Polyethylene Bar MV', at(POLYETHYLENE_BAR, 2, 1)],
+      ['Electronic Circuit LV', atOff(ELECTRONIC_CIRCUIT, 1, 1)], ['Electronic Circuit LV on Project Red', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' })],
+      ['Electronic Circuit LV on AE2', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' })], ['Polyethylene Bar MV', atOff(POLYETHYLENE_BAR, 2, 1)],
     ];
     const over: string[] = [];
     const worse: string[] = [];
@@ -415,6 +452,11 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
           const [mine, theirs] = [built, ignored].map((p) => buildObjective(p, s, leastDug(ignored), leanestOf(built))) as [number, number];
           if (mine > theirs * (1 + 1e-6) + 1e-6) worse.push(`${label}: ${mine} > ${theirs} ignoring build cost`);
         }
+        const farmsOn = { ...base, farms: defaultFarmSettings() };
+        const on = owned ? await owning(farmsOn) : farmsOn;
+        const [onBuilt, onIgnored] = [(await timed(on)).plan, (await timed({ ...on, buildHorizonHours: null })).plan];
+        console.log('real-build-cost farms on (U1: the leanest line counts the farms the group could build, so the cap may force them): '
+          + `${label} ${onBuilt.steps.length} steps against ${onIgnored.steps.length}`);
       }
     }
     expect(worse, 'ruling 187 on the owned lines').toEqual([]);
@@ -508,20 +550,21 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     /**
      * The build-MIP objectives (`buildStats.objective`, nothing owned, empty context) on fix wave 3 (D)'s prices, measured
      * after Task 3 (Task 1 pinned 737bcd0's own, on a5f5100's prices). At "No limit" from fix wave 3 Task 7 on: every pinned
-     * line's leanest line is within LEAN_BASE_ABOVE × σ, so its MIP is the one Task 4 pinned.
+     * line's leanest line is within LEAN_BASE_ABOVE × σ, so its MIP is the one Task 4 pinned. Plan 12 planned no farm, so
+     * these lines plan with farms off (add-on 17 ruling S15, `atOff`), each with its farms-on pick logged beside its pin.
      */
     const PINNED: ReadonlyArray<[string, PlanSettings, number]> = [
-      ['Electronic Circuit MV', at(ELECTRONIC_CIRCUIT, 2, 1), 12.451591979],
-      ['Electronic Circuit MV on Project Red', at(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), 12.451594296],
-      ['Good Electronic Circuit HV', at(GOOD_ELECTRONIC_CIRCUIT, 3, 1), 17.294139328],
-      ['Polyethylene Bar MV', at(POLYETHYLENE_BAR, 2, 1), 8.410411920],
-      ['Steel Ingot MV x10', at(STEEL_INGOT, 2, 10), 11.924229250],
-      ['Electronic Circuit LV', at(ELECTRONIC_CIRCUIT, 1, 1), 17.240499791],
-      ['Electronic Circuit LV on Project Red', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.259551046],
-      ['Electronic Circuit LV on AE2', at(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.856850743],
-      ['Advanced Circuit HV 1/min', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false }), 22.294776901],
-      ['Advanced Circuit HV 1/h', at(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 33.562427797],
-      ['Advanced Circuit HV 1/min, supporting lines', at(ADVANCED_CIRCUIT, 3, 1), 27.699827544],
+      ['Electronic Circuit MV', atOff(ELECTRONIC_CIRCUIT, 2, 1), 12.451591979],
+      ['Electronic Circuit MV on Project Red', atOff(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), 12.451594296],
+      ['Good Electronic Circuit HV', atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 1), 17.294139328],
+      ['Polyethylene Bar MV', atOff(POLYETHYLENE_BAR, 2, 1), 8.410411920],
+      ['Steel Ingot MV x10', atOff(STEEL_INGOT, 2, 10), 11.924229250],
+      ['Electronic Circuit LV', atOff(ELECTRONIC_CIRCUIT, 1, 1), 17.240499791],
+      ['Electronic Circuit LV on Project Red', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.259551046],
+      ['Electronic Circuit LV on AE2', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.856850743],
+      ['Advanced Circuit HV 1/min', atOff(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false }), 22.294776901],
+      ['Advanced Circuit HV 1/h', atOff(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 33.562427797],
+      ['Advanced Circuit HV 1/min, supporting lines', atOff(ADVANCED_CIRCUIT, 3, 1), 27.699827544],
     ];
     const statsOf = (run: BuildRun): NonNullable<Solution['buildStats']> => run.sol.buildStats as NonNullable<Solution['buildStats']>;
     const logPick = (name: string, stats: NonNullable<Solution['buildStats']>): void => {
@@ -532,15 +575,17 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     it.each(PINNED)('is no worse by the build MIP than its measured pin on %s', async (name, s, pinned) => {
       const stats = statsOf(await buildRun({ ...s, rawCap: null }, false));
       logPick(name, stats);
+      logPick(`${name}, farms on (S15, logged)`, statsOf(await buildRun({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
       expect(stats.approx).toBe(false);
       expect(stats.objective as number).toBeLessThanOrEqual(pinned * (1 + 1e-6));
     }, 300_000);
 
     it('plans 2 Good Electronic Circuits a minute at HV on AE2 in at most 28 new machines, at most 16.371 by the build MIP', async () => {
-      const s = at(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { logistics: 'ae2' });
+      const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { logistics: 'ae2' });
       const run = await buildRun({ ...s, rawCap: null }, false);
       const stats = statsOf(run);
       logPick('Good Electronic Circuit HV x2 on AE2', stats);
+      logPick('Good Electronic Circuit HV x2 on AE2, farms on (S15, logged)', statsOf(await buildRun({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
       expect(stats.retried).toBe(true);   // its root LP relaxation does not solve at 1e-10
       expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
       expect(stats.objective as number).toBeLessThanOrEqual(16.371 + 1e-6);
@@ -554,12 +599,16 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     }, 300_000);
 
     it('proves its plan of 2 Good Electronic Circuits a minute at HV optimal within its iteration cap', async () => {
-      const stats = statsOf(await buildRun(at(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { rawCap: null }), false));
+      const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { rawCap: null });
+      const stats = statsOf(await buildRun(s, false));
       logPick('Good Electronic Circuit HV x2', stats);
+      logPick('Good Electronic Circuit HV x2, farms on (S15, logged)', statsOf(await buildRun({ ...s, farms: defaultFarmSettings() }, false)));
       expect(stats.status).toBe('optimal');
       expect(stats.objective as number).toBeLessThanOrEqual(17.755272959 * (1 + 1e-6));
       // At the default raw cap the same line is another problem (controller OQ4): its MIP as planLine solves it, logged.
-      logPick('Good Electronic Circuit HV x2 at the default raw cap (logged only)', statsOf(await buildRun(at(GOOD_ELECTRONIC_CIRCUIT, 3, 2))));
+      const capped = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
+      logPick('Good Electronic Circuit HV x2 at the default raw cap (logged only)', statsOf(await buildRun(capped)));
+      logPick('Good Electronic Circuit HV x2 at the default raw cap, farms on (S15, logged)', statsOf(await buildRun({ ...capped, farms: defaultFarmSettings() })));
     }, 300_000);
   });
 
@@ -596,13 +645,19 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       // too, in 49 steps against 50. With byproduct-only goods beyond the group's stock at BEYOND_STOCK_FACTOR times their
       // price (fix wave 3 (C)) it plans 50 steps against 49, the plan that ignores build cost now crafting the board: at
       // most one step more, and no worse by the build MIP's measure than plan 09's plan of its own graph nor, where it is
-      // within the cap, than the plan that ignores build cost.
-      const s = at(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
+      // within the cap, than the plan that ignores build cost. With farms off (add-on 17 ruling S15, `atOff`): with farms on,
+      // the default, the raw cap's leanest line counts the farms the group could build (the user's ruling U1), so the cap may
+      // force them; the farms-on plans, with build cost and ignoring it, are logged.
+      const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2);
       const { plan, seconds } = await timed(s);
       const without = await timed({ ...s, buildHorizonHours: null });
       const ignored = without.plan;
       const { run } = await logPlan('Good Electronic Circuit HV x2', s, plan, seconds, ignored);
       await logPlan('Good Electronic Circuit HV x2, ignoring build cost', { ...s, buildHorizonHours: null }, ignored, without.seconds);
+      const on = { ...s, farms: defaultFarmSettings() };
+      const [onBuilt, onIgnored] = [(await timed(on)).plan, (await timed({ ...on, buildHorizonHours: null })).plan];
+      console.log('real-build-cost farms on (U1: the leanest line counts the farms the group could build, so the cap may force them): '
+        + `Good Electronic Circuit HV x2 ${onBuilt.steps.length} steps against ${onIgnored.steps.length}`);
       const board = plan.steps.find((st) => st.mainOutput === 'gregtech:gt.metaitem.03@32101');
       console.log(`real-build-cost Good Electronic Circuit HV x2: ${plan.status}, ${seconds.toFixed(2)} s, ${plan.steps.length} steps (ignoring build cost ${ignored.steps.length}), `
         + `its Good Circuit Board on ${board?.machine.name ?? 'none'}, build ${plan.cost?.build} (ignoring ${ignored.cost?.build})`);

@@ -26,6 +26,7 @@ import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import { STEP_CHARGE_BEFORE_V3, type Plan, type PlanSettings, type PlanStep } from '../../../src/shared/types/plan.ts';
 import { EC_STATE, localDocPath, storedSettings } from '../../helpers/local-docs.ts';
@@ -66,6 +67,8 @@ const COLD_PRICES_PLAN_SECONDS = 7;
  */
 const P_MAX_STEPS = 27;
 const PR_MAX_STEPS = 42;
+/** Add-on 17's farms off (its ruling S15: an expectation its farms change keeps its subject, its farms-on plan logged beside it). */
+const FARMS_OFF = { ...defaultFarmSettings(), kinds: [] };
 /** Warnings no plan of the user's line may carry (fix spec D1, D2, the loop guard, the graph cap). */
 const NEVER = ['numerics', 'simplify-skipped', 'free-loop', 'graph-too-big'];
 /** Invariant kinds (a), (b), (d), (e), (f) of the audit's checker. */
@@ -391,8 +394,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the user's Electronic Circuit p
     expect(checkPlanInvariants(pack, settings, p, { buildCost: true, farmPack: (await linePricing(pack, settings, emptyContext()))?.pack })
       .filter((v) => EXACT_KINDS.includes(v.kind) && v.severity !== 'info')
       .map((v) => `${v.kind}/${v.severity}: ${v.message}`)).toEqual([]);
-    expect(p.warnings).toContainEqual(expect.objectContaining({ code: 'pin-dominated', stepId: PINNED_RESISTOR }));
-  });
+    // The pinned Resistor is dominated with farms off (add-on 17 ruling S15): with them on, the default, the line farms its
+    // Sticky Resin, which makes the pin the cheapest way (P's warnings, logged).
+    const off = await timed({ ...settings, farms: FARMS_OFF });
+    console.log(`real-user-project complaint 6, farms on (S15, logged): P warns ${codesOf(p).join(' ') || 'nothing'}, `
+      + `farm steps ${p.steps.filter((s) => s.farm !== undefined).map((s) => s.recipeId).join(' ') || 'none'}; farms off ${codesOf(off.plan).join(' ') || 'nothing'}`);
+    expect(off.plan.warnings).toContainEqual(expect.objectContaining({ code: 'pin-dominated', stepId: PINNED_RESISTOR }));
+  }, 60_000);
 
   it('plans the same settings for an Advanced Circuit at HV on "Least raw material", build cost ignored, at the least raw material', async () => {
     // Spec §7.3: 181 s before the Task 4 review gave the 0 % stage its root-node MIP. With build cost counted the line may

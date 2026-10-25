@@ -10,6 +10,7 @@ import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { emptyContext, planLine, type SolveTuning } from '../../../src/server/planner/plan.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings, type FarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, FREE_KEYS, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
 import { buildObjective } from '../../helpers/build-objective.ts';
@@ -63,6 +64,8 @@ const REFERENCE_BLOCKS = 18;
 const REF_RAW: Readonly<Record<string, number>> = {
   'IC2:blockRubWood@0': 32, 'gregtech:gt.metaitem.01@11035': 11.25, [STEEL_INGOT]: 4, tin: 1, 'minecraft:redstone@0': 5, 'minecraft:sand@0': 2,
 };
+/** Add-on 17's farms off (its ruling S15: an expectation its farms change keeps its subject, its farms-on plan logged beside it). */
+const FARMS_OFF = { ...defaultFarmSettings(), kinds: [] };
 
 const local = process.env.GTNH_LOCAL === '1';
 /** The reference file: `GTNH_REFERENCE` when set, else in this checkout, else in the main checkout (`localDocPath`). */
@@ -126,7 +129,8 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   /**
    * R0's settings: `stored` with crafting by hand given explicitly, as the acceptance spec's R0 crafts by hand. The stored
    * project says so today; once `normalizeSettings` reads every project as automated (the user's ruling that crafting
-   * steps are automatic), `planLine` still plans an explicit `automateCrafting: false` by hand.
+   * steps are automatic), `planLine` still plans an explicit `automateCrafting: false` by hand. Farms off (add-on 17 ruling
+   * S15): with them on, the default, R0 plants a farm, logged beside it.
    */
   let byHand: PlanSettings;
   const timed = async (s: PlanSettings, tuning?: SolveTuning): Promise<{ plan: Plan; seconds: number }> => {
@@ -137,7 +141,7 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
 
   beforeAll(async () => {
     stored = normalizeSettings(storedSettings(path as string));
-    byHand = { ...stored, automateCrafting: false };
+    byHand = { ...stored, automateCrafting: false, farms: FARMS_OFF };
     pack = await loadPack(activeExportDir(loadConfig()));
     await planLine(pack, { ...stored, target: GLASS_TUBE, recipeChoice: {}, per: 'min', tier: 1 }, emptyContext());   // warm the pack
   }, 300_000);
@@ -145,7 +149,12 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
   it('R0: plans the reference as stored, with its 16 recipes, raw material, 14 machine blocks, 3 Centrifuges and 4 hand steps', async () => {
     // The acceptance spec's R0 (its pins, stops and crafting by hand, its stored 2 % step charge: normalizeSettings
     // applies no migration). On 93e508e: 17 blocks, 6 Basic Centrifuges for 3 Advanced (the step charge was per step).
-    // Its 16 recipes, the Molten Tin from Tin Dust or its Tin Ingot twin (controller ruling 201: `referenceIds`).
+    // Its 16 recipes, the Molten Tin from Tin Dust or its Tin Ingot twin (controller ruling 201: `referenceIds`). With farms
+    // off (add-on 17 ruling S15, `byHand`); with them on, the default, R0 plants a farm: that plan is logged, and its plan
+    // time, the default's, stays held to the bound (12 x 17 F2: plan times are judged with farms on).
+    const on = await timed({ ...byHand, farms: defaultFarmSettings() });
+    logPlan('R0, farms on (S15, logged)', on.plan, on.seconds);
+    expect(on.seconds, 'R0 with farms on').toBeLessThan(BUILD_COST_PLAN_SECONDS);
     const { plan, seconds } = await timed(byHand);
     logPlan('R0', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
@@ -170,7 +179,8 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
 
   it('R1: plans R0 with its crafting on 4 Auto Workbenches, no hand step and 18 machine blocks', async () => {
     // The acceptance spec's R1: R0's recipes, the Molten Tin from Tin Dust or its Tin Ingot twin (controller ruling 201).
-    const { plan, seconds } = await timed({ ...stored, automateCrafting: true });
+    // Farms off (add-on 17 ruling S15): with them on, the default, R1 plants a farm, logged beside it.
+    const { plan, seconds } = await timed({ ...stored, automateCrafting: true, farms: FARMS_OFF });
     logPlan('R1', plan, seconds);
     expect(plan.status, JSON.stringify(plan.warnings)).toBe('ok');
     expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
@@ -182,6 +192,8 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     for (const s of crafting) expect(s.count, s.recipeId).toBe(1);
     expect(plan.steps.filter((s) => s.handCraft)).toEqual([]);
     expect(machineBlocks(plan)).toBe(REFERENCE_BLOCKS);
+    const on = await timed({ ...stored, automateCrafting: true, farms: defaultFarmSettings() });
+    logPlan('R1, farms on (S15, logged)', on.plan, on.seconds);
   }, 120_000);
 
   it('probes R1 with its new machines at MV, and with new multiblocks only where nothing else can do it', async () => {
@@ -241,11 +253,15 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     // Since fix wave 3 the plan has 25 blocks at 24 h and no horizon from 1 h to 8,760 h meets the bound: the raw cap
     // (the user's ruling 247 (A)) and this bound do not both hold on this line. The user's amendment of 2026-10-24
     // (add-on 12 ledger, 'Ruling (USER, 2026-10-24)'): the raw cap wins, so the reference's block count is a comparison
-    // logged beside the plan, no longer asserted; the reference's raw materials stay asserted.
-    const defaults: Partial<PlanSettings> = { stepCharge: DEFAULT_STEP_CHARGE, buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, automateCrafting: true };
-    const judge = async (hours: number): Promise<{ text: string; ok: boolean; blocks: boolean; raw: boolean }> => {
-      const own: PlanSettings = { ...stored, ...defaults, recipeChoice: {}, stopItems: [], buildHorizonHours: hours };
-      const reference: PlanSettings = { ...stored, ...defaults, buildHorizonHours: hours };
+    // logged beside the plan, no longer asserted; the reference's raw materials stay asserted. With farms off (add-on 17
+    // ruling S15): with them on, the default, the cap's leanest line counts the farms the group could build (the user's
+    // ruling U1), so the cap may force a plan the planner rates dearer than the reference; that judgement is logged.
+    const defaults: Partial<PlanSettings> = {
+      stepCharge: DEFAULT_STEP_CHARGE, buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, automateCrafting: true, farms: FARMS_OFF,
+    };
+    const judge = async (hours: number, farms: FarmSettings = FARMS_OFF): Promise<{ text: string; ok: boolean; blocks: boolean; raw: boolean }> => {
+      const own: PlanSettings = { ...stored, ...defaults, farms, recipeChoice: {}, stopItems: [], buildHorizonHours: hours };
+      const reference: PlanSettings = { ...stored, ...defaults, farms, buildHorizonHours: hours };
       const mine = await timed(own);
       const theirs = await timed(reference);
       const least = mine.plan.rawCost?.leastPerSecond ?? 0;
@@ -266,6 +282,9 @@ describe.skipIf(path === undefined)("the user's reference Electronic Circuit flo
     };
     const day = await judge(DEFAULT_BUILD_HORIZON_HOURS);
     console.log(`real-reference without pins and stops, ${day.text}`);
+    const farmsOn = await judge(DEFAULT_BUILD_HORIZON_HOURS, defaultFarmSettings());
+    console.log("real-reference without pins and stops, farms on (U1: the cap's leanest line counts the farms the group could build, so it may force a plan "
+      + `the planner rates dearer than the reference), ${farmsOn.text}`);
     if (!day.ok) {
       let largest: number | undefined;
       for (const hours of [1, 2, 4, 8, 12, 48, 168, 720, 8760]) {

@@ -38,20 +38,20 @@ const MODES: readonly LogisticsMode[] = ['routed', 'ae2', 'enderio'];
 /**
  * The machines (GT basic machine kind) AE2 runs too seldom for the fluid they pipe to another machine, per line: no job
  * of the line needs what their patterns make (research §4.2 item 2: the Refined Glue the Resistor and Wood Plank
- * assemblers wait for, the Polyethylene for the Circuit Board assembler, the EBF's Oxygen). These are the lines as plan
- * 12's planner plans them at its defaults, fix wave 3's raw cap included: the Oxygen of the circuit lines' Arc Furnace
- * and EBF and of the Steel Plate EBF comes from a Canning Machine that empties Oxygen Cells (a Centrifuge separates them
- * from compressed air on the circuit lines, an Electrolyzer fills them from pumped Water on Steel Plate), whose pattern
- * makes Empty Cells, which no job of the line asks for as often as the Oxygen is needed; the Vacuum Tube's Oxygen comes
- * from an Electrolyzer on Ferrosilite Dust, which AE2 runs often enough; and the circuit's Circuit Board is the wood one,
- * which takes no Polyethylene. From the merge of fix/feeding (b4f5602) until the raw cap the Oxygen of the circuit,
- * Vacuum Tube and Steel Plate lines came from an Electrolyzer on bought Phosphate Dust, whose pattern makes Phosphorus
- * Dust; main's planner made the Steel Plate EBF's Oxygen in a Canning Machine too and the circuit's Polyethylene in a
- * Chemical Reactor. When the planner picks another route for these lines, this table follows it.
+ * assemblers wait for, the Polyethylene for the Circuit Board assembler, the EBF's Oxygen). These are the routes of the
+ * integrated planner (add-on 12 × 17) at its defaults, the raw cap and add-on 17's farms included: the circuit lines'
+ * EBFs now take their Oxygen from an Electrolyzer on Ferrosilite Dust, as the Vacuum Tube's do, which AE2 runs often
+ * enough, so only their Refined Glue is short; the Steel Plate EBF's Oxygen still comes from a Canning Machine that
+ * empties Oxygen Cells, whose pattern makes Empty Cells, which no job of the line asks for as often as the Oxygen is
+ * needed; and the circuit's Circuit Board is the wood one, which takes no Polyethylene. On plan 12's planner the circuit
+ * lines' Arc Furnace and EBF took their Oxygen from such a Canning Machine too (a Centrifuge separating the cells from
+ * compressed air); from the merge of fix/feeding (b4f5602) until the raw cap the Oxygen of the circuit, Vacuum Tube and
+ * Steel Plate lines came from an Electrolyzer on bought Phosphate Dust, whose pattern makes Phosphorus Dust. When the
+ * planner picks another route for these lines, this table follows it.
  */
 const FLUID_SHORT: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
-  'Electronic Circuit MV': [['centrifuge', 'fluid:refinedglue'], ['canner', 'fluid:oxygen']],
-  'Electronic Circuit MV, crafting automated': [['centrifuge', 'fluid:refinedglue'], ['canner', 'fluid:oxygen']],
+  'Electronic Circuit MV': [['centrifuge', 'fluid:refinedglue']],
+  'Electronic Circuit MV, crafting automated': [['centrifuge', 'fluid:refinedglue']],
   'Steel Plate': [['canner', 'fluid:oxygen']],
 };
 
