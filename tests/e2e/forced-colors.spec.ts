@@ -2,10 +2,12 @@
 // colour and drops every shadow, so the restyle's custom ticks, radios and carets, drawn with those alone, vanished there, and with them
 // whether a box was ticked. The stylesheet repaints them in system colours (styles-contract.test.tsx pins the block). Chromium's emulation
 // of forced colours says what the browser computes: an edge round every tick and radio, a mark in a colour of its own on a ticked one only,
-// and carets that are not the colour of what they sit on.
+// and carets that are not the colour of what they sit on. A picked map row keeps the focus ring the keyboard gives it, its own cue showing
+// only without one (ruling R42).
 
 import { test, expect, type Locator } from '@playwright/test';
 import { login, setName, createProject } from './helpers.ts';
+import { uploadSampleWorld } from './world-upload.ts';
 
 const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 
@@ -80,4 +82,36 @@ test('the ticks, radios and carets stay visible in forced colours', async ({ pag
   // out of forced colours a tick has no edge, its bevel draws it: the forced-colours block is what drew the edges above
   await page.emulateMedia({ forcedColors: 'none' });
   expect((await tick(ticked)).edge).toBe(0);
+});
+
+test('a picked map row shows the focus ring when the keyboard picks it, and its own cue when the pointer does', async ({ page }) => {
+  await page.emulateMedia({ forcedColors: 'active' });
+  await login(page); await setName(page, 'Ann');
+  // the iron plate line on the sample world's base, its pins listed in the line's panel; it reads no other project's surplus, so no other
+  // test's project replans it (ledger ruling P2-R16)
+  const scanId = await uploadSampleWorld(page);
+  const id = await createProject(page, 'Forced colours map');
+  const ops = [{ op: 'settings', patch: { target: 't:iron_plate@0', amount: 24, per: 'min', useSurplus: false } }, { op: 'world', scanId, baseId: '0:0:0' }];
+  expect((await page.request.post(`/api/projects/${id}/ops`, { data: { ops }, headers: { 'X-Planner-Name': 'Ann' } })).ok()).toBe(true);
+  await expect.poll(async () => (await (await page.request.get(`/api/projects/${id}/layout`)).json()).status, { timeout: 30_000 }).toBe('ok');
+  await page.goto(`/p/${id}#map`);
+  const pin = (n: number): Locator => page.getByTestId('line-panel').getByTestId(`pin-${n}`);
+  await expect(pin(2)).toBeVisible();
+  const outline = (n: number): Promise<{ width: string; offset: string }> => pin(n).locator('button').evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { width: style.outlineWidth, offset: style.outlineOffset };
+  });
+
+  // ledger ruling P2-R44: with the keyboard, Tab from the first pin's row to the second's and Enter picks it; it shows the focus ring, 3 px
+  // outside it, where the picked row's cue (an outline too) once replaced it (R42)
+  await pin(1).locator('button').focus();
+  await page.keyboard.press('Tab');
+  await expect(pin(2).locator('button')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(pin(2)).toHaveAttribute('aria-current', 'true');
+  await expect.poll(() => outline(2)).toEqual({ width: '3px', offset: '0px' });
+  // with the pointer there is no focus ring, so the picked row shows its cue, 2 px inside it
+  await pin(1).locator('button').click();
+  await expect(pin(1)).toHaveAttribute('aria-current', 'true');
+  await expect.poll(() => outline(1)).toEqual({ width: '2px', offset: '-2px' });
 });
