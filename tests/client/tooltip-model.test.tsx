@@ -167,4 +167,20 @@ describe('the shared tooltip: the mod line and the box', () => {
     // and a figure's comma is no separator: "1,440" is not "1 440"
     expect(describes('1,440', '1 440')).toBe(true); expect(describes('Iron Ingot\n1/s', 'Iron Ingot · 1/s')).toBe(false);
   });
+
+  // ledger ruling P2-R24c: since P2-R32 a recipe slot's name says its chance and what a run takes of it, which its tip says on lines of their
+  // own. A line whose parts all equal parts of the name, wherever it stands, is not heard twice; a line that says it in other words stays
+  it('drops a line that equals a part of the name wherever it stands, and keeps one that says it in other words', () => {
+    expect(describedLines(['Tiny Pile of Dust', '10% chance', '1/min in the line'], null, 'Tiny Pile of Dust, 10% chance')).toEqual(['1/min in the line']);
+    // a slot's tip as the recipe card writes it: the line of what a run makes stands between the good's name and its chance
+    expect(describedLines(['Tiny Pile of Dust', 'Tiny Pile of Dust per run', '10% chance', '1/min in the line'], null, 'Tiny Pile of Dust, 10% chance'))
+      .toEqual(['Tiny Pile of Dust per run', '1/min in the line']);
+    expect(describedLines(['1x Copper Wire', '2× 1x Copper Wire per run', '10% chance', '30/min in the line'], 'GregTech', '1x Copper Wire, 2 per run, 10% chance'))
+      .toEqual(['2× 1x Copper Wire per run', '30/min in the line', 'GregTech']);   // "2 per run" said again in other words stays
+    // the lines it drops are the ones TipLines hides
+    const tip = renderToStaticMarkup(<TipLines lines={['Tiny Pile of Dust', 'Tiny Pile of Dust per run', '10% chance', '1/min in the line']} mod={null}
+      name="Tiny Pile of Dust, 10% chance" />);
+    expect(tip).toBe('<div aria-hidden="true">Tiny Pile of Dust</div><div>Tiny Pile of Dust per run</div><div aria-hidden="true"><span class="fig">10</span>% chance</div>'
+      + '<div><span class="fig">1</span>/min in the line</div>');
+  });
 });

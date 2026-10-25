@@ -3,6 +3,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MachineTierSection, PortsSection, RawPanel, RecipeCard, StepPanel, shownWays } from '../../src/client/views/StepPanel.tsx';
 import { GtArrow } from '../../src/client/components/GtArrow.tsx';
+import { describedLines, tipLines } from '../../src/client/components/tooltip-model.ts';
 import { haveSupplyPatch, importInsteadPatch, makeHerePatch, optionPatch, useOnlyPatch } from '../../src/client/views/flow-model.ts';
 import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts';
 import { indexPlan } from '../../src/shared/plan/balance.ts';
@@ -492,6 +493,9 @@ describe('step panel: recipe card', () => {
     expect(dust).toContain('<span class="slot-chance" aria-hidden="true"><span class="fig">10</span>%</span>');
     expect(dust).toContain('aria-label="Tiny Pile of Dust, 10% chance"');
     expect(dust).toMatch(/data-tip="[^"]*\n10% chance/);
+    // a screen reader hears the chance once, in the name: the tip's description leaves out its chance line (ledger ruling P2-R24c)
+    const tip = /data-tip="([^"]*)"/.exec(dust)?.[1] ?? '';
+    expect(describedLines(tipLines(tip), null, /aria-label="([^"]*)"/.exec(dust)?.[1] ?? null)).toEqual(['Tiny Pile of Dust per run']);
     expect(slotOf(panelHtml(circuit, wires), 't:circuit@0')).not.toContain('slot-chance');
     // the plan without the wiremill's wire: the slot is short, and says so in its name
     const short = planOf({ ...wires, flows: wires.flows.filter((f) => f.from !== 'wire') });

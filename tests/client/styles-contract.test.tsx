@@ -2685,9 +2685,10 @@ describe('the Machine GUI Phase 2: the recipe card', () => {
       ['.slot-chance', 'position', 'absolute'], ['.slot-chance', 'left', '2px'], ['.slot-chance', 'top', '2px'], ['.slot-chance', 'z-index', '1'],
       ['.slot-chance', 'pointer-events', 'none'], ['.slot-chance', 'font', '14px/1 var(--font-pixel)'], ['.slot-chance', 'color', '#ffff55'],
       ['.slot-chance', 'text-shadow', '2px 2px 0 var(--stack-shadow)'],
-      // and it never draws past its own slot: 2 px in, at most 32 px wide, so its 2 px shadow ends at the slot's edge; a wider fallback face is
-      // clipped there (its text is short: chanceTag)
-      ['.slot-chance', 'max-width', '32px'], ['.slot-chance', 'overflow-x', 'clip'], ['.slot-chance', 'white-space', 'nowrap'],
+      // and it never draws past its own slot: 2 px in and at most 34 px wide, its 2 px right padding the room of its text's 2 px shadow, which
+      // the clip at that padding's edge never reaches unless a wider fallback face runs past the slot (its text is short: chanceTag)
+      ['.slot-chance', 'max-width', '34px'], ['.slot-chance', 'box-sizing', 'border-box'], ['.slot-chance', 'padding-right', '2px'],
+      ['.slot-chance', 'overflow-x', 'clip'], ['.slot-chance', 'white-space', 'nowrap'],
       ['.readout', 'padding', '5px 7px'], ['.readout', 'background', 'var(--screen)'], ['.readout', 'box-shadow', 'var(--bevel-screen)'],
       ['.readout dt', 'font-size', '11px'], ['.readout dt', 'color', 'var(--ink-muted)'],
       ['.readout dd', 'margin', '0'], ['.readout dd', 'font', '21px/21.6px var(--font-digits)'], ['.readout dd', 'font-size-adjust', 'cap-height 0.56'],

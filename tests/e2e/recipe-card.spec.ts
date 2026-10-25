@@ -111,11 +111,13 @@ test('"144L" fits its slot with the fonts and without them', async ({ browser })
 /** The chances of three outputs added to the Basic Assembler: a sliver, one with a decimal, and all but certain. */
 const RARE: ReadonlyArray<[string, number]> = [['t:iron_dust_tiny@0', 0.0005], ['t:copper_dust_small@0', 0.125], ['t:redstone_gem@0', 0.9995]];
 interface Box { left: number; top: number; right: number }
-interface TagBoxes { loaded: string[]; tags: Array<{ text: string; tag: Box; icon: Box }> }
+interface Tag { text: string; tag: Box; icon: Box; paddingRight: string; scrollWidth: number; clientWidth: number; unclipped: boolean }
+interface TagBoxes { loaded: string[]; tags: Tag[] }
 
 /**
  * Opens circuitLv with RARE's outputs added to its assembler, in a browser context of its own, and measures each chance tag and its slot once
- * the fonts the page asked for have loaded or failed (with `blockFonts` every font file is refused, as chrome.spec.ts does).
+ * the fonts the page asked for have loaded or failed (with `blockFonts` every font file is refused, as chrome.spec.ts does): the boxes, the
+ * tag's right padding and widths, and whether its slot looks the same with the tag's clip lifted (`unclipped`: the clip cut nothing).
  */
 async function measureTags(browser: Browser, blockFonts: boolean): Promise<TagBoxes> {
   const context = await browser.newContext();
@@ -139,26 +141,39 @@ async function measureTags(browser: Browser, blockFonts: boolean): Promise<TagBo
     if (!blockFonts) await expect.poll(async () => { const faces = await loaded(); return faces.includes('VT323') && faces.some((f) => f.includes('Pixelify')); }).toBe(true);
     const boxes = await tags.evaluateAll((els) => els.map((tag) => {
       const box = (el: Element): Box => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right }; };
-      return { text: tag.textContent ?? '', tag: box(tag), icon: box(tag.parentElement?.querySelector('.item-icon') as Element) };
+      return {
+        text: tag.textContent ?? '', tag: box(tag), icon: box(tag.parentElement?.querySelector('.item-icon') as Element),
+        paddingRight: getComputedStyle(tag).paddingRight, scrollWidth: tag.scrollWidth, clientWidth: tag.clientWidth,
+      };
     }));
-    return { loaded: await loaded(), tags: boxes };
+    // each slot as drawn, then with the tag's clip lifted: the same pixels when the clip cut nothing, the text's shadow included
+    const slots = page.locator('.recipe-slot').filter({ has: page.locator('.slot-chance') });
+    const shoot = (): Promise<Buffer[]> => Promise.all(boxes.map((_, i) => slots.nth(i).screenshot({ animations: 'disabled' })));
+    const clipped = await shoot();
+    await page.addStyleTag({ content: '.slot-chance { overflow-x: visible !important; }' });
+    const lifted = await shoot();
+    return { loaded: await loaded(), tags: boxes.map((t, i) => ({ ...t, unclipped: clipped[i]!.equals(lifted[i]!) })) };
   } finally {
     await context.close();
   }
 }
 
-test('a chance tag never draws past its own slot, with the fonts and without them', async ({ browser }) => {
+test('a chance tag never draws past its own slot, and draws its whole shadow, with the fonts and without them', async ({ browser }) => {
   const without = await measureTags(browser, true);
   const withFonts = await measureTags(browser, false);
   // the premise (chrome.spec.ts's): the first page never got a web font, the second has Pixelify and VT323
   expect(without.loaded, 'the faces that loaded with the font files refused').toEqual([]);
   expect(withFonts.loaded, 'VT323 loaded with the font files served').toContain('VT323');
   for (const [faces, m] of [['the fallback faces', without], ['the web fonts', withFonts]] as const) {
-    for (const { text, tag, icon } of m.tags) {
-      // 2 px in from the slot's left and top, and its 2 px shadow ends at the slot's right edge or before it
+    for (const { text, tag, icon, paddingRight, scrollWidth, clientWidth, unclipped } of m.tags) {
+      // 2 px in from the slot's left and top, and its box, the 2 px right padding its shadow is drawn in included, ends at the slot's edge
       expect(tag.left, `${faces}: "${text}" starts left of its slot`).toBeGreaterThanOrEqual(icon.left);
       expect(tag.top, `${faces}: "${text}" starts above its slot`).toBeGreaterThanOrEqual(icon.top);
-      expect(tag.right + 2, `${faces}: "${text}" and its shadow end at ${tag.right + 2}, past its slot's edge at ${icon.right}`).toBeLessThanOrEqual(icon.right + 0.01);
+      expect(tag.right, `${faces}: "${text}" ends at ${tag.right}, past its slot's edge at ${icon.right}`).toBeLessThanOrEqual(icon.right + 0.01);
+      // and a short tag draws its whole shadow: the clip cuts nothing, as the text fits before the padding its shadow falls in
+      expect(unclipped, `${faces}: "${text}" looks the same with its clip lifted`).toBe(true);
+      expect(paddingRight, `${faces}: "${text}" keeps 2 px for its shadow`).toBe('2px');
+      expect(scrollWidth, `${faces}: "${text}" fits its box`).toBe(clientWidth);
     }
     // the whole chance is in the slot's name and tip: the tag says less, in at most three figures
     expect(m.tags.map((t) => t.text), faces).toEqual(['<1%', '13%', '99%']);

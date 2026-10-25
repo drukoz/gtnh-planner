@@ -1035,12 +1035,12 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
  * sit in a recess of the panel (the panel's bevel inverted) and wrap at its edge, so at the panel's narrowest the power takes a line of its
  * own. A slot is a 32 px item icon, a 36 px slot, with its stack count at the bottom right (white VT323 16 px over a 2 px shadow, the
  * Minecraft way, D8, in the 14 px box Pixelify's 14 px had: spec §25) and a chance tag at the top left (yellow Pixelify, its digits Figs'
- * span.fig: VT323's % reads as an x; at most 32 px wide, so the tag and its shadow end inside the slot, a wider fallback face clipped
- * there); a slot the line does not supply in full is framed in red in place of its bevel. The arrow's fill sweeps in eight steps, three
- * times in 4.8 s, then rests full, its own style (spec §11.3); the energy bar is filled from the bottom to what one machine draws of what
- * it can (--share, set on the fill). The readouts are screens in the dark box's ink, their values VT323 21 px (as tall as the mockup's 18
- * px Pixelify), two a row beside the diagram and four below 1100 px; the overclock chips are badges, what overclocking did in green and its
- * notes in amber.
+ * span.fig: VT323's % reads as an x; at most 34 px wide with the 2 px right padding its text's shadow falls in, so the tag ends inside the
+ * slot, a wider fallback face clipped there and a short tag drawn whole); a slot the line does not supply in full is framed in red in place
+ * of its bevel. The arrow's fill sweeps in eight steps, three times in 4.8 s, then rests full, its own style (spec §11.3); the energy bar
+ * is filled from the bottom to what one machine draws of what it can (--share, set on the fill). The readouts are screens in the dark box's
+ * ink, their values VT323 21 px (as tall as the mockup's 18 px Pixelify), two a row beside the diagram and four below 1100 px; the
+ * overclock chips are badges, what overclocking did in green and its notes in amber.
  */
 .recipe-card { display: flex; flex-direction: column; gap: 8px; }
 .recipe-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -1057,7 +1057,7 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 }
 .slot-chance {
   position: absolute; left: 2px; top: 2px; z-index: 1; pointer-events: none; font: 14px/1 var(--font-pixel); color: #ffff55;
-  text-shadow: 2px 2px 0 var(--stack-shadow); max-width: 32px; overflow-x: clip; white-space: nowrap;
+  text-shadow: 2px 2px 0 var(--stack-shadow); max-width: 34px; box-sizing: border-box; padding-right: 2px; overflow-x: clip; white-space: nowrap;
 }
 .gt-arrow {
   position: relative; display: inline-block; flex: none; width: 22px; height: 16px; vertical-align: middle; background: var(--slot);

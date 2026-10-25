@@ -151,10 +151,6 @@ const parts = (text: string): string[] =>
 /** Whether two texts' parts are the same, in the same order. */
 const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((part, i) => part === b[i]);
 
-/** Whether `first` are the first parts of `all`, one or more of them. */
-const begins = (all: readonly string[], first: readonly string[]): boolean =>
-  first.length > 0 && first.length <= all.length && first.every((part, i) => part === all[i]);
-
 /**
  * Whether a tip says more than `name`, the accessible name of the element it would describe: only then does that element get the tip as
  * its description (`aria-describedby`), so a screen reader never says a name twice (P2-D36). White space and the views' separators do
@@ -165,23 +161,19 @@ export function describes(tip: string, name: string | null): boolean {
 }
 
 /**
- * Which of a tip's `lines` only repeat `name`, the accessible name of the element the tip describes (ledger rulings P2-R22, P2-R24): the
- * first lines, as few as can be, whose parts are all the name's (a Flow box is named by its whole tip, an arrow by its three lines run
- * together, a step head by its title and line), and each line whose parts are the name's first ones (an icon's own name; a row's words,
- * which its name goes on from with what a click on it does). White space and the views' separators do not count.
+ * Which of a tip's `lines` only repeat `name`, the accessible name of the element the tip describes (ledger rulings P2-R22, P2-R24, P2-R24c):
+ * each line whose parts are all parts of the name, wherever it stands. So a Flow box named by its whole tip, an arrow by its three lines run
+ * together and a step head by its title and line have those lines left out; so has an icon its own name, a row its words (its name goes on
+ * with what a click on it does), and a recipe slot its good and its chance (P2-R32 names the slot by its good, its amount a run and its
+ * chance). A line that says a part in other words ("2× Copper Wire per run" beside the name's "2 per run") stays, and a part counts whole
+ * ("Iron" is not "Iron Ingot"). White space and the views' separators do not count.
  */
 export function repeatsName(lines: readonly string[], name: string | null): boolean[] {
-  const said = parts(name ?? '');
-  const each = lines.map(parts);
-  const repeats = each.map((own) => begins(said, own));
-  let run: string[] = [];
-  for (let i = 0; i < each.length && run.length < said.length; i++) {
-    run = [...run, ...each[i]!];
-    if (!same(run, said)) continue;
-    for (let j = 0; j <= i; j++) repeats[j] = true;
-    break;
-  }
-  return repeats;
+  const said = new Set(parts(name ?? ''));
+  return lines.map((line) => {
+    const own = parts(line);
+    return own.length > 0 && own.every((part) => said.has(part));
+  });
 }
 
 /**
