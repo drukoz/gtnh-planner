@@ -8,6 +8,7 @@
 import type { AppContext } from '../app.ts';
 import { planForProject } from '../http/routes/projects.ts';
 import { worldService } from '../http/routes/world.ts';
+import { allMachines } from '../pack/lookup.ts';
 import { expandBomLines } from '../planner/bom.ts';
 import { bomBuildCost } from '../planner/build-cost.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
@@ -67,7 +68,7 @@ interface Entry { layout: Promise<Layout>; expansion: Promise<Expansion> | null;
  * differ in tier, which is not counted twice. A taller tower's added casings stay: no build counts them.
  */
 export function layoutParts(pack: Pack, layout: Layout): BomLine[] {
-  const hatches = new Set([...pack.machines.values()].filter((m) => m.kind === 'hatch').map((m) => m.itemKey));
+  const hatches = new Set(allMachines(pack).filter((m) => m.kind === 'hatch').map((m) => m.itemKey));
   return layout.bom.filter((l) => !isOptional(l) && !(l.group === 'machines' && hatches.has(l.key)));
 }
 

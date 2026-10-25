@@ -3,10 +3,11 @@
 // build at the line's tier, at the energy hatch tier of its farm settings, and the Crop Manager of the settings' tier the
 // group owns or can make. A Make N batch runs on owned farms only. Pure: the synthetic recipes are farms/recipes.ts's.
 
-import { machineIdOfLegacy } from '../../../shared/ids.ts';
+import { compareMachineId, legacyMteId, machineIdOfLegacy, type MachineId } from '../../../shared/ids.ts';
 import { defaultFarmSettings, type FarmSettings } from '../../../shared/types/farm.ts';
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings } from '../../../shared/types/plan.ts';
+import { machineByMteId, machineIdsForMap, machineOf } from '../../pack/lookup.ts';
 import { TREE_FARM_MAP } from '../../pack/recipes.ts';
 import type { PlanBasis } from '../basis.ts';
 import { ownedMachineMap } from '../owned.ts';
@@ -24,9 +25,9 @@ export interface FarmSetup {
   crops: { tier: number; machines: number[]; parallel: number } | null;
 }
 
-/** The pack's Tree Growth Simulators: the multiblocks of `gt.recipe.treefarm`, by mteId. */
-function treeFarms(pack: Pack): number[] {
-  return (pack.machinesByMap.get(TREE_FARM_MAP) ?? []).filter((id) => pack.machines.get(id)?.kind === 'multiblock').sort((a, b) => a - b);
+/** The pack's Tree Growth Simulators: the multiblocks of `gt.recipe.treefarm`, in `compareMachineId` order. */
+function treeFarms(pack: Pack): MachineId[] {
+  return machineIdsForMap(pack, TREE_FARM_MAP).filter((id) => machineOf(pack, id)?.kind === 'multiblock').sort(compareMachineId);
 }
 
 /**
@@ -36,7 +37,7 @@ function treeFarms(pack: Pack): number[] {
  * settings hash already.
  */
 export function ownedFarmMachines(pack: Pack, ctx: PlanContext): number[] {
-  const farms = new Set([...treeFarms(pack), ...CROP_MANAGER_MTE_IDS]);
+  const farms = new Set([...treeFarms(pack).map(legacyMteId), ...CROP_MANAGER_MTE_IDS]);
   return [...new Set(ctx.ownedMachines.filter((m) => m.count > 0 && farms.has(m.mteId)).map((m) => m.mteId))].sort((a, b) => a - b);
 }
 
@@ -60,15 +61,15 @@ export function farmSetup(pack: Pack, settings: PlanSettings, ctx: PlanContext, 
   let tgs: FarmSetup['tgs'] = null;
   if (farms.kinds.includes('tgs')) {
     const built = basis.env.multiblocks;   // absent: every multiblock counts as built (`PlanEnv.multiblocks`)
-    const machines = treeFarms(pack).filter((id) => has(id) || (rate && (built === undefined || built.has(machineIdOfLegacy(id)))))
-      .sort((a, b) => Number(has(b)) - Number(has(a)) || a - b);
-    if (machines.length > 0) tgs = { tier: Math.min(farms.tgs.tier, basis.tier), machines };
+    const machines = treeFarms(pack).filter((id) => has(legacyMteId(id)) || (rate && (built === undefined || built.has(id))))
+      .sort((a, b) => Number(has(legacyMteId(b))) - Number(has(legacyMteId(a))) || compareMachineId(a, b));
+    if (machines.length > 0) tgs = { tier: Math.min(farms.tgs.tier, basis.tier), machines: machines.map(legacyMteId) };
   }
   let crops: FarmSetup['crops'] = null;
   if (farms.kinds.includes('crop-manager') && (pack.crops?.length ?? 0) > 0) {
     const tier = Math.min(farms.crops.tier, basis.tier);
     const id = CROP_MANAGER_MTE_IDS[tier - 1];
-    const manager = id === undefined ? undefined : pack.machines.get(id);
+    const manager = id === undefined ? undefined : machineByMteId(pack, id);
     if (manager !== undefined && (has(manager.mteId) || (rate && basis.avail.available.has(manager.itemKey)))) {
       crops = { tier, machines: [manager.mteId], parallel: sticksPerManager(tier, farms.crops.layers) };
     }

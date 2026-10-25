@@ -36,6 +36,11 @@ export function allMachineIds(pack: Pack): MachineId[] {
   return [...pack.machines.values()].map((m) => m.id).sort(compareMachineId);
 }
 
+/** Every machine in the pack, in `compareMachineId` order. */
+export function allMachines(pack: Pack): Machine[] {
+  return allMachineIds(pack).flatMap((id) => machineOf(pack, id) ?? []);
+}
+
 /** True when the pack has a machine with that id. */
 export function hasMachine(pack: Pack, id: MachineId): boolean {
   return machineOf(pack, id) !== undefined;

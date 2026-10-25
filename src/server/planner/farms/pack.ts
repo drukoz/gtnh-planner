@@ -5,6 +5,7 @@
 
 import type { StuffKey } from '../../../shared/keys.ts';
 import type { Machine, Pack, Recipe, RecipeMapInfo } from '../../../shared/types/pack.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { CROP_MANAGER_MTE_IDS } from './crops.ts';
 
 /** The pseudo map crop farms run on (`Recipe.maps` of a crop recipe), whose machines are the pack's Crop Managers. */
@@ -59,7 +60,7 @@ function farmPackOf(pack: Pack, recipes: readonly Recipe[]): Pack {
   const machines = new Map(pack.machines);
   const managers: Machine[] = [];
   for (const id of CROP_MANAGER_MTE_IDS) {
-    const m = pack.machines.get(id);
+    const m = machineByMteId(pack, id);
     if (m === undefined) continue;
     const manager: Machine = { ...m, kind: 'basic', maps: [CROP_MANAGER_MAP] };
     machines.set(id, manager);

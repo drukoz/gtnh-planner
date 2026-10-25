@@ -17,7 +17,7 @@ import { type MachineId, compareMachineId } from '../../shared/ids.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { MachineWhere, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
-import { machinesForMap } from '../pack/lookup.ts';
+import { machineByMteId, machinesForMap } from '../pack/lookup.ts';
 import type { PlanBasis } from './basis.ts';
 import { cleanroomMachine } from './bom.ts';
 import { buildKeys, gapText, hatchSet, itemPrices, machineBuildCost, machineGap, type ItemPrices, type PriceGap } from './build-cost.ts';
@@ -383,7 +383,7 @@ function offersFor(pack: Pack, r: Recipe, mapId: string, env: OfferEnv): Offer[]
   const farm = r.meta.farm;
   if (farm !== undefined) {
     return farm.machines.flatMap((id): Offer[] => {
-      const m = pack.machines.get(id);
+      const m = machineByMteId(pack, id);
       return m === undefined ? [] : [{ m, tier: farm.tier, kind: farmMachineKind(m) }];
     });
   }
