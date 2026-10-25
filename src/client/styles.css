@@ -178,6 +178,7 @@ a, button.link { color: var(--ink-link); }
  * R27). Logo C's pipe steps through its frames on opacity alone (`brand-flow`, Phase 2 spec §5.3). The shared tooltip fades out and
  * sinks 2px as it goes (`tip-out`, Phase 2 spec §6.3), the one exit that keeps its last frame, as the box is removed once it has run.
  * A changed tile of the key-numbers strip flashes its frame once, from full opacity to its own nothing (`flash-out`, Phase 2 spec §10.1).
+ * A skeleton's sheen passes over its blocks from their left edge to their right, on transform alone (`sheen`, Phase 2 spec §11.2).
  * Under reduced motion every duration is zero and an animation runs once, for a millisecond: nothing moves.
  */
 @keyframes fade-in { from { opacity: 0; } }
@@ -193,6 +194,7 @@ a, button.link { color: var(--ink-link); }
 @keyframes brand-flow { 0% { opacity: 1; } 33.333% { opacity: 0; } }
 @keyframes tip-out { to { opacity: 0; transform: translateY(2px); } }
 @keyframes flash-out { from { opacity: 1; } }
+@keyframes sheen { to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-exit: 0ms; }
   *, *::before, *::after {
@@ -681,6 +683,44 @@ svg .item-icon::after { content: none; }
 }
 .badge { white-space: nowrap; }
 .badge.muted { color: var(--screen-muted); }
+/*
+ * Skeletons (Phase 2 spec §11, D13): beside a loading line, which stays as it is, an aria-hidden shape of what is coming: empty blocks of the
+ * skeleton grey (on a well, its own darker grey) in a column 8 px apart, 18 px tall unless the shape sizes them, every height in px so nothing
+ * jumps when the data comes and no late font changes one. A sheen passes over each block three times (4.2 s, within WCAG 2.2.2's 5 s), on
+ * transform alone, and rests where it starts, off the block's left edge: no fill mode, so none of it shows. The geometry is the builder's
+ * (§21): the project list's three cards, as far apart as its cards; a project page's head row (40 % wide), strip and views; the strip's five
+ * tiles, which draw no box of
+ * their own but are the wait box's grid's items, that grid being the strip's (ledger ruling P2-R48); a diagram's three boxes and a scene, set
+ * into a well as their views are; lines, every other one shorter. The Compare card's (plan ruling compare-skeletons): a mode's six figures
+ * in the tiles' own grid (`.compare-rows`'), 55 px blocks for its 54.7 px tiles, so they fall two a row or stacked as the tiles will; and its
+ * three modes in its columns' grid, each frame edged as a column is and padded with the room of its title above the tiles (8 + 19.5 + 8 px)
+ * and of its button below (8 + 36 + 8 px), 10 px at each side, so it has no height of its own and is as tall as a loaded column at every width.
+ */
+.skeleton { display: flex; flex-direction: column; gap: 8px; }
+.skeleton-block { position: relative; overflow: hidden; height: 18px; background: var(--skeleton); }
+.skeleton-block::after {
+  content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--sheen), transparent);
+  transform: translateX(-100%); animation: sheen 1.4s var(--ease-out) 3;
+}
+.skeleton-cards { gap: 10px; margin: 0 0 20px; }
+.skeleton-cards .skeleton-block { height: 58px; }
+.skeleton-project .skeleton-block:nth-child(1) { width: 40%; height: 36px; }
+.skeleton-project .skeleton-block:nth-child(2) { height: 52px; }
+.skeleton-project .skeleton-block:nth-child(3) { height: 360px; }
+.skeleton-strip { display: contents; }
+.skeleton-strip .skeleton-block { height: 52px; }
+.skeleton-diagram, .skeleton-scene { background: var(--well); border: 2px solid var(--outline); box-shadow: var(--bevel-well); }
+.skeleton-diagram { display: grid; grid-template-columns: repeat(3, 110px); gap: 40px; align-content: center; height: 240px; padding: 20px; }
+.skeleton-diagram .skeleton-block { height: 70px; background: var(--skeleton-well); }
+.skeleton-scene { height: 360px; padding: 20px; }
+.skeleton-scene .skeleton-block { flex: 1; }
+.skeleton-lines .skeleton-block:nth-child(even) { width: 70%; }
+.skeleton-readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 4px; }
+.skeleton-readouts .skeleton-block { height: 55px; }
+.skeleton-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.skeleton-compare > .skeleton-readouts {
+  border: 2px solid; border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo); padding: 35.5px 10px 52px;
+}
 /* A figure inside Pixelify text (Figs.tsx): as tall as the Pixelify digits round it, and a line height of 0, so it never grows or moves
    a line. */
 .fig { font: 1.15em/0 var(--font-digits); font-size-adjust: cap-height 0.56; }
@@ -1806,4 +1846,7 @@ details.mat-needed[open]::details-content { block-size: auto; }
   .mat-slot-tick::before { background: Highlight; }
   .mat-meter-fill { background: Highlight; }
   .mat-view-toggle button[aria-pressed='true'] { text-decoration: underline; }
+  /* Phase 2 Task 8: a skeleton's blocks, a background the theme would paint like the well or the page they lie on, are GrayText (the well's
+     blocks' own rule out-ranks a bare .skeleton-block, so it is named too), so the shape of what is coming stays */
+  .skeleton-block, .skeleton-diagram .skeleton-block { background: GrayText; }
 }

@@ -17,6 +17,7 @@ import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import type { Mark } from '../../shared/types/project.ts';
 import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { Tick } from '../components/Tick.tsx';
 import { formatRate } from '../format.ts';
 import { showInFlow } from '../state/flow-focus.ts';
@@ -314,7 +315,7 @@ function LeftOverSection(props: { plan: Plan; names: Record<string, string> }): 
 
 export function MaterialsView(props: ProjectViewProps): ReactElement {
   const { project, plan, send } = props;
-  if (plan === null) return <p className="muted">Planning…</p>;
+  if (plan === null) return <><p className="muted">Planning…</p><Skeleton shape="lines" /></>;   // with the lines to come beside it (spec §11.1)
   if (plan.status === 'empty') return <p className="muted">Pick something to make in the settings</p>;
   if (plan.status === 'infeasible') return <p className="muted">This line cannot be planned yet, so there is nothing to build or run.</p>;
   const names = plan.names ?? {};

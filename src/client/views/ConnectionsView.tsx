@@ -18,6 +18,7 @@ import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
 import {
   CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, hasLine, pickDetails,
@@ -400,19 +401,27 @@ function Panel(props: { details: Details; onClose(): void }): ReactElement {
 }
 
 /**
+ * A loading line of the tab, and beside it a skeleton of a diagram (Phase 2 spec §11.1): only while there is no picture yet, never over one,
+ * whose busy state keeps it up, dimmed (connections.spec.ts asks the page what is under a point of it).
+ */
+function Waiting(props: { text: string }): ReactElement {
+  return <><p className="muted">{props.text}</p><Skeleton shape="diagram" /></>;
+}
+
+/**
  * Everything the tab shows, from its state (markup but for the picture's own view, which it moves and zooms; tested
- * with renderToStaticMarkup): why there is nothing to draw yet, else the picture with its legend and, for a pick that
- * names something in `graph`, the side panel. While a newer layout or picture is on its way, or failed, the last
- * picture stays up (dimmed while busy) under the reason.
+ * with renderToStaticMarkup): why there is nothing to draw yet, beside a skeleton while it is on its way, else the picture with its
+ * legend and, for a pick that names something in `graph`, the side panel. While a newer layout or picture is on its way, or failed,
+ * the last picture stays up (dimmed while busy) under the reason.
  */
 export function ConnectionsShell(props: ConnectionsShellProps): ReactElement {
   const { plan, layout, loading, error, graph, picture, layoutError, pick, onPick } = props;
-  if (plan === null) return <p className="muted">{PLANNING_TEXT}</p>;
+  if (plan === null) return <Waiting text={PLANNING_TEXT} />;
   if (plan.status === 'empty') return <p className="muted">{EMPTY_PLAN_TEXT}</p>;
   if (plan.status === 'infeasible') return <p className="muted">{INFEASIBLE_TEXT}</p>;
-  if (layout === null) return error === null ? <p className="muted">{LAYING_OUT_TEXT}</p> : <p className="error" role="alert">{loadFailed(error)}</p>;
+  if (layout === null) return error === null ? <Waiting text={LAYING_OUT_TEXT} /> : <p className="error" role="alert">{loadFailed(error)}</p>;
   if (layout.status === 'empty' || graph?.nodes.length === 0) return <p className="muted">{NOTHING_TEXT}</p>;
-  if (picture === null) return layoutError === null ? <p className="muted">{DRAWING_TEXT}</p> : <p className="error" role="alert">{drawFailed(layoutError)}</p>;
+  if (picture === null) return layoutError === null ? <Waiting text={DRAWING_TEXT} /> : <p className="error" role="alert">{drawFailed(layoutError)}</p>;
 
   const details = pick === null || graph === null ? null : pickDetails(graph, pick);
   return (

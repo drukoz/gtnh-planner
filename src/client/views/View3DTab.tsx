@@ -1,8 +1,10 @@
 // The `3d` project tab (architecture §7.2): the 3D view loaded on first use, so three.js lands in a chunk of its own and
-// the other tabs never download it (web-stack §8).
+// the other tabs never download it (web-stack §8). While that chunk comes, its loading line with a skeleton of the scene
+// (Phase 2 spec §11.1).
 
 import { Component, lazy, Suspense, type ReactElement, type ReactNode } from 'react';
 import { messageOf } from '../api/client.ts';
+import { Skeleton } from '../components/Skeleton.tsx';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 const View3D = lazy(() => import('./View3D.tsx'));
@@ -27,7 +29,7 @@ class ViewFailed extends Component<{ children: ReactNode }, { error: string | nu
 export function View3DTab(props: ProjectViewProps): ReactElement {
   return (
     <ViewFailed>
-      <Suspense fallback="Loading the 3D view…">
+      <Suspense fallback={<><p className="muted">Loading the 3D view…</p><Skeleton shape="scene" /></>}>
         <View3D {...props} />
       </Suspense>
     </ViewFailed>

@@ -137,6 +137,7 @@ const KEYFRAMES: Record<string, string[]> = {
   'tip-out': ['opacity', 'transform'],                                               // Phase 2 spec §6.3: the shared tooltip's 80 ms exit
   'gt-arrow': ['transform'],                                                         // Phase 2 spec §11.3: the GT progress arrow fills in eight steps
   'flash-out': ['opacity'],                                                          // Phase 2 spec §10.1: a changed strip tile's frame fades once
+  sheen: ['transform'],                                                              // Phase 2 spec §11.2: a skeleton's sheen passes over its blocks
 };
 
 const FONT_IMPORTS = [
@@ -2611,6 +2612,21 @@ const STRIP_RULES = [
   STRIP_HIDE,
 ];
 
+/**
+ * Phase 2 Task 8 (spec §11.2): the skeletons beside the loading lines, empty blocks in the shape of what is coming, each with a sheen that
+ * passes three times; the diagram's and the scene's set into a well.
+ */
+const SKELETON_BLOCK = '.skeleton-block';
+const SHEEN = '.skeleton-block::after';
+const SKELETON_WELLS = '.skeleton-diagram, .skeleton-scene';
+const SKELETON_RULES = [
+  '.skeleton', SKELETON_BLOCK, SHEEN, '.skeleton-cards', '.skeleton-cards .skeleton-block', '.skeleton-project .skeleton-block:nth-child(1)',
+  '.skeleton-project .skeleton-block:nth-child(2)', '.skeleton-project .skeleton-block:nth-child(3)', '.skeleton-strip', '.skeleton-strip .skeleton-block',
+  SKELETON_WELLS, '.skeleton-diagram', '.skeleton-diagram .skeleton-block', '.skeleton-scene', '.skeleton-scene .skeleton-block', '.skeleton-lines .skeleton-block:nth-child(even)',
+];
+/** The Compare card's two (plan ruling compare-skeletons): a mode's six figures in the tiles' own grid, and the three modes framed as columns. */
+const COMPARE_SKELETON_RULES = ['.skeleton-readouts', '.skeleton-readouts .skeleton-block', '.skeleton-compare', '.skeleton-compare > .skeleton-readouts'];
+
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
@@ -2625,6 +2641,7 @@ const PHASE2_RULES: string[] = [
   ...GRID_RULES,                                                                     // Task 6a: the inventory grid (spec §9.3)
   ...MAT_FOLD_RULES,                                                                 // Task 6b: the Materials disclosures fold (spec §3.3, R16)
   ...STRIP_RULES,                                                                    // Task 7: the key-numbers strip (spec §10.2)
+  ...SKELETON_RULES, ...COMPARE_SKELETON_RULES,                                      // Task 8: the skeletons (spec §11.2, compare-skeletons)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3018,5 +3035,102 @@ describe('the Machine GUI Phase 2: the key-numbers strip', () => {
       expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
       expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
     }
+  });
+});
+
+// Skeletons and the progress arrow (Phase 2 spec §11, Task 8): beside every loading line an aria-hidden skeleton, blocks of the skeleton grey
+// (on a well, its own darker grey) in the shape of what is coming, every height in px, so nothing jumps when the data comes and no late font
+// changes a height; a sheen passes over each block three times in 4.2 s (WCAG 2.2.2) and rests off its left edge with no fill mode, so none
+// shows. The Compare card's two (plan ruling compare-skeletons) take its own grids: three frames in its columns' grid, each framed as a column
+// is, its six blocks in the tiles' grid, so they fall as the tiles will and a frame is as tall as its blocks, two a row or stacked. The strip's
+// draws no box of its own: its five blocks are the wait box's grid's (ledger ruling P2-R48). In forced colours the blocks are GrayText.
+describe('the Machine GUI Phase 2: skeletons', () => {
+  /** Every rule, at any depth, whose selector names a skeleton class. */
+  const skeletonRules = (): Block[] => blocks.filter((b) => !b.prelude.startsWith('@') && /\.skeleton(?![\w-])|\.skeleton-[a-z]/.test(b.prelude));
+
+  it('draws skeletons whose sheen passes three times and rests off their edge', () => {
+    expectDeclared([
+      [SKELETON_BLOCK, 'position', 'relative'], [SKELETON_BLOCK, 'overflow', 'hidden'], [SKELETON_BLOCK, 'background', 'var(--skeleton)'],
+      [SHEEN, 'content', "''"], [SHEEN, 'position', 'absolute'], [SHEEN, 'inset', '0'],
+      [SHEEN, 'background', 'linear-gradient(90deg, transparent, var(--sheen), transparent)'],
+      [SHEEN, 'transform', 'translateX(-100%)'], [SHEEN, 'animation', 'sheen 1.4s var(--ease-out) 3'],
+      [SKELETON_WELLS, 'background', 'var(--well)'], [SKELETON_WELLS, 'border', '2px solid var(--outline)'], [SKELETON_WELLS, 'box-shadow', 'var(--bevel-well)'],
+      ['.skeleton-diagram .skeleton-block', 'background', 'var(--skeleton-well)'],
+      // spec §11.2's geometry, the builder's (§21): a column of blocks 8 px apart, 18 px each unless a shape sizes them
+      ['.skeleton', 'display', 'flex'], ['.skeleton', 'flex-direction', 'column'], ['.skeleton', 'gap', '8px'], [SKELETON_BLOCK, 'height', '18px'],
+      ['.skeleton-cards .skeleton-block', 'height', '58px'], ['.skeleton-cards', 'gap', '10px'], ['.skeleton-cards', 'margin', '0 0 20px'],
+      ['.skeleton-project .skeleton-block:nth-child(1)', 'width', '40%'], ['.skeleton-project .skeleton-block:nth-child(1)', 'height', '36px'],
+      ['.skeleton-project .skeleton-block:nth-child(2)', 'height', '52px'], ['.skeleton-project .skeleton-block:nth-child(3)', 'height', '360px'],
+      ['.skeleton-diagram', 'display', 'grid'], ['.skeleton-diagram', 'grid-template-columns', 'repeat(3, 110px)'], ['.skeleton-diagram', 'gap', '40px'],
+      ['.skeleton-diagram', 'align-content', 'center'], ['.skeleton-diagram', 'height', '240px'], ['.skeleton-diagram', 'padding', '20px'],
+      ['.skeleton-diagram .skeleton-block', 'height', '70px'],
+      ['.skeleton-scene', 'height', '360px'], ['.skeleton-scene', 'padding', '20px'], ['.skeleton-scene .skeleton-block', 'flex', '1'],
+      ['.skeleton-lines .skeleton-block:nth-child(even)', 'width', '70%'],
+    ]);
+    // the sheen is finite, within 5 s, and rests where it starts, off the block's left edge: its own transform, no fill mode
+    const [, duration, , count] = (declared(SHEEN, 'animation') ?? '').split(' ');
+    expect(Number.parseFloat(duration ?? '') * Number(count)).toBeLessThanOrEqual(5);
+    expect(declared(SHEEN, 'animation')).not.toMatch(/forwards|backwards|both|infinite/);
+    expect(ruleBody('@keyframes sheen')).toMatch(/^to \{ transform: translateX\(100%\);? \}$/);
+    // every height in px: nothing jumps when the data comes, and no late font changes one (spec §3.6)
+    const rules = skeletonRules();
+    expect(rules.length, 'the scan sees the skeleton rules').toBeGreaterThanOrEqual(SKELETON_RULES.length + COMPARE_SKELETON_RULES.length);
+    for (const rule of rules) {
+      for (const [name, value] of declarations(rule.inner)) if (name === 'height') expect(value, rule.prelude).toMatch(/^\d+(\.\d+)?px$/);
+    }
+    // a shape's display and gap come after the column every skeleton is, which they replace (one class each); the cards are as far apart as
+    // the list's cards
+    for (const shape of ['.skeleton-cards', '.skeleton-strip', '.skeleton-diagram', '.skeleton-readouts', '.skeleton-compare']) expect(position(shape), shape).toBeGreaterThan(position('.skeleton'));
+    for (const property of ['gap', 'margin']) expect(declared('.skeleton-cards', property), property).toBe(declared('.cards', property));
+    // the Compare card's (plan ruling compare-skeletons): three frames in the card's columns' grid, each framed as a column is ...
+    expectDeclared([
+      ['.skeleton-compare', 'display', 'grid'], ['.skeleton-compare', 'grid-template-columns', 'repeat(auto-fit, minmax(220px, 1fr))'], ['.skeleton-compare', 'gap', '12px'],
+      ['.skeleton-readouts', 'display', 'grid'], ['.skeleton-readouts', 'gap', '4px'],
+      ['.skeleton-readouts', 'grid-template-columns', 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))'],
+      ['.skeleton-readouts .skeleton-block', 'height', '55px'],
+      ['.skeleton-compare > .skeleton-readouts', 'border', '2px solid'], ['.skeleton-compare > .skeleton-readouts', 'padding', '35.5px 10px 52px'],
+    ]);
+    expect(declared('.skeleton-compare', 'grid-template-columns')).toBe(declared('.compare-columns', 'grid-template-columns'));
+    expect(declared('.skeleton-compare', 'gap')).toBe(declared('.compare-columns', 'gap'));
+    expect(declared('.skeleton-readouts', 'grid-template-columns')).toBe(declared('.compare-rows', 'grid-template-columns'));
+    expect(declared('.skeleton-readouts', 'gap')).toBe(declared('.compare-rows', 'gap'));
+    expect(declared('.skeleton-compare > .skeleton-readouts', 'border-color')).toBe(declared('.compare-column', 'border-color'));
+    // ... the room of the column's title above its tiles and of its button below: its 8 px padding, the 15 px/1.3 title and the 8 px gap above,
+    // the gap, the 36 px button and the padding below, and its 10 px at each side; so a frame's grid is as wide as a loaded column's tiles
+    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
+    const [padTop, padSide] = (declared('.compare-column', 'padding') ?? '').split(' ').map(px);
+    const gap = px(declared('.compare-column', 'gap'));
+    const title = 15 * 1.3;
+    expect(declared('.compare-column > h4', 'font')).toBe('600 15px/1.3 var(--font-pixel)');
+    expect((declared('.skeleton-compare > .skeleton-readouts', 'padding') ?? '').split(' ').map(px))
+      .toEqual([padTop! + title + gap, padSide, gap + px(declared(':where(button)', 'min-height')) + padTop!]);
+    // ... and six blocks as tall as a tile, to the pixel: 6 + 14.3 + 2 + 26.390625 + 6 (its padding, label line, gap, value line, padding)
+    const tile = 2 * 6 + 11 * 1.3 + 2 + 26.390625;
+    expect(declared('.compare-row', 'padding')).toBe('6px 8px'); expect(declared('.compare-row', 'gap')).toBe('2px');
+    expect(Math.abs(px(declared('.skeleton-readouts .skeleton-block', 'height')) - tile)).toBeLessThan(1);
+    // no height of its own: a frame is as tall as its blocks, two a row or stacked as the tiles will be
+    for (const rule of rules.filter((r) => r.prelude.includes('.skeleton-compare'))) {
+      for (const name of ['height', 'grid-template-rows']) expect(declarations(rule.inner).map(([n]) => n), `${rule.prelude} { ${name} }`).not.toContain(name);
+    }
+    // tokens and square corners, as every Phase 2 rule; and no name of add-on 17's (`skeleton-compare` is not a `.compare-` class)
+    for (const selector of [...SKELETON_RULES, ...COMPARE_SKELETON_RULES]) {
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
+      expect(ADDON17_RULE.test(selector), selector).toBe(false);
+    }
+    // forced colours: the blocks' grey, a background the theme paints like what they lie on, is GrayText (the well's blocks' own rule
+    // out-ranks a bare .skeleton-block, so the block names it too), after the rules it repaints
+    expect(inQuery(FORCED, '.skeleton-block, .skeleton-diagram .skeleton-block')).toEqual([['background', 'GrayText']]);
+    const { block, rules: forced } = forcedBlock();
+    for (const selector of [SKELETON_BLOCK, '.skeleton-diagram .skeleton-block']) expect(position(selector), selector).toBeLessThan(blocks.indexOf(block));
+    const inBlock = (prelude: string): number => forced.findIndex((rule) => rule.prelude === prelude);
+    expect(inBlock('.skeleton-block, .skeleton-diagram .skeleton-block')).toBe(forced.length - 1);
+  });
+
+  it('puts the strip\'s skeleton blocks in the wait box\'s own grid, as tall as a tile (ledger ruling P2-R48)', () => {
+    // the skeleton draws no box: its blocks are the grid's items, so the wait box keeps the strip's height at every width, wrapped or not
+    expectDeclared([['.skeleton-strip', 'display', 'contents'], ['.skeleton-strip .skeleton-block', 'height', '52px']]);
+    expect(declared('.skeleton-strip .skeleton-block', 'height')).toBe(declared('.key-number', 'height'));
+    expect(declared('.skeleton-strip .skeleton-block', 'height')).toBe(declared('.key-numbers-wait > div', 'height'));
   });
 });

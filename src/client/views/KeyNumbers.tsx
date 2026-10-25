@@ -7,18 +7,16 @@
 // only, exact: the counting one is aria-hidden beside a visually hidden copy, with every qualifier of the plan's cost sentence, which is
 // then hidden from a screen reader (fix round 1, I2 and M2); the strip is no live region (the plan banner's status and What changed say
 // what changed). A project with no target has no strip; while its plan is on its way the strip's own grid of five empty blocks keeps its
-// place at every width, so nothing below moves when the figures come (ledger ruling P2-R48; Task 8 draws its skeleton there). It sits in
-// the banners' box, so it goes inert with them behind an open drawer.
+// place at every width, so nothing below moves when the figures come (ledger ruling P2-R48): the strip's skeleton, whose blocks are that
+// grid's (Phase 2 spec §11.1). It sits in the banners' box, so it goes inert with them behind an open drawer.
 
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { prefersReducedMotion } from '../state/motion.ts';
 import {
   COUNT_UP_MS, compactNumber, countUpAt, keyNumbers, nextCount, nextFlash, planUnit, type Count, type Flash, type KeyNumber,
 } from './key-numbers.ts';
-
-/** The blocks of the box that keeps the strip's place, one a tile. */
-const WAIT_BLOCKS = ['output', 'power', 'machines', 'build', 'run'];
 
 /**
  * The figure to show for `target`, which counts up to a new target from the figure shown when it came, over `ms` by animation frames, easing
@@ -82,8 +80,9 @@ function KeyNumberTile(props: { n: KeyNumber }): ReactElement {
 
 /**
  * The strip for a project's plan: nothing without a target; while the plan is on its way, its own grid of five empty blocks as tall as a
- * tile, so it takes the strip's height at every width (ledger ruling P2-R48); else the five tiles, the rate in the unit of the settings the
- * plan was made for, which it remembers of every settings state it draws (`planUnit`, ledger ruling P2-R49).
+ * tile, so it takes the strip's height at every width (ledger ruling P2-R48), the strip's skeleton, which draws no box of its own; else the
+ * five tiles, the rate in the unit of the settings the plan was made for, which it remembers of every settings state it draws (`planUnit`,
+ * ledger ruling P2-R49).
  */
 export function KeyNumbers(props: { plan: Plan | null; settings: PlanSettings }): ReactElement | null {
   const { plan, settings } = props;
@@ -95,7 +94,7 @@ export function KeyNumbers(props: { plan: Plan | null; settings: PlanSettings })
   if (numbers === null) {
     return (
       <div className="key-numbers-wait" aria-hidden="true">
-        {WAIT_BLOCKS.map((id) => <div key={id} />)}
+        <Skeleton shape="strip" />
       </div>
     );
   }

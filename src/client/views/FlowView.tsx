@@ -10,7 +10,8 @@
 // it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms.
 // The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6), and
 // its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone or out of the canvas's view
-// (ledger ruling P2-R36).
+// (ledger ruling P2-R36). While the plan, or its layout, is on its way the view says so beside a skeleton of a diagram (Phase 2 spec
+// §11.1), which is never drawn with the diagram it stands for.
 
 import {
   useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement,
@@ -23,6 +24,7 @@ import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
 import {
   endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
@@ -857,7 +859,7 @@ function FlowDiagram(props: {
         <FlowIssues plan={plan} settings={settings} send={send} onShow={(key) => revealFlowFocus({ kind: 'item', key })} />
         {error !== null && <p className="error" role="alert">{`Could not lay out the diagram: ${error}`}</p>}
         {laid === null ? (
-          error === null && <p className="muted">Laying out the diagram…</p>
+          error === null && <><p className="muted">Laying out the diagram…</p><Skeleton shape="diagram" /></>
         ) : (
           <FlowCanvas
             layout={laid.layout} viewKey={laid.viewKey} selectedId={selectedId} goods={goods}
@@ -887,7 +889,7 @@ function Infeasible(props: { plan: Plan }): ReactElement {
 
 export function FlowView(props: ProjectViewProps): ReactElement {
   const { project, plan, send } = props;
-  if (plan === null) return <p className="muted">Planning…</p>;
+  if (plan === null) return <><p className="muted">Planning…</p><Skeleton shape="diagram" /></>;
   if (plan.status === 'empty') return <p className="muted">Pick something to make in the settings</p>;
   if (plan.status === 'infeasible') return <Infeasible plan={plan} />;
   const { settings } = project;

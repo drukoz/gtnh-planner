@@ -9,7 +9,9 @@
 // open (ruling R36). What to make is the first of its sections, so it is never left out of sight: a project with no target
 // opens the drawer by itself, once, into the item search; the plan banner's hint to pick something to make goes there too;
 // and the Settings button says what the line makes. At the top of the banners, the plan's key numbers sit in a strip of
-// readouts (Phase 2 spec §10): what it makes, its peak power, its machines, and what it costs to build and to run.
+// readouts (Phase 2 spec §10): what it makes, its peak power, its machines, and what it costs to build and to run. While a new
+// plan is on its way the banner says so with the GT progress arrow (Phase 2 spec §11.3), and the drawer, behind which the banners are
+// inert, has a status line of its own (R43).
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -21,9 +23,11 @@ import { apiGet, messageOf } from '../api/client.ts';
 import { listenProjectEvents } from '../api/sse.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
 import { Figs } from '../components/Figs.tsx';
+import { GtArrow } from '../components/GtArrow.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ITEM_SEARCH_PLACEHOLDER } from '../components/ItemSearch.tsx';
 import { SettingsToggle } from '../components/SettingsToggle.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { formatPercent } from '../format.ts';
 import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
@@ -101,8 +105,46 @@ function issueCount(code: PlanIssueCode, n: number, issues: readonly PlanIssue[]
   }
 }
 
+/** What the plan banner lists: the problems, the derived materials the line buys and every other warning (`bannerItems`). */
+interface BannerItems { issues: PlanIssue[]; derived: StuffKey[]; others: PlanWarning[] }
+
 /**
- * What the plan warns about (fix spec §6.4), above every project view: a summary of the integrity issues
+ * What the plan banner lists (fix spec §6.4): the integrity issues the client finds in the plan (`indexPlan`), in ISSUE_ORDER; the derived
+ * materials the line buys, which stand for the server's derived-leaf warning as chips once the plan lists them; and every other server
+ * warning, but a server integrity warning the client finds too (listed once, with the issues) and the derived-leaf warning its chips stand
+ * for. The banner draws them, and the drawer's status counts them (R43): one reading for both.
+ */
+function bannerItems(plan: Plan | null): BannerItems {
+  const warnings = plan?.warnings ?? [];
+  const issues = plan === null ? [] : [...indexPlan(plan).issues].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code));
+  const derivedWarning = warnings.find((w) => w.code === 'derived-leaf');
+  const derived = derivedWarning === undefined ? [] : (plan?.rawInputs ?? []).filter((r) => r.leafClass === 'derived').map((r) => r.key);
+  const shownIssues = new Set(issues.map(problemId));
+  // Every other warning keeps its own text: a server integrity warning the client finds too is shown once (with the issues), and
+  // the derived-leaf warning becomes chips when the plan lists its leaves.
+  const others = warnings.filter((w) => !(ISSUE_CODES.has(w.code) && shownIssues.has(problemId(w))) && !(w === derivedWarning && derived.length > 0));
+  return { issues, derived, others };
+}
+
+/**
+ * What the settings drawer's own status line says (Phase 2 spec §17 R43): while the drawer is open the banners behind it are inert, so their
+ * status is not announced. The planner's error; else that the plan is updating, while a new plan is on its way and the views still show the
+ * old one, in other words than the banner's busy line, which drawer.spec.ts finds by its text while the drawer is open (plan ruling
+ * drawer-status-words); else how many problems the banner lists, its problems and its other warnings, but the hint to pick something to make,
+ * which the drawer, the item search in it focused, is there to answer (plan ruling drawer-status-count), and never their words, which other
+ * specs find by text; else nothing. What the plan uses beyond its line (a farm, another project's surplus) is no problem.
+ */
+export function drawerStatus(plan: Plan | null, planError: string | null, planLoading: boolean): string {
+  if (planError !== null) return planError;
+  if (planLoading && plan !== null) return 'The plan is updating…';
+  const { issues, others } = bannerItems(plan);
+  const n = issues.length + others.filter((w) => w.code !== NO_TARGET).length;
+  return n === 0 ? '' : `The plan has ${n} ${n === 1 ? 'problem' : 'problems'}`;
+}
+
+/**
+ * What the plan warns about (fix spec §6.4), above every project view: while a new plan is on its way, "Updating the plan…" after the GT
+ * progress arrow (Phase 2 spec §11.3); a summary of the integrity issues
  * (`indexPlan`: "This plan does not add up: …", with "Show in the flow") and each issue in the server's words, else
  * `issueText`'s (the client re-checks the plan it got); the derived materials the line buys as chips that show their
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan
@@ -135,7 +177,7 @@ export function PlanBanner(props: {
   const names = plan?.names ?? {};
   const nameOf = (key: StuffKey): string => names[key] ?? key;
 
-  const issues = plan === null ? [] : [...indexPlan(plan).issues].sort((a, b) => ISSUE_ORDER.indexOf(a.code) - ISSUE_ORDER.indexOf(b.code));
+  const { issues, derived, others } = bannerItems(plan);
   const served = new Map<string, PlanWarning>();
   for (const w of warnings) if (ISSUE_CODES.has(w.code)) served.set(problemId(w), w);
   const issueTexts = issues.map((issue) => served.get(problemId(issue))?.text ?? (plan === null ? '' : issueText(issue, plan)));
@@ -143,13 +185,6 @@ export function PlanBanner(props: {
     const ofCode = issues.filter((i) => i.code === code);
     return ofCode.length === 0 ? [] : [issueCount(code, ofCode.length, ofCode)];
   });
-
-  const derivedWarning = warnings.find((w) => w.code === 'derived-leaf');
-  const derived = derivedWarning === undefined ? [] : (plan?.rawInputs ?? []).filter((r) => r.leafClass === 'derived').map((r) => r.key);
-  const shownIssues = new Set(issues.map(problemId));
-  // Every other warning keeps its own text: a server integrity warning the client finds too is shown once (above), and
-  // the derived-leaf warning becomes chips when the plan lists its leaves.
-  const others = warnings.filter((w) => !(ISSUE_CODES.has(w.code) && shownIssues.has(problemId(w))) && !(w === derivedWarning && derived.length > 0));
 
   const rawText = rawCostText(plan?.rawCost, stepChargeLabel(stepChargeOf(settings)));
   // What the plan costs to run and to build (plan 12): on every plan that has a cost, outside the warning box, unless nothing tells it.
@@ -164,7 +199,7 @@ export function PlanBanner(props: {
   const banner = (
     <div className="plan-banner" role="status">
       {planError !== null && <p className="error">{planError}</p>}
-      {busy && <p className="muted">Updating the plan…</p>}
+      {busy && <p className="muted"><GtArrow tone="chat" />Updating the plan…</p>}
       {firstIssue !== undefined && (
         <div className="banner-integrity">
           <p className="banner-heading error">
@@ -414,7 +449,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
   if (project === null) {
     return (
       <main className="page">
-        {view.error !== null ? <p className="banner error" role="alert">{view.error}</p> : <p className="muted">Loading…</p>}
+        {view.error !== null ? <p className="banner error" role="alert">{view.error}</p> : <><p className="muted">Loading…</p><Skeleton shape="project" /></>}
       </main>
     );
   }
@@ -457,6 +492,9 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <aside className="settings-panel" id="project-settings" aria-label="Project settings" ref={settingsPanel}>
           {/* The drawer's way out, and where the focus goes when it opens; the stylesheet draws it in the drawer only. */}
           <button type="button" className="settings-close" onClick={closeSettings} ref={settingsClose}>Close settings</button>
+          {/* The drawer's own status (R43): the banners behind it are inert while it is open, so their status is not announced. Always
+              there, so a screen reader hears it change; empty while the drawer is closed. */}
+          <p className="visually-hidden" role="status">{settingsOpen ? drawerStatus(plan, view.planError, view.planLoading) : ''}</p>
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
           <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} names={names} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}

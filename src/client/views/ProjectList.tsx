@@ -12,6 +12,7 @@ import { apiGet, apiPost, messageOf } from '../api/client.ts';
 import { listDeletedProjects, restoreProject } from '../api/projects.ts';
 import { DeleteProject } from '../components/DeleteProject.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { localTime } from '../format.ts';
 import { followLink, navigate } from '../router.ts';
 import { alreadyDeletedNotice, deletedNotice, takeDeletedNotice } from '../state/deleted-notice.ts';
@@ -147,7 +148,7 @@ export function ProjectList(): ReactElement {
       {notice !== null && <p className="banner notice" role="status">{notice}</p>}
       {error !== null && <p className="banner error" role="alert">{error}</p>}
       {projects === null ? (
-        error === null && <p className="muted">Loading…</p>
+        error === null && <><p className="muted">Loading…</p><Skeleton shape="cards" /></>
       ) : projects.length === 0 ? (
         <p className="muted">No projects yet. Start the first one below.</p>
       ) : (

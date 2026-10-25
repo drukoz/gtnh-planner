@@ -8,9 +8,13 @@
 // The most important setting, what to make, is in the drawer, so a project with no target opens it by itself, once, with the focus in the
 // item search, and the banner's "Pick something to make" is a way back in (the last block of this file). The tests that start with the
 // drawer closed give their project a target, which keeps it from opening.
+//
+// The banners are inert behind the open drawer, so their status is not announced there: the drawer has a status line of its own (Phase 2
+// spec §17 R43, the last two tests), visually hidden, which counts the plan's problems and is empty once the drawer is closed.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { login, setName, createProject } from './helpers.ts';
+import { copperUnsourced } from './fixtures/plans.ts';
+import { login, setName, createProject, openWithPlan } from './helpers.ts';
 
 /** What the page behind the drawer is made of: inert while the drawer is open. */
 const BEHIND = ['.top-nav', '.project-head', '.project-banners', '.project-views'];
@@ -612,4 +616,26 @@ test('a drawer that opened by itself in a window that has grown past 900 px sinc
   await expect(settings).toBeVisible();
   await expect(search).toBeFocused();
   await expect(toggle).not.toBeFocused();
+});
+
+// Phase 2 Task 8 (spec §17 R43): while the drawer is open the banners behind it are inert, so what they say is not announced; the drawer's
+// own status line says how many problems the plan has (never their words, which other specs find by text), and nothing once it is closed.
+test('the drawer has a status line of its own (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await openWithPlan(page, copperUnsourced());                                       // its LV_CIRCUITS give a target: the drawer stays shut
+  const status = page.locator("aside[aria-label='Project settings'] [role=status]");
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();                 // "Settings · Make: Basic Circuit"
+  await expect(status).toHaveText('The plan has 1 problem');                          // the Copper Ingot nothing supplies
+  await page.keyboard.press('Escape');
+  await expect(status).toHaveText('');
+});
+
+// plan ruling drawer-status-count: the drawer that opens by itself is where the hint to pick something to make is answered, so that hint is
+// no problem it announces over the focused item search
+test('the drawer that opens by itself to pick a target says no problem (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Status, nothing yet');                                  // no target: the drawer opens by itself into the item search
+  await expect(page.locator('.plan-banner button.link')).toHaveText('Pick something to make');   // the plan is in; the banner is inert, so found by class
+  await expect(page.locator("aside[aria-label='Project settings'] [role=status]")).toHaveText('');
 });

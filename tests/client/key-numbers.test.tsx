@@ -71,10 +71,11 @@ describe('the key-numbers strip', () => {
     expect(html).toContain('<div class="key-number" data-key-number="output"><dt><span>Output</span></dt><dd><span aria-hidden="true">—</span><span class="visually-hidden">not available</span></dd></div>');
     expect(html).not.toContain('t:plate@0');
   });
-  // ledger ruling P2-R48 (fix round 1, I1): the wait box is the strip's own grid, so it is as tall as the loaded strip at every width
+  // ledger ruling P2-R48 (fix round 1, I1): the wait box is the strip's own grid, so it is as tall as the loaded strip at every width; Task 8
+  // fills it with the strip's skeleton, whose five blocks are the grid's (the skeleton draws no box of its own: they take the grid's columns)
   it('keeps the strip\'s place while its plan is on its way: five empty blocks in the strip\'s grid', () => {
     const wait = renderToStaticMarkup(<KeyNumbers plan={null} settings={{ ...defaultSettings(), target: 't:plate@0' }} />);
-    expect(wait).toBe(`<div class="key-numbers-wait" aria-hidden="true">${'<div></div>'.repeat(5)}</div>`);
+    expect(wait).toBe(`<div class="key-numbers-wait" aria-hidden="true"><div class="skeleton skeleton-strip" aria-hidden="true">${'<div class="skeleton-block"></div>'.repeat(5)}</div></div>`);
   });
   // fix round 1, I2 (spec §10.1: the exact figures stay in the visually hidden value): the tile writes 540k, a screen reader hears 540,000
   it('gives a screen reader the exact figure a tile writes compactly', () => {
@@ -177,6 +178,7 @@ describe('the key-numbers strip', () => {
     expect(html).not.toMatch(/aria-live|role="status"/);
     const wait = renderToStaticMarkup(<KeyNumbers plan={null} settings={{ ...defaultSettings(), target: 't:plate@0' }} />);
     expect(wait).toMatch(/^<div class="key-numbers-wait" aria-hidden="true">/); expect(wait.replace(/<[^>]+>/g, '')).toBe('');   // Task 8 fills it
+    expect(wait).toContain('<div class="key-numbers-wait" aria-hidden="true"><div class="skeleton skeleton-strip" aria-hidden="true">');   // with the strip's skeleton
     expect(renderToStaticMarkup(<KeyNumbers plan={plan} settings={defaultSettings()} />)).toBe('');   // no target, no strip
   });
 });

@@ -91,6 +91,8 @@ interface DarkStop { name: string; open(page: Page): Promise<void>; rows: DarkRo
  * waits for would only slow the tests beside it. Its `close` lets go of it.
  */
 const heldCompares: Route[] = [];
+/** The plans the skeleton's stop holds (Task 8): a page whose plan never comes shows its skeletons; its `close` lets go of them. */
+const heldPlans: Route[] = [];
 
 /** The dark tour (spec §4.11, §4.12): each later task appends its rows and stops. */
 const DARK_TOUR: DarkStop[] = [
@@ -193,6 +195,22 @@ const DARK_TOUR: DarkStop[] = [
       { what: 'the pressed Grid', selector: ".mat-view-toggle button[aria-pressed='true']", property: 'background-color', expected: 'rgb(30, 30, 30)' },
       { what: 'the meter', selector: '.mat-meter', property: 'background-color', expected: 'rgb(11, 11, 11)' },
     ],
+  },
+  // Task 8: a page whose plan never comes, its Flow skeleton set into the dark well (#1a1a1a), its blocks the dark --skeleton-well (spec §11.2)
+  {
+    name: 'a plan on its way',
+    open: async (page) => {
+      await page.route('**/api/projects/*/plan', (route) => { heldPlans.push(route); });
+      await createProject(page, 'Dark skeleton', LV_CIRCUITS);
+      await expect(page.locator('.tab-panel .skeleton-diagram')).toBeVisible();
+    },
+    rows: [
+      { what: 'the diagram\'s skeleton', selector: '.skeleton-diagram', property: 'background-color', expected: 'rgb(26, 26, 26)' },
+      { what: 'its blocks', selector: '.skeleton-diagram .skeleton-block', property: 'background-color', expected: 'rgb(42, 42, 42)' },
+    ],
+    close: async () => {
+      for (const route of heldPlans.splice(0)) await route.abort().catch(() => { /* the page has gone */ });
+    },
   },
 ];
 

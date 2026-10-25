@@ -15,6 +15,7 @@ import type { Note, Project, ProjectOp } from '../../shared/types/project.ts';
 import { findBase, type WorldScan, type WorldSource } from '../../shared/types/world.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { localTime } from '../format.ts';
 import { worldApi } from '../map/api.ts';
 import { FoundPanel } from '../map/FoundPanel.tsx';
@@ -467,7 +468,10 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
   );
 }
 
-/** The project's world scan, loaded; while it loads or when it cannot be loaded, the scan can still be changed. */
+/**
+ * The project's world scan, loaded; while it loads or when it cannot be loaded, the scan can still be changed. While it loads, a skeleton of
+ * the map follows the status box (Phase 2 spec §11.1), outside it, so the box stays as it is.
+ */
 function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanListItem[] | null; send: Send } & LineProps): ReactElement {
   const { project, scanId, scans, send, plan, line, focusedPin } = props;
   const loaded = useScan(scanId);
@@ -475,21 +479,24 @@ function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanL
     return <ScanMap project={project} scan={loaded.scan} scans={scans} send={send} plan={plan} line={line} focusedPin={focusedPin} />;
   }
   return (
-    <div className="map-tab map-tab-status">
-      {loaded.error === null ? <p className="muted">Loading the world scan…</p> : <p className="error">{`Could not load the world scan: ${loaded.error}`}</p>}
-      {loaded.error !== null && (
-        <>
-          <ScanSelect
-            scans={scans}
-            value={scanId}
-            current={{ id: scanId, label: scanId }}
-            emptyLabel="None: plan without the world"
-            onChange={(id) => send(worldOps(project, id === '' ? null : id, id === '' ? null : project.world.baseId))}
-          />
-          <WorldLink />
-        </>
-      )}
-    </div>
+    <>
+      <div className="map-tab map-tab-status">
+        {loaded.error === null ? <p className="muted">Loading the world scan…</p> : <p className="error">{`Could not load the world scan: ${loaded.error}`}</p>}
+        {loaded.error !== null && (
+          <>
+            <ScanSelect
+              scans={scans}
+              value={scanId}
+              current={{ id: scanId, label: scanId }}
+              emptyLabel="None: plan without the world"
+              onChange={(id) => send(worldOps(project, id === '' ? null : id, id === '' ? null : project.world.baseId))}
+            />
+            <WorldLink />
+          </>
+        )}
+      </div>
+      {loaded.error === null && <Skeleton shape="scene" />}
+    </>
   );
 }
 

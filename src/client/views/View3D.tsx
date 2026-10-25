@@ -17,6 +17,7 @@ import type { DyeColor, Layout } from '../../shared/types/layout.ts';
 import type { LogisticsMode } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { SPANS_PER_LINK, connectionPieces, connectionsGraph, hasLine, pickDetails, spanDetails } from '../connections/model.ts';
 import { useLayout } from '../state/use-layout.ts';
 import {
@@ -218,8 +219,8 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
 }
 
 /**
- * The tab without the viewer: what is happening (an error, laying out, no WebGL2, nothing to build, only farms to build,
- * which have no blocks), the canvas with
+ * The tab without the viewer: what is happening (an error, laying out, beside a skeleton of the scene while the first layout is on its way,
+ * no WebGL2, nothing to build, only farms to build, which have no blocks), the canvas with
  * the hover label over it, the layer slider and the Ghosts, Hookups and Show connections toggles (with what the drawn
  * links are while they show), and beside them the clicked block's or link's details (where they show without
  * scrolling), the side list and the layout's warnings below it. Without WebGL2 only the side list and the warnings show.
@@ -233,6 +234,7 @@ export function View3DShell(props: View3DShellProps): ReactElement {
     <div className="view3d" data-testid="view3d">
       {error !== null && <p className="error">{error}</p>}
       {loading && <p className="muted">{LOADING_TEXT}</p>}
+      {loading && layout === null && <Skeleton shape="scene" />}
       {!webgl && <p className="muted">{NO_WEBGL_TEXT}</p>}
       {layout?.status === 'empty' && <p className="muted">{props.noSteps === true ? NO_STEPS_TEXT : ALL_OWNED_TEXT}</p>}
       {farmsOnly && <p className="muted">{FARMS_ONLY_TEXT}</p>}
