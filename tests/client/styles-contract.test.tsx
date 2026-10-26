@@ -140,6 +140,8 @@ const KEYFRAMES: Record<string, string[]> = {
   sheen: ['transform'],                                                              // Phase 2 spec §11.2: a skeleton's sheen passes over its blocks
   'toast-in': ['opacity', 'transform'],                                              // Phase 2 spec §12.1: a toast pops in from 12 px below
   'toast-out': ['opacity', 'transform'],                                             // Phase 2 spec §12.1: and sinks back out as it goes
+  // Phase 2 spec §15.3 (§3.3): a good rides its Flow pipe along the arrow's path, a deliberate exception, like pipe-flow
+  'pipe-ride': ['offset-distance'],
 };
 
 const FONT_IMPORTS = [
@@ -191,7 +193,7 @@ describe('the Machine GUI stylesheet', () => {
   it('defines the keyframes', () => {
     for (const [name, properties] of Object.entries(KEYFRAMES)) {
       expect(new RegExp(`@keyframes ${name}\\s*\\{`).test(css), `@keyframes ${name} is defined`).toBe(true);
-      // opacity and transform only, but the pipes' dash offset; the breathing and blinking dots never move
+      // opacity and transform only, but the pipes' dash offset and the riders' offset distance; the breathing and blinking dots never move
       const steps = ruleBody(`@keyframes ${name}`).match(/\{[^}]*\}/g) ?? [];
       const animated = new Set(steps.flatMap((step) => declarations(step.slice(1, -1)).map(([property]) => property)));
       expect([...animated].sort(), name).toEqual([...properties].sort());
@@ -1290,6 +1292,10 @@ const LIT_CONTENTS = '.flow-edge.hl .flow-edge-flow';
 const DIMMED_CONTENTS = '.flow-edge.dim .flow-edge-flow';
 const DRAGGED_CONTENTS = '.flow-canvas.dragging .flow-edge-flow';
 const MANY_CONTENTS = '.flow-canvas.many-edges .flow-edge:not(.hl) .flow-edge-flow';
+/** Phase 2 Task 12 (spec §15.3): a good riding its pipe, and what stops it with the pipes' contents. */
+const RIDER = '.flow-rider';
+const RIDER_STOPS = '.flow-canvas.dragging .flow-rider, .flow-canvas.pipes-paused .flow-rider, .flow-rider.dim';
+const RIDER_RULES = [RIDER, RIDER_STOPS];
 const FADES = '.flow-node, .flow-row, .flow-edge, .flow-group';
 const LIT_BOX = '.flow-node.selected > .flow-node-box, .flow-node.producer > .flow-node-box';
 const TAKER_BOX = '.flow-node.consumer > .flow-node-box';
@@ -1333,6 +1339,7 @@ const FLOW_RULES = [
   '.swap-option.unusable, .option-choice.unusable', '.port-short .port-rate, .port-warn', '.option-slot', '.option-slot-title',
   ...TIER_RULES, ...READOUT_RULES,                                                   // Phase 2 Task 4: the machine readout (spec §7.3)
   ...RECIPE_RULES,                                                                   // Phase 2 Task 5a: the step panel's recipe card (spec §8.4)
+  ...RIDER_RULES,                                                                    // Phase 2 Task 12: the goods riding the pipes (spec §15.3)
 ];
 
 describe('the Machine GUI Flow diagram', () => {
@@ -2443,7 +2450,9 @@ describe('the Machine GUI pause of the pipes', () => {
 
   it('lets nothing but the pipes move for ever, and the button stops those', () => {
     const endless = blocks.filter((b) => !b.prelude.startsWith('@') && /(^|; )animation: [^;]*\binfinite\b/.test(b.inner)).map((b) => b.prelude);
-    expect(endless.sort()).toEqual([CONTENTS, LIT_CONTENTS, CONN_CONTENTS].sort());
+    // Phase 2 spec §3.9 (deliberate; P2-D18, ratified as P2-D45): the goods riding the Flow pipes are pipe contents too, the fourth rule,
+    // which Pause pipes stops with the other three
+    expect(endless.sort()).toEqual([CONTENTS, LIT_CONTENTS, CONN_CONTENTS, RIDER].sort());
   });
 
   it('stops the dot of the connection by itself within 5 s, on the dot\'s full opacity', () => {
@@ -2686,6 +2695,7 @@ const PHASE2_RULES: string[] = [
   ...CONFIRM_RULES,                                                                  // Task 10: the in-app confirm (spec §13.2)
   ...SHORTCUT_RULES, SHORTCUTS_OPEN,                                                 // Task 11: the shortcuts sheet and the head's button (spec §14.1)
   SETTINGS_SHORTCUTS, SHEET,                                                         // Task 11, fix round 1: the drawer's way in (P2-R85), M5
+  ...RIDER_RULES,                                                                    // Task 12: the goods riding the Flow pipes (spec §15.3)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3369,5 +3379,46 @@ describe('the Machine GUI Phase 2: keyboard shortcuts', () => {
     expect(declarations(ruleBody(SETTINGS_SHORTCUTS))).toEqual([['display', 'none']]);
     expect(inQuery(NARROW, SETTINGS_SHORTCUTS)).toEqual([['display', 'inline-flex'], ['align-items', 'center'], ['align-self', 'flex-start']]);
     expect(position(SETTINGS_SHORTCUTS)).toBeGreaterThan(position('.settings-close'));
+  });
+});
+
+// Goods riding the pipes (Phase 2 spec §15, Task 12; P2-D5, and P2-D18 as P2-D45 ratified it): a good rides each Flow pipe, its icon carried
+// by the stylesheet along the arrow's path (`offset-path`: the spike's branch A, ledger ruling rider mechanism), upright on every run and crisp,
+// for ever like the pipes' contents and stopped with them: while the diagram is dragged, while the pipes are paused and on a dimmed pipe. It
+// takes no pointer, so the arrow under it keeps its hover, its click and its tip, it has no shadow (among the Flow rules only the box has
+// one, a case above), and a dimmed one fades with its pipe. Reduced motion draws none, in a block of its own: the global block stays as it
+// is. pipes.spec.ts watches them ride.
+describe('the Machine GUI Phase 2: goods riding the pipes', () => {
+  it('carries a good upright along its pipe for ever, crisp and never under the pointer, and fades it with its pipe', () => {
+    expectDeclared([
+      [RIDER, 'offset-rotate', '0deg'], [RIDER, 'animation', 'pipe-ride var(--rider-dur, 3s) linear infinite'],
+      [RIDER, 'pointer-events', 'none'], [RIDER, 'image-rendering', 'pixelated'],
+    ]);
+    // a ride is the whole path, from the output's flange to the input's
+    expect(ruleBody('@keyframes pipe-ride')).toContain('from { offset-distance: 0%; }');
+    expect(ruleBody('@keyframes pipe-ride')).toContain('to { offset-distance: 100%; }');
+    // a dimmed rider fades with its pipe (`.flow-canvas.focusing .dim`), over the pipe's own fade: a rule of its own, as FADES is exact
+    expect(declared(RIDER, 'transition')).toBe(declared(FADES, 'transition'));
+    expect(declared(FADES, 'transition')).toBe('opacity var(--dur-base) var(--ease-out)');
+  });
+
+  it('stops a rider with the pipes: while the diagram is dragged, while the pipes are paused, and on a dimmed pipe', () => {
+    expect(declarations(ruleBody(RIDER_STOPS))).toEqual([['animation-play-state', 'paused']]);
+    // the rider's `animation` shorthand resets its play state: the stops come after it
+    expect(position(RIDER_STOPS)).toBeGreaterThan(position(RIDER));
+  });
+
+  it('draws no rider for reduced motion, in a block of its own right after the rider rules', () => {
+    expect(inQuery('@media (prefers-reduced-motion: reduce)', RIDER)).toEqual([['display', 'none']]);
+    const own = blocks.findIndex((b) => b.prelude === '@media (prefers-reduced-motion: reduce)' && b.inner.includes(RIDER));
+    expect(own).toBe(position(RIDER_STOPS) + 1);
+    // the global block is still the first of its kind, as it was: the case that reads it (the stylesheet's first describe) finds it unchanged
+    expect(ruleBody('@media (prefers-reduced-motion: reduce)')).not.toContain(RIDER);
+  });
+
+  // forced colours: a rider is its good's icon or a square of its good's colour, an SVG paint the theme leaves as it is (as it leaves the
+  // pipe under it), decorative and aria-hidden; Task 12 found each rider's painted pixels the same with forced colours on and off, so no rule
+  it('leaves a rider as it is in forced colours', () => {
+    expect(forcedBlock().rules.flatMap((r) => selectorList(r.prelude)).filter((s) => s.includes(RIDER))).toEqual([]);
   });
 });

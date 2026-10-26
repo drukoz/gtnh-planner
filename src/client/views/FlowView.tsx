@@ -7,7 +7,8 @@
 // toward the input, ending on the flange of its port (design spec §7); Pause pipes stops them (ruling R31). Hovering a row,
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
-// it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms.
+// it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms. A good rides each pipe, its icon carried
+// from the output to the input (Phase 2 spec §15), and stops with the pipe's contents.
 // The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6), and
 // its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone or out of the canvas's view
 // (ledger ruling P2-R36). While the plan, or its layout, is on its way the view says so beside a skeleton of a diagram (Phase 2 spec
@@ -19,8 +20,10 @@ import {
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
+import { hashColor } from '../../shared/types/assets.ts';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
+import { useItemIcon } from '../assets/icons.ts';
 import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
@@ -42,7 +45,7 @@ import {
   type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type MachineReadout,
 } from './flow-model.ts';
 import { pointIn } from './pan-zoom.ts';
-import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
+import { RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, riderEdges, riderPhase, riderSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { RawPanel, StepPanel } from './StepPanel.tsx';
 import { WhatChanged } from './WhatChanged.tsx';
@@ -335,6 +338,11 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
   );
 }
 
+/** An arrow's route as SVG path data, "M x y L x y …": its pipe's, and the path its good rides. */
+function routeData(points: ReadonlyArray<readonly [number, number]>): string {
+  return points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
+}
+
 /**
  * One arrow, drawn as a pipe (design spec §7): a 10 px transparent path to hover and click, the casing with its head (a
  * red casing with a white head from a stub of what is missing, ruling R34, which stays white when the arrow is lit:
@@ -347,7 +355,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
 export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; missing: boolean }): ReactElement | null {
   const { edge, lit, missing } = props;
   if (edge.points.length < 2) return null;
-  const d = edge.points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ');
+  const d = routeData(edge.points);
   const fluid = isFluidKey(edge.key);
   const classes = ['flow-edge', fluid ? 'fluid' : 'item'];
   if (missing) classes.push('missing');
@@ -366,6 +374,42 @@ export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; mi
         <text className="flow-edge-label" x={edge.labelAt[0]} y={edge.labelAt[1]} textAnchor="middle" dominantBaseline="central">{edge.label}</text>
       )}
     </g>
+  );
+}
+
+/**
+ * The good riding an arrow's pipe (Phase 2 spec §15.3), from the output toward the input: its icon at 12 px, drawn from the rows' 16 px icon
+ * (a square in its colour until that has come), which the stylesheet carries along the arrow's route (`offset-path` and the `pipe-ride`
+ * keyframes) once a ride (`--rider-dur`, `riderSeconds`), started part-way by its edge's phase (a negative delay), so the goods of a diagram
+ * do not leave their ports together. Lit (`hl`) or dimmed (`dim`) with its pipe. It only draws: nothing an arrow or a box carries for the hit
+ * test, the tooltips or the tests, and the stylesheet gives it no pointer, so the arrow under it keeps its hover, its click and its tip.
+ */
+export function FlowRiderShape(props: { edge: PlacedEdge; lit: boolean | null }): ReactElement {
+  const { edge, lit } = props;
+  const { desc, url } = useItemIcon(edge.key, ICON_SIZE);
+  const fluid = isFluidKey(edge.key);
+  const seconds = riderSeconds(pathLength(edge.points), edge.perSecond, fluid);
+  const style = {
+    offsetPath: `path('${routeData(edge.points)}')`, '--rider-dur': `${seconds}s`,
+    animationDelay: `-${Math.round(riderPhase(edge.id) * seconds * 100) / 100}s`,
+  } as CSSProperties;
+  const kind = fluid ? 'fluid' : 'item';
+  const state = lit === null ? [] : [lit ? 'hl' : 'dim'];
+  // `offset-anchor: auto` is the origin of its own coordinates, which the path moves: the square is centred on it
+  const corner = -RIDER_SIZE / 2;
+  if (url === null) {
+    const [r, g, b] = desc?.fallbackColor ?? hashColor(edge.key);
+    return (
+      <rect
+        className={['flow-rider', 'placeholder', kind, ...state].join(' ')} x={corner} y={corner} width={RIDER_SIZE} height={RIDER_SIZE}
+        fill={`rgb(${r}, ${g}, ${b})`} style={style}
+      />
+    );
+  }
+  return (
+    <image
+      className={['flow-rider', kind, ...state].join(' ')} href={url} x={corner} y={corner} width={RIDER_SIZE} height={RIDER_SIZE} style={style}
+    />
   );
 }
 
@@ -513,6 +557,10 @@ function FlowCanvas(props: {
   const keysOn = useSingleKeyShortcuts();
   const sets = useMemo(() => focusSets(layout, focus), [layout, focus]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
+  /** The arrows from a stub of what is missing: nothing moves in them, and no good rides them. */
+  const missingIds = useMemo(() => new Set(layout.edges.filter((e) => byId.get(e.from)?.kind === 'missing').map((e) => e.id)), [layout, byId]);
+  /** The arrows a good rides (Phase 2 spec §15.1): past 200 arrows the lit ones only, and never more than `RIDER_LIMIT`. */
+  const riders = useMemo(() => riderEdges(layout.edges, sets?.edges ?? null, missingIds), [layout, sets, missingIds]);
 
   const canvas = (): { width: number; height: number } => ({ width: svgRef.current?.clientWidth ?? 0, height: svgRef.current?.clientHeight ?? 0 });
   /** Centres the box (or open line) `id`; false when this layout has none. */
@@ -714,8 +762,12 @@ function FlowCanvas(props: {
             <FlowGroupShape key={group.id} group={group} dim={sets !== null && !group.nodes.some((id) => sets.nodes.has(id))} />
           ))}
           {layout.edges.map((edge) => (
-            <FlowEdgeShape key={edge.id} edge={edge} lit={sets === null ? null : sets.edges.has(edge.id)} missing={byId.get(edge.from)?.kind === 'missing'} />
+            <FlowEdgeShape key={edge.id} edge={edge} lit={sets === null ? null : sets.edges.has(edge.id)} missing={missingIds.has(edge.id)} />
           ))}
+          {/* the goods riding the pipes (Phase 2 spec §15.3): over the pipes, under the boxes, whose flanges they slip under, and the lit tags */}
+          <g className="flow-riders" aria-hidden="true">
+            {riders.map((edge) => <FlowRiderShape key={edge.id} edge={edge} lit={sets === null ? null : sets.edges.has(edge.id)} />)}
+          </g>
           {layout.nodes.map((node) => <FlowNodeShape key={node.id} node={node} sets={sets} selected={node.id === selectedId} />)}
           {sets !== null && layout.edges.filter((edge) => sets.edges.has(edge.id)).map((edge) => <EdgeTagShape key={edge.id} edge={edge} />)}
         </g>

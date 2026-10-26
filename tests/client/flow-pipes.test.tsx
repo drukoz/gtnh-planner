@@ -2,12 +2,15 @@
 // inside, yellow for an item and cyan for a fluid, at the speed of its rate (`--pipe-dur` on the arrow's group); its head
 // is in the colour of what it carries; an arrow from a missing source carries nothing. Every port is a flange whose outer
 // face is where ELK ends an arrow (2 px outside the box, on the row's centre line), so a pipe meets its flange at any zoom.
-// pipes.spec.ts measures that in a browser; these cases pin the markup.
+// pipes.spec.ts measures that in a browser; these cases pin the markup. Phase 2 Task 12 (spec §15.3): a good rides each pipe, a 12 px
+// icon the stylesheet carries along the arrow's path, in a layer of its own, so the arrow's own markup stays as it is.
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { FlowDefs, FlowEdgeShape, FlowNodeShape } from '../../src/client/views/FlowView.tsx';
+import { FlowDefs, FlowEdgeShape, FlowNodeShape, FlowRiderShape } from '../../src/client/views/FlowView.tsx';
 import { machineReadout, rowCentre, type FlowLayout, type FocusSets } from '../../src/client/views/flow-model.ts';
+import { riderPhase } from '../../src/client/views/pipe-motion.ts';
+import { hashColor } from '../../src/shared/types/assets.ts';
 import type { PlanStep } from '../../src/shared/types/plan.ts';
 
 type Edge = FlowLayout['edges'][number];
@@ -68,6 +71,32 @@ describe('flow diagram: pipes (design spec §7)', () => {
   it('keeps a slow arrow slow and a fast one fast', () => {
     expect(draw({ ...edge, perSecond: 0.5 })).toContain('style="--pipe-dur:1.08s"');
     expect(draw({ ...edge, perSecond: 100 })).toContain('style="--pipe-dur:0.5s"');
+  });
+
+  // Phase 2 spec §15.3: in node no icon URL ever arrives (the icon hook answers in an effect), so a rider is its placeholder, a square in its
+  // good's colour; the stylesheet moves it along the pipe's path (`offset-path`) over its ride (`--rider-dur`: 40 px is under 64 px a cycle,
+  // so the 1.2 s floor), and its negative delay starts it part-way, at its edge's phase
+  it('draws a rider as a 12 px image that rides its pipe, and a placeholder until its icon loads', () => {
+    const ride = (e: Edge, lit: boolean | null = null): string => renderToStaticMarkup(<svg><FlowRiderShape edge={e} lit={lit} /></svg>);
+    const delay = (id: string, seconds: number): number => Math.round(riderPhase(id) * seconds * 100) / 100;
+    const style = `style="offset-path:path(&#x27;M 0 0 L 40 0&#x27;);--rider-dur:1.2s;animation-delay:-${delay('e1', 1.2)}s"`;
+    const rect = (classes: string): string => (
+      `<rect class="${classes}" x="-6" y="-6" width="12" height="12" fill="rgb(${hashColor('t:iron_ingot@0').join(', ')})" ${style}></rect>`
+    );
+    expect(ride(edge)).toBe(`<svg>${rect('flow-rider placeholder item')}</svg>`);
+    // lit and dimmed with its pipe, so `.flow-canvas.focusing .dim` fades it and a dimmed one stands still
+    expect(ride(edge, true)).toBe(`<svg>${rect('flow-rider placeholder item hl')}</svg>`);
+    expect(ride(edge, false)).toBe(`<svg>${rect('flow-rider placeholder item dim')}</svg>`);
+    // a fluid in its own colour; a longer route rides longer, at its rate (160 px is 2.5 cycles of a second)
+    const fluid = ride({ ...edge, key: 'fluid:water', perSecond: 1000 });
+    const water = hashColor('fluid:water').join(', ');
+    expect(fluid).toContain(`<rect class="flow-rider placeholder fluid" x="-6" y="-6" width="12" height="12" fill="rgb(${water})"`);
+    const long = ride({ ...edge, id: 'e2', points: [[0, 0], [100, 0], [100, 60]] });
+    expect(long).toContain(`style="offset-path:path(&#x27;M 0 0 L 100 0 L 100 60&#x27;);--rider-dur:2.5s;animation-delay:-${delay('e2', 2.5)}s"`);
+    // never what the hit test, the tooltips or the e2e locators read on an arrow or a box
+    for (const html of [ride(edge), ride(edge, true), fluid, long]) {
+      expect(html).not.toMatch(/flow-edge|data-edge-id|data-step-id|data-tip|data-key|flow-port/);
+    }
   });
 
   it('defines one 8 x 8 head per colour in user space, so it never grows with the pipe, its tip on the end of the pipe', () => {

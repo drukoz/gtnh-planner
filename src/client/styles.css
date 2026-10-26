@@ -182,6 +182,8 @@ a, button.link { color: var(--ink-link); }
  * A skeleton's sheen passes over its blocks from their left edge to their right, on transform alone (`sheen`, Phase 2 spec §11.2).
  * A toast pops in from 12 px below at 96 % (`toast-in`) and sinks back out as it goes, the other exit that keeps its last frame, for it
  * is removed once that has run (`toast-out`, Phase 2 spec §12.1).
+ * A good rides its Flow pipe from one end of the arrow's path to the other, on its offset along the path alone (`pipe-ride`, Phase 2
+ * spec §15.3), the other exception beside the dashes.
  * Under reduced motion every duration is zero and an animation runs once, for a millisecond: nothing moves.
  */
 @keyframes fade-in { from { opacity: 0; } }
@@ -194,6 +196,7 @@ a, button.link { color: var(--ink-link); }
 @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.25; } }
 @keyframes pipe-flow { to { stroke-dashoffset: -16; } }
 @keyframes pipe-pulse { 0%, 100% { opacity: 1; } 35% { opacity: 0.15; } }
+@keyframes pipe-ride { from { offset-distance: 0%; } to { offset-distance: 100%; } }
 @keyframes brand-flow { 0% { opacity: 1; } 33.333% { opacity: 0; } }
 @keyframes tip-out { to { opacity: 0; transform: translateY(2px); } }
 @keyframes flash-out { from { opacity: 1; } }
@@ -1095,6 +1098,17 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-canvas.dragging .flow-edge-flow { animation-play-state: paused; }
 .flow-canvas.pipes-paused .flow-edge-flow { animation-play-state: paused; }
 .flow-canvas.many-edges .flow-edge:not(.hl) .flow-edge-flow { animation: none; }
+/* Goods riding the pipes (Phase 2 spec §15.3): pipe contents, so they may move for ever, and Pause pipes stops them with the pipes. Each is
+   carried along its arrow's path (the view sets the path, the ride's length and where it starts), upright on every run, its pixels crisp; it
+   never takes the pointer, which goes to the arrow under it, and dims with its pipe over the same 160 ms (the pipes' list is pinned, so the
+   fade is the rider's own). A drag, Pause pipes and a dimmed pipe stop it where it is: after the rider's rule, whose `animation` shorthand
+   resets the play state. Above 200 arrows the view draws riders on the lit pipes only (pipe-motion.ts). */
+.flow-rider {
+  offset-rotate: 0deg; animation: pipe-ride var(--rider-dur, 3s) linear infinite; pointer-events: none; image-rendering: pixelated;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+.flow-canvas.dragging .flow-rider, .flow-canvas.pipes-paused .flow-rider, .flow-rider.dim { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .flow-rider { display: none; } }
 /* A lit arrow's good and rate, on an NEI tag above the boxes; it never takes the pointer from what is under it. Its text stays the
    diagram font at 11px: edgeTag sizes the tag at 6.5px per character. */
 .flow-edge-tag { pointer-events: none; }

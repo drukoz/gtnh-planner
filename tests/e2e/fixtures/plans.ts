@@ -101,6 +101,24 @@ export function everyTier(): Plan {
   return planOf({ tier: 1, targetPerSecond: 0.5, steps, flows: [], rawInputs: [] });
 }
 
+/**
+ * Deferred F8 (Phase 2 spec §15.5, Task 12): one assembler, `big`, taking 201 raw goods (direct imports, as `mined` gives them, each from a
+ * stub of its own), `t:g0@0` to `t:g200@0`, which have no names (they show their keys): 202 arrows with the target's, past
+ * `PIPE_ANIMATION_LIMIT`, so only the lit pipes move and carry goods.
+ */
+export function manyEdges(): Plan {
+  const keys = Array.from({ length: 201 }, (_, i) => `t:g${i}@0`);
+  const big = step({
+    id: 'big', mapId: 'gt.recipe.assembler', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 }, mainOutput: 't:circuit@0',
+    inputs: keys.map((key) => per(key, 1)), outputs: [per('t:circuit@0', 1)],
+  });
+  return planOf({
+    tier: 1, targetPerSecond: 0.5, steps: [big],
+    flows: [...keys.map((key) => flow('raw', 'big', key, 0.5)), flow('big', 'out', 't:circuit@0', 0.5)],
+    rawInputs: keys.map((key) => mined(key, 0.5)),
+  });
+}
+
 /** Basic Circuit at MV, 1 an hour: the cheaper assembler recipe on Molten Iron from a fluid extractor. */
 export function circuitMvPerHour(): Plan {
   const assembleMv = step({

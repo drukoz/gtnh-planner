@@ -2,11 +2,13 @@
 // and 5). The Flow part opens a real project of the Mini-GT e2e server and serves a fixture plan in place of the server's, the way
 // flow-focus.spec.ts does: the contents of every pipe move, every pipe starts and ends on the flange of a port at any zoom, a
 // drag stops them, and a user who asked for reduced motion gets pipes that hold still. The Connections part lays an EnderIO line
-// out on the uploaded sample world, the way connections.spec.ts does: the contents of its pipes move too.
+// out on the uploaded sample world, the way connections.spec.ts does: the contents of its pipes move too. Phase 2 Task 12 (spec §15):
+// goods ride the Flow pipes, never take the pointer, stop with the pipes and are not drawn for reduced motion; above 200 arrows only
+// the lit pipes carry them.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
-import { circuitLv } from './fixtures/plans.ts';
+import { circuitLv, manyEdges } from './fixtures/plans.ts';
 import { createProject, login, openConnections, setName } from './helpers.ts';
 
 const LV_CIRCUITS: Partial<PlanSettings> = { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 };
@@ -44,36 +46,89 @@ async function loosePipeEnds(page: Page): Promise<{ loose: string[]; pipes: numb
   });
 }
 
+/** What `expectMoving` watches: the keyframes that move it, the computed property they move, and how its messages name it. */
+interface Motion { animation: string; property: 'strokeDashoffset' | 'offsetDistance'; offset: string; moves: string; watched: string }
+
 /**
- * Watches the dashes of the pipe `contents` finds first, the same element all along: they are the moving pipe's (`pipe-flow`), and their
- * offset along the pipe changes within two seconds while that element stays in the page (ruling R40: a poll, not a fixed sleep). A
- * reading of a pipe the view had drawn anew would be another pipe's, and the empty offset of a detached one differs from any number:
- * neither counts as a move.
+ * Watches the element `moving` finds first, the same element all along: it runs `motion.animation`, and the offset that animation moves
+ * changes within two seconds while that element stays in the page (ruling R40: a poll, not a fixed sleep). A reading of an element the view
+ * had drawn anew would be another's, and the empty offset of a detached one differs from any number: neither counts as a move.
  */
-async function expectDashesMove(contents: Locator): Promise<void> {
-  const pipe = await contents.elementHandle();
-  if (pipe === null) throw new Error('no pipe to watch');
+async function expectMoving(moving: Locator, motion: Motion): Promise<void> {
+  const element = await moving.elementHandle();
+  if (element === null) throw new Error(`no ${motion.watched} to watch`);
   try {
-    const read = (): Promise<{ attached: boolean; name: string; offset: number }> => pipe.evaluate((el) => {
+    const read = (): Promise<{ attached: boolean; name: string; offset: number }> => element.evaluate((el, property) => {
       const style = getComputedStyle(el);
-      return { attached: el.isConnected, name: style.animationName, offset: Number.parseFloat(style.strokeDashoffset) };
-    });
+      return { attached: el.isConnected, name: style.animationName, offset: Number.parseFloat(style[property]) };
+    }, motion.property);
     const first = await read();
-    expect(first.name).toBe('pipe-flow');
-    expect(Number.isFinite(first.offset), `the dash offset reads as a number, not "${first.offset}"`).toBe(true);
+    expect(first.name).toBe(motion.animation);
+    expect(Number.isFinite(first.offset), `${motion.offset} reads as a number, not "${first.offset}"`).toBe(true);
     await expect.poll(async () => {
       const now = await read();
       return now.attached && Number.isFinite(now.offset) && now.offset !== first.offset;
-    }, { message: 'the dashes move along the pipe, which stays in the page', timeout: 2_000 }).toBe(true);
-    expect((await read()).attached, 'the pipe watched is still in the page').toBe(true);
+    }, { message: motion.moves, timeout: 2_000 }).toBe(true);
+    expect((await read()).attached, `the ${motion.watched} watched is still in the page`).toBe(true);
   } finally {
-    await pipe.dispose();
+    await element.dispose();
   }
 }
+
+/** The dashes of the pipe `contents` finds first are the moving pipe's (`pipe-flow`): their offset along it changes (`expectMoving`). */
+function expectDashesMove(contents: Locator): Promise<void> {
+  return expectMoving(contents, {
+    animation: 'pipe-flow', property: 'strokeDashoffset', offset: 'the dash offset',
+    moves: 'the dashes move along the pipe, which stays in the page', watched: 'pipe',
+  });
+}
+
+/** The good `rider` finds first rides its pipe (`pipe-ride`): its offset along the path changes (`expectMoving`). */
+function expectRiderMoves(rider: Locator): Promise<void> {
+  return expectMoving(rider, {
+    animation: 'pipe-ride', property: 'offsetDistance', offset: 'the offset along the path',
+    moves: 'the good rides along its pipe, and stays in the page', watched: 'rider',
+  });
+}
+
+/** The play state of the first rider in the Flow diagram (its CSS animation's: `running` or `paused`). */
+const riderState = (page: Page): Promise<string> => (
+  page.locator('svg.flow-canvas .flow-rider').first().evaluate((el) => getComputedStyle(el).animationPlayState)
+);
 
 test('flow pipes move', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   await expectDashesMove(page.locator('.flow-edge-flow').first());
+});
+
+// Phase 2 spec §15: a good rides each pipe, its icon carried along the arrow's path by the stylesheet (`pipe-ride` on `offset-distance`); it
+// takes no pointer, so the arrow under it keeps its hover, its click and its tip; and no more ride than there are pipes that carry something
+test('goods ride the flow pipes, attached, and never take the pointer', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  // a rider drawn from its icon (the Iron Ingot's has the pack's texture): a placeholder gives way to the image once the icon has come, and an
+  // image stays, so the element watched is the same all along
+  const rider = canvas.locator('image.flow-rider').first();
+  await expect(rider).toBeAttached();
+  await expectRiderMoves(rider);
+  const riders = await canvas.locator('.flow-rider').count();
+  expect(riders, 'the line has goods riding').toBeGreaterThan(0);
+  expect(riders).toBeLessThanOrEqual(await canvas.locator('.flow-edge:not(.missing)').count());
+  // the whole diagram in view, then at each rider's centre (read and hit in one task, so it does not move in between): a rider that took the
+  // pointer would be what the page finds there, wherever no box covers it (at a flange it slips under the box); the page finds what is under it
+  await page.getByRole('button', { name: 'Fit' }).click();
+  const hits = await canvas.evaluate((svg) => [...svg.querySelectorAll<SVGElement>('.flow-rider')].map((one) => {
+    const box = one.getBoundingClientRect();
+    const [x, y] = [box.left + box.width / 2, box.top + box.height / 2];
+    one.style.pointerEvents = 'auto';
+    const taking = document.elementFromPoint(x, y) === one;
+    one.style.pointerEvents = '';
+    const found = document.elementFromPoint(x, y);
+    return { taking, rider: found?.classList.contains('flow-rider') ?? false, inCanvas: found !== null && svg.contains(found) };
+  }));
+  const open = hits.filter((hit) => hit.taking);
+  expect(open.length, 'some rider is in view and under no box, so the check bites').toBeGreaterThan(0);
+  for (const hit of open) expect(hit).toEqual({ taking: true, rider: false, inCanvas: true });
 });
 
 test('every flow pipe starts and ends on a flange', async ({ page }) => {
@@ -94,6 +149,7 @@ test('a drag stops the flow pipes until it ends', async ({ page }) => {
   const canvas = page.locator('svg.flow-canvas');
   const state = (): Promise<string> => page.locator('.flow-edge-flow').first().evaluate((el) => getComputedStyle(el).animationPlayState);
   expect(await state()).toBe('running');
+  expect(await riderState(page), 'the goods ride with the pipes').toBe('running');
   const box = await canvas.boundingBox();
   if (box === null) throw new Error('no canvas');
   // from the top left corner, which the diagram leaves empty (it opens on the target, at the right)
@@ -102,9 +158,11 @@ test('a drag stops the flow pipes until it ends', async ({ page }) => {
   await page.mouse.move(box.x + 46, box.y + 26, { steps: 4 });
   await expect(canvas).toHaveClass(/\bdragging\b/);
   expect(await state()).toBe('paused');
+  expect(await riderState(page), 'and stop with them').toBe('paused');
   await page.mouse.up();
   await expect(canvas).not.toHaveClass(/\bdragging\b/);
   expect(await state()).toBe('running');
+  expect(await riderState(page)).toBe('running');
 });
 
 test('a second pointer cannot leave the flow pipes stopped', async ({ page }) => {
@@ -137,9 +195,12 @@ test('reduced motion stills the pipes', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openWithPlan(page, circuitLv());
   const count = (): Promise<string> => page.locator('.flow-edge-flow').first().evaluate((el) => getComputedStyle(el).animationIterationCount);
+  const rider = (): Promise<string> => page.locator('svg.flow-canvas .flow-rider').first().evaluate((el) => getComputedStyle(el).display);
   expect(await count()).toBe('1');                                                     // run once, for a millisecond: still dashes
+  expect(await rider(), 'no good rides (Phase 2 spec §15.1)').toBe('none');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   expect(await count(), 'without the preference the pipes flow for ever, so the check above is not vacuous').toBe('infinite');
+  expect(await rider(), 'and the goods ride them').not.toBe('none');
 });
 
 test('connections pipes move', async ({ page }) => {
@@ -180,18 +241,21 @@ test('a Pause pipes button stops the pipes of both diagrams, and this browser re
   const canvas = page.locator('svg.flow-canvas');
   await expect(canvas.locator('.flow-edge-flow').first()).toBeAttached();
   expect(await playState('.flow-edge-flow')).toBe('running');
+  expect(await riderState(page), 'the goods ride the Flow pipes').toBe('running');
   const pause = page.getByRole('button', { name: 'Pause pipes' });
   await expect(pause).not.toHaveAttribute('aria-pressed');                            // R44: the label says what a press does
   await pause.click();
   await expect(page.getByRole('button', { name: 'Play pipes' })).not.toHaveAttribute('aria-pressed');
   await expect(canvas).toHaveClass(/\bpipes-paused\b/);
   expect(await playState('.flow-edge-flow')).toBe('paused');
+  expect(await riderState(page), 'Pause pipes stops the goods too (Phase 2 spec §3.3)').toBe('paused');
 
   // loaded again, the page keeps them paused
   await page.reload();
   await expect(page.locator('svg.flow-canvas .flow-edge-flow').first()).toBeAttached();
   await expect(page.getByRole('button', { name: 'Play pipes' })).not.toHaveAttribute('aria-pressed');
   expect(await playState('.flow-edge-flow')).toBe('paused');
+  expect(await riderState(page)).toBe('paused');
 
   // the Connections tab has them paused too, and its Play plays the pipes of both
   await page.getByRole('tab', { name: 'Connections' }).click();
@@ -206,4 +270,18 @@ test('a Pause pipes button stops the pipes of both diagrams, and this browser re
   await expect(page.locator('svg.flow-canvas .flow-edge-flow').first()).toBeAttached();
   await expect(page.locator('svg.flow-canvas')).not.toHaveClass(/\bpipes-paused\b/);
   expect(await playState('.flow-edge-flow')).toBe('running');
+  expect(await riderState(page)).toBe('running');
+});
+
+// Deferred F8 (Phase 2 spec §15.1 and §15.5): past 200 arrows a diagram moves only its lit pipes (`many-edges`), and only those carry goods:
+// none until something is lit, then one on the one lit arrow
+test('above 200 arrows only the lit pipes carry goods', async ({ page }) => {
+  await openWithPlan(page, manyEdges());
+  const canvas = page.locator('svg.flow-canvas');
+  await expect(canvas).toHaveClass(/\bmany-edges\b/);
+  await expect(canvas.locator('.flow-edge')).toHaveCount(202);                         // every arrow is drawn, so the riders' count below is theirs
+  await expect(canvas.locator('.flow-rider')).toHaveCount(0);
+  await page.getByLabel('Find item').selectOption('t:g0@0');
+  await expect(canvas.locator('.flow-edge.hl')).toHaveCount(1);
+  await expect(canvas.locator('.flow-rider')).toHaveCount(1);
 });
