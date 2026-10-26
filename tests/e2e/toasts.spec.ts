@@ -350,6 +350,38 @@ test('a held Enter dismisses one toast, not the next one its Dismiss hands the f
   expect(dialogs).toEqual([]);
 });
 
+// ledger ruling P2-R69a: a held key acts once, wherever the focus goes. A note toast's Undo from the keyboard hands the focus to the next toast's
+// Undo (P2-R57), here a rename's; the held Enter's auto-repeats are not that Undo's, as the press began on the note's, so the rename stays
+test('a held Enter on a note\'s Undo brings the note back and leaves the rename beside it as it is', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Toasts held undo');
+  await addNote(page, id, { id: 'n1', text: 'first' }, 'Bob');
+  await page.goto(`/p/${id}#notes`);
+  await expect(page.locator('.note-text')).toHaveText(['first']);
+  await rename(page, 'Toasts held undo, renamed');
+  const renamed = toastOf(page, 'Renamed to “Toasts held undo, renamed”');
+  await expect(renamed).toBeVisible();
+  await landed(page, id, 'Toasts held undo, renamed');
+  await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
+  const deleted = toastOf(page, 'Note deleted');
+  await expect(deleted).toBeVisible();
+  // the focus comes into the region from nowhere, so the note's Undo hands it to the next toast's Undo, the rename's (P2-R57)
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await deleted.getByRole('button', { name: 'Undo' }).focus();
+  await page.keyboard.down('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first']);
+  const renameUndo = renamed.getByRole('button', { name: 'Undo' });
+  await expect(renameUndo).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the rename's Undo
+  await page.keyboard.up('Enter');
+  await expect(renameUndo).toBeFocused();
+  await expect(renamed).toHaveAttribute('data-state', 'open');
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Toasts held undo, renamed');
+  await landed(page, id, 'Toasts held undo, renamed');
+  expect(dialogs).toEqual([]);
+});
+
 // P2-R57: never back into the project's name in the tick of a rename's Undo. The field follows the name only while it is not being edited, so
 // it would keep the name the Undo takes back and send it again on its blur.
 test('a rename\'s Undo never gives the focus back to the project name, which keeps the name it gave back', async ({ page }) => {

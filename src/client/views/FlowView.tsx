@@ -644,7 +644,8 @@ function FlowCanvas(props: {
     if (!dragged.current) activate(hitOf(e.target));
   };
   const onKeyDown = (e: KeyboardEvent<SVGSVGElement>): void => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
+    // a held Enter's repeat that landed here from where its press began (a Close that gave the focus back to its box) is not a pick (P2-R69a)
+    if ((e.key !== 'Enter' && e.key !== ' ') || e.nativeEvent.defaultPrevented) return;
     const hit = hitOf(e.target);
     if (hit === null) return;
     e.preventDefault();

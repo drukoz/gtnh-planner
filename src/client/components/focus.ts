@@ -25,10 +25,28 @@ export function focusLost(): boolean {
 }
 
 /**
- * A button's keydown that keeps a held Enter from pressing it again (ledger ruling P2-R69). Chromium presses a focused button once more on each
- * auto-repeat of a held Enter, and a button that hands the focus on to the next one of its kind as it acts (a note's Delete, a toast's Dismiss)
- * would press that one too, and the next. A repeated Enter's default is prevented, which prevents its press: one held press acts once.
+ * Makes a held Enter act once, wherever its first press puts the focus (ledger ruling P2-R69a, which widens P2-R69). Chromium sends a held key's
+ * auto-repeats to whatever has the focus, so a press that hands the focus on as it acts lands its repeats there: a note's Delete on the next
+ * note's (deleting it too) or on the field to add one (typing line breaks), a toast's Undo or Dismiss on the next toast's, a step panel's Close on
+ * the box it gives the focus back to (picking it again). A repeated Enter whose target is not where the press began is prevented, which keeps it
+ * from pressing a button or typing; a handler that acts on Enter itself and can be handed the focus so (the Flow canvas's pick) skips a prevented
+ * key. A press held where it began repeats as before (Enter held in a text area types line after line). It listens on `doc` in the capture
+ * phase, so it sees each key before any element does; installed once for the page's life (main.tsx), it returns how to stop.
  */
-export function ignoreHeldEnter(e: { key: string; repeat: boolean; preventDefault(): void }): void {
-  if (e.repeat && e.key === 'Enter') e.preventDefault();
+export function guardHeldEnter(doc: Document = document): () => void {
+  let began: EventTarget | null = null;                                                 // where the Enter being held was first pressed
+  const down = (e: KeyboardEvent): void => {
+    if (e.key !== 'Enter') return;
+    if (!e.repeat) began = e.target;
+    else if (e.target !== began) e.preventDefault();
+  };
+  const up = (e: KeyboardEvent): void => {
+    if (e.key === 'Enter') began = null;
+  };
+  doc.addEventListener('keydown', down, true);
+  doc.addEventListener('keyup', up, true);
+  return () => {
+    doc.removeEventListener('keydown', down, true);
+    doc.removeEventListener('keyup', up, true);
+  };
 }

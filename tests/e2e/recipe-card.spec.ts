@@ -8,7 +8,7 @@
 // stood (spec §8.6), its head scrolled into the window when the window shows none of it (ledger ruling P2-R35); and Close giving the focus
 // back to the box head that opened the panel, or to the diagram once a replan has removed that box (ledger ruling P2-R36). Its fix round 1
 // adds a press on the canvas focusing it with no ring, Close giving the focus to the canvas when that box is panned out of its view, and a
-// new panel for each import picked.
+// new panel for each import picked. Task F3 adds a held Enter on Close, which closes the panel once (ledger ruling P2-R69a).
 
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { circuitLv, circuitMvPerHour, copperUnsourced, platesTwoWays } from './fixtures/plans.ts';
@@ -180,6 +180,26 @@ test('Close gives the focus back to the box head that opened the panel from the 
   await expect(head).toBeFocused();
   await panel.getByRole('button', { name: 'Close the panel' }).focus();
   await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(head).toBeFocused();
+});
+
+// ledger ruling P2-R69a: a held key acts once, wherever the focus goes. Close hands the focus back to the box head that opened the panel
+// (P2-R36), where a held Enter's auto-repeats would pick the box again and open its panel anew: they are not the head's, as the press began
+// on Close
+test('a held Enter on Close closes the panel once, the focus back on the box head', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const head = page.locator('[data-step-id="circuit-lv"] .flow-node-head');
+  await head.focus();
+  await page.keyboard.press('Enter');
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Assembler' });
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Close the panel' }).focus();
+  await page.keyboard.down('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(head).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the box head
+  await page.keyboard.up('Enter');
   await expect(panel).toHaveCount(0);
   await expect(head).toBeFocused();
 });
