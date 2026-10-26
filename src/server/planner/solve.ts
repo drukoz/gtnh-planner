@@ -1467,7 +1467,6 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
   return bounded.filter((j) => (x[j] ?? 0) > TINY);
 }
 
-
 /**
  * The build MIP's solve and its pick (fix wave 3 (F), ledger 248): robust and still decided by node and simplex-iteration
  * limits only. One solve from `start` — BUILD_MIP_MAX_NODES nodes without strong branching (whose iterations escape the

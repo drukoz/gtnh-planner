@@ -301,6 +301,13 @@ export async function solveBuildRuns(job: BuildRunsJob, solver: (model: LpModel)
   if (first.rootLpFailed === true) runs.push(await solve(retryTolerance));
   let bare: { bare?: 'kept' | 'stalled' } = {};
   const stalled = runs[runs.length - 1] as LpResult;
+  // A solve its limits ended at the root after its LP relaxation solved, with nothing better than its start (a start
+  // costs HiGHS the heuristics it runs on that relaxation without an incumbent: Duty plate with farms, 436 against 149,
+  // bound 143.87): once more without it; the start stays a pick. Not where the iteration cap stopped it inside that
+  // relaxation, before those heuristics (its bound at most TINY, or none, as no objective coefficient is below 0): a solve
+  // without the start only spends the cap again at its root (the integration's final review: Electronic Circuit MV on
+  // Project Red, two of every machine owned, bound 5.8e-10, where it found a plan of 3.7e8 against its start's 8.81, so
+  // the same plan, the start's, in a build MIP of 22.8 s against 13.0 s).
   if (start !== undefined && wholeBuild(stalled) && stalled.stop === 'limit' && (stalled.nodes ?? 0) === 0
     && (stalled.bound ?? 0) > tiny && runs.every((r) => (r.improving?.length ?? 0) <= 1)) {
     const again = await solve(retryTolerance, true);
