@@ -1299,12 +1299,12 @@ const RIDER = '.flow-rider';
 const RIDER_STOPS = '.flow-canvas.dragging .flow-rider, .flow-canvas.pipes-paused .flow-rider, .flow-rider.dim';
 const RIDER_RULES = [RIDER, RIDER_STOPS];
 /**
- * Phase 2 Task 13b (spec §16.3, P2-D42): a box a new layout dropped, fading out where it was as a ghost, in its kind's colours: `owned` for a
- * step owned in whole or in part, `new` for a new one, else its stub's kind.
+ * Phase 2 Task 13b (spec §16.3, P2-D42): a box a new layout dropped, fading out where it was as a ghost, in its kind's colours: `owned`,
+ * `partly-owned` or `new` for a step, else its stub's kind, an import's with its kind of import (fix round 1, ledger ruling P2-R118).
  */
 const GHOST = '.flow-ghost';
 const GHOST_BOX = '.flow-ghost-box';
-const GHOST_KINDS = ['owned', 'new', 'out', 'import', 'missing', 'sink', 'line'];
+const GHOST_KINDS = ['owned', 'partly-owned', 'new', 'out', 'import', 'import.leaf-free', 'import.leaf-unavailable', 'missing', 'sink', 'line'];
 const GHOST_RULES = [GHOST, GHOST_BOX, ...GHOST_KINDS.map((kind) => `.flow-ghost.${kind} > .flow-ghost-box`)];
 const FADES = '.flow-node, .flow-row, .flow-edge, .flow-group';
 const LIT_BOX = '.flow-node.selected > .flow-node-box, .flow-node.producer > .flow-node-box';
@@ -3472,9 +3472,17 @@ describe('the Machine GUI Phase 2: the diagrams glide', () => {
     expect(declarations(ruleBody(GHOST))).toEqual([['pointer-events', 'none']]);
     expect(declarations(ruleBody(GHOST_BOX))).toEqual([['fill', 'var(--flow-raw)'], ['stroke', 'var(--flow-raw-line)'], ['stroke-width', '2']]);
     expect(declared(GHOST_BOX, 'stroke-width'), 'a box\'s edge').toBe(declared('.flow-node-box', 'stroke-width'));
-    for (const kind of GHOST_KINDS) {
-      const box = `.flow-node.${kind} > .flow-node-box`;
-      expect(declarations(ruleBody(`.flow-ghost.${kind} > .flow-ghost-box`)), kind).toEqual([['fill', declared(box, 'fill')], ['stroke', declared(box, 'stroke')]]);
+    // fix round 1 (ledger ruling P2-R118): a ghost is a faithful copy of its box's look, its fill and its edge, the edge's dashes too, for every
+    // kind of box the stylesheet draws (a partly owned step's half-and-half fill, an import's kind of import). Not its shadow, and not the
+    // accent edge a box takes when it is selected, makes or takes the good lit: once its box is gone, nothing selects or lights a ghost
+    const look = (selector: string): Array<[string, string]> =>
+      declarations(ruleBody(selector)).filter(([property]) => /^(fill|stroke|stroke-width|stroke-dasharray)$/.test(property));
+    expect(declarations(ruleBody(GHOST_BOX)), 'the box\'s own look but its shadow').toEqual(look('.flow-node-box'));
+    const accents = new Set(['selected', 'producer', 'consumer']);
+    const kinds = blocks.map((b) => /^\.flow-node\.([\w.-]+) > \.flow-node-box$/.exec(b.prelude)?.[1]).filter((k): k is string => k !== undefined && !accents.has(k));
+    expect([...kinds].sort(), 'every kind of box has its ghost, and every ghost its box').toEqual([...GHOST_KINDS].sort());
+    for (const kind of kinds) {
+      expect(declarations(ruleBody(`.flow-ghost.${kind} > .flow-ghost-box`)), kind).toEqual(look(`.flow-node.${kind} > .flow-node-box`));
     }
     expect(declarations(ruleBody(FADES))).toEqual([['transition', 'opacity var(--dur-base) var(--ease-out)']]);
     // a ghost of a box a focus dims fades from where that box was drawn, the stylesheet's dimmed opacity, which FlowView reads as DIM_OPACITY

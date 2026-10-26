@@ -15,7 +15,7 @@ import { EASE_IN, EASE_OUT } from '../../src/client/state/motion.ts';
 import { matrixView, panTransform, type PanView } from '../../src/client/views/glide.ts';
 import type { Layout } from '../../src/shared/types/layout.ts';
 import type { Plan } from '../../src/shared/types/plan.ts';
-import { circuitLv, manyEdges, platesTwoWays } from './fixtures/plans.ts';
+import { circuitLv, copperUnsourced, manyEdges, platesTwoWays } from './fixtures/plans.ts';
 import {
   bodyFocusCount, createProject, finishMotion, login, loosePipeEnds, LV_CIRCUITS, openConnections, openWithPlan, setName, watchBodyFocus,
 } from './helpers.ts';
@@ -23,7 +23,10 @@ import {
 /** A box on the page, as Playwright measures one. */
 interface Box { x: number; y: number; width: number; height: number }
 
-/** One `animate()` call: the element's class, its box or arrow (`data-node-id`, `data-edge-id` or `data-node`), its timing and its keyframes. */
+/**
+ * One `animate()` call: the element's class, its box, frame, arrow or arrow's tag (`data-node-id`, `data-group-id`, `data-edge-id`,
+ * `data-edge-tag` or `data-node`), its timing and its keyframes.
+ */
 interface AnimationRecord {
   cls: string | null; node: string | null; duration: unknown; delay: unknown; fill: unknown; easing: unknown; frames: Array<Record<string, unknown>>;
 }
@@ -43,7 +46,8 @@ function recordAnimations(): void {
     const timing: KeyframeAnimationOptions = typeof options === 'number' ? { duration: options } : options ?? {};
     records.push({
       cls: this.getAttribute('class'),
-      node: this.getAttribute('data-node-id') ?? this.getAttribute('data-edge-id') ?? this.getAttribute('data-node'),
+      node: this.getAttribute('data-node-id') ?? this.getAttribute('data-group-id') ?? this.getAttribute('data-edge-id')
+        ?? this.getAttribute('data-edge-tag') ?? this.getAttribute('data-node'),
       duration: timing.duration, delay: timing.delay ?? 0, fill: timing.fill, easing: timing.easing,
       frames: JSON.parse(JSON.stringify(frames)) as unknown,
     });
@@ -844,15 +848,19 @@ test('under reduced motion a replan moves at once', async ({ page }) => {
   let served = circuitLv();
   const id = await openServing(page, () => served);
   const before = await places(page);
+  const short = await canvasHeight(page);
   served = platesTwoWays();
   await replan(page, id, 31);
   await expect(stepBoxes(page)).toHaveCount(4);
   const after = await places(page);
   expect(Object.keys(after).some((box) => before[box] !== undefined && before[box] !== after[box]), 'the premise: boxes moved').toBe(true);
+  expect(await canvasHeight(page), 'the premise: platesTwoWays is taller').toBeGreaterThan(short);
   served = circuitLv();
   await replan(page, id, 32);
   await expect(stepBoxes(page)).toHaveCount(3);
   await expect(page.locator('[data-node-id="hammer-plate"]'), 'the premise: the hand step\'s box went').toHaveCount(0);
+  // fix round 1 (ledger ruling P2-R121): nothing glides, so the canvas takes the shorter height at once
+  expect(await canvasHeight(page), 'the height at once').toBe(short);
   expect(await allRecords(page), 'no animation, and no probe of what the browser can glide').toEqual([]);
   expect((await finiteAnimations(page)).filter((a) => a.ends > 1)).toEqual([]);
   await expect.poll(() => finiteAnimations(page)).toEqual([]);
@@ -890,10 +898,11 @@ test('a box a replan drops fades out where it stood, as a ghost no pointer, tip 
       opacity: getComputedStyle(ghost).opacity,
     };
   }));
-  // where the boxes stood, the size they were, in their kinds' colours: the hand step a new one, its Iron Ingot an import
+  // where the boxes stood, the size they were, in their kinds' colours: the hand step a new one, its Iron Ingot an import, a mined one (fix
+  // round 1, ledger ruling P2-R118: an import's ghost has its kind of import, as its box)
   expect(drawn.map(({ cls, at, size }) => ({ cls, at, size }))).toEqual([
     { cls: 'flow-ghost new', at: stood[0]!.at, size: { width: stood[0]!.width, height: stood[0]!.height } },
-    { cls: 'flow-ghost import', at: stood[1]!.at, size: { width: stood[1]!.width, height: stood[1]!.height } },
+    { cls: 'flow-ghost import leaf-direct', at: stood[1]!.at, size: { width: stood[1]!.width, height: stood[1]!.height } },
   ]);
   for (const ghost of drawn) {
     // nothing a box carries: no id, kind, port, role, tab stop, tip, light or flange; a lone box with its size
@@ -914,7 +923,7 @@ test('a box a replan drops fades out where it stood, as a ghost no pointer, tip 
   for (const nodeId of dropped) await expect(page.locator(`svg.flow-canvas [data-node-id="${nodeId}"]`)).toHaveCount(0);
   // their fade: from whole to nothing over 180 ms with --ease-in, held at nothing (`forwards`) until it goes
   const fades = (await records(page)).filter((r) => r.cls?.startsWith('flow-ghost') === true);
-  expect(fades).toEqual(['flow-ghost new', 'flow-ghost import'].map((cls) => expect.objectContaining({
+  expect(fades).toEqual(['flow-ghost new', 'flow-ghost import leaf-direct'].map((cls) => expect.objectContaining({
     cls, node: null, duration: 180, delay: 0, fill: 'forwards', easing: EASE_IN, frames: [{ opacity: 1 }, { opacity: 0 }],
   })));
   // once faded, each is taken away
@@ -943,7 +952,7 @@ test('the ghost of a box a focus dims fades out from its dimmed opacity, not fro
   const ghosts = page.locator('svg.flow-canvas .flow-ghost');
   await expect(ghosts).toHaveCount(2);
   expect(await ghosts.evaluateAll((all) => all.map((g) => [g.getAttribute('class'), getComputedStyle(g).opacity]))).toEqual([
-    ['flow-ghost new', '0.18'], ['flow-ghost import', '0.18'],
+    ['flow-ghost new', '0.18'], ['flow-ghost import leaf-direct', '0.18'],
   ]);
   const fades = (await records(page)).filter((r) => r.cls?.startsWith('flow-ghost') === true);
   expect(fades.map((r) => r.frames)).toEqual([[{ opacity: 0.18 }, { opacity: 0 }], [{ opacity: 0.18 }, { opacity: 0 }]]);
@@ -1072,24 +1081,44 @@ test('a replan that drops a box the focus has left takes the focus nowhere', asy
   expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
 });
 
+/** circuitLv with its wiremill in a supporting line, `key` (named `name`): a short plan draws the line open, a frame round the wiremill. */
+function lined(key = 't:copper_wire@0', name = '1x Copper Wire'): Plan {
+  const plan = circuitLv();
+  return { ...plan, steps: plan.steps.map((s) => (s.id === 'wire' ? { ...s, line: { key, name } } : s)) };
+}
+
 // Task 13b (notes 6): a supporting line opened or closed from the keyboard is laid out again, and its open/collapse button drawn anew, on the
-// collapsed line's box or on its open frame: the focus goes on to that button, never to the body
+// collapsed line's box or on its open frame: the focus goes on to that button, never to the body. Fix round 1 (M4): the line keeps its id
+// (`line:<key>`) from its frame to its box and back, so each glides from where the other stood to where its own attribute puts it
 test('a line closed and opened from the keyboard keeps the focus on its button', async ({ page }) => {
-  const lined = circuitLv();
-  lined.steps = lined.steps.map((s) => (s.id === 'wire' ? { ...s, line: { key: 't:copper_wire@0', name: '1x Copper Wire' } } : s));
-  await openWithPlan(page, lined);
+  await page.addInitScript(recordAnimations);
+  await openWithPlan(page, lined());
   const toggle = page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]');
   await expect(toggle, 'the premise: a short plan opens its lines').toHaveAttribute('aria-expanded', 'true');
+  const frame = page.locator('svg.flow-canvas [data-group-id="line:t:copper_wire@0"]');
+  const box = page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]');
+  /** The last glide recorded of the line (its frame's, `data-group-id`, or its box's, `data-node-id`), and its group's attribute now. */
+  const glided = async (group: Locator, cls: string): Promise<{ frames: Array<[number, number]>; at: [number, number] }> => {
+    const glide = (await records(page)).filter((r) => r.node === 'line:t:copper_wire@0' && r.cls?.startsWith(cls) === true && r.frames.some((f) => 'transform' in f)).at(-1);
+    if (glide === undefined) throw new Error(`no glide of the ${cls}`);
+    return { frames: glide.frames.map((f) => translation(f.transform)), at: translation(await group.getAttribute('transform')) };
+  };
+  const stood = translation(await frame.getAttribute('transform'));
   await watchBodyFocus(page);
   await toggle.focus();
   await page.keyboard.press('Enter');
-  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed: one box').toHaveCount(1);
+  await expect(box, 'the line closed: one box').toHaveCount(1);
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(toggle).toBeFocused();
+  const closed = await glided(box, 'flow-node');
+  expect(closed.frames, 'the box glides from where the frame stood to its own place').toEqual([stood, closed.at]);
+  await finishMotion(page);                                                            // landed: the frame glides from where the box rests
   await page.keyboard.press('Enter');
-  await expect(page.locator('svg.flow-canvas [data-group-id="line:t:copper_wire@0"]'), 'the line open again: its frame').toHaveCount(1);
+  await expect(frame, 'the line open again: its frame').toHaveCount(1);
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(toggle).toBeFocused();
+  const opened = await glided(frame, 'flow-group');
+  expect(opened.frames, 'the frame glides from where the box stood to its own place').toEqual([closed.at, opened.at]);
   expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
 });
 
@@ -1360,8 +1389,10 @@ function without(plan: Plan, key: string): Plan {
 
 // Review focus 4 (spec §16.3, Task 13b): a replan that moves more than GLIDE_LIMIT (200) boxes snaps into place, so no frame of a big plan
 // runs long: nothing glides, fades or goes as a ghost, and the browser is not even asked whether it can glide. manyEdges' 201 stubs sit in one
-// column: without its first good, every stub after it moves up a place; without one half way down, half of them do, and that replan glides
-test('a replan that moves more than 200 boxes snaps into place, and one that moves fewer glides', async ({ page }) => {
+// column: without its first good, every stub after it moves up a place; without one half way down, half of them do, and that replan glides.
+// Fix round 1 (ledger ruling P2-R119): the limit counts every box a replan changes, so one that brings other goods (every stub goes and as
+// many come, nearly nothing moving) snaps too
+test('a replan that changes more than 200 boxes snaps into place, and one that changes fewer glides', async ({ page }) => {
   await page.addInitScript(recordAnimations);
   let served = manyEdges();
   const id = await openServing(page, () => served);
@@ -1382,4 +1413,264 @@ test('a replan that moves more than 200 boxes snaps into place, and one that mov
   const made = await records(page);
   expect(made.filter((r) => r.cls?.startsWith('flow-node') === true && r.frames.some((frame) => 'transform' in frame)), 'it glides').toHaveLength(moved);
   expect(made.filter((r) => r.cls?.startsWith('flow-ghost') === true), 'and its stub goes as a ghost').toHaveLength(1);
+  // other goods: each of the 199 stubs left goes, and as many come
+  await finishMotion(page);
+  const settled = (await allRecords(page)).length;
+  const other = { ...served, steps: served.steps.map((s) => ({ ...s, inputs: s.inputs.map((p) => ({ ...p, key: p.key.replace('t:g', 't:h') })) })),
+    flows: served.flows.map((f) => ({ ...f, key: f.key.replace('t:g', 't:h') })), rawInputs: served.rawInputs.map((r) => ({ ...r, key: r.key.replace('t:g', 't:h') })) };
+  const changed = await replanTo(other, 33, 'import:t:g1@0@big');
+  expect(changed, 'the premise: few boxes moved').toBeLessThanOrEqual(2);
+  expect((await allRecords(page)).slice(settled), 'it snaps: nothing glides, fades or goes as a ghost').toEqual([]);
+  await expect(page.locator('svg.flow-canvas .flow-ghost')).toHaveCount(0);
+});
+
+// ---- Task 13b fix round 1 ----
+
+/**
+ * Puts each box's glide (a script animation of its `transform`, held at its start) `ms` in, and gives where each such box is drawn then, by its
+ * id: the translation the browser computes for its group, in the diagram's units.
+ */
+const heldGlidesAt = (page: Page, ms: number): Promise<Record<string, [number, number]>> => page.locator('svg.flow-canvas').evaluate((svg, at) => {
+  const drawn: Record<string, [number, number]> = {};
+  for (const box of svg.querySelectorAll('[data-node-id]')) {
+    const glide = box.getAnimations().find((a) => !(a instanceof CSSAnimation) && !(a instanceof CSSTransition)
+      && (a.effect as KeyframeEffect | null)?.getKeyframes().some((k) => 'transform' in k) === true);
+    if (glide === undefined) continue;
+    glide.currentTime = at;
+    const m = /^matrix\((.+)\)$/.exec(getComputedStyle(box).transform)?.[1]?.split(',').map(Number);
+    if (m !== undefined) drawn[box.getAttribute('data-node-id') ?? ''] = [m[4]!, m[5]!];
+  }
+  return drawn;
+}, ms);
+
+// Fix round 1 (ledger ruling P2-R117): a new layout that comes while the last one's boxes still glide starts each box that moves again from
+// where it is drawn, as a pan starts from the picture on screen (P2-R103), and ends its old glide: platesTwoWays to circuitLv, every glide held
+// 100 ms in, then back to platesTwoWays. Each new glide's first keyframe is the box as drawn (±0.5), the box shows there (its new glide held at
+// its start), and it has one glide: no box jumps back to where the last layout put it
+test('a new layout that comes while boxes glide starts each from where it is drawn: no box jumps', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  let served = platesTwoWays();
+  const id = await openServing(page, () => served);
+  await holdAnimationsOf(page, '[data-node-id]');
+  served = circuitLv();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  const drawn = await heldGlidesAt(page, 100);
+  expect(Object.keys(drawn).length, 'the premise: boxes glide').toBeGreaterThan(0);
+  const first = (await records(page)).length;
+  served = platesTwoWays();
+  await replan(page, id, 32);
+  await expect(stepBoxes(page)).toHaveCount(4);
+  const second = (await records(page)).slice(first);
+  const now = await page.locator('svg.flow-canvas').evaluate((svg) => Object.fromEntries([...svg.querySelectorAll('[data-node-id]')].map((box) => [
+    box.getAttribute('data-node-id') ?? '', {
+      at: getComputedStyle(box).transform,
+      glides: box.getAnimations().filter((a) => !(a instanceof CSSAnimation) && !(a instanceof CSSTransition)
+        && (a.effect as KeyframeEffect | null)?.getKeyframes().some((k) => 'transform' in k) === true).length,
+    },
+  ])));
+  for (const [box, [x, y]] of Object.entries(drawn)) {
+    const glide = second.find((r) => r.node === box && r.frames.some((frame) => 'transform' in frame));
+    if (glide === undefined) throw new Error(`${box} did not glide again`);
+    const [fx, fy] = translation(glide.frames[0]!.transform);
+    expect(fx, `${box}: its new glide starts where it is drawn`).toBeCloseTo(x, 0);
+    expect(fy, box).toBeCloseTo(y, 0);
+    const shown = matrixView(now[box]?.at ?? '');
+    if (shown === null) throw new Error(`${box} is not drawn`);
+    expect(shown.x, `${box}: drawn where it was, no jump`).toBeCloseTo(x, 0);
+    expect(shown.y, box).toBeCloseTo(y, 0);
+    expect(now[box]?.glides, `${box}: its old glide ended`).toBe(1);
+  }
+});
+
+// Fix round 1 (ledger ruling P2-R117): a box a new layout drops while it still glides leaves its ghost where it is drawn, not where the last
+// layout was taking it: the copper stub glides from platesTwoWays to circuitLv, held 100 ms in, and copperUnsourced drops it
+test('a box dropped while it glides leaves its ghost where it is drawn', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  let served = platesTwoWays();
+  const id = await openServing(page, () => served);
+  await holdAnimationsOf(page, '[data-node-id], .flow-ghost');
+  served = circuitLv();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  const stub = 'import:t:copper_ingot@0@wire';
+  const drawn = (await heldGlidesAt(page, 100))[stub];
+  if (drawn === undefined) throw new Error('the premise: the copper stub glides');
+  const going = translation(await page.locator(`svg.flow-canvas [data-node-id="${stub}"]`).getAttribute('transform'));
+  expect(Math.hypot(going[0] - drawn[0], going[1] - drawn[1]), 'the premise: it is on its way, not there').toBeGreaterThan(5);
+  served = copperUnsourced();
+  await replan(page, id, 32);
+  await expect(page.locator(`svg.flow-canvas [data-node-id="${stub}"]`)).toHaveCount(0);
+  // the ghosts of the last replan went with the new layout (M1): this one is the copper stub's
+  const ghost = page.locator('svg.flow-canvas .flow-ghost.import');
+  await expect(ghost).toHaveCount(1);
+  const [x, y] = translation(await ghost.getAttribute('transform'));
+  expect(x, 'the ghost stands where the box was drawn').toBeCloseTo(drawn[0], 0);
+  expect(y).toBeCloseTo(drawn[1], 0);
+});
+
+// Fix round 1 (ledger ruling P2-R120): under a focus a lit arrow writes its good and rate on an opaque tag; a replan that reroutes the arrow fades
+// the tag in with it, the same fade (otherwise the tag would stand at the arrow's new place while the arrow is held invisible)
+test('a lit arrow\'s tag fades in with its arrow when a replan reroutes it', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  let served = circuitLv();
+  const id = await openServing(page, () => served);
+  await page.getByLabel('Find item').selectOption({ label: '1x Copper Wire' });
+  await expect(page.locator('svg.flow-canvas')).toHaveClass(/\bfocusing\b/);
+  await page.mouse.move(1, 1);
+  const lit = 'wire|out|t:copper_wire@0->circuit-lv|in|t:copper_wire@0';
+  await expect(page.locator(`svg.flow-canvas [data-edge-tag="${lit}"]`), 'the premise: the lit arrow\'s tag').toHaveCount(1);
+  await finishMotion(page);                                                            // the reveal's pan
+  const first = (await records(page)).length;
+  served = platesTwoWays();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(4);
+  const made = (await records(page)).slice(first);
+  const arrow = made.find((r) => r.node === lit && r.cls?.startsWith('flow-edge ') === true);
+  const tag = made.find((r) => r.node === lit && r.cls === 'flow-edge-tag');
+  if (arrow === undefined) throw new Error('the premise: the replan reroutes the lit arrow');
+  expect(tag, 'the tag fades in with its arrow').toMatchObject({ frames: arrow.frames, delay: arrow.delay, duration: arrow.duration, fill: arrow.fill, easing: arrow.easing });
+  expect(arrow).toMatchObject({ frames: [{ opacity: 0, offset: 0 }], delay: 130, duration: 130, fill: 'backwards' });
+});
+
+/** The px height the Flow canvas is given, `min(<px>px, 75vh)`. */
+const canvasHeight = (page: Page): Promise<number> => page.locator('svg.flow-canvas').evaluate((svg) => {
+  const px = /^min\(([\d.]+)px, 75vh\)$/.exec((svg as SVGSVGElement).style.height)?.[1];
+  if (px === undefined) throw new Error(`no height in "${(svg as SVGSVGElement).style.height}"`);
+  return Number(px);
+});
+
+// Fix round 1 (ledger ruling P2-R121): the canvas is as tall as its diagram (75vh at most); a new layout that shortens it (the wiremill's line
+// closed from the keyboard: its frame goes) would cut off what glides up from below and the ghosts under the new edge on the first frame, so
+// while its boxes glide and its ghosts fade the canvas keeps the old height, and takes the new one once they have
+test('the canvas keeps its height while a new layout that shortens it glides, and takes the new one after', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await openWithPlan(page, lined());
+  const open = await canvasHeight(page);
+  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
+  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
+  await expect(page.locator('svg.flow-canvas .flow-ghost'), 'the premise: its boxes go as ghosts').not.toHaveCount(0);
+  expect(await canvasHeight(page), 'the old height while it glides').toBe(open);
+  await finishMotion(page);
+  await expect.poll(() => canvasHeight(page), { message: 'the new, shorter height once it has' }).toBeLessThan(open);
+  await expect(page.locator('svg.flow-canvas .flow-ghost')).toHaveCount(0);
+});
+
+// Fix round 1 (ledger ruling P2-R122): a window that loses the focus fires a focusout on what has it, which keeps it: the canvas still knows it
+// had it, so a replan that then drops that box gives the focus to the canvas, never to the body. A browser blurs the window so: a focusout on
+// the focused element, then the window's blur (a second page brought to the front blurs nothing under Playwright's focus emulation)
+test('a focused box keeps its place through a window blur: a replan that drops it gives the focus to the canvas', async ({ page }) => {
+  let served = platesTwoWays();
+  const id = await openServing(page, () => served);
+  const head = page.locator('[data-step-id="hammer-plate"] .flow-node-head');
+  await head.focus();
+  await head.evaluate(async (el) => {
+    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    window.dispatchEvent(new FocusEvent('blur'));
+    await new Promise((done) => setTimeout(done, 0));                                // the focusout's microtask has run
+  });
+  await expect(head, 'the premise: the box keeps the focus').toBeFocused();
+  await watchBodyFocus(page);
+  served = circuitLv();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  await expect(page.locator('svg.flow-canvas')).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+});
+
+// Fix round 1 (ledger ruling P2-R122): a replan can remove the panel that has the focus: Make it here instead pressed from the keyboard on the
+// Iron Ingot import's panel (flow-focus.spec.ts (7), the server planning the line) makes the iron here, so the import, and its panel, go; the
+// focus goes to the canvas, never to the body
+test('Make it here instead from the keyboard leaves the focus on the canvas when its panel goes', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Make iron', LV_CIRCUITS);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.locator('[data-node-id^="import:t:iron_ingot@0@"]').first().click();
+  const panel = page.getByRole('complementary', { name: 'Import: Iron Ingot' });
+  await panel.getByRole('button', { name: 'Make it here instead' }).focus();
+  await watchBodyFocus(page);
+  await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(page.locator('svg.flow-canvas')).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+});
+
+// Fix round 1 (M1): a ghost goes when its fade has run or is cancelled, and in any case by a fallback a while after its fade would have ended,
+// or with the next new layout: here its fade never runs (an `animate()` that makes it paused, as no timeline would move it), and then cannot
+// start at all (an `animate()` that throws), when the ghost goes at once; the page shows no error either way
+test('a ghost whose fade never runs goes all the same, and one whose fade cannot start goes at once', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function fading(this: Element, keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions): Animation {
+      const mode = (window as unknown as { __ghostFade?: string }).__ghostFade;
+      if (mode === 'throw' && this.matches('.flow-ghost')) throw new Error('no fade');
+      const made = animate.call(this, keyframes, options);
+      if (mode === 'stuck' && this.matches('.flow-ghost')) made.pause();
+      return made;
+    };
+  });
+  let served = platesTwoWays();
+  const id = await openServing(page, () => served);
+  const ghosts = page.locator('svg.flow-canvas .flow-ghost');
+  await page.evaluate(() => { (window as unknown as { __ghostFade: string }).__ghostFade = 'stuck'; });
+  served = circuitLv();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  await expect(ghosts, 'drawn').toHaveCount(2);
+  await expect(ghosts, 'and gone, though its fade never ran').toHaveCount(0);
+  await page.evaluate(() => { (window as unknown as { __ghostFade: string }).__ghostFade = 'throw'; });
+  served = platesTwoWays();
+  await replan(page, id, 32);
+  await expect(stepBoxes(page)).toHaveCount(4);
+  served = circuitLv();
+  await replan(page, id, 33);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  expect(await ghosts.count(), 'a ghost whose fade cannot start goes at once').toBe(0);
+  expect(errors).toEqual([]);
+});
+
+/**
+ * Runs in the page before its scripts: React's DevTools hook as React finds it, which React calls at the end of each commit. Each commit is
+ * recorded in `window.__commits`: whether it drew the Flow canvas again (its svg's props object, which React gives anew each time it draws the
+ * canvas: Task 12's M3), and the open lines' frames it leaves drawn.
+ */
+function countCommits(): void {
+  const commits: Array<{ canvas: boolean; frames: string }> = [];
+  let last: unknown;
+  (window as unknown as { __commits: typeof commits }).__commits = commits;
+  (window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown }).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+    supportsFiber: true, isDisabled: false, renderers: new Map(),
+    inject: () => 1, checkDCE: () => {}, onScheduleFiberRoot: () => {}, onCommitFiberUnmount: () => {}, onPostCommitFiberRoot: () => {},
+    onCommitFiberRoot: () => {
+      const svg = document.querySelector('svg.flow-canvas');
+      const key = svg === null ? undefined : Object.keys(svg).find((k) => k.startsWith('__reactProps$'));
+      const props = key === undefined ? undefined : (svg as unknown as Record<string, unknown>)[key];
+      commits.push({ canvas: props !== undefined && props !== last, frames: [...document.querySelectorAll('svg.flow-canvas [data-group-id]')].map((g) => g.getAttribute('data-group-id')).join(' ') });
+      last = props;
+    },
+  };
+}
+
+// Fix round 1 (M2): a new layout that adds no ghost draws the canvas once: the wiremill's line, open, served as another line (its frame goes,
+// another comes, the boxes stay where they are, at the same height), so the layout's commit is the canvas's last
+test('a new layout that adds no ghost draws the canvas once', async ({ page }) => {
+  await page.addInitScript(countCommits);
+  let served = lined();
+  const id = await openServing(page, () => served);
+  const next = 'line:t:copper_ingot@0';
+  served = lined('t:copper_ingot@0', 'Copper Ingot');
+  await replan(page, id, 31);
+  await expect(page.locator(`svg.flow-canvas [data-group-id="${next}"]`)).toHaveCount(1);
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  await expect(page.locator('svg.flow-canvas .flow-ghost'), 'the premise: no ghost').toHaveCount(0);
+  const commits = await page.evaluate(() => (window as unknown as { __commits: Array<{ canvas: boolean; frames: string }> }).__commits);
+  expect(commits.length, 'the premise: React reports its commits').toBeGreaterThan(0);
+  const laid = commits.findIndex((c) => c.frames.split(' ').includes(next));
+  expect(laid, 'the commit that draws the new layout').toBeGreaterThanOrEqual(0);
+  expect(commits.slice(laid).filter((c) => c.canvas).length, 'the canvas drawn once from then on').toBe(1);
 });

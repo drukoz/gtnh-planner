@@ -1065,7 +1065,10 @@ export interface LayoutChange {
   entered: string[]; left: string[]; rerouted: string[];
 }
 
-/** A new layout that moves more boxes than this snaps into place instead of gliding, so no frame of a big plan runs long (review focus 4). */
+/**
+ * A new layout that changes more boxes than this (moves them, brings them or drops them) snaps into place instead of gliding, so no frame of a big
+ * plan runs long (review focus 4).
+ */
 export const GLIDE_LIMIT = 200;
 
 /** Whether two arrows run through the same points. */
@@ -1100,9 +1103,13 @@ export function layoutChange(before: PlacedPicture | null, after: PlacedPicture)
   return change;
 }
 
-/** Whether a new layout's change glides: it moves GLIDE_LIMIT boxes or fewer (review focus 4); a bigger one snaps. */
+/**
+ * Whether a new layout's change glides: it changes GLIDE_LIMIT boxes or fewer, those it moves, brings and drops (review focus 4; ledger ruling
+ * P2-R119: a new target on a big line drops nearly every box and brings as many, moving few or none); a bigger one snaps. The arrows it reroutes
+ * only fade, and do not count.
+ */
 export function glidable(change: LayoutChange): boolean {
-  return change.moved.length <= GLIDE_LIMIT;
+  return change.moved.length + change.entered.length + change.left.length <= GLIDE_LIMIT;
 }
 
 /** The tag in which a lit arrow writes its good and rate ("1x Copper Wire · 2/h", fix spec §6.2), drawn above the boxes. */

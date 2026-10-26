@@ -197,9 +197,44 @@ export function settle(g: SVGGElement, el: Element): void {
 
 /**
  * What a new layout's glide moves in a diagram (`glideLayout`): the attributes that name its boxes (by the box's id), the one that names its
- * arrows, and what fades in with the arrows (`extra`, a selector: Flow's rider layer).
+ * arrows, the one that names an arrow's tag (by the arrow's id: Flow's lit arrows' `data-edge-tag`, fix round 1), and what fades in with the
+ * arrows (`extra`, a selector: Flow's rider layer).
  */
-export interface GlideTargets { boxes: readonly string[]; edges: string; extra?: string }
+export interface GlideTargets { boxes: readonly string[]; edges: string; tags?: string; extra?: string }
+
+/** A box's glide under way (`glideLayout`): its animation, and from where to where it takes the box, in the diagram's units. */
+interface BoxGlide { animation: Animation; from: [number, number]; to: [number, number] }
+
+/** The boxes' glides under way, by pan group, then by box id. */
+const boxGlides = new WeakMap<Element, Map<string, BoxGlide>>();
+
+/** The glides under way in the pan group `root`. */
+function glidesIn(root: Element): Map<string, BoxGlide> {
+  let glides = boxGlides.get(root);
+  if (glides === undefined) {
+    glides = new Map();
+    boxGlides.set(root, glides);
+  }
+  return glides;
+}
+
+/**
+ * Where the box `id` of the pan group `root` is drawn while its glide (`glideLayout`) runs, in the diagram's units: the glide's place at its
+ * eased progress, which goes on when the box is taken away, so the ghost of a box dropped while it glides stands where it was drawn (ledger
+ * ruling P2-R117). Null when it does not glide: it stands at its attribute.
+ */
+export function glidingAt(root: Element, id: string): [number, number] | null {
+  const glides = boxGlides.get(root);
+  const glide = glides?.get(id);
+  if (glide === undefined) return null;
+  const progress = glide.animation.playState === 'idle' ? null : glide.animation.effect?.getComputedTiming().progress ?? null;
+  if (progress === null) {                          // ended, or cancelled: the box is on its attribute
+    glides?.delete(id);
+    return null;
+  }
+  const [[fx, fy], [tx, ty]] = [glide.from, glide.to];
+  return [fx + (tx - fx) * progress, fy + (ty - fy) * progress];
+}
 
 /**
  * A fade in, from nothing to the element's own opacity: one keyframe, at offset 0, so its end is the element's own opacity, an implicit one (a
@@ -232,26 +267,52 @@ function named(root: Element, attrs: readonly string[]): Map<string, Element> {
  * Glides a diagram's new layout into place in its pan group `root` (Phase 2 spec §16.3), the layout drawn and not yet painted: each box that moved
  * from where it stood to where its `transform` attribute already puts it, absolute keyframes with no fill, so it hands the box back to its
  * attribute, over GLIDE_MS with `--ease-out`; each box that came in fades in (`FADE_IN`) over the same time; and each arrow whose points changed
- * or that came, with `targets.extra` when any did, fades in over the second half (a backwards fill keeps it invisible through the first), so a
- * pipe is never seen hanging off a box on its way. Each element is found by its id in the attributes `targets` names, all of them in one pass.
- * Nothing moves for the same layout again (every SSE refetch's), and then the browser is not even asked whether it can glide; nor where
- * `layoutGlides` says no, so the new layout is drawn at once.
+ * or that came, with its tag (`targets.tags`) and `targets.extra` when any did, fades in over the second half (a backwards fill keeps it
+ * invisible through the first), so a pipe is never seen hanging off a box on its way. A box the last layout still glides starts from where it
+ * is drawn, its old glide ended, as a pan starts from the picture on screen (ledger ruling P2-R117); and the boxes this layout moves, brings or
+ * drops end any glide they had, so where this layout snaps they stand on their attributes at once. Each element is found by its id in the
+ * attributes `targets` names, all of them in one pass. Nothing moves for the same layout again (every SSE refetch's), and then the browser is
+ * not even asked whether it can glide; nor where `layoutGlides` says no, so the new layout is drawn at once. Gives the animations it started.
  */
-export function glideLayout(root: SVGGElement, change: LayoutChange, targets: GlideTargets): void {
-  const { moved, entered, rerouted } = change;
-  if (moved.length + entered.length + rerouted.length === 0 || !layoutGlides(change)) return;
-  const boxes = named(root, targets.boxes);
-  for (const { id, from: [fx, fy], to: [tx, ty] } of moved) {
-    boxes.get(id)?.animate(
-      [{ transform: `translate(${fx}px, ${fy}px)` }, { transform: `translate(${tx}px, ${ty}px)` }], { duration: GLIDE_MS, easing: EASE_OUT, fill: 'none' },
-    );
+export function glideLayout(root: SVGGElement, change: LayoutChange, targets: GlideTargets): Animation[] {
+  const { moved, entered, left, rerouted } = change;
+  const glides = glidesIn(root);
+  const drawn = new Map(moved.map(({ id }) => [id, glidingAt(root, id)]));
+  for (const id of [...moved.map((m) => m.id), ...entered, ...left]) {
+    glides.get(id)?.animation.cancel();
+    glides.delete(id);
   }
-  for (const id of entered) boxes.get(id)?.animate(FADE_IN, { duration: GLIDE_MS, easing: EASE_OUT, fill: 'none' });
-  if (rerouted.length === 0) return;
+  if (moved.length + entered.length + rerouted.length === 0 || !layoutGlides(change)) return [];
+  const started: Animation[] = [];
+  const boxes = named(root, targets.boxes);
+  for (const { id, from: stood, to } of moved) {
+    const box = boxes.get(id);
+    if (box === undefined) continue;
+    const from = drawn.get(id) ?? stood;
+    const animation = box.animate(
+      [{ transform: `translate(${from[0]}px, ${from[1]}px)` }, { transform: `translate(${to[0]}px, ${to[1]}px)` }],
+      { duration: GLIDE_MS, easing: EASE_OUT, fill: 'none' },
+    );
+    glides.set(id, { animation, from, to });
+    started.push(animation);
+  }
+  for (const id of entered) {
+    const fade = boxes.get(id)?.animate(FADE_IN, { duration: GLIDE_MS, easing: EASE_OUT, fill: 'none' });
+    if (fade !== undefined) started.push(fade);
+  }
+  if (rerouted.length === 0) return started;
   const secondHalf: KeyframeAnimationOptions = { delay: GLIDE_MS / 2, duration: GLIDE_MS / 2, fill: 'backwards' };
   const arrows = named(root, [targets.edges]);
-  for (const id of rerouted) arrows.get(id)?.animate(FADE_IN, secondHalf);
-  if (targets.extra !== undefined) root.querySelector(targets.extra)?.animate(FADE_IN, secondHalf);
+  const tags = targets.tags === undefined ? new Map<string, Element>() : named(root, [targets.tags]);
+  for (const id of rerouted) {
+    for (const el of [arrows.get(id), tags.get(id)]) {
+      const fade = el?.animate(FADE_IN, secondHalf);
+      if (fade !== undefined) started.push(fade);
+    }
+  }
+  const extra = targets.extra === undefined ? undefined : root.querySelector(targets.extra)?.animate(FADE_IN, secondHalf);
+  if (extra !== undefined) started.push(extra);
+  return started;
 }
 
 /**

@@ -889,6 +889,20 @@ describe('what a new layout changed', () => {
     const moved = (n: number): LayoutChange => ({ moved: Array.from({ length: n }, (_, i) => ({ id: `n${i}`, from: [0, 0], to: [1, 0] })), entered: [], left: [], rerouted: [] });
     expect(GLIDE_LIMIT).toBe(200); expect(glidable(moved(200))).toBe(true); expect(glidable(moved(201))).toBe(false);
   });
+  // fix round 1 (ledger ruling P2-R119): the limit counts every box a layout changes, so a new target on a big line, which drops nearly every box
+  // and brings as many (few or none moved), snaps too; the arrows it reroutes only fade, and do not count
+  it('counts the boxes that come and go against the limit, with those that move', () => {
+    const ids = (n: number, prefix: string): string[] => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+    const change = (moved: number, entered: number, left: number, rerouted = 0): LayoutChange => ({
+      moved: ids(moved, 'm').map((id) => ({ id, from: [0, 0], to: [1, 0] })), entered: ids(entered, 'e'), left: ids(left, 'l'), rerouted: ids(rerouted, 'r'),
+    });
+    expect(glidable(change(100, 50, 50))).toBe(true);
+    expect(glidable(change(100, 50, 51))).toBe(false);
+    expect(glidable(change(0, 101, 100))).toBe(false);
+    expect(glidable(change(0, 200, 0))).toBe(true);
+    expect(glidable(change(0, 0, 201))).toBe(false);
+    expect(glidable(change(10, 10, 10, 500)), 'rerouted arrows do not count').toBe(true);
+  });
   // a line opened or closed keeps its id (`line:<key>`) from its collapsed box to its open frame: one box, moved, not one gone and one come;
   // an arrow that loses or gains a bend is rerouted, and one that is gone is not (it has nothing left to fade in)
   it('moves a line from its collapsed box to its open frame, and reroutes an arrow whose bends changed', () => {
@@ -904,12 +918,16 @@ describe('what a new layout changed', () => {
 // colours, `owned` for a step owned in whole or in part, `new` for a new one, else its stub's kind. It carries nothing a box carries for the
 // hit test, the focus, the tips or the tests (the `[data-step-id]` counts, the `.dim` count, `loosePipeEnds`), so none of them sees it.
 describe('a removed box\'s ghost', () => {
-  const ghost = (kind: FlowNode['kind'], owned: FlowNode['owned'] = 'none'): string =>
-    renderToStaticMarkup(<svg><FlowGhostShape ghost={{ id: 'wire', kind, owned, x: 10, y: 20.5, width: 190, height: 80, opacity: 0.18 }} onGone={() => {}} /></svg>);
+  const ghost = (kind: FlowNode['kind'], owned: FlowNode['owned'] = 'none', leaf?: LeafClass): string => renderToStaticMarkup(
+    <svg><FlowGhostShape ghost={{ id: 'wire', kind, owned, ...(leaf === undefined ? {} : { leaf }), x: 10, y: 20.5, width: 190, height: 80, opacity: 0.18 }} onGone={() => {}} /></svg>,
+  );
   it('draws a plain copy of the box, where it was, in its kind\'s colours', () => {
     expect(ghost('step')).toBe('<svg><g class="flow-ghost new" aria-hidden="true" transform="translate(10 20.5)"><rect class="flow-ghost-box" width="190" height="80"></rect></g></svg>');
-    expect(['all', 'some', 'none'].map((owned) => /class="flow-ghost (\w+)"/.exec(ghost('step', owned as FlowNode['owned']))?.[1])).toEqual(['owned', 'owned', 'new']);
+    // fix round 1 (ledger ruling P2-R118): a partly owned step's ghost has its box's half-and-half fill, through a class of its own
+    expect(['all', 'some', 'none'].map((owned) => /class="flow-ghost ([\w-]+)"/.exec(ghost('step', owned as FlowNode['owned']))?.[1])).toEqual(['owned', 'partly-owned', 'new']);
     for (const kind of ['import', 'missing', 'sink', 'out', 'line'] as const) expect(ghost(kind), kind).toContain(`<g class="flow-ghost ${kind}" aria-hidden="true"`);
+    // and an import's ghost its kind of import, which dashes a free one's edge and reddens an unreachable one's, as the box's class does
+    for (const leaf of ['free', 'unavailable', 'direct'] as const) expect(ghost('import', 'none', leaf), leaf).toContain(`<g class="flow-ghost import leaf-${leaf}" aria-hidden="true"`);
   });
   it('carries nothing a box carries for the pointer, the focus, the tips or the tests', () => {
     for (const kind of ['step', 'import', 'missing', 'sink', 'out', 'line'] as const) {

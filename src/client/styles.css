@@ -1116,17 +1116,22 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-edge-tag rect { fill: var(--tip-bg); stroke: var(--tip-border); stroke-width: 1; }
 .flow-edge-tag text { fill: #ffffff; font-size: 11px; font-weight: 600; }
 /* A box a new layout dropped, fading out where it stood (Phase 2 spec §16.3, P2-D42; FlowView's ghosts, whose fade is a WAAPI animation of their
-   own): a plain copy of its box, in its kind's fill and edge from the boxes' own tokens, so the dark look reaches it with no rule of its own. It
-   never takes the pointer, so what lies under it keeps its hover, its click and its tip, and it has no shadow: that is the box's. */
+   own): a faithful copy of its box's look (ledger ruling P2-R118), its kind's fill and edge, its edge's dashes too, from the boxes' own tokens, so
+   the dark look reaches it with no rule of its own; a partly owned step's half-and-half fill is the same svg's gradient. It never takes the
+   pointer, so what lies under it keeps its hover, its click and its tip. It has no shadow, which is the box's, and no accent edge: once its box
+   is gone nothing selects or lights it. */
 .flow-ghost { pointer-events: none; }
 .flow-ghost-box { fill: var(--flow-raw); stroke: var(--flow-raw-line); stroke-width: 2; }
 .flow-ghost.owned > .flow-ghost-box { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
 .flow-ghost.new > .flow-ghost-box { fill: var(--flow-new); stroke: var(--flow-new-line); }
+.flow-ghost.partly-owned > .flow-ghost-box { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
 .flow-ghost.out > .flow-ghost-box { fill: var(--flow-out); stroke: var(--flow-out-line); }
 .flow-ghost.import > .flow-ghost-box { fill: var(--flow-import); stroke: var(--flow-import-line); }
-.flow-ghost.missing > .flow-ghost-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); }
-.flow-ghost.sink > .flow-ghost-box { fill: var(--flow-sink); stroke: var(--flow-sink-line); }
-.flow-ghost.line > .flow-ghost-box { fill: var(--flow-line); stroke: var(--flow-line-line); }
+.flow-ghost.import.leaf-free > .flow-ghost-box { stroke-dasharray: 2 2; }
+.flow-ghost.import.leaf-unavailable > .flow-ghost-box { stroke: var(--flow-missing-line); }
+.flow-ghost.missing > .flow-ghost-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); stroke-dasharray: 5 3; }
+.flow-ghost.sink > .flow-ghost-box { fill: var(--flow-sink); stroke: var(--flow-sink-line); stroke-dasharray: 4 3; }
+.flow-ghost.line > .flow-ghost-box { fill: var(--flow-line); stroke: var(--flow-line-line); stroke-dasharray: 6 3; }
 /* What does not add up, above the canvas, and why a line cannot be planned: chat boxes (dark boxes, so in the light ink of their
    group), amber, or red with an input nothing supplies. The issues rise in when they appear, like the banners. */
 .flow-issues {

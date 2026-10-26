@@ -59,9 +59,11 @@ describe('the diagrams glide', () => {
     expect(FADE_IN).toEqual([{ opacity: 0, offset: 0 }]);
   });
 
+  // fix round 1 (M3): past its gate `glideLayout` looks the boxes up with `querySelectorAll` first, so both are watched, and neither may be called
   it('never glides a new layout where the browser cannot animate an element (node): the boxes move at once', () => {
-    const root = { querySelector: vi.fn(() => null) } as unknown as SVGGElement;
+    const root = { querySelector: vi.fn(() => null), querySelectorAll: vi.fn(() => []) } as unknown as SVGGElement;
     glideLayout(root, { moved: [{ id: 'a', from: [0, 0], to: [10, 0] }], entered: ['b'], left: ['c'], rerouted: ['e'] }, { boxes: ['data-node-id'], edges: 'data-edge-id', extra: '.flow-riders' });
+    expect(root.querySelectorAll).not.toHaveBeenCalled();
     expect(root.querySelector).not.toHaveBeenCalled();
   });
 });
