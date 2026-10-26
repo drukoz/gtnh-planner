@@ -14,6 +14,8 @@
 // spec §11.3, ledger rulings P2-R18 and P2-R51), and the drawer, behind which the banners are inert, has a status line of its own (R43).
 // A rename here says so in a toast, with Undo (Phase 2 spec §12), and so does a delete, whose Undo restores the project from the list the page
 // leaves for. A deleted note waits in the page's store, which posts its delete once the note's toast has gone, or as the page goes (§12.2).
+// Its keys (Phase 2 spec §14) switch the tabs, find the item search, fit the diagram and pause its pipes, and a sheet lists them, which ? opens,
+// as the head's Shortcuts button does above 900 px.
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
@@ -26,16 +28,19 @@ import { apiGet, messageOf } from '../api/client.ts';
 import { listenProjectEvents } from '../api/sse.ts';
 import { DeleteProject, showDeletedToast } from '../components/DeleteProject.tsx';
 import { Figs } from '../components/Figs.tsx';
+import { focusLost, focusMain, focusOn } from '../components/focus.ts';
 import { GtArrow } from '../components/GtArrow.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ITEM_SEARCH_PLACEHOLDER } from '../components/ItemSearch.tsx';
 import { SettingsToggle } from '../components/SettingsToggle.tsx';
+import { ShortcutsSheet } from '../components/ShortcutsSheet.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { formatPercent } from '../format.ts';
 import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
+import { shortcutOf } from '../state/shortcuts.ts';
 import { dismissToast, setToastsInert, showToast } from '../state/toasts.ts';
 import { CompareCard, CompareToggle, useCompare } from './CompareCard.tsx';
 import { ISSUE_ORDER, problemId } from './flow-model.ts';
@@ -330,9 +335,11 @@ export function ProjectPage(props: { id: string }): ReactElement {
   useEffect(() => () => dismissToast(`rename:${props.id}`), [props.id]);
   // The settings column is a drawer below 900 px, and a layer of its own while it is open (ruling R36): opening it moves the focus to
   // its Close settings button, and the page behind it is inert (the head, the banners and the views here, and the App's top bar above
-  // this page), so neither the keyboard nor a click reaches what the drawer covers. Every way out, Escape, a click on the dimmed page,
-  // its Close button or the Settings button, goes through `closeSettings`, which gives the focus back to the Settings button. A window
-  // that grows past 900 px closes it too, without moving the focus: the column is beside the views again and the button is not drawn.
+  // this page), so neither the keyboard nor a click reaches what the drawer covers. Every way out, Escape, a click on the dimmed page or
+  // its Close settings button (the Settings button sits in the inert head while it is open), goes through `closeSettings`, which gives the
+  // focus back to the Settings button. A window that grows past 900 px closes it too: the column is beside the views again and the button
+  // is not drawn, so the focus stays where it is, unless what has it is no longer drawn (the Close settings button, which only the drawer
+  // draws); then the column itself takes it (R46).
   // The focus moves in a layout effect, after the commit: until then the page behind is still inert, and an inert button takes no focus.
   // It opens into its Close button when the Settings button opens it, and into the item search when the page opens it to pick what to make
   // (below). These hooks sit above the early return below; the listeners are removed when the drawer closes, and between StrictMode's two runs.
@@ -344,6 +351,11 @@ export function ProjectPage(props: { id: string }): ReactElement {
   const refocusToggle = useRef(false);
   /** Where the focus goes when the drawer opens: its Close button, or the item search of its Make section. */
   const focusOnOpen = useRef<'close' | 'search'>('close');
+  /**
+   * What had the focus in the drawer when a window that grew past 900 px closed it, or 'lost' when the browser had let it go already: the
+   * column takes the focus from what is no longer drawn, and a lost one (R46).
+   */
+  const refocusAside = useRef<Element | 'lost' | null>(null);
   const closeSettings = (): void => {
     refocusToggle.current = true;
     setSettingsOpen(false);
@@ -367,6 +379,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
       if (!intoSearch || !focusSearch()) settingsClose.current?.focus();
     } else if (refocusToggle.current) settingsToggle.current?.focus();
     refocusToggle.current = false;
+    // R46 (plan ruling aside-refocus): what had the focus when the window outgrew the drawer keeps it while it is drawn beside the views (the
+    // Make search); the drawer's own Close settings is not, so the column takes the focus from it, which is not left on the page's body
+    const left = refocusAside.current;
+    refocusAside.current = null;
+    const gone = left === 'lost' ? focusLost() : left !== null && (!left.isConnected || left.getClientRects().length === 0);
+    if (gone && !focusOn(settingsPanel.current)) focusMain();
   }, [settingsOpen]);
   // What to make is the first thing a project needs, and it is in the drawer on a narrow window: so a project with no target opens the
   // drawer by itself, into the item search, once per visit (this page is new for each visit to a project: the route keys it by the id).
@@ -414,8 +432,9 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // meanwhile is drawn, so heard, only once the drawer closes. The drawer closes when the window grows past the width it is a drawer at (the
   // stylesheet's query). It looks once more as it starts to listen: the page's own opening (the auto-open, in an effect) is a task or two
   // older than this effect, and a window that grew in between fired its change before there was a listener. In a window still narrow that
-  // look does nothing; in one that has grown it closes the drawer at once, the cleanup giving the top bar and the toasts back, and, as for
-  // any widening, leaves the focus where it is (on the search, which sits beside the views then), not on a Settings button that is not drawn.
+  // look does nothing; in one that has grown it closes the drawer at once, the cleanup giving the top bar and the toasts back, and leaves the
+  // focus where it is when that is still drawn (on the search, which sits beside the views then), never on a Settings button that is not
+  // drawn (R46).
   useEffect(() => {
     if (!settingsOpen) return;
     const outside = ['.top-nav', '.toasts'].flatMap((selector) => document.querySelector<HTMLElement>(selector) ?? []);
@@ -423,7 +442,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
     setToastsInert(true);
     const narrow = matchMedia(NARROW);
     const onWidth = (): void => {
-      if (!narrow.matches) setSettingsOpen(false);
+      if (narrow.matches) return;
+      // what has the focus in the drawer (R46). Chromium can let it go from a control the wider window does not draw (Close settings) before
+      // this hears the change; the page behind the drawer is inert, so a focus lost by then was the drawer's
+      const at = document.activeElement;
+      refocusAside.current = focusLost() ? 'lost' : at !== null && settingsPanel.current?.contains(at) === true ? at : null;
+      setSettingsOpen(false);
     };
     narrow.addEventListener('change', onWidth);
     onWidth();
@@ -462,6 +486,80 @@ export function ProjectPage(props: { id: string }): ReactElement {
     // a button the stylesheet does not show has no box
     [compareHeadToggle.current, compareBarToggle.current].find((b) => b !== null && b.getClientRects().length > 0)?.focus();
   };
+  // The keyboard shortcuts (Phase 2 spec §14): one listener on the document, in the bubble phase, so what an element did with a key is known
+  // (`defaultPrevented`), and a pure function decides what the key does (state/shortcuts.ts). It listens once the project is in (no tabs or
+  // search are drawn before, and the drawer that opens by itself has not decided yet), and not while the drawer, the sheet or another modal
+  // (the name prompt, the map's pin dialog) is open. A digit selects its tab, which then takes the focus; `/` is the banner hint's way to the
+  // item search (`pickTarget`: below 900 px the drawer opens into it); F and P press the shown diagram's Fit and Pause pipes, and do nothing on
+  // a tab with no diagram, so no setting changes unseen; ? opens the sheet. The sheet (components/ShortcutsSheet.tsx), which the head's
+  // Shortcuts button opens too, gives the focus back as it closes: to what had it while that is still drawn, else to the Shortcuts button if
+  // it is drawn (not below 900 px), else to the selected tab, else to the page's main, never to the body (ledger ruling P2-R71: when nothing
+  // had the focus, there is no opener to go back to).
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const shortcutsButton = useRef<HTMLButtonElement | null>(null);
+  /** What had the focus as the sheet opened (null: nothing, or the body), which takes it back as the sheet closes, while it is drawn. */
+  const sheetOpener = useRef<Element | null>(null);
+  /** The sheet is being closed: the focus goes back. */
+  const refocusFromSheet = useRef(false);
+  /** A digit switched the tab: the tab takes the focus once the page has drawn it selected. */
+  const focusTab = useRef(false);
+  const openSheet = (): void => {
+    const at = document.activeElement;
+    sheetOpener.current = at === null || at === document.body ? null : at;
+    setSheetOpen(true);
+  };
+  const closeSheet = (): void => {
+    refocusFromSheet.current = true;
+    setSheetOpen(false);
+  };
+  useLayoutEffect(() => {
+    if (sheetOpen || !refocusFromSheet.current) return;
+    refocusFromSheet.current = false;
+    const opener = sheetOpener.current;
+    sheetOpener.current = null;
+    const drawn = (el: Element | null): boolean => el !== null && el.isConnected && el.getClientRects().length > 0;
+    const selectedTab = document.querySelector('.tabs [aria-selected="true"]');
+    for (const el of [opener, shortcutsButton.current, selectedTab]) if (drawn(el) && focusOn(el)) return;
+    focusMain();
+  }, [sheetOpen]);
+  useLayoutEffect(() => {
+    if (!focusTab.current) return;
+    focusTab.current = false;
+    if (!focusOn(document.getElementById(`tab-${tab}`))) focusMain();
+  }, [tab]);
+  const listening = project !== null && !settingsOpen && !sheetOpen;
+  useEffect(() => {
+    if (!listening) return undefined;
+    const onKey = (e: KeyboardEvent): void => {
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      // an svg target (a Flow box's head) takes no typing
+      const shortcut = shortcutOf(e, e.target instanceof HTMLElement ? e.target : null);
+      if (shortcut === null) return;
+      if (shortcut.kind === 'fit' || shortcut.kind === 'pipes') {
+        // the button of the selected tab's panel, a diagram's, else none
+        const panel = document.querySelector('.tabs [aria-selected="true"]')?.getAttribute('aria-controls');
+        const key = shortcut.kind === 'fit' ? 'F' : 'P';
+        const button = panel == null ? null : document.getElementById(panel)?.querySelector<HTMLElement>(`[aria-keyshortcuts~="${key}"]`);
+        if (button == null) return;
+        e.preventDefault();
+        button.click();   // the button's own path: Fit's fit, Pause pipes' setting
+        return;
+      }
+      // a key the page acts on is taken: the `/` is not typed into the search it focuses, nor opens a browser's quick find
+      e.preventDefault();
+      if (shortcut.kind === 'search') pickTarget();
+      else if (shortcut.kind === 'sheet') openSheet();
+      else {
+        const id = PROJECT_TABS[shortcut.index]!.id;
+        if (tabFromHash(location.hash) !== id) {
+          focusTab.current = true;
+          location.hash = `#${id}`;
+        } else if (!focusOn(document.getElementById(`tab-${id}`))) focusMain();   // the tab shown already
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [listening]);
 
   if (project === null) {
     return (
@@ -498,6 +596,9 @@ export function ProjectPage(props: { id: string }): ReactElement {
             view.markDeleted(me);
           }}
         />
+        {/* The keys' sheet (Phase 2 spec §14.1, P2-D29), last in the head; below 900 px the head's row is full and the stylesheet does not draw it
+            (plan ruling shortcuts-button-wide): ? opens the sheet at every width, and the diagrams' hints say so. */}
+        <button type="button" className="small shortcuts-open" aria-keyshortcuts="?" ref={shortcutsButton} onClick={openSheet}>Shortcuts</button>
       </div>
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
           The key-numbers strip (Phase 2 spec §10) leads it, the plan's cost sentence beside it hidden from sight by a sibling rule and from a
@@ -521,7 +622,9 @@ export function ProjectPage(props: { id: string }): ReactElement {
         )}
       </div>
       <div className={settingsOpen ? 'project-body settings-open' : 'project-body'}>
-        <aside className="settings-panel" id="project-settings" aria-label="Project settings" ref={settingsPanel}>
+        {/* It can hold the focus, out of the Tab order: a window that outgrew the drawer gives it the focus that Close settings, which only the
+            drawer draws, had (R46); and a press on its words leaves the focus in it. */}
+        <aside className="settings-panel" id="project-settings" aria-label="Project settings" ref={settingsPanel} tabIndex={-1}>
           {/* The drawer's way out, and where the focus goes when it opens; the stylesheet draws it in the drawer only. */}
           <button type="button" className="settings-close" onClick={closeSettings} ref={settingsClose}>Close settings</button>
           {/* The drawer's own status (R43): the banners behind it are inert while it is open, so their status is not announced. Always
@@ -533,7 +636,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
         </aside>
         <div className="project-views" inert={settingsOpen}>
           <div className="tabs" role="tablist" aria-label="Project views">
-            {PROJECT_TABS.map((t) => (
+            {PROJECT_TABS.map((t, i) => (
               <button
                 key={t.id}
                 type="button"
@@ -541,6 +644,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
                 id={`tab-${t.id}`}
                 aria-selected={t.id === active.id}
                 aria-controls={`panel-${t.id}`}
+                aria-keyshortcuts={String(i + 1)}
                 onClick={() => {
                   location.hash = `#${t.id}`;
                 }}
@@ -557,6 +661,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
       </div>
       {/* After the body, not in its grid: the dimmed page behind the drawer is not a cell. It only draws below 900 px. */}
       {settingsOpen && <div className="drawer-backdrop" onClick={closeSettings} />}
+      {/* A portal on <body>: the page's #root is inert behind it while it is open. */}
+      {sheetOpen && <ShortcutsSheet onClose={closeSheet} />}
     </main>
   );
 }

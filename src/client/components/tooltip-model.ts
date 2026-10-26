@@ -161,6 +161,17 @@ export function describes(tip: string, name: string | null): boolean {
 }
 
 /**
+ * What a screen reader says of an element before its description, for `describes`, `repeatsName` and `describedLines` to read as its name: the
+ * name, then each key of its `aria-keyshortcuts` (`keys`), which a screen reader says with it, a part each; null when it says neither. A name
+ * with no key is said as it is. So the tip "Pause pipes · P" of the toolbar's Pause pipes, key P (Phase 2 spec §14.1), says nothing more and
+ * describes nothing: neither the name nor the key is heard twice (P2-D36).
+ */
+export function spokenName(name: string | null, keys: string | null): string | null {
+  const said = [name ?? '', ...(keys ?? '').split(/\s+/)].filter((part) => part.trim() !== '');
+  return said.length === 0 ? null : said.join('\n');
+}
+
+/**
  * Which of a tip's `lines` only repeat `name`, the accessible name of the element the tip describes (ledger rulings P2-R22, P2-R24, P2-R24c):
  * each line whose parts are all parts of the name, wherever it stands. So a Flow box named by its whole tip, an arrow by its three lines run
  * together and a step head by its title and line have those lines left out; so has an icon its own name, a row its words (its name goes on

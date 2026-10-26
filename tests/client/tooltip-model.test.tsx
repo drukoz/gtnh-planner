@@ -7,7 +7,8 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { HOVER_DELAY_MS } from '../../src/client/map/hover.ts';
 import {
-  alongAxis, createRestTimer, describedLines, describes, frameThrottle, hoverFrom, inView, placeTip, tapActs, TIP_DELAY_MS, tipLines, tipText, type TapNode,
+  alongAxis, createRestTimer, describedLines, describes, frameThrottle, hoverFrom, inView, placeTip, spokenName, tapActs, TIP_DELAY_MS, tipLines, tipText,
+  type TapNode,
 } from '../../src/client/components/tooltip-model.ts';
 import { MOD_NAMES, modName } from '../../src/client/components/mod-names.ts';
 import { TipLines } from '../../src/client/components/Tooltip.tsx';
@@ -166,6 +167,21 @@ describe('the shared tooltip: the mod line and the box', () => {
     expect(describedLines(['Iron Ingot Block', 'Iron'], null, 'Iron Ingot')).toEqual(['Iron Ingot Block', 'Iron']);
     // and a figure's comma is no separator: "1,440" is not "1 440"
     expect(describes('1,440', '1 440')).toBe(true); expect(describes('Iron Ingot\n1/s', 'Iron Ingot · 1/s')).toBe(false);
+  });
+
+  // Task 11 (spec §14.1): the diagrams' Fit and Pause pipes buttons are named by their words and give their key in `aria-keyshortcuts`, which a
+  // screen reader says with the name; their tips, "Fit · F" and "Pause pipes · P", say nothing more, so they describe nothing, and the name is not
+  // heard twice. A name with no key is said as it was
+  it('describes nothing on a button whose tip is its name and its key', () => {
+    expect(spokenName('Pause pipes', 'P')).toBe('Pause pipes\nP');
+    expect(describedLines(['Pause pipes · P'], null, spokenName('Pause pipes', 'P'))).toEqual([]);
+    expect(describedLines(['Play pipes · P'], null, spokenName('Play pipes', 'P'))).toEqual([]);
+    expect(describedLines(['Fit · F'], null, spokenName('Fit', 'F'))).toEqual([]); expect(describes('Fit · F', spokenName('Fit', 'F'))).toBe(false);
+    // the name alone, the key unsaid, leaves the whole line to describe; and a key counts whole: F is not Flow
+    expect(describedLines(['Fit · F'], null, spokenName('Fit', null))).toEqual(['Fit · F']);
+    expect(describedLines(['Fit · Flow'], null, spokenName('Fit', 'F'))).toEqual(['Fit · Flow']);
+    expect([spokenName('Copper Wire', null), spokenName(null, null), spokenName(null, 'F'), spokenName('Fit', ' F  Shift+F ')]).toEqual(['Copper Wire', null, 'F', 'Fit\nF\nShift+F']);
+    expect(renderToStaticMarkup(<TipLines lines={['Pause pipes · P']} mod={null} name={spokenName('Pause pipes', 'P')} />)).toBe('<div aria-hidden="true">Pause pipes · P</div>');
   });
 
   // ledger ruling P2-R24c: since P2-R32 a recipe slot's name says its chance and what a run takes of it, which its tip says on lines of their

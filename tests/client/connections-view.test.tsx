@@ -46,7 +46,7 @@ describe('the Connections tab', () => {
     expect(pan).toBeDefined();
     for (const id of ['step:a', 'step:b', 'chest:2,64,0', 'chest:2,64,2']) expect(pan).toContain(`data-node="${id}"`);
     expect(pan).toContain('data-edge="flow:step:a&gt;step:b:t:dust@0"');
-    expect(html).toMatch(/<button type="button" class="small">Fit<\/button>.*<div class="connections" data-testid="connections"/s);
+    expect(html).toMatch(/<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit<\/button>.*<div class="connections" data-testid="connections"/s);
   });
   // the audit of the EnderIO In / Out fix: a conduit face's row names its mode and the channel of each side under its
   // title, so the picture shows that the link in (insert side) and the link out (extract side) pass the same face
@@ -265,11 +265,11 @@ describe('the Connections pipes', () => {
   // ruling R31 (WCAG 2.2.2): the pipes move for as long as the picture is shown, so a text button after Fit stops them all, the one
   // setting of this browser that the Flow toolbar shares (state/pipes-paused.ts); paused, the area says so in `data-pipes`
   it('offers a Pause pipes button after Fit, and stops every pipe while the pipes are paused', () => {
-    expect(shell()).toMatch(/<button type="button" class="small">Fit<\/button><button type="button" class="small" aria-pressed="false">Pause pipes<\/button><span class="muted small">/);
+    expect(shell()).toMatch(/<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit<\/button><button type="button" class="small" aria-keyshortcuts="P" data-tip="Pause pipes · P">Pause pipes<\/button><span class="muted small">/);
     setPipesPaused(true);
     try {
       const html = shell();
-      expect(html).toContain('<button type="button" class="small">Fit</button><button type="button" class="small" aria-pressed="true">Play pipes</button>');
+      expect(html).toContain('<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit</button><button type="button" class="small" aria-keyshortcuts="P" data-tip="Play pipes · P">Play pipes</button>');
       expect(html).toContain('<div class="connections" data-testid="connections" aria-busy="false" data-pipes="paused">');
       // a pause stops the picked link of a huge picture too, the one pipe that moves there
       const links = Array.from({ length: 201 }, (_, i) => ({ ...redLink, id: `link:${i}` }));

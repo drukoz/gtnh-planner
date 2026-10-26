@@ -240,6 +240,19 @@ const DARK_TOUR: DarkStop[] = [
     },
     rows: [{ what: 'a confirm', selector: '.inline-confirm', property: 'background-color', expected: 'rgba(0, 0, 0, 0.82)' }],
   },
+  // Task 11: the keyboard shortcuts' sheet is a modal on the dark panel's #2a2a2a, its key caps the dark button face's #3c3c3c (spec §14.1)
+  {
+    name: 'the shortcuts sheet',
+    open: async (page) => {
+      await openWithPlan(page, circuitLv());
+      await page.keyboard.press('?');
+      await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
+    },
+    rows: [
+      { what: 'the sheet', selector: '.shortcuts-sheet', property: 'background-color', expected: 'rgb(42, 42, 42)' },
+      { what: 'a key cap', selector: '.shortcut-list kbd', property: 'background-color', expected: 'rgb(60, 60, 60)' },
+    ],
+  },
 ];
 
 // a fresh context per test, in a dark OS

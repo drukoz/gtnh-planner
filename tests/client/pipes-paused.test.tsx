@@ -46,9 +46,10 @@ describe('the Pause pipes setting', () => {
 });
 
 describe('the Pause pipes button', () => {
+  // R44 (Phase 2 spec §17, §3.9): no `aria-pressed`, the label says what a press does; its key is P (spec §14), which its tip says too
   it('is a small text button that says what pressing it does, and whether the pipes are paused', () => {
-    expect(renderToStaticMarkup(<PipesButton paused={false} />)).toBe('<button type="button" class="small" aria-pressed="false">Pause pipes</button>');
-    expect(renderToStaticMarkup(<PipesButton paused />)).toBe('<button type="button" class="small" aria-pressed="true">Play pipes</button>');
+    expect(renderToStaticMarkup(<PipesButton paused={false} />)).toBe('<button type="button" class="small" aria-keyshortcuts="P" data-tip="Pause pipes · P">Pause pipes</button>');
+    expect(renderToStaticMarkup(<PipesButton paused />)).toBe('<button type="button" class="small" aria-keyshortcuts="P" data-tip="Play pipes · P">Play pipes</button>');
   });
 
   it('pauses the pipes when they move, and plays them when they are paused', () => {

@@ -905,7 +905,7 @@ and the spec follow the ruling; the task text is left as it was planned. `file:l
 - **R31** — WCAG 2.2.2: a "Pause pipes" / "Play pipes" button (`aria-pressed`) after Fit in the Flow and Connections
   toolbars, one setting per browser (`gtnh-planner:pipes-paused`), applied as `pipes-paused` on the Flow svg and
   `data-pipes="paused"` on `.connections`; the live dot breathes twice and the reconnect dot blinks three times, so
-  both stop within 5 s.
+  both stop within 5 s. R44 dropped `aria-pressed`; the label changes (Phase 2 Task 11).
 - **R32** — `.conn-arrow-head` falls back to `var(--item)` before `context-stroke`, which WebKit lacks (it drew black
   heads); as a base rule plus an `@supports (fill: context-stroke)` rule, as the minifier keeps only the last `fill`
   of one rule.

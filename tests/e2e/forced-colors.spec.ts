@@ -3,10 +3,11 @@
 // whether a box was ticked. The stylesheet repaints them in system colours (styles-contract.test.tsx pins the block). Chromium's emulation
 // of forced colours says what the browser computes: an edge round every tick and radio, a mark in a colour of its own on a ticked one only,
 // and carets that are not the colour of what they sit on. A picked map row keeps the focus ring the keyboard gives it, its own cue showing
-// only without one (ruling R42).
+// only without one (ruling R42). The keyboard shortcuts' sheet (Phase 2 Task 11) keeps its frame and its key caps their edges, read from the
+// painted pixels (ledger ruling P2-R41).
 
 import { test, expect, type Locator } from '@playwright/test';
-import { login, setName, createProject } from './helpers.ts';
+import { login, setName, createProject, LV_CIRCUITS } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
 const TRANSPARENT = 'rgba(0, 0, 0, 0)';
@@ -114,4 +115,47 @@ test('a picked map row shows the focus ring when the keyboard picks it, and its 
   await pin(1).locator('button').click();
   await expect(pin(1)).toHaveAttribute('aria-current', 'true');
   await expect.poll(() => outline(1)).toEqual({ width: '2px', offset: '-2px' });
+});
+
+// Phase 2 Task 11 (spec §3.5, §20; ledger ruling P2-R41: read from painted pixels): the sheet and its key caps are drawn with faces and bevels,
+// which a contrast theme paints its canvas and drops; their edges are borders, which it keeps in its text colour, so the sheet stays framed
+// on the dimmed page and each cap a key on the sheet
+test('in forced colours the shortcuts sheet keeps its frame, and its key caps their edges', async ({ page }) => {
+  await page.emulateMedia({ forcedColors: 'active' });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Forced shortcuts', LV_CIRCUITS);
+  await expect(page.getByRole('tab', { name: 'Flow' })).toBeVisible();                // the page is in: its keys are listened to
+  await page.keyboard.press('?');
+  const sheet = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  await expect(sheet).toBeVisible();
+  // measured at its size and over the page dimmed, once the sheet's and its backdrop's entrances have run
+  await sheet.evaluate((el) => Promise.all([...el.getAnimations(), ...el.parentElement!.getAnimations()].map((a) => a.finished)));
+  const frame = (await sheet.boundingBox())!;
+  const cap = (await sheet.locator('kbd').first().boundingBox())!;
+  const theme = await page.evaluate(() => {
+    const probe = document.createElement('div');
+    document.body.append(probe);
+    const colourOf = (value: string): string => { probe.style.color = value; return getComputedStyle(probe).color; };
+    const colours = { text: colourOf('CanvasText'), canvas: colourOf('Canvas') };
+    probe.remove();
+    return colours;
+  });
+  expect(theme.text).not.toBe(theme.canvas);
+  const shot = await page.screenshot({ animations: 'disabled', caret: 'hide' });
+  const at = (x: number, y: number): [number, number] => [Math.floor(x), Math.floor(y)];
+  const [edge, face, capEdge, capFace] = await page.evaluate(async ([png, points]) => {
+    const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
+    const g = new OffscreenCanvas(image.width, image.height).getContext('2d')!;
+    g.drawImage(image, 0, 0);
+    return points.map(([x, y]) => { const [r, gr, b] = g.getImageData(x!, y!, 1, 1).data; return `rgb(${r}, ${gr}, ${b})`; });
+  }, [shot.toString('base64'), [
+    at(frame.x + 1, frame.y + frame.height / 2),                                       // the sheet's edge, 2 px wide
+    at(frame.x + 10, frame.y + 10),                                                    // its face, in the padding before its title
+    at(cap.x + 1, cap.y + cap.height / 2),                                             // the first cap's edge
+    at(cap.x + 3, cap.y + 3),                                                          // its face, beside its glyph
+  ]] as const);
+  expect(edge, 'the sheet\'s edge is the theme\'s text colour').toBe(theme.text);
+  expect(face, 'its face the theme\'s canvas').toBe(theme.canvas);
+  expect(capEdge, 'a key cap\'s edge is the theme\'s text colour').toBe(theme.text);
+  expect(capFace, 'its face the theme\'s canvas').toBe(theme.canvas);
 });

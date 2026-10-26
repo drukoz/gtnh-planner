@@ -21,9 +21,10 @@
 //   a still pointer fires no pointerout, and a finger's tip hears no pointer event at all: Review Focus 2), re-reads its lines (a replan
 //   rewrites a box's), and keeps a focus or touch tip at its element.
 // - Its box gives the focused element (focus) or the trigger its id as one more `aria-describedby` token, unless the tip says no more than
-//   the element's own name (P2-D36); the lines that only repeat the name, whatever the separators its parts are joined with, are hidden
-//   from assistive technology, so the description is what the tip adds: an icon's mod line, a step head's rows (P2-R22, P2-R24). Only
-//   that token is taken back.
+//   the element's own name (P2-D36) and keys (`aria-keyshortcuts`, which a screen reader says with the name: Fit's tip "Fit · F" describes
+//   nothing, Task 11); the lines that only repeat them, whatever the separators its parts are joined with, are hidden from assistive
+//   technology, so the description is what the tip adds: an icon's mod line, a step head's rows (P2-R22, P2-R24). The name is the element's
+//   `aria-label`, else, for a button named by its words (the toolbars' Fit and Pause pipes), its words. Only that token is taken back.
 // - An element out of view (its svg's, or the window's) shows no tip, not even for a frame; one never placed is dropped as it is, and only
 //   a tip that showed fades out (spec §6.2).
 
@@ -32,8 +33,8 @@ import { createPortal } from 'react-dom';
 import { DRAG_THRESHOLD } from '../views/pan-zoom.ts';
 import { Figs } from './Figs.tsx';
 import {
-  createRestTimer, describedLines, frameThrottle, hoverFrom, inView, LONG_PRESS_CLICK_MS, LONG_PRESS_MS, placeTip, repeatsName, tapActs,
-  TIP_ATTR, TIP_EXIT_MS, TIP_MOD_ATTR, tipLines, type TapNode, type TipAnchor,
+  createRestTimer, describedLines, frameThrottle, hoverFrom, inView, LONG_PRESS_CLICK_MS, LONG_PRESS_MS, placeTip, repeatsName, spokenName,
+  tapActs, TIP_ATTR, TIP_EXIT_MS, TIP_MOD_ATTR, tipLines, type TapNode, type TipAnchor,
 } from './tooltip-model.ts';
 
 /** What showed the tip: the mouse or a pen resting on it, the keyboard's focus, or a finger. */
@@ -152,11 +153,13 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
   const guard: { contextmenu: boolean; click: boolean; timer: ReturnType<typeof setTimeout> | null } = { contextmenu: false, click: false, timer: null };
 
   /**
-   * Gives `el` the tip as one more `aria-describedby` token when the tip says more than its name (P2-D36, ledger ruling P2-R22: an icon's
-   * mod line is more), and gives back that name, whose lines `TipLines` hides from assistive technology; null when it describes nothing.
+   * Gives `el` the tip as one more `aria-describedby` token when the tip says more than its name and keys (P2-D36, ledger ruling P2-R22: an
+   * icon's mod line is more), and gives back what those say (`spokenName`), whose lines `TipLines` hides from assistive technology; null when
+   * it describes nothing. A button with no `aria-label` is named by its words.
    */
   const describe = (lines: readonly string[], mod: string | null, el: Element): string | null => {
-    const name = el.getAttribute('aria-label');
+    const label = el.getAttribute('aria-label') ?? (el instanceof HTMLButtonElement ? el.textContent : null);
+    const name = spokenName(label, el.getAttribute('aria-keyshortcuts'));
     if (describedLines(lines, mod, name).length === 0) return null;
     const ids = tokens(el.getAttribute('aria-describedby'));
     if (!ids.includes(id)) el.setAttribute('aria-describedby', [...ids, id].join(' '));

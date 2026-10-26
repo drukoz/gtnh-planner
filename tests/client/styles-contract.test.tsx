@@ -2654,6 +2654,14 @@ const CONFIRM_ROW = '.key-list > li:has(> .inline-confirm)';
 const CONFIRM_IN_ROW = '.key-list > li > .inline-confirm';
 const CONFIRM_RULES = [CONFIRM, '.inline-confirm p', CONFIRM_ROW, CONFIRM_IN_ROW];
 
+/**
+ * Phase 2 Task 11 (spec §14.1): the keyboard shortcuts' sheet, a modal whose list sets each key's caps beside what the key does; and the head's
+ * Shortcuts button, which a window of 900 px or less does not draw (plan ruling shortcuts-button-wide).
+ */
+const SHORTCUT_CAP = '.shortcut-list kbd';
+const SHORTCUT_RULES = ['.shortcut-list', '.shortcut-list > div', '.shortcut-list dt', '.shortcut-list dd', SHORTCUT_CAP];
+const SHORTCUTS_OPEN = '.project-head > .shortcuts-open';
+
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
@@ -2672,6 +2680,7 @@ const PHASE2_RULES: string[] = [
   ...BUSY_RULES,                                                                     // Task 8: the busy line out of the flow (P2-R18)
   ...TOAST_RULES,                                                                    // Task 9a: the toasts (spec §12.3)
   ...CONFIRM_RULES,                                                                  // Task 10: the in-app confirm (spec §13.2)
+  ...SHORTCUT_RULES, SHORTCUTS_OPEN,                                                 // Task 11: the shortcuts sheet and the head's button (spec §14.1)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3308,5 +3317,39 @@ describe('the Machine GUI Phase 2: the in-app confirm', () => {
     // its words (a toast floats, and needs its rule); its edge, a border, is the theme's text colour already: no rule (projector.spec.ts reads
     // the painted pixels)
     expect(forcedBlock().rules.flatMap((r) => selectorList(r.prelude)).filter((s) => s.includes(CONFIRM))).toEqual([]);
+  });
+});
+
+// Keyboard shortcuts (Phase 2 spec §14, Task 11): the sheet is a modal (`.modal`, its frame and its entrance) whose list sets each key's caps
+// beside what the key does, in two columns; a cap has the button's look, Pixelify 14 px (a digit cap's digit is a `span.fig` in VT323, on a
+// line of 0, spec §25), 28 px tall on a fixed 24 px line (spec §3.6). The head's Shortcuts button is drawn above 900 px only: below it the
+// Settings button names the target and the head's one row is full (plan ruling shortcuts-button-wide, as add-on 17 moved Compare modes).
+describe('the Machine GUI Phase 2: keyboard shortcuts', () => {
+  it('lists the keys in two columns, each cap a 28 px button face in Pixelify', () => {
+    expectDeclared([
+      ['.shortcut-list', 'display', 'grid'], ['.shortcut-list', 'grid-template-columns', 'auto 1fr'], ['.shortcut-list', 'gap', '8px 12px'],
+      ['.shortcut-list', 'margin', '0'], ['.shortcut-list > div', 'display', 'contents'],
+      ['.shortcut-list dt', 'display', 'flex'], ['.shortcut-list dt', 'align-items', 'center'], ['.shortcut-list dt', 'gap', '4px'],
+      ['.shortcut-list dd', 'margin', '0'], ['.shortcut-list dd', 'align-self', 'center'],
+      [SHORTCUT_CAP, 'display', 'inline-grid'], [SHORTCUT_CAP, 'place-content', 'center'], [SHORTCUT_CAP, 'min-width', '28px'],
+      [SHORTCUT_CAP, 'min-height', '28px'], [SHORTCUT_CAP, 'padding', '0 6px'], [SHORTCUT_CAP, 'font', '14px/24px var(--font-pixel)'],
+      [SHORTCUT_CAP, 'background', 'var(--btn)'], [SHORTCUT_CAP, 'box-shadow', 'var(--bevel-btn)'], [SHORTCUT_CAP, 'border', '2px solid var(--outline)'],
+      [SHORTCUT_CAP, 'color', '#ffffff'],
+    ]);
+    // a cap is as tall as its fixed line and its edge: no font that comes late changes its height
+    const px = (value: string | undefined): number => Number.parseFloat(value ?? '');
+    expect(px(/\/(\S+)/.exec(declared(SHORTCUT_CAP, 'font') ?? '')?.[1]) + 2 * px(declared(SHORTCUT_CAP, 'border'))).toBe(px(declared(SHORTCUT_CAP, 'min-height')));
+    for (const selector of SHORTCUT_RULES) {
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
+    }
+    // forced colours: the sheet's frame and a cap's edge are borders, which the theme keeps in its text colour, and their faces are its canvas:
+    // no rule (forced-colors.spec.ts reads the painted pixels)
+    expect(forcedBlock().rules.flatMap((r) => selectorList(r.prelude)).filter((s) => s.includes('shortcut'))).toEqual([]);
+  });
+
+  it('draws no Shortcuts button in the head below 900 px, where its one row is full', () => {
+    expect(inQuery(NARROW, SHORTCUTS_OPEN)).toEqual([['display', 'none']]);
+    expect(blocks.filter((b) => !b.nested && b.prelude.split(', ').includes(SHORTCUTS_OPEN))).toEqual([]);
   });
 });

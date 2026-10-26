@@ -1,6 +1,6 @@
 // Search box over every item and fluid in the pack (spec §3.2, "works like NEI search"): typing waits 200 ms, then asks
 // the server; the answers are a listbox picked with the mouse or with the arrow keys and Enter. Only the answer to the
-// latest text is shown.
+// latest text is shown. A search the page's `/` focuses says so in `aria-keyshortcuts` (`shortcut`, Phase 2 spec §14).
 
 import { useEffect, useId, useState, type KeyboardEvent, type ReactElement } from 'react';
 import type { SearchHit } from '../../shared/types/pack.ts';
@@ -12,7 +12,11 @@ const SEARCH_LIMIT = 20;
 /** The placeholder, and so the name, of a search box that asks for none: the Make section's, which the page finds the picker of what to make by. */
 export const ITEM_SEARCH_PLACEHOLDER = 'Search items and fluids';
 
-export function ItemSearch(props: { onPick(hit: SearchHit): void; placeholder?: string }): ReactElement {
+export function ItemSearch(props: {
+  onPick(hit: SearchHit): void; placeholder?: string;
+  /** The key that focuses this search (the Make section's `/`), for `aria-keyshortcuts`; it is the page's to listen for. */
+  shortcut?: string;
+}): ReactElement {
   const { onPick } = props;
   const placeholder = props.placeholder ?? ITEM_SEARCH_PLACEHOLDER;
   const listId = useId();
@@ -93,6 +97,7 @@ export function ItemSearch(props: { onPick(hit: SearchHit): void; placeholder?: 
         aria-expanded={showList}
         aria-controls={listId}
         aria-activedescendant={showList && active >= 0 ? optionId(active) : undefined}
+        aria-keyshortcuts={props.shortcut}
         value={query}
         autoComplete="off"
         spellCheck={false}

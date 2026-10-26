@@ -181,16 +181,16 @@ test('a Pause pipes button stops the pipes of both diagrams, and this browser re
   await expect(canvas.locator('.flow-edge-flow').first()).toBeAttached();
   expect(await playState('.flow-edge-flow')).toBe('running');
   const pause = page.getByRole('button', { name: 'Pause pipes' });
-  await expect(pause).toHaveAttribute('aria-pressed', 'false');
+  await expect(pause).not.toHaveAttribute('aria-pressed');                            // R44: the label says what a press does
   await pause.click();
-  await expect(page.getByRole('button', { name: 'Play pipes' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Play pipes' })).not.toHaveAttribute('aria-pressed');
   await expect(canvas).toHaveClass(/\bpipes-paused\b/);
   expect(await playState('.flow-edge-flow')).toBe('paused');
 
   // loaded again, the page keeps them paused
   await page.reload();
   await expect(page.locator('svg.flow-canvas .flow-edge-flow').first()).toBeAttached();
-  await expect(page.getByRole('button', { name: 'Play pipes' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Play pipes' })).not.toHaveAttribute('aria-pressed');
   expect(await playState('.flow-edge-flow')).toBe('paused');
 
   // the Connections tab has them paused too, and its Play plays the pipes of both
@@ -199,7 +199,7 @@ test('a Pause pipes button stops the pipes of both diagrams, and this browser re
   await expect(view).toHaveAttribute('data-pipes', 'paused');
   expect(await playState('.conn-edge-flow')).toBe('paused');
   await page.getByRole('button', { name: 'Play pipes' }).click();
-  await expect(page.getByRole('button', { name: 'Pause pipes' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'Pause pipes' })).not.toHaveAttribute('aria-pressed');
   await expect(view).toHaveAttribute('data-pipes', 'all');
   expect(await playState('.conn-edge-flow')).toBe('running');
   await page.getByRole('tab', { name: 'Flow' }).click();

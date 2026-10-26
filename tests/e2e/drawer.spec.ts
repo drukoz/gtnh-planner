@@ -155,6 +155,10 @@ test('a window that grows past 900 px closes the drawer, and leaves the page liv
   await page.setViewportSize({ width: 1280, height: 720 });
   // the button is not drawn on a wide window, so it is found by its class: it says the drawer is closed
   await expect(page.locator('.settings-toggle')).toHaveAttribute('aria-expanded', 'false');
+  // R46 (plan ruling aside-refocus): the toggle's click put the focus on Close settings, which the column beside the views does not draw, so
+  // the column itself takes it: it is not lost to the page's body
+  await expect(settings).toBeFocused();
+  expect(await focusIsIn(page)).toBe('the drawer');
   await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
   for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
   await expect(settings).toBeVisible();                                                // the column beside the views again

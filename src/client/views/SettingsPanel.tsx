@@ -196,6 +196,7 @@ function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: Name
         </div>
       )}
       <ItemSearch
+        shortcut="/"
         onPick={(hit) => {
           remember(hit);
           if (hit.key !== target) patch({ target: hit.key });

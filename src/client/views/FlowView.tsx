@@ -664,7 +664,7 @@ function FlowCanvas(props: {
       <div className="flow-toolbar row">
         <button type="button" className="small" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
         <button type="button" className="small" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
-        <button type="button" className="small" onClick={() => fit(MIN_ZOOM)}>Fit</button>
+        <button type="button" className="small" aria-keyshortcuts="F" data-tip="Fit · F" onClick={() => fit(MIN_ZOOM)}>Fit</button>
         <PipesButton paused={pipesPaused} />
         <select
           className="flow-find small" aria-label="Find item" value=""
@@ -680,7 +680,7 @@ function FlowCanvas(props: {
           <input type="checkbox" checked={importsInOneColumn} onChange={(e) => onImportsInOneColumn(e.currentTarget.checked)} />
           Imports in one column
         </label>
-        <span className="muted small">Hover or click a good to see where it comes from and goes, click a box for details, Esc clears. Drag to move, scroll to zoom.</span>
+        <span className="muted small">Hover or click a good to see where it comes from and goes, click a box for details, Esc clears. Drag to move, scroll to zoom. ? shows the shortcuts.</span>
       </div>
       <svg
         ref={svgRef}

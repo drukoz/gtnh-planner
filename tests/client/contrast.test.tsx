@@ -255,6 +255,10 @@ const PAIRS: Pair[] = [
   // failed, the dark boxes' red; its buttons are the danger button and a button (above)
   ['confirm question over its panel', '#ffffff', CHAT_ON_PANEL, AA],
   ['confirm failure over its panel', '#ff5555', CHAT_ON_PANEL, AA],
+
+  // the keyboard shortcuts' sheet (Phase 2 Task 11, spec §14.1): a key cap's white on the button face it is drawn with; the sheet is a modal,
+  // whose ink is the panel's (above), and its Close is a button
+  ['shortcut key cap', '#ffffff', '--btn', AA],
 ];
 
 describe('contrast of the Machine GUI palette', () => {
