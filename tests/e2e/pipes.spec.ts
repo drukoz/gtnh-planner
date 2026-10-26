@@ -9,7 +9,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
 import { circuitLv, copperUnsourced, manyEdges } from './fixtures/plans.ts';
-import { createProject, login, openConnections, setName } from './helpers.ts';
+import { createProject, login, loosePipeEnds, openConnections, setName } from './helpers.ts';
 
 const LV_CIRCUITS: Partial<PlanSettings> = { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 };
 
@@ -19,31 +19,6 @@ async function openWithPlan(page: Page, plan: Plan): Promise<void> {
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Pipes', LV_CIRCUITS);
   await expect(page.locator('svg.flow-canvas [data-step-id]')).toHaveCount(plan.steps.length);
-}
-
-/** The ends of the pipes that no flange holds (`[]` when every one is on a flange), and how many pipes were measured. */
-async function loosePipeEnds(page: Page): Promise<{ loose: string[]; pipes: number }> {
-  return page.evaluate(() => {
-    const flanges = [...document.querySelectorAll('svg.flow-canvas rect.flow-port')].map((flange) => flange.getBoundingClientRect());
-    const pipes = [...document.querySelectorAll<SVGPathElement>('svg.flow-canvas path.flow-edge-line')];
-    const loose: string[] = [];
-    for (const pipe of pipes) {
-      const toScreen = pipe.getScreenCTM();
-      const id = pipe.closest('[data-edge-id]')?.getAttribute('data-edge-id') ?? '?';
-      if (toScreen === null) {
-        loose.push(`${id}: not drawn`);
-        continue;
-      }
-      const ends: Array<[string, DOMPoint]> = [['start', pipe.getPointAtLength(0)], ['end', pipe.getPointAtLength(pipe.getTotalLength())]];
-      for (const [which, point] of ends) {
-        const at = new DOMPoint(point.x, point.y).matrixTransform(toScreen);
-        // inside some flange: across it give or take a pixel, and within its height
-        const held = flanges.some((f) => at.x >= f.left - 1 && at.x <= f.right + 1 && at.y >= f.top && at.y <= f.bottom);
-        if (!held) loose.push(`${id} ${which} at (${at.x.toFixed(1)}, ${at.y.toFixed(1)})`);
-      }
-    }
-    return { loose, pipes: pipes.length };
-  });
 }
 
 /** What `expectMoving` watches: the keyframes that move it, the computed property they move, and how its messages name it. */
@@ -106,9 +81,9 @@ test('flow pipes move', async ({ page }) => {
 test('goods ride the flow pipes, attached, and never take the pointer', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   const canvas = page.locator('svg.flow-canvas');
-  // a rider drawn from its icon (the Iron Ingot's has the pack's texture): a placeholder gives way to the image once the icon has come, and an
-  // image stays, so the element watched is the same all along
-  const rider = canvas.locator('image.flow-rider').first();
+  // the first rider, in the arrows' order (ledger ruling P2-R93): one <image> from its mount, whose placeholder square gives way to its icon in
+  // the same element (ledger ruling P2-R96), so the element watched is the same all along
+  const rider = canvas.locator('.flow-rider').first();
   await expect(rider).toBeAttached();
   await expectRiderMoves(rider);
   const riders = await canvas.locator('.flow-rider').count();

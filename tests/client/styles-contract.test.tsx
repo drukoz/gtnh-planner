@@ -5,6 +5,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
+import { EASE_IN, EASE_OUT, EXIT_MS, GLIDE_MS, PAN_MS } from '../../src/client/state/motion.ts';
 import { cssBlocks, declarations, scan, themeTokens, type Block } from './css-blocks.ts';
 
 const read = (file: string): string => readFileSync(new URL(`../../src/client/${file}`, import.meta.url), 'utf8');
@@ -3394,7 +3395,8 @@ describe('the Machine GUI Phase 2: goods riding the pipes', () => {
       [RIDER, 'offset-rotate', '0deg'], [RIDER, 'animation', 'pipe-ride var(--rider-dur, 3s) linear infinite'],
       [RIDER, 'pointer-events', 'none'], [RIDER, 'image-rendering', 'pixelated'],
     ]);
-    // a ride is the whole path, from the output's flange to the input's
+    // a ride is the whole of `rideRoute`'s path: the arrow's, run on from 9 px inside the box it leaves to 9 px inside the box it enters
+    // (ledger ruling P2-R97)
     expect(ruleBody('@keyframes pipe-ride')).toContain('from { offset-distance: 0%; }');
     expect(ruleBody('@keyframes pipe-ride')).toContain('to { offset-distance: 100%; }');
     // a dimmed rider fades with its pipe (`.flow-canvas.focusing .dim`), over the pipe's own fade: a rule of its own, as FADES is exact
@@ -3425,5 +3427,27 @@ describe('the Machine GUI Phase 2: goods riding the pipes', () => {
   // pipe under it), decorative and aria-hidden; Task 12 found each rider's painted pixels the same with forced colours on and off, so no rule
   it('leaves a rider as it is in forced colours', () => {
     expect(forcedBlock().rules.flatMap((r) => selectorList(r.prelude)).filter((s) => s.includes(RIDER))).toEqual([]);
+  });
+});
+
+// The diagrams glide (Phase 2 spec §16, Task 13a; P2-D6): Fit, the zoom buttons and a reveal pan a diagram's view in JS, by a WAAPI animation of
+// its pan group's `transform` that ends on the group's `transform` attribute, with the motion tokens of motion.ts, which are the stylesheet's.
+// The stylesheet adds nothing for it: no transition on the boxes (FADES stays opacity alone) and no CSS transform on a pan group, which would
+// replace the attribute that holds the view (a box would jump to the corner). glide.spec.ts watches the pans in a browser.
+describe('the Machine GUI Phase 2: the diagrams glide', () => {
+  it('keeps the glide\'s numbers the stylesheet\'s, and adds no transition to the boxes', () => {
+    const tokens = rootTokens();
+    expect(`${GLIDE_MS}ms`, 'GLIDE_MS').toBe(tokens.get('--dur-slow'));
+    expect(`${EXIT_MS}ms`, 'EXIT_MS').toBe(tokens.get('--dur-exit'));
+    expect(EASE_OUT, 'EASE_OUT').toBe(tokens.get('--ease-out'));
+    expect(EASE_IN, 'EASE_IN').toBe(tokens.get('--ease-in'));
+    expect(PAN_MS, 'a pan is 250 ms: nothing the user waits for takes more than 300 ms').toBe(250);
+    expect(declarations(ruleBody(FADES))).toEqual([['transition', 'opacity var(--dur-base) var(--ease-out)']]);
+    // the class whole: `.flow-panel` is no pan group; and neither the property nor one of its parts, which would add to it
+    const pans = blocks.filter((b) => /\.(?:flow|conn)-pan(?![\w-])/.test(b.prelude));
+    const moving = pans.filter((b) => declarations(b.inner).some(([property]) => /^(transform|translate|scale|rotate)$/.test(property)));
+    expect(moving.map((b) => b.prelude)).toEqual([]);
+    expect(/\.(?:flow|conn)-pan(?![\w-])/.test('.flow-panel'), 'the pattern names the class whole').toBe(false);
+    expect(/\.(?:flow|conn)-pan(?![\w-])/.test('.flow-canvas > .flow-pan'), 'and finds it').toBe(true);
   });
 });

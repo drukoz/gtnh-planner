@@ -1,8 +1,9 @@
 // The shared end-to-end harness (architecture §11.7; Plans 3–5 use it too): log a page's browser context in, give it a
 // display name and a look, open a new project (or one with an EnderIO line laid out on the sample world, on its Connections tab),
 // hold its plan on the way (a replan's busy line), and move the views under its banners (a spacer). Task F3 adds a note through the API, the
-// guard against browser dialogs, and the count of the focus left on the page's body. All of it but holding a plan, the spacer and the
-// focus count (which watch the page that is open) works before the first navigation,
+// guard against browser dialogs, and the count of the focus left on the page's body. Task 13a adds the end of every motion that ends (the
+// diagrams' pans), and the check of the Flow pipes' ends that waits for it (pipes.spec.ts's, moved here). All of it but holding a plan, the
+// spacer, the focus count and those two (which watch or act on the page that is open) works before the first navigation,
 // because the request context of `page.context()` resolves relative URLs against `use.baseURL` and shares the browser context's
 // cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
 
@@ -237,3 +238,43 @@ export const watchBodyFocus = (page: Page): Promise<void> => page.evaluate(() =>
 export const bodyFocusCount = (page: Page): Promise<number> => page.evaluate(() => new Promise<number>((done) => {
   requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => done((window as unknown as { bodyFocus: number }).bodyFocus))));
 }));
+
+/**
+ * Ends every animation of the page that has an end (Phase 2 spec §16.4): a diagram's pan (Fit, the zoom buttons, a reveal) is where its
+ * `transform` attribute says at once, the picture on screen once it has run, so a test that measures the picture finishes it first. The
+ * endless ones (the pipes' dashes, the goods riding them) go on. A guard, not a loosening: what is measured after it is the same.
+ */
+export const finishMotion = (page: Page): Promise<void> => page.evaluate(() => {
+  for (const animation of document.getAnimations()) {
+    if (animation.effect?.getComputedTiming().endTime !== Infinity) animation.finish();
+  }
+});
+
+/**
+ * The ends of the Flow pipes that no flange holds (`[]` when every one is on a flange), and how many pipes were measured; once every motion
+ * that ends has ended (`finishMotion`), so a pan under way is measured where it ends (pipes.spec.ts's, moved here by Task 13a).
+ */
+export async function loosePipeEnds(page: Page): Promise<{ loose: string[]; pipes: number }> {
+  await finishMotion(page);
+  return page.evaluate(() => {
+    const flanges = [...document.querySelectorAll('svg.flow-canvas rect.flow-port')].map((flange) => flange.getBoundingClientRect());
+    const pipes = [...document.querySelectorAll<SVGPathElement>('svg.flow-canvas path.flow-edge-line')];
+    const loose: string[] = [];
+    for (const pipe of pipes) {
+      const toScreen = pipe.getScreenCTM();
+      const id = pipe.closest('[data-edge-id]')?.getAttribute('data-edge-id') ?? '?';
+      if (toScreen === null) {
+        loose.push(`${id}: not drawn`);
+        continue;
+      }
+      const ends: Array<[string, DOMPoint]> = [['start', pipe.getPointAtLength(0)], ['end', pipe.getPointAtLength(pipe.getTotalLength())]];
+      for (const [which, point] of ends) {
+        const at = new DOMPoint(point.x, point.y).matrixTransform(toScreen);
+        // inside some flange: across it give or take a pixel, and within its height
+        const held = flanges.some((f) => at.x >= f.left - 1 && at.x <= f.right + 1 && at.y >= f.top && at.y <= f.bottom);
+        if (!held) loose.push(`${id} ${which} at (${at.x.toFixed(1)}, ${at.y.toFixed(1)})`);
+      }
+    }
+    return { loose, pipes: pipes.length };
+  });
+}

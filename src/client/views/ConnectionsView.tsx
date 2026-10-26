@@ -6,7 +6,7 @@
 // the picture, the wheel zooms it and Fit shows all of it (./pan-zoom.ts), as for the flow diagram; a click on a box, one
 // of its face rows or a link shows its full configuration in the side panel, and a picked link marks the face rows it
 // leaves and enters. When the panel opens or closes beside it, the picture is fitted again if it still is the fitted one,
-// else keeps its middle (the review of 401d0ca).
+// else keeps its middle (the review of 401d0ca). The Fit button pans the picture there over 250 ms (Phase 2 spec §16.2, P2-D20).
 
 import {
   Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactElement,
@@ -30,6 +30,7 @@ import { usePipesPaused } from '../state/pipes-paused.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
+import { usePan, type PanView } from './glide.ts';
 import { DRAG_THRESHOLD, fitView, pointIn, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
 import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -88,6 +89,16 @@ const PAN_KEYS: Readonly<Record<string, readonly [number, number]>> = { ArrowLef
  * 2.8:1): their pipes get a panel-grey casing instead, on which each reads at 3.6:1 or more (design spec §7).
  */
 const DARK_DYES: ReadonlySet<DyeColor> = new Set(['black', 'brown', 'blue', 'gray', 'green', 'purple', 'red']);
+
+/** A view as its pan's (./glide.ts): the zoom `k` is the pan group's scale. */
+function toPan(v: View): PanView {
+  return { x: v.x, y: v.y, scale: v.k };
+}
+
+/** A pan's picture as a view. */
+function fromPan(p: PanView): View {
+  return { x: p.x, y: p.y, k: p.scale };
+}
 
 /** `text`, or its first `max` characters and '…' when it is longer, so the box shows where its text is cut. */
 function cut(text: string, max: number): string {
@@ -215,7 +226,10 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
  * boxes change, shows all of it. When the area changes size (the side panel opening or closing beside it), the view is
  * fitted again while nothing has moved or zoomed it since it was fitted, else it keeps the spot in its middle
  * (`resizeView`). The links come first, then the boxes over them. A group, not an image, so assistive technology reads
- * the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling).
+ * the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling). The Fit button pans the
+ * picture over 250 ms (Phase 2 spec §16.2, P2-D20: `usePan`), its attribute the fitted view at once; every other move is
+ * instant and ends a pan under way, the wheel, the drag and the arrow keys from the picture on screen (review focus 1),
+ * a refit from the view it was going to, the fitted one.
  */
 function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: boolean; onPick(pick: ConnPick): void }): ReactElement {
   const { picture, pick, busy, onPick } = props;
@@ -227,6 +241,8 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   }, [picture, pickedEdge]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ x: PAD, y: PAD, k: 1 });
+  /** The pan group (`g.conn-pan`), whose attribute is the view; Fit pans there (`glideTo`), `holdView` holds a pan for an instant move. */
+  const { panRef, glideTo, holdView } = usePan(view, setView, toPan, fromPan);
   const [dragging, setDragging] = useState(false);
   /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
   const pipesPaused = usePipesPaused();
@@ -234,7 +250,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const keysOn = useSingleKeyShortcuts();
   /**
    * The press that may become a drag: its pointer, where it went down on the page (`cx`, `cy`: client px) and in the area (`sx`, `sy`:
-   * `pointIn`), and the view then.
+   * `pointIn`), and the view then (the picture on screen once it is a drag, when a pan was under way).
    */
   const drag = useRef<{ pointer: number; cx: number; cy: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
@@ -248,14 +264,16 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     latest.current = { view, picture };
   }, [view, picture]);
 
-  const fit = (): void => {
+  /** Fits the picture: panned to by the Fit button (`glide`), at once when it first shows and when its boxes change. */
+  const fit = (glide = false): void => {
     const svg = svgRef.current;
     const size = { width: svg?.clientWidth ?? 0, height: svg?.clientHeight ?? 0 };
     const next = fitView(picture, size, PAD);
     area.current = size;
     fitted.current = next;
     latest.current.view = next;
-    setView(next);
+    if (glide) glideTo(next);
+    else setView(next);
   };
   useLayoutEffect(() => fit(), [shape]);   // reads the current picture; only a change of boxes refits
 
@@ -267,6 +285,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
       const after = { width: svg.clientWidth, height: svg.clientHeight };
       if (after.width === before.width && after.height === before.height) return;
       area.current = after;
+      // while Fit pans, the view is the fitted one it is going to, so a fitted view is fitted again; the view set ends the pan
       const { view: was, picture: shown } = latest.current;
       const refit = fitted.current !== null && sameView(was, fitted.current);
       const next = resizeView(was, fitted.current, shown, before, after, PAD);
@@ -281,12 +300,14 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   useEffect(() => {
     const svg = svgRef.current;
     if (svg === null) return undefined;
-    // React's wheel listener is passive, so it cannot stop the page from scrolling (or zooming, on a pinch); this can.
+    // React's wheel listener is passive, so it cannot stop the page from scrolling (or zooming, on a pinch); this can. It zooms the picture
+    // on screen at once: a pan under way stops where it is (review focus 1).
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       const box = svg.getBoundingClientRect();
       const factor = wheelFactor(e.deltaY, e.deltaMode === WheelEvent.DOM_DELTA_LINE);
-      setView((v) => zoomAround(v, e.clientX - box.left, e.clientY - box.top, factor));
+      const held = holdView();
+      setView((v) => zoomAround(held ?? v, e.clientX - box.left, e.clientY - box.top, factor));
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
@@ -321,6 +342,14 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
       d.moved = true;
       setDragging(true);
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
+      // a pan under way stops where it is on screen, and the drag carries on from that picture, its zoom too, as the move below sets x and y
+      // only (review focus 1); a click lets it run on
+      const held = holdView();
+      if (held !== null) {
+        setView(held);
+        d.ox = held.x;
+        d.oy = held.y;
+      }
     }
     // the drag follows the area: the spot it grabbed stays under the pointer while the area moves on the page (`pointIn`, P2-R16)
     const [px, py] = pointIn(e);
@@ -333,7 +362,11 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     const step = PAN_KEYS[e.key];
     if (step === undefined || e.altKey || e.ctrlKey || e.metaKey) return;   // Alt+← is the browser's Back
     e.preventDefault();   // the page does not scroll too
-    setView((v) => ({ ...v, x: v.x + step[0] * KEY_PAN, y: v.y + step[1] * KEY_PAN }));
+    const held = holdView();   // from the picture on screen, where a pan under way stops
+    setView((v) => {
+      const from = held ?? v;
+      return { ...from, x: from.x + step[0] * KEY_PAN, y: from.y + step[1] * KEY_PAN };
+    });
   };
 
   return (
@@ -341,7 +374,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
       <div className="conn-toolbar row">
         <button
           type="button" className="small" aria-keyshortcuts={keysOn ? 'F' : undefined} data-tip={keysOn ? 'Fit · F' : undefined}
-          onClick={() => fit()}
+          onClick={() => fit(true)}
         >
           Fit
         </button>
@@ -371,7 +404,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
               <path className="conn-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />
             </marker>
           </defs>
-          <g className="conn-pan" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+          <g className="conn-pan" ref={panRef} transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
             {picture.edges.map((edge) => <EdgeShape key={edge.id} edge={edge} selected={edge.id === pickedEdge} onPick={pickUnlessDragged} />)}
             {picture.nodes.map((node) => <NodeShape key={node.id} node={node} pick={pick} linked={linked} onPick={pickUnlessDragged} />)}
           </g>

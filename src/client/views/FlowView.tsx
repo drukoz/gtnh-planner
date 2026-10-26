@@ -7,8 +7,9 @@
 // toward the input, ending on the flange of its port (design spec §7); Pause pipes stops them (ruling R31). Hovering a row,
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
-// it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms. A good rides each pipe, its icon carried
-// from the output to the input (Phase 2 spec §15), and stops with the pipe's contents.
+// it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms, at once, while Fit, the zoom buttons, a reveal,
+// a line opened or closed and a new plan's view pan there over 250 ms (Phase 2 spec §16.2, ./glide.ts). A good rides each pipe, its icon
+// carried from the output to the input (Phase 2 spec §15), and stops with the pipe's contents.
 // The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6), and
 // its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone or out of the canvas's view
 // (ledger ruling P2-R36). While the plan, or its layout, is on its way the view says so beside a skeleton of a diagram (Phase 2 spec
@@ -45,6 +46,7 @@ import {
   lineNodeId, problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
   type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type MachineReadout,
 } from './flow-model.ts';
+import { restingBox, stopPan, usePan, type PanView } from './glide.ts';
 import { pointIn } from './pan-zoom.ts';
 import { RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, rideRoute, riderEdges, riderPhase, riderSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -124,6 +126,16 @@ function fitView(layout: FlowLayout, cw: number, ch: number, minZoom: number): V
 function keepOnScreen(pos: number, size: number, room: number): number {
   if (size + 2 * PAD <= room) return (room - size) / 2;
   return clamp(pos, room - PAD - size, PAD);
+}
+
+/** A view as its pan's (./glide.ts): the zoom is the pan group's scale. */
+function toPan(v: View): PanView {
+  return { x: v.x, y: v.y, scale: v.zoom };
+}
+
+/** A pan's picture as a view. */
+function fromPan(p: PanView): View {
+  return { zoom: p.scale, x: p.x, y: p.y };
 }
 
 /** The view a new diagram opens with (fix spec §6.2): zoom 0.9, centred on the target as far as the diagram reaches. */
@@ -530,9 +542,11 @@ interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
  * under the pointer while the canvas moves on the page) and zoom (wheel, buttons, Fit), Find item and the "Imports in
  * one column" toggle; hovering lights what is under the pointer, a click pins it (a box click also calls `onOpen`),
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
- * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`). The canvas can take the
- * focus from a script, out of the tab order: a panel's Close gives it there once the box that opened the panel is gone or
- * panned out of its view (P2-R36). A press focuses it too, with no ring; the keyboard's ring is drawn inside it.
+ * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`). Its first view is drawn at once; Fit,
+ * the zoom buttons, a reveal, a line opened or closed and a later plan's view are panned to over 250 ms (Phase 2 spec §16.2, `usePan`),
+ * while the wheel and a drag move the view at once, from the picture on screen, where they stop a pan under way (review focus 1). The
+ * canvas can take the focus from a script, out of the tab order: a panel's Close gives it there once the box that opened the panel is
+ * gone or panned out of its view (P2-R36). A press focuses it too, with no ring; the keyboard's ring is drawn inside it.
  */
 function FlowCanvas(props: {
   layout: FlowLayout; viewKey: string; selectedId: string | null; goods: Array<{ key: StuffKey; name: string }>;
@@ -541,9 +555,13 @@ function FlowCanvas(props: {
   const { layout, viewKey, selectedId, goods, importsInOneColumn, onImportsInOneColumn, onOpen, onToggleLine } = props;
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, x: PAD, y: PAD });
+  /** The pan group (`g.flow-pan`), whose attribute is the view; `glideTo` pans to a view, `holdView` holds a pan for an instant move. */
+  const { panRef, glideTo, holdView } = usePan(view, setView, toPan, fromPan);
+  /** The plan steps (`viewKey`) this canvas has opened on: its first view is drawn at once, a later plan's panned to. */
+  const openedOn = useRef<string | null>(null);
   /**
    * The press that may become a drag: its pointer, where it went down on the page (`cx`, `cy`: client px) and on the canvas (`sx`, `sy`:
-   * `pointIn`), and the view then.
+   * `pointIn`), and the view then (the picture on screen once it is a drag, when a pan was under way).
    */
   const drag = useRef<{ pointer: number; cx: number; cy: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const dragged = useRef(false);
@@ -568,19 +586,24 @@ function FlowCanvas(props: {
   const riders = useMemo(() => riderEdges(layout.edges, sets?.edges ?? null, missingIds), [layout, sets, missingIds]);
 
   const canvas = (): { width: number; height: number } => ({ width: svgRef.current?.clientWidth ?? 0, height: svgRef.current?.clientHeight ?? 0 });
-  /** Centres the box (or open line) `id`; false when this layout has none. */
+  /** Pans to the box (or open line) `id`, centred (a reveal, a line opened or closed); false when this layout has none. */
   const centre = (id: string, minZoom = 0): boolean => {
     const box = byId.get(id) ?? layout.groups.find((g) => g.id === id);
     if (box === undefined) return false;
-    setView((v) => centreOn(box, { ...v, zoom: Math.max(v.zoom, minZoom) }, canvas()));
+    glideTo((v) => centreOn(box, { ...v, zoom: Math.max(v.zoom, minZoom) }, canvas()));
     return true;
   };
 
-  // A new plan: open on what someone asked to see, else on the target (fix spec §6.2).
+  // A new plan: open on what someone asked to see, else on the target (fix spec §6.2). The first plan this canvas shows opens there at once
+  // (flow-focus.spec.ts measures it, and so does a reveal that mounts the diagram); a later one is panned to from the picture of the last.
   useLayoutEffect(() => {
     const anchor = focusAnchor(layout, getFlowFocus());
     const box = anchor === undefined ? undefined : byId.get(anchor);
-    setView(box === undefined ? initialView(layout, canvas()) : centreOn(box, { zoom: INITIAL_ZOOM, x: 0, y: 0 }, canvas()));
+    const next = box === undefined ? initialView(layout, canvas()) : centreOn(box, { zoom: INITIAL_ZOOM, x: 0, y: 0 }, canvas());
+    // StrictMode runs this twice on the first mount, for the same steps
+    if (openedOn.current === null || openedOn.current === viewKey) setView(next);
+    else glideTo(next);
+    openedOn.current = viewKey;
   }, [viewKey]);   // reads the current layout; only a change of the plan's steps resets the view
   useLayoutEffect(() => {
     const id = centreNext.current;
@@ -596,12 +619,14 @@ function FlowCanvas(props: {
   useEffect(() => {
     const svg = svgRef.current;
     if (svg === null) return undefined;
-    // React's wheel listener is passive, so it cannot stop the page from scrolling; this one can.
+    // React's wheel listener is passive, so it cannot stop the page from scrolling; this one can. It zooms the picture on screen at once:
+    // a pan under way stops where it is (review focus 1).
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       const box = svg.getBoundingClientRect();
       const pixels = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * WHEEL_LINE_PIXELS : e.deltaY;
-      setView((v) => zoomed(v, e.clientX - box.left, e.clientY - box.top, Math.exp(-pixels * WHEEL_ZOOM)));
+      const held = holdView();
+      setView((v) => zoomed(held ?? v, e.clientX - box.left, e.clientY - box.top, Math.exp(-pixels * WHEEL_ZOOM)));
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
@@ -620,8 +645,8 @@ function FlowCanvas(props: {
     };
   }, []);
 
-  const fit = (minZoom: number): void => setView(fitView(layout, canvas().width, canvas().height, minZoom));
-  const zoomCentre = (factor: number): void => setView((v) => zoomed(v, canvas().width / 2, canvas().height / 2, factor));
+  const fit = (minZoom: number): void => glideTo(fitView(layout, canvas().width, canvas().height, minZoom));
+  const zoomCentre = (factor: number): void => glideTo((v) => zoomed(v, canvas().width / 2, canvas().height / 2, factor));
 
   const hitOf = (target: EventTarget | null): Hit | null => {
     if (!(target instanceof Element)) return null;
@@ -679,6 +704,14 @@ function FlowCanvas(props: {
       d.moved = true;
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
       setDragging(true);
+      // a pan under way stops where it is on screen, and the drag carries on from that picture, its zoom too, as the move below sets x and y
+      // only (review focus 1); a click lets it run on
+      const held = holdView();
+      if (held !== null) {
+        setView(held);
+        d.ox = held.x;
+        d.oy = held.y;
+      }
     }
     // the drag follows the canvas: the spot it grabbed stays under the pointer while the canvas moves on the page (`pointIn`, P2-R16)
     const [px, py] = pointIn(e);
@@ -762,7 +795,7 @@ function FlowCanvas(props: {
         onKeyDown={onKeyDown}
       >
         <FlowDefs />
-        <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
+        <g className="flow-pan" ref={panRef} transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
           {layout.groups.map((group) => (
             <FlowGroupShape key={group.id} group={group} dim={sets !== null && !group.nodes.some((id) => sets.nodes.has(id))} />
           ))}
@@ -796,13 +829,26 @@ export function outsideWindow(box: PageBox, width: number, height: number): bool
 }
 
 /**
+ * Where `el` stands on screen; for what the diagram draws, where it stands once a pan under way has ended, in the view the pan group's attribute
+ * holds (Task 13a): what the focus will show is judged where it will be, not on the picture on its way there.
+ */
+function boxAtRest(el: Element): DOMRect {
+  const pan = el.closest<SVGGElement>('g.flow-pan');
+  return pan === null ? el.getBoundingClientRect() : restingBox(pan, el);
+}
+
+/**
  * Gives `el` the focus without moving the page, then, only when the window shows no part of `seen` (what must be in sight: a panel's head, or
- * `el` itself), scrolls `seen` in by the least scroll, so the focus stays in sight (ledger rulings P2-R35 and P2-R36; WCAG 2.4.11). What the
- * window shows, even in part, never moves the page.
+ * `el` itself) where it rests (`boxAtRest`), scrolls `seen` in by the least scroll, so the focus stays in sight (ledger rulings P2-R35 and
+ * P2-R36; WCAG 2.4.11). What the window shows, even in part, never moves the page. The scroll goes by where `seen` is drawn, so a pan under way
+ * ends at once first, where it rests.
  */
 function focusInWindow(el: HTMLElement | SVGElement, seen: Element = el): void {
   el.focus({ preventScroll: true });
-  if (outsideWindow(seen.getBoundingClientRect(), innerWidth, innerHeight)) seen.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (!outsideWindow(boxAtRest(seen), innerWidth, innerHeight)) return;
+  const pan = seen.closest<SVGGElement>('g.flow-pan');
+  if (pan !== null) stopPan(pan);
+  seen.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /** The box whose panel is open: a step, or an import stub (its panel is about its good). */
@@ -861,6 +907,7 @@ function FlowDiagram(props: {
   // pick on the canvas leaves the focus where it is.
   // The new panel stands where the old one stood, so neither moves the page unless the window shows nothing of the panel's head or of the
   // box head (a plain focus would jump the page to show a panel's cut-off end): then that comes in by the least scroll (P2-R35, P2-R36).
+  // While Fit, a zoom button or a reveal still pans the diagram, the box head is judged where the pan ends (`boxAtRest`, Task 13a).
   useLayoutEffect(() => {
     if (focusPanel.current) {
       focusPanel.current = false;
@@ -874,7 +921,7 @@ function FlowDiagram(props: {
       const node = [...(canvas?.querySelectorAll('[data-node-id]') ?? [])].find((el) => el.getAttribute('data-node-id') === box);
       const head = node?.querySelector<SVGGElement>('.flow-node-head[tabindex]') ?? null;
       // a head panned out of the canvas's own view would take the focus unseen, and scroll the page to it for nothing: the canvas takes it
-      const seen = head !== null && canvas !== null && !disjoint(head.getBoundingClientRect(), canvas.getBoundingClientRect());
+      const seen = head !== null && canvas !== null && !disjoint(boxAtRest(head), canvas.getBoundingClientRect());
       const target = seen ? head : canvas;
       if (target !== null) focusInWindow(target);
     }
