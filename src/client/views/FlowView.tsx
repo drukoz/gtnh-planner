@@ -15,12 +15,13 @@
 // §11.1), which is never drawn with the diagram it stands for.
 
 import {
-  useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement,
+  memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent,
+  type ReactElement,
 } from 'react';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
-import { hashColor } from '../../shared/types/assets.ts';
+import { hashColor, type Rgb } from '../../shared/types/assets.ts';
 import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { useItemIcon } from '../assets/icons.ts';
@@ -45,7 +46,7 @@ import {
   type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type MachineReadout,
 } from './flow-model.ts';
 import { pointIn } from './pan-zoom.ts';
-import { RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, riderEdges, riderPhase, riderSeconds } from './pipe-motion.ts';
+import { RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, rideRoute, riderEdges, riderPhase, riderSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { RawPanel, StepPanel } from './StepPanel.tsx';
 import { WhatChanged } from './WhatChanged.tsx';
@@ -378,40 +379,44 @@ export function FlowEdgeShape(props: { edge: PlacedEdge; lit: boolean | null; mi
 }
 
 /**
- * The good riding an arrow's pipe (Phase 2 spec §15.3), from the output toward the input: its icon at 12 px, drawn from the rows' 16 px icon
- * (a square in its colour until that has come), which the stylesheet carries along the arrow's route (`offset-path` and the `pipe-ride`
- * keyframes) once a ride (`--rider-dur`, `riderSeconds`), started part-way by its edge's phase (a negative delay), so the goods of a diagram
- * do not leave their ports together. Lit (`hl`) or dimmed (`dim`) with its pipe. It only draws: nothing an arrow or a box carries for the hit
- * test, the tooltips or the tests, and the stylesheet gives it no pointer, so the arrow under it keeps its hover, its click and its tip.
+ * A rider's picture until its icon has come (ledger ruling P2-R96): a square of `rgb` as an SVG data URI, its quotes written %22, so the
+ * rider is the same <image> before and after and only its `href` changes, which leaves its ride where it is.
  */
-export function FlowRiderShape(props: { edge: PlacedEdge; lit: boolean | null }): ReactElement {
+function swatchHref([r, g, b]: Rgb): string {
+  return `data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22 shape-rendering=%22crispEdges%22%3E`
+    + `%3Crect width=%221%22 height=%221%22 fill=%22rgb(${r},${g},${b})%22/%3E%3C/svg%3E`;
+}
+
+/**
+ * The good riding an arrow's pipe (Phase 2 spec §15.3), from the output toward the input: one 12 px <image> from its mount, which shows the
+ * rows' 16 px icon of its good once that has come and a square in the good's colour until then (`placeholder`; ledger ruling P2-R96), so its
+ * ride never starts over. The stylesheet carries it along the arrow's route, run on 9 px past each end into the boxes (`rideRoute`, ledger
+ * ruling P2-R97: a ride starts and ends out of sight), by `offset-path` and the `pipe-ride` keyframes, once a ride (`--rider-dur`,
+ * `riderSeconds`), started part-way by its edge's phase (a negative delay), so the goods of a diagram do not leave their ports together. Lit
+ * (`hl`) or dimmed (`dim`) with its pipe. It only draws: nothing an arrow or a box carries for the hit test, the tooltips or the tests, and the
+ * stylesheet gives it no pointer, so the arrow under it keeps its hover, its click and its tip. Memoized: a pan or a zoom draws the canvas
+ * again, but no rider, whose arrow and light have not changed.
+ */
+export const FlowRiderShape = memo(function FlowRiderShape(props: { edge: PlacedEdge; lit: boolean | null }): ReactElement {
   const { edge, lit } = props;
   const { desc, url } = useItemIcon(edge.key, ICON_SIZE);
   const fluid = isFluidKey(edge.key);
-  const seconds = riderSeconds(pathLength(edge.points), edge.perSecond, fluid);
+  const route = rideRoute(edge.points);
+  const seconds = riderSeconds(pathLength(route), edge.perSecond, fluid);
   const style = {
-    offsetPath: `path('${routeData(edge.points)}')`, '--rider-dur': `${seconds}s`,
+    offsetPath: `path('${routeData(route)}')`, '--rider-dur': `${seconds}s`,
     animationDelay: `-${Math.round(riderPhase(edge.id) * seconds * 100) / 100}s`,
   } as CSSProperties;
-  const kind = fluid ? 'fluid' : 'item';
-  const state = lit === null ? [] : [lit ? 'hl' : 'dim'];
+  const classes = ['flow-rider', ...(url === null ? ['placeholder'] : []), fluid ? 'fluid' : 'item', ...(lit === null ? [] : [lit ? 'hl' : 'dim'])];
   // `offset-anchor: auto` is the origin of its own coordinates, which the path moves: the square is centred on it
   const corner = -RIDER_SIZE / 2;
-  if (url === null) {
-    const [r, g, b] = desc?.fallbackColor ?? hashColor(edge.key);
-    return (
-      <rect
-        className={['flow-rider', 'placeholder', kind, ...state].join(' ')} x={corner} y={corner} width={RIDER_SIZE} height={RIDER_SIZE}
-        fill={`rgb(${r}, ${g}, ${b})`} style={style}
-      />
-    );
-  }
   return (
     <image
-      className={['flow-rider', kind, ...state].join(' ')} href={url} x={corner} y={corner} width={RIDER_SIZE} height={RIDER_SIZE} style={style}
+      className={classes.join(' ')} href={url ?? swatchHref(desc?.fallbackColor ?? hashColor(edge.key))} x={corner} y={corner}
+      width={RIDER_SIZE} height={RIDER_SIZE} style={style}
     />
   );
-}
+});
 
 /** A lit arrow's "name · rate" on an opaque tag, above the boxes so a short arrow's text stays readable. */
 function EdgeTagShape(props: { edge: PlacedEdge }): ReactElement | null {

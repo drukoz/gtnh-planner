@@ -5,13 +5,20 @@
 // pipes.spec.ts measures that in a browser; these cases pin the markup. Phase 2 Task 12 (spec §15.3): a good rides each pipe, a 12 px
 // icon the stylesheet carries along the arrow's path, in a layer of its own, so the arrow's own markup stays as it is.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { useItemIcon } from '../../src/client/assets/icons.ts';
 import { FlowDefs, FlowEdgeShape, FlowNodeShape, FlowRiderShape } from '../../src/client/views/FlowView.tsx';
 import { machineReadout, rowCentre, type FlowLayout, type FocusSets } from '../../src/client/views/flow-model.ts';
 import { riderPhase } from '../../src/client/views/pipe-motion.ts';
-import { hashColor } from '../../src/shared/types/assets.ts';
+import { hashColor, type IconDescriptor, type Rgb } from '../../src/shared/types/assets.ts';
 import type { PlanStep } from '../../src/shared/types/plan.ts';
+
+// The real hook, except where a case hands a rider a descriptor and an image URL (server rendering never gets either), as item-icon.test.tsx
+vi.mock('../../src/client/assets/icons.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/client/assets/icons.ts')>();
+  return { ...actual, useItemIcon: vi.fn(actual.useItemIcon) };
+});
 
 type Edge = FlowLayout['edges'][number];
 
@@ -26,6 +33,15 @@ const draw = (e: Edge, lit: boolean | null = null, missing = false): string =>
 
 /** Every class attribute of the markup, in order. */
 const classes = (html: string): string[] => [...html.matchAll(/class="([^"]*)"/g)].map((m) => m[1] ?? '');
+
+/** A rider's placeholder picture (ledger ruling P2-R96): a 1 × 1 square of `rgb` as an SVG data URI, its quotes written %22. */
+const swatch = ([r, g, b]: Rgb): string => (
+  `data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22 shape-rendering=%22crispEdges%22%3E`
+  + `%3Crect width=%221%22 height=%221%22 fill=%22rgb(${r},${g},${b})%22/%3E%3C/svg%3E`
+);
+
+/** A rider's delay into its ride: its phase of `seconds`, in hundredths. */
+const delay = (id: string, seconds: number): number => Math.round(riderPhase(id) * seconds * 100) / 100;
 
 describe('flow diagram: pipes (design spec §7)', () => {
   it('draws an item arrow as a casing with yellow contents that move at its rate, and its head in their colour', () => {
@@ -73,30 +89,59 @@ describe('flow diagram: pipes (design spec §7)', () => {
     expect(draw({ ...edge, perSecond: 100 })).toContain('style="--pipe-dur:0.5s"');
   });
 
-  // Phase 2 spec §15.3: in node no icon URL ever arrives (the icon hook answers in an effect), so a rider is its placeholder, a square in its
-  // good's colour; the stylesheet moves it along the pipe's path (`offset-path`) over its ride (`--rider-dur`: 40 px is under 64 px a cycle,
-  // so the 1.2 s floor), and its negative delay starts it part-way, at its edge's phase
+  // Phase 2 spec §15.3 and fix round 1 (ledger rulings P2-R96, P2-R97): in node no icon URL ever arrives (the icon hook answers in an
+  // effect), so a rider shows its placeholder: the same <image>, its picture a square of its good's colour (an SVG data URI) until the icon
+  // comes, so it is never swapped for another element and its ride never starts over. The stylesheet moves it along the pipe's route carried
+  // on 9 px past each end, into the boxes (`offset-path`: 58 px, under 64 px a cycle, so the 1.2 s floor), and its negative delay starts it
+  // part-way, at its edge's phase
   it('draws a rider as a 12 px image that rides its pipe, and a placeholder until its icon loads', () => {
     const ride = (e: Edge, lit: boolean | null = null): string => renderToStaticMarkup(<svg><FlowRiderShape edge={e} lit={lit} /></svg>);
-    const delay = (id: string, seconds: number): number => Math.round(riderPhase(id) * seconds * 100) / 100;
-    const style = `style="offset-path:path(&#x27;M 0 0 L 40 0&#x27;);--rider-dur:1.2s;animation-delay:-${delay('e1', 1.2)}s"`;
-    const rect = (classes: string): string => (
-      `<rect class="${classes}" x="-6" y="-6" width="12" height="12" fill="rgb(${hashColor('t:iron_ingot@0').join(', ')})" ${style}></rect>`
+    const style = `style="offset-path:path(&#x27;M -9 0 L 49 0&#x27;);--rider-dur:1.2s;animation-delay:-${delay('e1', 1.2)}s"`;
+    const image = (classes: string): string => (
+      `<image class="${classes}" href="${swatch(hashColor('t:iron_ingot@0'))}" x="-6" y="-6" width="12" height="12" ${style}></image>`
     );
-    expect(ride(edge)).toBe(`<svg>${rect('flow-rider placeholder item')}</svg>`);
+    expect(ride(edge)).toBe(`<svg>${image('flow-rider placeholder item')}</svg>`);
     // lit and dimmed with its pipe, so `.flow-canvas.focusing .dim` fades it and a dimmed one stands still
-    expect(ride(edge, true)).toBe(`<svg>${rect('flow-rider placeholder item hl')}</svg>`);
-    expect(ride(edge, false)).toBe(`<svg>${rect('flow-rider placeholder item dim')}</svg>`);
-    // a fluid in its own colour; a longer route rides longer, at its rate (160 px is 2.5 cycles of a second)
+    expect(ride(edge, true)).toBe(`<svg>${image('flow-rider placeholder item hl')}</svg>`);
+    expect(ride(edge, false)).toBe(`<svg>${image('flow-rider placeholder item dim')}</svg>`);
+    // a fluid in its own colour; a longer route rides longer, at its rate (178 px, 160 and 9 at each end, is 2.78 cycles of a second)
     const fluid = ride({ ...edge, key: 'fluid:water', perSecond: 1000 });
-    const water = hashColor('fluid:water').join(', ');
-    expect(fluid).toContain(`<rect class="flow-rider placeholder fluid" x="-6" y="-6" width="12" height="12" fill="rgb(${water})"`);
+    expect(fluid).toContain(`<image class="flow-rider placeholder fluid" href="${swatch(hashColor('fluid:water'))}" x="-6" y="-6" width="12" height="12"`);
     const long = ride({ ...edge, id: 'e2', points: [[0, 0], [100, 0], [100, 60]] });
-    expect(long).toContain(`style="offset-path:path(&#x27;M 0 0 L 100 0 L 100 60&#x27;);--rider-dur:2.5s;animation-delay:-${delay('e2', 2.5)}s"`);
+    expect(long).toContain(`style="offset-path:path(&#x27;M -9 0 L 100 0 L 100 69&#x27;);--rider-dur:2.78s;animation-delay:-${delay('e2', 2.78)}s"`);
     // never what the hit test, the tooltips or the e2e locators read on an arrow or a box
     for (const html of [ride(edge), ride(edge, true), fluid, long]) {
       expect(html).not.toMatch(/flow-edge|data-edge-id|data-step-id|data-tip|data-key|flow-port/);
     }
+  });
+
+  // fix round 1 (M2, ledger ruling P2-R96): once the icon has come, the same <image> shows it, the placeholder class gone; while only the
+  // descriptor has, its square takes the server's fallback colour
+  it('draws a rider\'s icon once it has come, in the same image, and the server\'s colour before it', () => {
+    const desc: IconDescriptor = { key: 't:iron_ingot@0', layers: [], source: 'jar', fallbackColor: [10, 20, 30] };
+    const ride = (e: Edge, lit: boolean | null, icon: { desc: IconDescriptor | null; url: string | null }): string => {
+      vi.mocked(useItemIcon).mockReturnValueOnce(icon);
+      return renderToStaticMarkup(<svg><FlowRiderShape edge={e} lit={lit} /></svg>);
+    };
+    const style = `style="offset-path:path(&#x27;M -9 0 L 49 0&#x27;);--rider-dur:1.2s;animation-delay:-${delay('e1', 1.2)}s"`;
+    const loaded = (classes: string): string => `<svg><image class="${classes}" href="blob:x" x="-6" y="-6" width="12" height="12" ${style}></image></svg>`;
+    expect(ride(edge, null, { desc, url: 'blob:x' })).toBe(loaded('flow-rider item'));
+    expect(ride(edge, true, { desc, url: 'blob:x' })).toBe(loaded('flow-rider item hl'));
+    expect(ride(edge, false, { desc, url: 'blob:x' })).toBe(loaded('flow-rider item dim'));
+    expect(ride({ ...edge, key: 'fluid:water', perSecond: 1000 }, null, { desc, url: 'blob:x' })).toBe(loaded('flow-rider fluid'));
+    // the icon asked for is the rows' 16 px one, whose image the cache already holds
+    expect(vi.mocked(useItemIcon)).toHaveBeenLastCalledWith('fluid:water', 16);
+    const described = ride(edge, null, { desc, url: null });
+    expect(described).toBe(`<svg><image class="flow-rider placeholder item" href="${swatch([10, 20, 30])}" x="-6" y="-6" width="12" height="12" ${style}></image></svg>`);
+  });
+
+  // fix round 1 (M3): a rider draws only from its arrow and whether it is lit, so it is memoized: a pan or a zoom, which draws the whole canvas
+  // again, leaves every rider as it is (pipes.spec.ts shows it in a browser: a view change keeps each rider's props)
+  it('memoizes a rider on its arrow and its light', () => {
+    const memo = FlowRiderShape as unknown as { $$typeof: symbol; compare: unknown; type: unknown };
+    expect(memo.$$typeof).toBe(Symbol.for('react.memo'));
+    expect(memo.compare).toBeNull();                                                   // React's own shallow comparison of the props
+    expect(typeof memo.type).toBe('function');
   });
 
   it('defines one 8 x 8 head per colour in user space, so it never grows with the pipe, its tip on the end of the pipe', () => {

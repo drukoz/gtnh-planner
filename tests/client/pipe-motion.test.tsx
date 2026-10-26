@@ -4,8 +4,10 @@
 // that ride the Flow pipes, 64 px a dash cycle within 1.2–12 s a ride, staggered by a phase of their edge's id, and which pipes carry one.
 
 import { describe, it, expect } from 'vitest';
+import { PORT_SIZE } from '../../src/client/views/flow-model.ts';
 import {
-  PIPE_ANIMATION_LIMIT, RIDER_LIMIT, RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, riderEdges, riderPhase, riderSeconds,
+  PIPE_ANIMATION_LIMIT, RIDE_OVERHANG, RIDER_LIMIT, RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, rideRoute, riderEdges, riderPhase,
+  riderSeconds,
 } from '../../src/client/views/pipe-motion.ts';
 
 describe('pipe motion', () => {
@@ -76,5 +78,46 @@ describe('goods riding the pipes (Phase 2 spec §15)', () => {
     expect(kept).toEqual(['e0', ...Array.from({ length: 149 }, (_, i) => `e${i + 31}`)]);
     // a limit of its own, and ties on the rate go to the first id
     expect(riderEdges([e('c', 2), e('b', 2), e('a', 2)], null, new Set(), 2).map((x) => x.id)).toEqual(['b', 'a']);
+  });
+
+  // fix round 1 (ledger ruling P2-R98): a fluid's rate is in litres, so past the limit a pipe is ranked in the dashes' units (`pipeSeconds`):
+  // a thousand litres a second rides like one item a second; an edge with no key is taken as items
+  it('ranks pipes past the limit in the units the dashes use: a fluid by the thousand litres', () => {
+    const p = (id: string, perSecond: number, key?: string) => (
+      { id, perSecond, points: [[0, 0], [10, 0]] as Array<[number, number]>, ...(key === undefined ? {} : { key }) }
+    );
+    expect(riderEdges([p('f', 144, 'fluid:water'), p('i', 2, 't:x@0')], null, new Set(), 1).map((x) => x.id)).toEqual(['i']);
+    expect(riderEdges([p('f', 3000, 'fluid:water'), p('i', 2, 't:x@0')], null, new Set(), 1).map((x) => x.id)).toEqual(['f']);
+    expect(riderEdges([p('n', 144), p('i', 2, 't:x@0')], null, new Set(), 1).map((x) => x.id)).toEqual(['n']);
+  });
+
+  // fix round 1 (ledger ruling P2-R97): an arrow ends on its flange's outer face, 2 px outside the box, where a 12 px rider would show half of
+  // itself; the ride runs on along the first and last runs, 9 px past each end (the flange's 2 px, half a rider and a pixel), into the boxes,
+  // which are drawn over the riders, so a ride starts and ends out of sight
+  it('rides on 9 px past each end of its arrow, along its first and last runs, into the boxes', () => {
+    expect(RIDE_OVERHANG).toBe(PORT_SIZE + RIDER_SIZE / 2 + 1);
+    expect(RIDE_OVERHANG).toBe(9);
+    // a two-point route
+    expect(rideRoute([[0, 0], [40, 0]])).toEqual([[-9, 0], [49, 0]]);
+    // a horizontal route, right to left (a pipe back to an earlier box)
+    expect(rideRoute([[100, 5], [70, 5], [20, 5]])).toEqual([[109, 5], [70, 5], [11, 5]]);
+    // a route that turns: each end along its own run, whichever way it runs
+    expect(rideRoute([[0, 0], [30, 0], [30, 40]])).toEqual([[-9, 0], [30, 0], [30, 49]]);
+    expect(rideRoute([[0, 0], [30, 0], [30, -40], [60, -40]])).toEqual([[-9, 0], [30, 0], [30, -40], [69, -40]]);
+    // a doubled point at an end gives no direction: the run is the one to the next point that differs
+    expect(rideRoute([[0, 0], [0, 0], [40, 0]])).toEqual([[-9, 0], [0, 0], [49, 0]]);
+    // nothing to ride: as it is
+    expect(rideRoute([[5, 5], [5, 5]])).toEqual([[5, 5], [5, 5]]);
+    // the arrow's own points stay as they are
+    const points: Array<[number, number]> = [[0, 0], [40, 0]];
+    rideRoute(points);
+    expect(points).toEqual([[0, 0], [40, 0]]);
+  });
+
+  // fix round 1 (M4): the phase is the shared FNV-1a over 2³², as it was before it was shared
+  it('keeps each rider\'s phase where it was', () => {
+    expect(riderPhase('')).toBe(0x811c9dc5 / 2 ** 32);
+    expect(riderPhase('e1')).toBe(2216349443 / 2 ** 32);
+    expect(riderPhase('a|out|t:x@0->b|in|t:x@0')).toBe(3367248338 / 2 ** 32);
   });
 });

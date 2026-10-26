@@ -8,7 +8,7 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
-import { circuitLv, manyEdges } from './fixtures/plans.ts';
+import { circuitLv, copperUnsourced, manyEdges } from './fixtures/plans.ts';
 import { createProject, login, openConnections, setName } from './helpers.ts';
 
 const LV_CIRCUITS: Partial<PlanSettings> = { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 };
@@ -129,6 +129,173 @@ test('goods ride the flow pipes, attached, and never take the pointer', async ({
   const open = hits.filter((hit) => hit.taking);
   expect(open.length, 'some rider is in view and under no box, so the check bites').toBeGreaterThan(0);
   for (const hit of open) expect(hit).toEqual({ taking: true, rider: false, inCanvas: true });
+});
+
+/** One frame of a rider in the log `logRiders` keeps: its ride's time, whether it shows its placeholder, and whether it is in the page. */
+interface RiderFrame { t: number | null; placeholder: boolean; connected: boolean }
+
+/** Runs in the page before its scripts: every frame, each Flow rider there is or was, by element, and how its ride stands (`window.riderLog`). */
+function logRiders(): void {
+  const log = new Map<Element, RiderFrame[]>();
+  (window as unknown as { riderLog: Map<Element, RiderFrame[]> }).riderLog = log;
+  const frame = (): void => {
+    for (const rider of document.querySelectorAll('svg.flow-canvas .flow-rider')) if (!log.has(rider)) log.set(rider, []);
+    for (const [rider, frames] of log) {
+      const ride = rider.getAnimations().find((a) => (a as CSSAnimation).animationName === 'pipe-ride');
+      const t = ride?.currentTime;
+      frames.push({ t: typeof t === 'number' ? t : null, placeholder: rider.classList.contains('placeholder'), connected: rider.isConnected });
+    }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+
+// fix round 1 (ledger ruling P2-R96): a rider is one <image> from its first frame, its placeholder square swapped in place for its icon, so its
+// ride goes on when the icon comes. A log kept from before the page's own scripts follows every rider, element by element, frame by frame.
+test('a good keeps its ride when its icon comes, in the image it started as', async ({ page }) => {
+  await page.addInitScript(logRiders);
+  await openWithPlan(page, circuitLv());
+  const log = (): Promise<Array<{ connected: boolean; frames: RiderFrame[] }>> => page.evaluate(() => (
+    [...(window as unknown as { riderLog: Map<Element, RiderFrame[]> }).riderLog].map(([rider, frames]) => ({ connected: rider.isConnected, frames }))
+  ));
+  // the Iron Ingot's icon comes from the pack: until a rider has shown an icon for ten frames
+  await expect.poll(async () => (await log()).some(({ frames }) => frames.filter((f) => !f.placeholder).length >= 10), {
+    message: 'a rider shows its icon', timeout: 10_000,
+  }).toBe(true);
+  const riders = await log();
+  // no rider was ever taken out of the page for another: every one seen is there still, and there are no others
+  expect(riders.map((r) => r.connected)).not.toContain(false);
+  expect(riders).toHaveLength(await page.locator('svg.flow-canvas .flow-rider').count());
+  // one rider at least was seen as its placeholder first and then, the same element, as its icon; its ride's time grew all along
+  const came = riders.filter(({ frames }) => frames[0]?.placeholder === true && frames.some((f) => !f.placeholder));
+  expect(came.length, 'a rider whose icon came while it was watched').toBeGreaterThan(0);
+  for (const { frames } of came) {
+    const arrived = frames.findIndex((f) => !f.placeholder);
+    const before = frames.slice(0, arrived).map((f) => f.t).filter((t): t is number => t !== null);
+    const after = frames.slice(arrived).map((f) => f.t).filter((t): t is number => t !== null);
+    expect(before.length, 'its ride was under way before its icon came').toBeGreaterThan(0);
+    const times = [...before, ...after];
+    for (let i = 1; i < times.length; i++) expect(times[i], `frame ${i}: the ride's time never goes back`).toBeGreaterThanOrEqual(times[i - 1]!);
+    expect(after.at(-1)!, 'and it grew past the icon\'s arrival').toBeGreaterThan(before.at(-1)!);
+  }
+});
+
+// fix round 1 (ledger ruling P2-R97): a ride runs on 9 px past each end of its arrow, into the boxes, which are drawn over it, so nothing shows
+// at a port: at the start of its ride a good lies wholly inside the box it leaves, and at the end wholly inside the box it reaches
+test('a ride starts and ends under the boxes, so no good shows at a port', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  await page.getByRole('button', { name: 'Fit' }).click();
+  const ends = await page.locator('svg.flow-canvas').evaluate((svg) => {
+    const boxOf = (id: string): DOMRect | undefined => [...svg.querySelectorAll('[data-node-id]')]
+      .find((g) => g.getAttribute('data-node-id') === id)?.querySelector(':scope > rect.flow-node-box')?.getBoundingClientRect();
+    const within = (a: DOMRect, b: DOMRect | undefined): boolean => (
+      b !== undefined && a.left >= b.left && a.right <= b.right && a.top >= b.top && a.bottom <= b.bottom
+    );
+    const pipes = [...svg.querySelectorAll('.flow-edge:not(.missing)')];
+    return [...svg.querySelectorAll<SVGElement>('.flow-rider')].map((rider, i) => {
+      // its arrow: the riders come in the arrows' order (ledger ruling P2-R93), and an arrow's id is `<from>|out|<key>-><to>|in|<key>`
+      const id = pipes[i]?.getAttribute('data-edge-id') ?? '';
+      const [from = '', to = ''] = id.split('->').map((port) => port.split('|')[0] ?? '');
+      for (const ride of rider.getAnimations()) ride.cancel();                         // the offset below places it, not its ride
+      rider.style.offsetDistance = '0%';
+      const start = within(rider.getBoundingClientRect(), boxOf(from));
+      rider.style.offsetDistance = '100%';
+      const end = within(rider.getBoundingClientRect(), boxOf(to));
+      return { id, start, end };
+    });
+  });
+  expect(ends).toHaveLength(6);
+  for (const end of ends) expect(end).toEqual({ id: end.id, start: true, end: true });
+});
+
+// fix round 1 (M1): the goods ride in a layer of their own, hidden from assistive technology, after every arrow and before every box (so a box
+// covers each end of a ride) and the lit tags; under a focus each good is lit or dimmed as its pipe is (they come in the pipes' order)
+test('the goods ride in a layer of their own, over the pipes and under the boxes and the lit tags, lit and dimmed with their pipes', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  await expect(canvas.locator('g.flow-riders')).toHaveAttribute('aria-hidden', 'true');
+  const order = (): Promise<{ afterPipes: boolean; beforeBoxes: boolean; beforeTags: boolean; tags: number }> => canvas.evaluate((svg) => {
+    const layer = svg.querySelector('g.flow-riders');
+    const pipes = svg.querySelectorAll('.flow-edge');
+    const tags = [...svg.querySelectorAll('.flow-edge-tag')];
+    const follows = (a: Node | null | undefined, b: Node | null | undefined): boolean => (
+      a !== null && a !== undefined && b !== null && b !== undefined && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    );
+    return {
+      afterPipes: follows(pipes[pipes.length - 1], layer), beforeBoxes: follows(layer, svg.querySelector('[data-node-id]')),
+      beforeTags: tags.every((tag) => follows(layer, tag)), tags: tags.length,
+    };
+  });
+  expect(await order()).toEqual({ afterPipes: true, beforeBoxes: true, beforeTags: true, tags: 0 });
+  await page.locator('[data-port$="|out|t:copper_wire@0"]').hover();
+  await expect(canvas).toHaveClass(/\bfocusing\b/);
+  expect(await order()).toEqual({ afterPipes: true, beforeBoxes: true, beforeTags: true, tags: 1 });
+  const states = await canvas.evaluate((svg) => {
+    const state = (el: Element): string => (el.classList.contains('hl') ? 'hl' : el.classList.contains('dim') ? 'dim' : 'neither');
+    return { pipes: [...svg.querySelectorAll('.flow-edge:not(.missing)')].map(state), riders: [...svg.querySelectorAll('.flow-rider')].map(state) };
+  });
+  expect(states.riders).toEqual(states.pipes);
+  expect(states.pipes, 'the focus lights a pipe and dims the others').toEqual(expect.arrayContaining(['hl', 'dim']));
+});
+
+// fix round 1 (M5): a pipe from a missing source carries nothing, so no good rides it, and every other pipe has its good
+test('a pipe from a missing source carries no good', async ({ page }) => {
+  await openWithPlan(page, copperUnsourced());
+  const canvas = page.locator('svg.flow-canvas');
+  await expect(canvas.locator('.flow-edge.missing')).toHaveCount(1);
+  const carrying = await canvas.locator('.flow-edge:not(.missing)').count();
+  expect(carrying).toBeGreaterThan(0);
+  await expect(canvas.locator('.flow-rider')).toHaveCount(carrying);
+});
+
+/**
+ * Runs in the page: how many Flow riders and arrows React has drawn again since the last call, by their props objects (which React gives a
+ * drawn element anew and keeps on one it leaves as it is), and whether every rider's could be read; keeps the current ones for the next call.
+ */
+function drawnAgain(svg: SVGSVGElement): { read: boolean; riders: number; pipes: number } {
+  const props = (el: Element): unknown => {
+    const key = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+    return key === undefined ? undefined : (el as unknown as Record<string, unknown>)[key];
+  };
+  const now = { riders: [...svg.querySelectorAll('.flow-rider')].map(props), pipes: [...svg.querySelectorAll('.flow-edge')].map(props) };
+  const w = window as unknown as { drawn?: typeof now };
+  const before = w.drawn ?? { riders: [], pipes: [] };
+  w.drawn = now;
+  return {
+    read: now.riders.length > 0 && now.riders.every((p) => p !== undefined),
+    riders: now.riders.filter((p, i) => p !== before.riders[i]).length, pipes: now.pipes.filter((p, i) => p !== before.pipes[i]).length,
+  };
+}
+
+// fix round 1 (M3): a rider is memoized on its arrow and its light, so a pan or a zoom, which draws the canvas again (its arrows anew), leaves
+// every rider as it was
+test('a pan or a zoom draws no good again', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  const frames = (): Promise<void> => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  // a rider draws again when its icon comes: the icons have come once two frames pass with no rider drawn again
+  await expect(canvas.locator('image.flow-rider:not(.placeholder)')).not.toHaveCount(0);
+  await expect.poll(async () => {
+    await canvas.evaluate(drawnAgain);
+    await frames();
+    return (await canvas.evaluate(drawnAgain)).riders;
+  }, { message: 'the riders settle' }).toBe(0);
+  const transform = (): Promise<string | null> => canvas.locator(':scope > g').evaluate((g) => g.getAttribute('transform'));
+  // a pan, from the top left corner, which the diagram leaves empty (it opens on the target, at the right), so nothing is hovered on the way
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('no canvas');
+  const opened = await transform();
+  await page.mouse.move(box.x + 6, box.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 46, box.y + 26, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(transform).not.toBe(opened);
+  expect(await canvas.evaluate(drawnAgain)).toEqual({ read: true, riders: 0, pipes: 6 });
+  // a zoom
+  const panned = await transform();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect.poll(transform).not.toBe(panned);
+  expect(await canvas.evaluate(drawnAgain)).toEqual({ read: true, riders: 0, pipes: 6 });
 });
 
 test('every flow pipe starts and ends on a flange', async ({ page }) => {

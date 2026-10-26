@@ -3400,6 +3400,11 @@ describe('the Machine GUI Phase 2: goods riding the pipes', () => {
     // a dimmed rider fades with its pipe (`.flow-canvas.focusing .dim`), over the pipe's own fade: a rule of its own, as FADES is exact
     expect(declared(RIDER, 'transition')).toBe(declared(FADES, 'transition'));
     expect(declared(FADES, 'transition')).toBe('opacity var(--dur-base) var(--ease-out)');
+    // fix round 1 (M6): the rule is exactly these, as the stops and the reduced-motion rule are
+    expect(declarations(ruleBody(RIDER))).toEqual([
+      ['offset-rotate', '0deg'], ['animation', 'pipe-ride var(--rider-dur, 3s) linear infinite'], ['pointer-events', 'none'],
+      ['image-rendering', 'pixelated'], ['transition', 'opacity var(--dur-base) var(--ease-out)'],
+    ]);
   });
 
   it('stops a rider with the pipes: while the diagram is dragged, while the pipes are paused, and on a dimmed pipe', () => {
