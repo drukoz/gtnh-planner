@@ -11,7 +11,7 @@ import type { Mark } from '../../shared/types/project.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { modName } from '../components/mod-names.ts';
 import { tipText } from '../components/tooltip-model.ts';
-import { localTime } from '../format.ts';
+import { formatNumber, localTime } from '../format.ts';
 import { setMaterialsView, type MaterialsViewMode } from '../state/materials-view.ts';
 import { stackText } from './flow-model.ts';
 import { MAX_STACKS_SHOWN, slotTipLines, STACK_SIZE, stillNeeded, type SlotGroup, type SlotItem } from './materials-model.ts';
@@ -38,10 +38,13 @@ export function ViewToggle(props: { view: MaterialsViewMode }): ReactElement {
   );
 }
 
-/** The stacks gathered, in Grid: a progress bar whose fill grows on its transform (--done), named by its word and read as "2 of 4 stacks gathered". */
+/**
+ * The stacks gathered, in Grid: a progress bar whose fill grows on its transform (--done), named by its word and read as "2 of 4 stacks
+ * gathered", its figures written as the List writes them ("1,563 of 10,000 stacks").
+ */
 export function GatherMeter(props: { done: number; total: number }): ReactElement {
   const { done, total } = props;
-  const count = `${done} of ${total} ${total === 1 ? 'stack' : 'stacks'}`;
+  const count = `${formatNumber(done)} of ${formatNumber(total)} ${total === 1 ? 'stack' : 'stacks'}`;
   return (
     <div className="mat-meter-box">
       <div className="mat-meter-label"><span id={METER_LABEL_ID}>Gathered</span><span>{count}</span></div>
@@ -72,11 +75,10 @@ export function BuildGrid(props: { groups: readonly SlotGroup[]; marks: Readonly
     const toggle = (): void => send([{ op: 'mark', row: item.row, on: !marked }]);
     const tip = tipText([item.name, ...slotTipLines(item, mark, localTime)]);
     const mod = modName(item.key) ?? undefined;
-    const n = item.stacks.length;
-    const label = item.fluid ? `${item.name}, ${item.amount}` : `${item.name}, ${item.amount} in ${n} ${n === 1 ? 'stack' : 'stacks'}`;
+    const n = item.stackCount;
+    const label = item.fluid ? `${item.name}, ${item.amount}` : `${item.name}, ${item.amount} in ${formatNumber(n)} ${n === 1 ? 'stack' : 'stacks'}`;
     const face = marked ? 'mat-slot marked' : 'mat-slot';
-    const shown = n > MAX_STACKS_SHOWN ? item.stacks.slice(0, MAX_STACKS_SHOWN) : item.stacks;
-    const out = shown.map((stack, i) => {
+    const out = item.stacks.slice(0, MAX_STACKS_SHOWN).map((stack, i) => {
       const key = `${group.id}:${item.row}#${i}`;
       const inside = (
         <>

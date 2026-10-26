@@ -185,16 +185,29 @@ export const MAX_STACKS_SHOWN = 9;
 /** How far past a whole number an amount may be and still count as it (float noise: 64.0000000001 items are one stack of 64). */
 const STACK_NOISE = 1e-6;
 
-/**
- * Whole items in stacks of `size`, the last one holding the rest: 80 → [64, 16], 128 → [64, 64], 1 → [1]. The amount is rounded up first
- * (0.25 → [1]), but for a hair of float noise (64.0000000001 → [64]); nothing for 0 or less.
- */
-export function stackSplit(amount: number, size: number = STACK_SIZE): number[] {
+/** Whole items: the amount rounded up (0.25 → 1), but for a hair of float noise (64.0000000001 → 64); 0 for none or for no number. */
+function wholeItems(amount: number): number {
   const n = Math.ceil(amount - STACK_NOISE);
-  if (!Number.isFinite(n) || n <= 0) return [];
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * The first `limit` stacks of whole items in stacks of `size` (the grid draws `MAX_STACKS_SHOWN`), the last one holding the rest: 80 →
+ * [64, 16], 128 → [64, 64], 1 → [1], 0.25 → [1], 64.0000000001 → [64]; nothing for 0 or less. However many there are, the array is at most
+ * `limit` long (the final fix wave, FW-5: a build of 1e12 once built 15.6 billion entries): `stackCount` counts them all.
+ */
+export function stackSplit(amount: number, size: number = STACK_SIZE, limit: number = MAX_STACKS_SHOWN): number[] {
+  const n = wholeItems(amount);
   const full = Math.floor(n / size);
   const rest = n - full * size;
-  return [...Array<number>(full).fill(size), ...(rest > 0 ? [rest] : [])];
+  const stacks = Array.from({ length: Math.min(full, limit) }, () => size);
+  if (rest > 0 && stacks.length < limit) stacks.push(rest);
+  return stacks;
+}
+
+/** How many stacks of `size` whole items fill (80 → 2, 1 → 1, 0.25 → 1), worked out, never counted in an array; 0 for none. */
+export function stackCount(amount: number, size: number = STACK_SIZE): number {
+  return Math.ceil(wholeItems(amount) / size);
 }
 
 /** A top-level line of the build list as inventory slots (Phase 2 spec §9.4). */
@@ -203,8 +216,10 @@ export interface SlotItem {
   row: string; key: StuffKey; name: string; group: BuildGroup;
   /** The quantity the List shows: "80×", "1,000 L". */
   amount: string;
-  /** The item's stacks (`stackSplit`); a fluid is one slot, whatever its litres. */
+  /** The sizes of the item's stacks the grid draws, at most `MAX_STACKS_SHOWN` (`stackSplit`); a fluid is one slot, whatever its litres. */
   stacks: number[];
+  /** How many stacks the item fills in all (`stackCount`), those past the ninth too; 1 for a fluid. */
+  stackCount: number;
   why: string; have?: string; where?: string[];
   /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
   avoid?: true;
@@ -228,7 +243,7 @@ function slotItem(line: BomLine, group: BuildGroup, names: Record<string, string
   const fluid = isFluidKey(line.key);
   const item: SlotItem = {
     row: `build:${line.key}`, key: line.key, name: buildName(line.key, names), group, amount: quantity(line.key, amountText(line.amount)),
-    stacks: fluid ? [1] : stackSplit(line.amount), why: line.why, ...stockOf(line.have), fluid,
+    stacks: fluid ? [1] : stackSplit(line.amount), stackCount: fluid ? 1 : stackCount(line.amount), why: line.why, ...stockOf(line.have), fluid,
   };
   if (unavoidable.has(line.key)) item.avoid = true;
   return item;
@@ -240,8 +255,8 @@ export function gatheredStacks(groups: readonly SlotGroup[], marks: Readonly<Rec
   let total = 0;
   for (const group of groups) {
     for (const item of group.items) {
-      total += item.stacks.length;
-      if (marks[item.row] !== undefined) done += item.stacks.length;
+      total += item.stackCount;
+      if (marks[item.row] !== undefined) done += item.stackCount;
     }
   }
   return { done, total };

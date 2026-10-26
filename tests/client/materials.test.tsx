@@ -3,7 +3,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys, missingRows,
-  gatheredStacks, groupBuildSlots, slotTipLines, stackSplit, stillNeeded,
+  gatheredStacks, groupBuildSlots, MAX_STACKS_SHOWN, slotTipLines, stackCount, stackSplit, stillNeeded,
 } from '../../src/client/views/materials-model.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
 import { MaterialsView, UsedByChips } from '../../src/client/views/MaterialsView.tsx';
@@ -249,6 +249,26 @@ describe('the inventory grid', () => {
 
   it('splits an amount into stacks of 64', () => {
     expect([80, 128, 1, 0, 0.25, 64.0000000001].map((a) => stackSplit(a))).toEqual([[64, 16], [64, 64], [1], [], [1], [64]]);
+  });
+  // the final fix wave, FW-5: the split stops at the stacks the grid draws, and an item's count of stacks is worked out, never counted in an
+  // array, so a build of a trillion items makes no array of 15.6 billion stacks (a renderer killed, again on every reload, from about 8.6e9)
+  it('splits only the stacks the grid draws, and counts the rest', () => {
+    expect(stackSplit(64 * 9 + 16)).toEqual(Array(MAX_STACKS_SHOWN).fill(64));                 // the tenth stack, the 16, is not drawn
+    expect(stackSplit(64 * 8 + 16)).toEqual([...Array(8).fill(64), 16]);
+    expect(stackSplit(1e12)).toEqual(Array(MAX_STACKS_SHOWN).fill(64));
+    expect([80, 128, 1, 0, 0.25, 64.0000000001, 64 * 9 + 16, 1e12].map((a) => stackCount(a))).toEqual([2, 2, 1, 0, 1, 1, 10, 15_625_000_000]);
+    expect([Number.NaN, Number.POSITIVE_INFINITY, -5].map((a) => [stackSplit(a), stackCount(a)])).toEqual([[[], 0], [[], 0], [[], 0]]);
+    const [huge, water] = groupBuildSlots([{ key: 'p:x@0', amount: 1e12, why: 'x' }, { key: 'fluid:water', amount: 1e12, why: 'y' }], names)[0]!.items;
+    expect([huge!.stacks.length, huge!.stackCount]).toEqual([MAX_STACKS_SHOWN, 15_625_000_000]);
+    expect([water!.stacks, water!.stackCount]).toEqual([[1], 1]);                               // a fluid is one slot, whatever its litres
+    expect(gatheredStacks([{ id: 'machines', label: 'Machines', items: [huge!, water!] }], { [huge!.row]: mark })).toEqual({ done: 15_625_000_000, total: 15_625_000_001 });
+  });
+  it('writes the counts of stacks as the List writes its figures: in the meter, its spoken words and a slot\'s name', () => {
+    expect(renderToStaticMarkup(<GatherMeter done={1563} total={100_000} />)).toMatch(
+      /<span>1,563 of 100,000 stacks<\/span>.*aria-valuemax="100000" aria-valuenow="1563" aria-valuetext="1,563 of 100,000 stacks gathered"/);
+    const html = renderToStaticMarkup(<BuildGrid groups={groupBuildSlots([{ key: 'p:x@0', amount: 1563 * 64, why: 'x' }], names)} marks={{}} send={() => {}} />);
+    expect(html).toContain('aria-label="p:x@0, 100,032× in 1,563 stacks"');
+    expect(html).toContain('<span class="stack-count" aria-hidden="true">+1.6k</span>');           // 1,554 more: rolled up as a stack count is
   });
   it('groups the top-level build lines as slots, in the groups\' order, a fluid as one slot', () => {
     const groups = groupBuildSlots([{ key: 'p:cable@0', amount: 80, why: 'power hookup', group: 'power' }, { key: 'machine:111@0', amount: 1, why: '1× Basic Wiremill' },
