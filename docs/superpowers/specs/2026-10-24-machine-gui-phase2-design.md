@@ -1,6 +1,6 @@
 # Machine GUI restyle, Phase 2 — design
 
-Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R127, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
+Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R137, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
 Phase 1 merged. Every `file:line` below is at that commit. §24 and the plan were re-checked against `main` at `01da27d` (Phase 1, the
 Make-picker fix, add-on 23 and add-on 17 merged), and their cites are at `01da27d`. On 2026-10-24 the user also chose VT323 for
 figures, Pixelify Sans kept for words: §25 records it, adds its one dependency and overrides anything above that disagrees.
@@ -237,11 +237,17 @@ equals the element's `transform` attribute and it uses `fill: 'none'` (P2-D6). T
   - Cues use `:not(:focus-visible)`, so they never replace the focus ring. That is the lesson of R42.
 
 > **As built.** Exceptions recorded while building, each identified some other way: in dark, empty bar tracks and readout tiles'
-> edges (ledger ruling P2-R30) and every chat box's black edge and 82 % face on the panel, 1.40–1.46:1 (P2-R67); the short ring
+> edges (ledger ruling P2-R30) and every chat box's black edge and 82 % face on the panel, 1.40–1.46:1 (P2-R67); in dark, button
+> faces and the unselected tabs on the stone (1.67:1, 1.12:1) and a button on the top bar (1.78:1), named by their labels, and a
+> modal's or the sheet's frame on the dimmed page (1.40:1), a container, as P2-R67's chat boxes are (P2-R136); the short ring
 > against the light slot face inside it, 2.27:1 (P2-R31); the tick's black edge on a ticked light slot, 2.73:1, where the green
-> tick reads 5.80:1 (P2-R38). In forced colours riders (P2-R95) and ghosts (P2-R115) take no rule: they are aria-hidden and
-> paint the same with forced colours on and off. Every forced-colours frame is checked as painted pixels, for Chromium does not
-> force SVG fills (P2-R41).
+> tick reads 5.80:1 (P2-R38). Three dark pairs that fell short were raised instead, each through a token whose light value is the
+> one the light look drew: every scroll bar the page colours takes the slider's thumb, 4.59:1 on the screen and 4.05:1 in the map's
+> side column (`--btn` was 1.78:1 and 1.58:1: P2-R128); the selected tab's label takes the accent, 13.46:1, as its face differs
+> from the others' by 1.15:1 (`--tab-on-ink`, P2-R129, a departure from the dark mockup); a slider's track takes the tick well's
+> light lower edge, 4.21:1 (`--bevel-track`, P2-R130). In forced colours riders (P2-R95) and ghosts (P2-R115) take no rule: they
+> are aria-hidden and paint the same with forced colours on and off. Every frame something could paint over is checked as painted
+> pixels (P2-R41); the SVG paints, which Chromium leaves unforced, are checked by their computed fill and stroke.
 
 ### 3.6 Height budget at 1280×720
 
@@ -360,13 +366,20 @@ behaviour. Nothing is deleted or loosened. Additions are not listed here.
 | `styles-contract.test.tsx:2198-2201` | The allowed endless list grows from 3 rules to 4: the rider rule | P2-D18 | 12 |
 
 > **As built.** Against `main`, every changed or removed test line is one of this table's rows, §25's figure rows, the §3.5
-> rewrite of `contrast.test.tsx`, a helper moved to `tests/client/css-blocks.ts` or `tests/e2e/helpers.ts`, or a change the
-> ledger authorised: the slider thumb's pin `var(--btn)` → `var(--thumb)` (P2-R9); the pins of §4.4's list where a pinned token
-> became a feature token with the same light value (`--field-edge`, `--bevel-tick`, `--flange`, `--flow-group`, `--conn-box`);
-> the Pause pipes store's storage cases, asserted for every browser choice in `browser-choice.test.tsx` (P2-R40); the conduits
-> line's own settings and reload in `connections.spec.ts` (P2-R16); and a farm field's test event that carries `nativeEvent`
-> (P2-R76). Inside tests this phase added, P2-R24a, P2-R50, P2-R60, P2-R74, P2-R89, P2-R96, P2-R97 and P2-R116 changed pins
-> deliberately.
+> rewrite of `contrast.test.tsx`, a helper moved to `tests/client/css-blocks.ts`, `tests/client/storage-stub.ts` (P2-R40) or
+> `tests/e2e/helpers.ts`, or a change the ledger authorised: the slider thumb's pin `var(--btn)` → `var(--thumb)` (P2-R9); the pins
+> of §4.4's list where a pinned token became a feature token with the same light value (`--field-edge`, `--bevel-tick`, `--flange`,
+> `--flow-group`, `--conn-box`); the Pause pipes store's storage cases, asserted for every browser choice in
+> `browser-choice.test.tsx` (P2-R40); the conduits line's own settings and reload in `connections.spec.ts` (P2-R16); a farm field's
+> test event that carries `nativeEvent` (P2-R76); and, in the final fix wave, the scroll bars' two pins `var(--btn)` → `var(--thumb)`
+> (P2-R128), the selected tab's ink `var(--text)` → `var(--tab-on-ink)` (P2-R129), the range tracks' `var(--bevel-well)` →
+> `var(--bevel-track)` (P2-R130), `.item-icon`'s pin gaining `-webkit-touch-callout: none` (P2-R135), and the project-name case of
+> `tooltips.spec.ts`, whose second Escape now leaves the focus in the field (P2-R132). Inside tests this phase added, P2-R24a,
+> P2-R32, P2-R50, P2-R50b, P2-R60, P2-R74, P2-R86, P2-R89, P2-R96, P2-R97 and P2-R116 changed pins deliberately, and so did the final
+> fix wave: P2-R131 (the diagram skeleton's columns and gap, the narrow recipe readouts, the tooltip's `max-width`), P2-R134 (the
+> sheet's Esc row), the drawer status's signature (FW-10), the strip's `planDrawn` record (FW-13), `glide.spec.ts`'s drawn-at check
+> (FW-14) and `map-summary.test.tsx`'s plain-number pattern (FW-15); and test set-ups a fix needed (an event passed to Keep only, a
+> stand-in `main` for the supporting-lines button, a blur before `?`, an icon named before it is hovered).
 
 ## 4. The theme system (dark mode)
 
@@ -479,6 +492,11 @@ proposals, which fill what the mockup lacks ([TL] §4.2.3). The rows marked "P2"
 
 The forced-colours block is theme-agnostic and stays last.
 
+> **As built.** The final fix wave adds two tokens, each at the light look's own value: `--tab-on-ink`, the selected tab's label
+> (`var(--text)`; dark `var(--accent)`: P2-R129), and `--bevel-track`, a slider's track (`var(--bevel-well)`; dark
+> `inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b`: P2-R130); and `--thumb` colours every scroll bar's thumb as well as the
+> slider's (P2-R128).
+
 ### 4.4 Rules that change from a literal to a token
 
 About 40 rules read a light-only literal today. Each becomes the token from §4.3. [TL] §1.2 lists each one with its line;
@@ -564,7 +582,10 @@ the tightest, with the minimum in brackets:
 
 > **As built.** The flange on a new box is 1.99:1 in light (`--slot` on `--panel`), not 2.59:1 as in dark; both are accepted, a
 > shape detail with a black edge. Every pair added while building is a row of `contrast.test.tsx`'s one table, run for both
-> looks.
+> looks. The final fix wave adds the scroll bars' thumb on its track (3.23:1 light, 4.59:1 dark) and in the map's side column
+> (4.05:1 dark), the selected tab's label (7.73:1, 13.46:1), a slider track's edge on the dark panel (4.21:1) and a field's edge
+> on the dark panel (5.49:1), and reads the tick well's edge and the sun and moon from their tokens' text; its accepted dark
+> exceptions are P2-R136's (§3.5).
 
 ### 4.6 First paint: the head script
 
@@ -905,7 +926,9 @@ works unchanged on SVG `<g>` elements inside the pan and zoom groups, with no st
 > lists, the field drafts, the project name, the pin dialog and the tip's own Escape — skips a key whose default was prevented,
 > so one press closes one layer app-wide (P2-R21, P2-R21b); Flow's `window` listener is the one named exemption and still
 > ignores it (P2-R21c). The host drops a shown tip whose trigger has come inside `[inert]`, under the sheet or the drawer
-> (P2-R87).
+> (P2-R87). The project name's Enter renames and its Escape takes a draft back, each leaving the focus in the field (P2-R132,
+> which reverses Task 3a's blur); an Escape with no draft goes on to the layers below. A settings draft that Escape takes back
+> takes the key, so the drawer stays open (the final fix wave, FW-9).
 
 ### 6.2 Placement
 
@@ -965,6 +988,9 @@ createPortal(
 - `.nei-tooltip` is a rule of its own, never merged into `.map-tooltip`'s selector list (R1, and the pins at
   `:1586-1600`).
 - The NEI box is the same in both looks. In forced colours its border survives, so it needs no rule.
+
+> **As built.** `max-width: min(360px, 100%)`: a fixed box's containing block is the window, so a long tip wraps inside a phone's
+> window instead of losing its right edge past it (ledger ruling P2-R131; WCAG 1.4.10). `.map-tooltip` keeps its 360px.
 
 ### 6.4 Call sites ([TT] §5)
 
@@ -1121,7 +1147,8 @@ Nothing new comes from the server.
   - unit: `map-hover.test.tsx`, `avoid-picker.test.tsx`, `map-summary.test.tsx`, `plan-banner.test.tsx`
 
 > **As built.** `describes()` had no caller in `src` and was deleted with its tests (P2-R89); `describedLines` carries its
-> cases. `tooltip-model.test.tsx:115` expects `[]` (P2-R24a).
+> cases. In `tooltip-model.test.tsx`'s "describes what a tip says beyond the name of the element it describes…", a Flow head's
+> case (a name that joins its lines with ", ") expects `[]` (P2-R24a).
 
 ### 6.8 Risks ([TT] §7)
 
@@ -1284,7 +1311,7 @@ as part of the head.
 
 **R41 is folded in here (§17).**
 
-> **As built.** The machine slot and its bevel strips have forced-colours rules (P2-R26); the e2e reads painted pixels.
+> **As built.** The machine slot and its bevel strips have forced-colours rules (P2-R26); the e2e reads the computed fills.
 
 ### 7.4 Data
 
@@ -1475,7 +1502,11 @@ The tokens follow [SR] §4.4, with these changes:
 > empty slot lists are left out (P2-R29). A slot's name is the good, ", N per run" (when not 1), ", P% chance" (below 100 %) and
 > ", not supplied in full", and a fluid's always states its litres (P2-R32, P2-R32a); a chance tag is a whole percent, "<1%"
 > below 1 % and at most "99%" (P2-R34). The energy track, the short ring and the arrow's base have forced-colours rules
-> (P2-R33). Not built: the programmed-circuit slot and the main output's frame (§21).
+> (P2-R33). Not built: the programmed-circuit slot and the main output's frame (§21). Below 1100 px the readouts stand as many
+> to a row as are 110 px wide, four where there is room and two on a phone, where four ran a seven-glyph figure ("131,072") into
+> the next tile (P2-R131, which changes §8.1's four columns). A good a run takes and gives back in full (a cell, a catalyst) leaves
+> its rate in the line out of its tips, as its ports carry no flow and no need; an input the line does not supply keeps its true
+> "0/min" (the final fix wave, FW-13).
 
 ### 8.5 Data
 
@@ -1731,7 +1762,10 @@ The mod line comes from `data-tip-mod`.
 > past 999 (P2-R39); a slot keeps `isolation: isolate` (P2-R42), and its forced-colours frame paints over its own icon, checked
 > by a pixel (P2-R41). The view choice is one `createBrowserChoice` store (`state/browser-choice.ts`), shared with the Pause
 > pipes setting, the look and the single-key switch (P2-R40). The Materials fixes (§17) move a shut row's shorter items by under
-> a pixel, a recorded light-look exception (P2-R43).
+> a pixel, a recorded light-look exception (P2-R43). An item keeps the sizes of the nine stacks the grid draws and counts the
+> rest (`stackCount`), so a huge build makes no array of billions; the meter, its spoken words and a slot's name write their
+> counts as the List writes figures ("1,563 stacks"); the meter's box is `min(240px, 100%)` wide, so it stays in its head in a
+> 320 px window (the final fix wave: FW-5, P2-R131).
 
 ### 9.6 Tests
 
@@ -1833,7 +1867,9 @@ counter, so the flash replays.
 > settings state it drew (P2-R49). While the plan is on its way the strip's place is its own grid of five 52 px blocks, so it is
 > as tall as the strip at every width (P2-R48), filled by the strip skeleton in the tiles' dark readout face in both looks
 > (P2-R53). A figure's line box may be 30 px beside a unit, the tile staying exactly 52 px (P2-R45), and the tiles wrap to two
-> rows below a 780 px window (P2-R47). The busy line sits on the strip's top-right corner (§11.3).
+> rows below a 780 px window (P2-R47). The busy line sits on the strip's top-right corner (§11.3). In Make N the Output tile is
+> the count of the settings its plan was made for, kept beside each state's unit (`planDrawn`), so an amount typed while the old
+> plan is still on screen never shows beside that plan's time (the final fix wave, FW-13).
 
 ### 10.2 Markup and CSS
 
@@ -1993,7 +2029,9 @@ recipe card and renders `<span class="gt-arrow [on-chat] [still]" aria-hidden="t
 > **As built.** The busy line no longer moves the page: a plan event changes no height above the tabs (P2-R18). With the strip
 > shown, "Updating the plan…" is a 20 px chip on the strip's top-right corner, over a label row, never a figure or a control;
 > with no strip it is visually hidden, for assistive technology and `getByText` (P2-R51). The drawer's status (R43, §17) says
-> "The plan is updating…" (plan ruling `drawer-status-words`) and "No problems" when an update ends with none (P2-R52).
+> "The plan is updating…" (plan ruling `drawer-status-words`) and "No problems" when an update ends with none (P2-R52). The
+> diagram's skeleton's three columns and their gaps shrink with a narrow window (`repeat(3, minmax(0, 110px))`,
+> `clamp(12px, 6%, 40px)`), so a phone's window never scrolls sideways while a first plan or layout is on its way (P2-R131).
 
 ### 11.4 Tests
 
@@ -2084,7 +2122,9 @@ after `useProject` had already closed the store.
 > **As built.** A project's op batches post one at a time, in order, so an Undo lands after what it undoes (P2-R59); a post
 > aborts after 60 s, counts as failed, and the store resyncs from the server (P2-R64). On `pagehide`, and on `freeze`, whatever
 > still waits is sent at once with keepalive, merged and split at the server's 100-op limit (P2-R62, P2-R63, P2-R65); a project
-> delete waits for its deferred posts (P2-R65).
+> delete waits for its deferred posts (P2-R65). Cancel in the type-the-name confirm stops a delete still waiting for them, and
+> leaves the confirm ready to ask again; Cancel and Escape in it give the focus back to the button that opened it, and the
+> keyboard's Delete keeps the focus in the form while it waits (the final fix wave, FW-6).
 
 ### 12.3 Markup and CSS
 
@@ -2125,7 +2165,8 @@ after `useProject` had already closed the store.
 
 > **As built.** Undo or Dismiss from the keyboard moves the focus before the toast goes: back to where it came from, else to the
 > next toast's same button, else to the page's `<main>` (P2-R57); a note's Undo then hands it to the restored note's Delete
-> (P2-R74).
+> (P2-R74). A deleted project's Undo never gives it back to a control under Recently deleted, whose row it takes away with the
+> project it restores (the final fix wave, FW-7).
 
 ### 12.5 Tests
 
@@ -2290,9 +2331,13 @@ export function InlineConfirm(props: { question: string; confirmLabel: string; c
 > less (P2-R85; plan ruling `shortcuts-button-wide`). The Shortcuts button sits before Delete project (P2-R83). `/`, `?` and the
 > range's en dash are spoken as words (P2-R86). In the sheet Tab goes round the switch and Close, and its words can be selected
 > (P2-R81, P2-R81a). Closing it gives the focus back to its opener while that is drawn — not `<body>`, not a control in a closed
-> drawer — else the Shortcuts button, the selected tab, then `<main>` (P2-R71, P2-R90). The hints were shortened so they grow no
-> taller (P2-R84). R46: the column takes the focus when the window outgrows the drawer only if the control that had it is no
-> longer drawn, or the focus was already lost (plan ruling `aside-refocus`; P2-R80).
+> drawer — else the head's Shortcuts button, else the drawer's Keyboard shortcuts button (at 900 px or less, the drawer open), the
+> selected tab, then `<main>` (P2-R71, P2-R90). The hints were shortened so they grow no taller (P2-R84). The Esc row says what
+> Escape does, "Hide a tip, close a list, a question or the drawer, clear the highlight", in place of the mockup's words, which
+> named a panel no Escape closes (P2-R134). R46: the column takes the focus when the window outgrows the drawer only if the
+> control that had it is no longer drawn, or the focus was already lost (plan ruling `aside-refocus`; P2-R80); and a window that
+> narrows to the drawer's width moves a focus in the column, or on the head's Shortcuts button, to the Settings button, and one on
+> the head's Compare modes to its twin in the bar under the banner (P2-R133).
 
 ### 14.2 Tests
 
@@ -2508,7 +2553,10 @@ drag and wheel stay instant. `connections.spec.ts:45-46` reads the attribute, wh
 > **As built.** One `usePan` hook drives both diagrams' pans (P2-R102). A pan's start is read at the commit, from the picture on
 > screen (P2-R103), and a pan belongs to the view object `glideTo` made, tagged in a WeakSet in place of `pendingGlide`
 > (P2-R108). The wheel, a drag past `DRAG_THRESHOLD` and the arrow keys hold a running pan where it is and go on from that
-> picture; a click lets it run (P2-R104). Connections' resize refit ends a Fit in flight (P2-R105).
+> picture; a click lets it run (P2-R104). Connections' resize refit ends a Fit in flight (P2-R105). A new plan's view and a line's
+> box centred are panned to only when the new layout glides; one that snaps takes its view at once (P2-R126, Task F4). A press
+> let go outside the Flow canvas before it became a drag ends at the next move with no button held, as Connections' does, so
+> the view never follows the bare mouse (the final fix wave, FW-11).
 
 ### 16.3 Then the re-layout
 
@@ -2567,8 +2615,10 @@ export function layoutChange(before: FlowLayout | null, after: FlowLayout): Layo
 > tag fades in with it (P2-R120). The Flow canvas keeps the taller of the old and new heights while a glide runs (P2-R121). The
 > focus: a re-layout that removes it hands it to the same line's button if redrawn, else to the canvas; across a window blur it
 > survives; a removed panel control hands it to its panel, a removed panel to the canvas; "N more…" to the first item it reveals
-> (P2-R112, P2-R122, P2-R123, P2-R124). Connections refits a new picture at once, then its boxes glide, with no ghosts
-> (P2-R114).
+> (P2-R112, P2-R122, P2-R123, P2-R124); Keep only hands it to its own issue line's Show, and an issue line a replan drops to the
+> first Show left, else the canvas (the final fix wave, FW-7). Connections refits a new picture at once, then its boxes glide,
+> with no ghosts (P2-R114). A second run of the layout effect for the layout it placed (StrictMode's, Fast Refresh's, an Activity
+> shown again) glides, ghosts and holds nothing again (FW-14).
 
 ### 16.4 Keeping e2e deterministic
 
@@ -2664,7 +2714,9 @@ Each fix goes in the task that touches its code (D1, P2-D40).
 
 > **As built.** R43's status says "The plan is updating…", not the banner's words, and its problem count leaves out the "Pick
 > something to make" hint (plan rulings `drawer-status-words`, `drawer-status-count`); it says "No problems" when an update ends
-> with none (P2-R52). R46 is built as plan ruling `aside-refocus`, with P2-R80.
+> with none (P2-R52). It says first why a change the page sent failed or was refused (the store's error, which the inert
+> banner's alert says), as the changed field in the drawer snaps back (the final fix wave, FW-10). R46 is built as plan ruling
+> `aside-refocus`, with P2-R80; its twin for a window that narrows is P2-R133 (§14.1).
 
 ## 18. Moved to Phase 3 (not in this work)
 
@@ -2777,7 +2829,12 @@ All of these are under `src/client`. The test files are named in each section.
 > **As built.** Traced headless in Chromium: the pipes and the glides cause no long frame. The riders' first pan after a page
 > load, on a plan of about 200 arrows, costs a one-time 3–4 frames of 33 ms, none over 50 ms, while later pans and idle are
 > clean. That is accepted, as the remedies would take the riders off big plans (P2-R125). The 250 ms view pan that followed a
-> whole-plan swap, over a picture drawn anew, is gone: a layout that snaps takes its view at once (P2-R126).
+> whole-plan swap, over a picture drawn anew, is gone: a layout that snaps takes its view at once (P2-R126). The first theme switch
+> of a page measures 297–314 ms from the click, the View Transition itself 260–268 ms, accepted against §3.3's 300 ms (P2-R127).
+> "The light look is unchanged" is proved by swapping the base's and the new stylesheet into one page state, with a
+> base-against-base control (P2-R6), against fresh shots of the base (plan ruling `baseline-shots`). The probes ran headless with
+> `recordVideo` (P2-R100), and the VoiceOver smoke test ran as accessibility-tree checks, with a list for the user to confirm by
+> ear (P2-R99).
 
 ## 21. Open decisions left to the builder
 

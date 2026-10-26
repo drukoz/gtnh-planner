@@ -2924,7 +2924,7 @@ made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's 
 **Task 3b**
 - **P2-R23** — A zero-area box whose extent meets the view counts as in view (a straight Flow arrow), so a long press shows its tip.
 - **P2-R24** — Descriptions fold " · " and ", ": an arrow gets no description, a box head's is its rows.
-- **P2-R24a** — Authorised: `tooltip-model.test.tsx:115` now expects `[]` (P2-R24's effect).
+- **P2-R24a** — Authorised: in `tooltip-model.test.tsx`'s "describes what a tip says beyond the name of the element it describes…", a Flow head's case (a name that joins its lines with ", ") now expects `[]` (P2-R24's effect).
 - **P2-R24b** — Name and tip compare by parts, and a line whose parts begin the name repeats it ("Iron" never matches "Iron Ingot").
 - **P2-R25** — A fixed wait in an e2e only proves an absence over the host's own wait window, and is followed by a positive check.
 
@@ -2982,7 +2982,7 @@ made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's 
 - **P2-R58** — `act()` retires a toast before running its action.
 - **P2-R59** — A project's op batches are posted one at a time, in order, so a rename's Undo lands after the rename.
 - **P2-R56a** — No take-back: a toast already drawn stays drawn and paused under the drawer and is announced once.
-- **P2-R60** — Authorised: `toasts.spec.ts:131`'s hover precondition becomes a poll.
+- **P2-R60** — Authorised: the `:hover` precondition of `toasts.spec.ts`'s "a toast holds while a pointer moves over it or the focus is in it…" becomes a poll.
 
 **Task 9b**
 - **P2-R62** — On `pagehide` whatever still waits is sent at once with keepalive.
@@ -3016,7 +3016,7 @@ made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's 
 - **P2-R82** — The tooltip host counts a button's own words and its `aria-keyshortcuts` as said; it stands, with a comment that `aria-keyshortcuts` is spoken only where supported.
 - **P2-R83** — The Shortcuts button sits before Delete project in the head (not last).
 - **P2-R84** — The diagram hints get no taller for "? shows the shortcuts": the words before it are shortened.
-- **P2-R85** — WCAG 2.1.4: the single-key shortcuts can be turned off in the sheet, per browser; off, no key acts, `aria-keyshortcuts` and the Fit/Pipes tips are left off and the hints drop their ending; below 900 px a Keyboard shortcuts button ends the settings column.
+- **P2-R85** — WCAG 2.1.4: the single-key shortcuts can be turned off in the sheet, per browser; off, no key acts, `aria-keyshortcuts` and the Fit/Pipes tips are left off and the hints drop their ending; at 900 px or less a Keyboard shortcuts button ends the settings column.
 - **P2-R86** — `/`, `?` and the range's en dash are spoken as words (visually hidden) beside their aria-hidden glyphs.
 - **P2-R87** — The tooltip host drops a shown tip whose trigger has come inside `[inert]`.
 - **P2-R88** — `setToastsInert` composes: the toasts stay inert while any layer (the drawer, the sheet) holds them.
@@ -3071,6 +3071,18 @@ made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's 
 - **P2-R126** — A layout that does not glide (past `GLIDE_LIMIT`, reduced motion, or no glide support) takes its new view at once: the `viewKey` reset and `centreNext` use the instant path; a layout that glides keeps its 250 ms pan.
 - **P2-R127** — The first theme switch of a page measures 297–314 ms from the click (the View Transition itself 260–268 ms; the browser captures the old look first); accepted against spec §3.3's 300 ms budget.
 
+**The final fix wave (after the whole-branch review over `01da27d..9fd597a`)**
+- **P2-R128** — Every author-coloured scroll bar takes the slider's thumb: `:root { scrollbar-color: var(--thumb) var(--screen) }` and `.map-side`'s `var(--thumb) var(--well)`; the light look draws what it drew, and in dark the thumb is 4.59:1 (4.05:1 in the map's side column), where `--btn` was 1.78:1 (1.58:1).
+- **P2-R129** — In the dark look the selected tab's label takes the accent, through `--tab-on-ink` (`var(--text)` in light, `var(--accent)` in dark), a cue for low-vision readers the faces alone do not give (1.15:1); a departure from the dark mockup. A hovered tab no longer looks selected.
+- **P2-R130** — Range tracks draw `--bevel-track` (`var(--bevel-well)` in light; in dark the tick well's `#8b8b8b` lower edge, 4.21:1 on the panel).
+- **P2-R131** — A narrow window keeps every box inside it: the diagram skeleton's columns shrink, the grid meter's box is `min(240px, 100%)`, below 1100 px the recipe readouts are `repeat(auto-fit, minmax(110px, 1fr))` (a plan value), and `.nei-tooltip` is `max-width: min(360px, 100%)` (spec §6.3's value); nothing changes at 1280 or 1440.
+- **P2-R132** — The project name's Enter renames and its Escape takes the draft back, both without a blur: the focus stays in the field (reverses Task F3's deferred "by design" blur).
+- **P2-R133** — An always-on listener for the drawer's width: on narrowing to 900 px or less, a focus in the settings column or on the head's Shortcuts goes to the Settings button, and one on the head's Compare modes to its `.compare-bar` twin; never to `<body>`.
+- **P2-R134** — The sheet's Esc row says what Escape does, "Hide a tip, close a list, a question or the drawer, clear the highlight" (checked against spec §3.8); a departure from the mockup's words.
+- **P2-R135** — `.item-icon` gains `-webkit-touch-callout: none`, so a long press opens no iOS image callout over the tip.
+- **P2-R136** — Recorded dark exceptions, beside P2-R30, P2-R67 and P2-R95: button faces and the unselected tabs on the stone (1.67:1, 1.12:1) and on the top bar (1.78:1), named by their labels; a modal's or the sheet's frame on the dimmed page (1.40:1), a container.
+- **P2-R137** — Keyboard access to the Connections boxes (they take no focus) is a follow-up task after this branch.
+
 **Plan rulings** (the plan's Conventions give each in full; signed off before Task 1a, the last six on 2026-10-24 with the VT323 choice)
 - **`baseline-shots`** — Task 1a diffs the light look against fresh shots of the base, not spec §19's older after-shots.
 - **`view-transition-split`** — The cross-fade's `::view-transition-old(root)` and `-new(root)` are two rules, not one list (R28).
@@ -3103,5 +3115,8 @@ made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's 
 - Connections' re-layout glide shipped in Task 13b with Flow's, without ghosts (P2-R114).
 - No `.theme-fade` fallback: where a browser has no View Transitions the look switches at once (`theme.ts`).
 
-**Recorded exceptions** to the Global Constraints, besides spec §3.5's and §4.5's: P2-R30, P2-R31, P2-R38, P2-R43 and P2-R67 (contrast or
-pixels), P2-R95 and P2-R115 (forced colours), and the plan rulings `compare-frame-dark` and `farm-line-dark`.
+**Recorded exceptions** to the Global Constraints, besides spec §3.5's and §4.5's: P2-R30, P2-R31, P2-R38, P2-R43, P2-R67 and P2-R136
+(contrast or pixels), P2-R95 and P2-R115 (forced colours), the plan rulings `compare-frame-dark` and `farm-line-dark`, P2-R127 (the first
+theme switch's 297–314 ms against "nothing the user waits for takes more than 300 ms"), P2-R25 (an e2e's bounded wait that proves an
+absence, beside "e2e polls, never sleeps") and P2-R85 (a third per-browser setting, the single-key shortcuts' switch, beside the theme
+and the materials view).

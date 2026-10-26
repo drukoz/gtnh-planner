@@ -37,6 +37,7 @@ lists, `1-chrome.md` Map, `4-chrome.md` 3D/World/projector).
   nothing over 300 ms that the user waits for; never a CSS `transform` on an SVG `<g>`; no infinite `transform`
   animation on anything clickable (Playwright waits for stable elements); under `prefers-reduced-motion: reduce`
   nothing moves.
+  *Superseded in part by Phase 2 (2026-10-24 spec §16): a WAAPI `transform` animation on an SVG `<g>` whose last keyframe equals its `transform` attribute, with `fill: 'none'`, drives the diagrams' pans and glides.*
 - Contrast: every text pair in spec §4 meets WCAG AA; the focus ring is 3 px `#ffff55`, offset 0.
 - Decorative `::before`/`::after` use `content: ''` — never glyphs (they join accessible names).
 - Native inputs stay native, visible and clickable; nothing is inserted between an input and its label text.
