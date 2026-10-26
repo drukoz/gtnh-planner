@@ -4,7 +4,7 @@
 // nothing glides where the browser cannot animate an element: node here, where the view then moves at once. glide.spec.ts drives the pans in
 // a browser.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PAN_ANIMATION_ID, canGlide, glideView, matrixView, panTransform } from '../../src/client/views/glide.ts';
 
 describe('the diagrams glide', () => {
@@ -35,5 +35,21 @@ describe('the diagrams glide', () => {
   it('never glides where the browser cannot animate an element (node): the view moves at once', () => {
     expect(canGlide()).toBe(false);
     expect(glideView({} as SVGGElement, { x: 16, y: 16, scale: 1 }, { x: 40, y: 16, scale: 0.5 })).toBeNull();
+  });
+
+  // fix round 2: a probe that cannot run (here the page gives it nowhere to go) answers false, and never throws out of `canGlide`; a fresh
+  // copy of the module, as the answer is kept once found
+  it('answers false, and throws nothing, when its probe cannot run', async () => {
+    vi.resetModules();
+    const element = (): Record<string, unknown> => ({ setAttribute: () => {}, append: () => {}, remove: () => {}, style: {} });
+    vi.stubGlobal('Element', class { animate(): void {} });
+    vi.stubGlobal('document', { createElementNS: element, body: { append: () => { throw new Error('nowhere to probe'); } } });
+    try {
+      const fresh = await import('../../src/client/views/glide.ts');
+      expect(fresh.canGlide()).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
 });

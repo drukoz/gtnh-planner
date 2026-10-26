@@ -64,8 +64,8 @@ function probe(): boolean {
   rect.setAttribute('height', '10');
   g.append(rect);
   svg.append(g);
-  document.body.append(svg);
   try {
+    document.body.append(svg);   // in the try: a probe that cannot run answers false, and never throws out of `canGlide`
     /** The rect's top left and bottom right corners, in the svg's px. */
     const at = (): number[] => {
       const area = svg.getBoundingClientRect();

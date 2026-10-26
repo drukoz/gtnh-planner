@@ -68,40 +68,26 @@ const FLOW_PAN = 'svg.flow-canvas > g.flow-pan';
 const CONN_PAN = 'g.conn-pan';
 
 /**
- * Clicks the shown diagram's Fit (a script's click, which moves no focus) and, a frame later, holds the pan it started on the group `group`,
- * at `ms` of its 250 ms: returns the transform the browser computes for the group then, the picture on screen, which only the pan sets.
+ * Clicks the shown diagram's button named `name` (a script's click, which moves no focus) and, a frame later, holds the pan it started on the
+ * group `group`, at `ms` of its 250 ms: returns the transform the browser computes for the group then, the picture on screen, which only the
+ * pan sets. The click and the hold are one script: clicked outside a frame, the pan is made in this task and starts in the next frame, whose
+ * callback holds it, so it cannot have ended first however late that frame comes (fix round 2).
  */
-function fitHeldAt(page: Page, ms: number, group = FLOW_PAN): Promise<string> {
-  return page.getByRole('button', { name: 'Fit', exact: true }).evaluate(async (button, [at, selector]) => {
+function pressHeldAt(page: Page, name: string, ms: number, group = FLOW_PAN): Promise<string> {
+  return page.getByRole('button', { name, exact: true }).evaluate(async (button, [at, selector]) => {
     (button as HTMLButtonElement).click();
     await new Promise((done) => requestAnimationFrame(done));
     const g = document.querySelector(selector);
     const pan = g?.getAnimations()[0];
-    if (g === null || pan === undefined) throw new Error('Fit started no pan');
+    if (g === null || pan === undefined) throw new Error('the press started no pan');
     pan.pause();
     pan.currentTime = at;
     return getComputedStyle(g).transform;
   }, [ms, group] as const);
 }
 
-/**
- * Holds the pan under way on the Flow pan group, once it has started (within a few frames of what asked for it: a reveal's waits for its
- * effect), at `ms` of its 250 ms; returns the transform the browser computes for the group then.
- */
-function panHeldAt(page: Page, ms: number): Promise<string> {
-  return page.locator(FLOW_PAN).evaluate(async (g, at) => {
-    for (let frame = 0; frame < 30; frame++) {
-      const pan = g.getAnimations()[0];
-      if (pan !== undefined) {
-        pan.pause();
-        pan.currentTime = at;
-        return getComputedStyle(g).transform;
-      }
-      await new Promise((done) => requestAnimationFrame(done));
-    }
-    throw new Error('no pan started');
-  }, ms);
-}
+/** `pressHeldAt` for the shown diagram's Fit. */
+const fitHeldAt = (page: Page, ms: number, group = FLOW_PAN): Promise<string> => pressHeldAt(page, 'Fit', ms, group);
 
 /** A pan's keyframe, `translate(xpx, ypx) scale(s)` (`panTransform`), as a view. */
 function keyframeView(transform: unknown): PanView {
@@ -314,7 +300,9 @@ test('a new plan\'s view is panned to from the picture of the last', async ({ pa
 // Fix round 1 (ledger ruling P2-R108): a pan goes with the view `glideTo` made, never with whatever view is drawn next. Find item's reveal asks
 // for its pan from an effect, which React runs in the microtask that draws the light, so the pan's view waits for React's default lane; a wheel
 // turn in that same task updates at the continuous lane, drawn with it or before it. Either way the turn is an instant move: the view it gives,
-// on top of the reveal's, is drawn at once and never panned to (the reveal's pan gives way to it, as to any instant move)
+// on top of the reveal's, is drawn at once and never panned to (the reveal's pan gives way to it, as to any instant move). Fix round 2: React
+// applies the two updates in the order they were made, whichever lane it draws first, so the view drawn is the reveal's (the wiremill centred,
+// at the zoom of 0.9 the page opened on) zoomed by the turn: the reveal's view is not lost, only its pan
 test('a wheel turn in the task of a reveal is drawn at once, never panned to', async ({ page }) => {
   await page.addInitScript(recordAnimations);
   await openWithPlan(page, circuitLv());
@@ -332,18 +320,39 @@ test('a wheel turn in the task of a reveal is drawn at once, never panned to', a
     await Promise.resolve();
     const svg = document.querySelector('svg.flow-canvas');
     if (svg === null) throw new Error('no canvas');
+    const area = svg.getBoundingClientRect();
     svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: x, clientY: y, bubbles: true, cancelable: true }));
     await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
-    return { focusing: svg.classList.contains('focusing'), pans: svg.querySelector(':scope > g.flow-pan')?.getAnimations().length };
+    const mill = svg.querySelector('[data-node-id="wire"]');
+    const millBox = mill?.querySelector(':scope > rect.flow-node-box');
+    return {
+      lit: { focusing: svg.classList.contains('focusing'), pans: svg.querySelector(':scope > g.flow-pan')?.getAnimations().length },
+      // what the reveal centres in (FlowView's `canvas()`) and on, and where the turn was over the svg (its wheel's `clientX - left`)
+      canvas: { width: svg.clientWidth, height: svg.clientHeight },
+      mill: { at: mill?.getAttribute('transform') ?? '', width: Number(millBox?.getAttribute('width')), height: Number(millBox?.getAttribute('height')) },
+      wx: x - area.left, wy: y - area.top,
+    };
   }, [px, py] as const);
-  expect(run, 'the good is lit and no pan runs').toEqual({ focusing: true, pans: 0 });
+  expect(run.lit, 'the good is lit and no pan runs').toEqual({ focusing: true, pans: 0 });
   expect(await records(page), 'nothing was panned to').toEqual([]);
   expect(await pan.getAttribute('transform'), 'the reveal and the turn moved the view').not.toBe(before);
+  // the reveal's view (`centreOn` the wiremill at zoom 0.9), then the turn on top of it, about the pointer
+  const [mx, my] = (/^translate\((\S+) (\S+)\)$/.exec(run.mill.at) ?? []).slice(1).map(Number);
+  if (mx === undefined || my === undefined) throw new Error(`no place in "${run.mill.at}"`);
+  const revealed = {
+    scale: 0.9, x: run.canvas.width / 2 - (mx + run.mill.width / 2) * 0.9, y: run.canvas.height / 2 - (my + run.mill.height / 2) * 0.9,
+  };
+  const want = zoomedAt(revealed, run.wx, run.wy, TURN);
+  const now = attributeView(await pan.getAttribute('transform'));
+  expect(now.scale, 'the reveal\'s zoom, turned once').toBeCloseTo(want.scale, 6);
+  expect(now.x, 'the reveal\'s view turned about the pointer').toBeCloseTo(want.x, 0);
+  expect(now.y).toBeCloseTo(want.y, 0);
 });
 
 // Task 13a (notes 6): the pipes' dashes and the goods riding them are inside the pan group, so they move with it; a pan is no drag, so it
-// neither stops them nor starts them over: the same animations run on, their times going forward, the goods along their routes. Fix round 1
-// (T6): read in the first frame after the press, while the 250 ms pan is surely under way, however slow the frames
+// neither stops them nor starts them over: the same animations run on, their times going forward, the goods along their routes. Fix rounds 1
+// and 2 (T6): the pan is read in the press's own task, once React has drawn the press in its microtask: made and pending, it cannot have ended,
+// however slow the frames; the pipes and the goods are read a frame on
 test('a pan leaves the pipes running and the goods riding: the same animations, on and going forward', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   await dragCanvas(page, 100, 60);
@@ -362,12 +371,14 @@ test('a pan leaves the pipes running and the goods riding: the same animations, 
     await frame();
     const before = moving();
     (button as HTMLButtonElement).click();
-    await frame();                                       // the press's first frame: one frame of the pan, of its 250 ms, has run
+    await Promise.resolve();                             // React draws the press in a microtask of this task: the pan is made, pending
     const pans = svg.querySelector(':scope > g.flow-pan')?.getAnimations() ?? [];
+    const panning = pans.length === 1 && pans[0]?.playState === 'running' && pans[0].pending;
+    await frame();                                       // a frame of the pan, which the pipes and the goods run on through
     const after = moving();
     const riders = before.filter((b) => b.el.classList.contains('flow-rider'));
     return {
-      panning: pans.length === 1 && pans[0]?.playState === 'running', dragging: svg.classList.contains('dragging'),
+      panning, dragging: svg.classList.contains('dragging'),
       riders: riders.length, pipes: before.length - riders.length,
       same: after.length === before.length && before.every((b, i) => b.animation !== undefined && after[i]?.animation === b.animation),
       running: after.every((a) => a.animation?.playState === 'running'),
@@ -604,8 +615,9 @@ const apart = (a: Box, b: Box): boolean => a.y + a.height <= b.y || a.y >= b.y +
 
 /**
  * Opens circuitLv and the Basic Assembler's panel from its box head, once it has slid in; returns the canvas, the head and the panel. Then drags
- * the picture up or down until the head's bottom edge is at `bottom` (page px, measured from the canvas's middle up), and holds Zoom in's pan,
- * which zooms about the canvas's middle, at its start: on screen the head is where it was dragged, and at rest a quarter further from the middle.
+ * the picture until the head is centred across the canvas and its bottom edge is at `bottom` (page px, from the canvas's `top` or `middle`), and
+ * holds Zoom in's pan, which zooms about the canvas's middle, at its start: on screen the head is where it was dragged, and at rest a quarter
+ * further from the middle, straight up, still centred across (fix round 2: so the whole head can be in view, none of it cut at a side).
  */
 async function headHeldAboveMiddle(page: Page, bottom: (canvas: { top: number; middle: number }) => number): Promise<{ canvas: Locator; head: Locator; panel: Locator }> {
   await openWithPlan(page, circuitLv());
@@ -618,20 +630,20 @@ async function headHeldAboveMiddle(page: Page, bottom: (canvas: { top: number; m
   // the canvas's middle, which Zoom in keeps where it is: its content box's (the pan group's origin is inside its 2 px border)
   const middle = await canvas.evaluate((svg) => {
     const box = svg.getBoundingClientRect();
-    return { top: box.top + svg.clientTop, middle: box.top + svg.clientTop + svg.clientHeight / 2 };
+    return { top: box.top + svg.clientTop, middle: box.top + svg.clientTop + svg.clientHeight / 2, across: box.left + svg.clientLeft + svg.clientWidth / 2 };
   });
   const h = await head.boundingBox();
   const c = await canvas.boundingBox();
   if (h === null || c === null) throw new Error('no box');
+  const dx = Math.round(middle.across - (h.x + h.width / 2));
   const dy = Math.round(bottom(middle) - (h.y + h.height));
-  const [x, y] = [Math.round(c.x + 12), Math.round(dy < 0 ? c.y + c.height - 12 : c.y + 12)];
+  const [x, y] = [Math.round(c.x + c.width / 2 - dx / 2), Math.round(dy < 0 ? c.y + c.height - 12 : c.y + 12)];
   await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(x, y + dy, { steps: 8 });
+  await page.mouse.move(x + dx, y + dy, { steps: 8 });
   await page.mouse.up();
   await page.mouse.move(1, 1);
-  await page.getByRole('button', { name: 'Zoom in' }).click();
-  await panHeldAt(page, 0);
+  await pressHeldAt(page, 'Zoom in', 0);
   return { canvas, head, panel };
 }
 
@@ -698,8 +710,15 @@ test('Close while a pan takes the head out of the window ends the pan, then scro
   await page.keyboard.press('Enter');
   await expect(panel).toHaveCount(0);
   await expect(head).toBeFocused();
-  expect(await pansOn(page), 'the pan ended before the scroll').toBe(0);
+  expect(await pansOn(page), 'the pan ended').toBe(0);
   await expect(head, 'the head is in the window').toBeInViewport();
+  // the whole head: the pan ended first and the scroll went by where the head rests (the other order scrolls to the picture on its way, and
+  // the head then jumps up, out of the window's top). Measured on the head's box, which `block: 'nearest'` aligns: an IntersectionObserver
+  // (`toBeInViewport`'s ratio) also counts the focus ring's stroke round the box, half of which the aligned box leaves above the window
+  const landed = await head.boundingBox();
+  if (landed === null) throw new Error('no head');
+  expect(landed.y, 'the whole head: its top in the window').toBeGreaterThanOrEqual(0);
+  expect(landed.y + landed.height, 'and its bottom').toBeLessThanOrEqual(900);
   expect(await page.evaluate(() => scrollY), 'the page scrolled up to it').toBeLessThan(scrolled);
   expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
 });
