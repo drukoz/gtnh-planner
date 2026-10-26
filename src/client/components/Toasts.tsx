@@ -28,15 +28,21 @@ const TYPED = new Set(['text', 'search', 'number', 'email', 'url', 'tel', 'passw
 const takesTyping = (el: Element): boolean =>
   el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TYPED.has(el.type)) || (el instanceof HTMLElement && el.isContentEditable);
 
-/** Focuses `el`, an HTML or an SVG element (a Flow box's head), and says whether it took the focus (one hidden, disabled or gone does not). */
-function focusOn(el: Element | null, options?: FocusOptions): boolean {
+/**
+ * Focuses `el`, an HTML or an SVG element (a Flow box's head), and says whether it took the focus (one hidden, disabled or gone does not). The
+ * projector panel's confirm gives the focus back with it too (Task 10).
+ */
+export function focusOn(el: Element | null | undefined, options?: FocusOptions): boolean {
   if (!(el instanceof HTMLElement || el instanceof SVGElement)) return false;
   el.focus(options);
   return document.activeElement === el;
 }
 
-/** The page's main, focused as a last resort, with a tabindex of -1 that it loses with the focus (it is no stop of the Tab order). */
-function focusMain(): void {
+/**
+ * The page's main, focused as a last resort, with a tabindex of -1 that it loses with the focus (it is no stop of the Tab order): never the
+ * body (P2-R57; the projector panel's confirm's last resort too).
+ */
+export function focusMain(): void {
   const main = document.querySelector('main');
   if (!(main instanceof HTMLElement)) return;
   if (!main.hasAttribute('tabindex')) {

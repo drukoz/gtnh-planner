@@ -250,6 +250,11 @@ const PAIRS: Pair[] = [
   ['toast text over a panel', '#ffffff', { over: '--chat', on: '--panel' }, AA],
   ['toast text over the page', '#ffffff', { over: '--chat', on: '--page' }, AA],
   ['Undo', '--accent', '--btn', AA],
+
+  // the in-app confirm (Phase 2 Task 10, spec §13.2): its question, white on a chat box in the settings panel it asks in, and why its answer
+  // failed, the dark boxes' red; its buttons are the danger button and a button (above)
+  ['confirm question over its panel', '#ffffff', CHAT_ON_PANEL, AA],
+  ['confirm failure over its panel', '#ff5555', CHAT_ON_PANEL, AA],
 ];
 
 describe('contrast of the Machine GUI palette', () => {

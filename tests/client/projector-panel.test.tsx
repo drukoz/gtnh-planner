@@ -149,3 +149,45 @@ describe('the Machine GUI projector panel', () => {
     expect(byHand).toContain('<p class="small" role="status" style="margin-top:4px">');
   });
 });
+
+// Phase 2 Task 10 (spec §13): Revoke asks in the panel, never in a browser dialog. The question is drawn in the row of the token it would
+// revoke, in place of that row's Revoke button, so no second button there is named with "Revoke" but the confirm's own "Revoke token".
+describe('revoking a token asks in its row', () => {
+  const two = [tok(), tok({ tokenId: 'T2bbbbbbbb', label: 'Alex' })];
+  /** The markup of the row of token `id`. */
+  const rowOf = (html: string, id: string): string => html.slice(html.indexOf(`<li data-token-id="${id}">`)).split('</li>')[0]!;
+
+  it('asks in place of the row\'s Revoke, named by its question, and leaves the other rows as they are', () => {
+    const html = renderToStaticMarkup(<ProjectorPanelView {...props({ asking: 'T1aaaaaaaa', tokens: two })} />);
+    const asking = rowOf(html, 'T1aaaaaaaa');
+    expect(asking).toContain('role="alertdialog"');
+    expect(asking).toContain('Revoke &quot;Steve&quot;? Anyone using it loses the ghosts until they get a new token.');
+    expect(asking).toContain('>Revoke token</button>');
+    expect(asking).not.toContain('>Revoke</button>');
+    expect(asking).toContain('Steve · gpt_AbCd… · by Ann · never used');                // the row still says whose token it is
+    expect(html.match(/data-token-id/g)).toHaveLength(2);                                  // the confirm has no token id of its own
+    expect(html).not.toContain('style=');
+    const other = rowOf(html, 'T2bbbbbbbb');
+    expect(other).toContain('>Revoke</button>');
+    expect(other).not.toContain('alertdialog');
+    expect(html.match(/role="alertdialog"/g)).toHaveLength(1);
+  });
+
+  it('asks nothing while nothing is asked, and the question is the pinned one', () => {
+    for (const asking of [undefined, null, 'T9 gone']) {
+      const html = renderToStaticMarkup(<ProjectorPanelView {...props({ asking, tokens: two })} />);
+      expect(html, String(asking)).not.toContain('alertdialog');
+      expect(html.match(/>Revoke<\/button>/g), String(asking)).toHaveLength(2);
+    }
+    expect(revokeQuestion('Steve')).toBe('Revoke "Steve"? Anyone using it loses the ghosts until they get a new token.');
+  });
+
+  it('says in the confirm why a revoke failed, and nowhere else; while one is on its way Revoke token cannot be pressed again', () => {
+    const failed = renderToStaticMarkup(<ProjectorPanelView {...props({ asking: 'T1aaaaaaaa', tokens: two, revokeError: 'The server is not reachable' })} />);
+    expect(rowOf(failed, 'T1aaaaaaaa')).toContain('<p class="error small" role="alert">The server is not reachable</p>');
+    expect(failed.match(/role="alert"/g)).toHaveLength(1);
+    const busy = renderToStaticMarkup(<ProjectorPanelView {...props({ asking: 'T1aaaaaaaa', tokens: two, busy: true })} />);
+    expect(rowOf(busy, 'T1aaaaaaaa')).toContain('<button type="button" class="small danger" disabled="">Revoke token</button>');
+    expect(rowOf(busy, 'T1aaaaaaaa')).toContain('<button type="button" class="small">Keep it</button>');
+  });
+});

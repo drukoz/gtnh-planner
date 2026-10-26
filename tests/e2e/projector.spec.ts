@@ -1,7 +1,14 @@
-import { test, expect } from '@playwright/test';
-import { login, setName, createProject } from './helpers.ts';
+// The project page's "In-game projector" panel: a token made, copied and revoked. Revoke asks in the panel (Phase 2 spec §13, Task 10), in the
+// token's row, never in a browser dialog: each test that revokes counts the browser dialogs it meets, which must be none. The safe answer,
+// Keep it, takes the focus as the confirm opens; Keep it and Escape give it back to the row's Revoke, and a revoke that went through to the
+// "Who is it for?" field, the row being gone. The focus is never left on the page's body; Tab stays in the confirm while it asks; Escape is one
+// layer per press, after a tip and before the settings drawer it may be asked in.
+
+import { test, expect, type Locator, type Page, type Route } from '@playwright/test';
+import { login, setName, createProject, LV_CIRCUITS, SETTINGS_BUTTON } from './helpers.ts';
 
 test('create, copy and revoke a projector token', async ({ page }) => {
+  const dialogs: string[] = []; page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
   await login(page);
   await setName(page, 'Ann');
   const id = await createProject(page, 'Projector e2e');
@@ -11,12 +18,19 @@ test('create, copy and revoke a projector token', async ({ page }) => {
   await page.getByRole('button', { name: 'Create token' }).click();
   await expect(page.locator('code', { hasText: `/planner load ${id} gpt_` })).toBeVisible();
   await expect(page.getByText(/^Steve · gpt_/)).toBeVisible();
-  page.once('dialog', (d) => d.accept());
   await page.getByRole('button', { name: 'Revoke' }).click();
+  await expect(page.getByRole('alertdialog', { name: /Revoke "Steve"/ }).getByRole('button', { name: 'Keep it' })).toBeFocused();
+  await page.getByRole('alertdialog', { name: /Revoke "Steve"/ }).getByRole('button', { name: 'Keep it' }).click();
+  await expect(page.getByText(/^Steve · gpt_/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Revoke' })).toBeFocused();
+  await page.getByRole('button', { name: 'Revoke' }).click();
+  await page.getByRole('alertdialog', { name: /Revoke "Steve"/ }).getByRole('button', { name: 'Revoke token' }).click();
   await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await expect(page.getByLabel('Who is it for?')).toBeFocused();
   await page.reload();
   await page.getByText('In-game projector').click();
   await expect(page.locator('code', { hasText: '/planner load' })).toHaveCount(0);
+  expect(dialogs).toEqual([]);
 });
 
 /** What the page's stand-in for `document.execCommand('copy')` saw (it never touches the real clipboard). */
@@ -57,4 +71,221 @@ test('copies a command over plain http, and says how to copy it by hand when the
   await expect(urlLine.getByRole('status')).toHaveText('Press Ctrl+C (Cmd+C on a Mac) to copy');
   expect(await page.evaluate(() => String(getSelection()))).toBe(await urlCode.textContent());
   await expect(loadLine.getByRole('status')).toHaveCount(0);
+});
+
+// ---- Task 10: the confirm's keyboard and focus, a revoke that fails or finds its token gone, its entrance, and forced colours ----
+
+/** The browser dialogs `page` meets from now on, each dismissed: a page that asks in the app meets none. */
+function noDialogs(page: Page): string[] {
+  const dialogs: string[] = [];
+  page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
+  return dialogs;
+}
+
+/**
+ * Counts, in the page, every time the focus is left on the page's body: a focus that goes and is not given anywhere by the second frame
+ * after (a focus React moves on in the same task, as when a row's Revoke is drawn again where its confirm was, is not lost). Read with `lost`.
+ */
+const watchFocus = (page: Page): Promise<void> => page.evaluate(() => {
+  const w = window as unknown as { lost: number };
+  w.lost = 0;
+  document.addEventListener('focusout', () => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (document.activeElement === null || document.activeElement === document.body) w.lost += 1;
+    }));
+  }, true);
+});
+const lost = (page: Page): Promise<number> => page.evaluate(() => new Promise<number>((done) => {
+  requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => done((window as unknown as { lost: number }).lost))));
+}));
+
+/** Opens the projector panel in `scope` (the page, or the settings drawer), makes Steve a token and waits for its row; resolves with its id. */
+async function steveToken(page: Page, scope: Page | Locator): Promise<string> {
+  await scope.getByText('In-game projector').click();
+  await scope.getByLabel('Who is it for?').fill('Steve');
+  await scope.getByRole('button', { name: 'Create token' }).click();
+  await expect(scope.getByText(/^Steve · gpt_/)).toBeVisible();
+  await expect(scope.getByRole('button', { name: 'Create token' })).toBeEnabled();      // the list is in: the panel is not busy
+  return (await scope.locator('li[data-token-id]').getAttribute('data-token-id'))!;
+}
+
+test('the confirm keeps the keyboard: Tab stays in it, a tip takes the first Escape, it the next, and in the drawer the drawer the one after', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector drawer', LV_CIRCUITS);                            // a target: the drawer stays shut until asked
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  await toggle.click();
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  await expect(settings).toBeVisible();
+  await steveToken(page, settings);
+  await watchFocus(page);
+  const revoke = settings.getByRole('button', { name: 'Revoke' });
+  await revoke.click();
+  const confirm = settings.getByRole('alertdialog', { name: /Revoke "Steve"/ });
+  const keep = confirm.getByRole('button', { name: 'Keep it' });
+  const yes = confirm.getByRole('button', { name: 'Revoke token' });
+  await expect(keep).toBeFocused();
+  // the confirm is in the drawer, above its dimmed page and not inert: it is drawn where the pointer reaches it
+  expect(await confirm.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)) && el.closest('[inert]') === null;
+  })).toBe(true);
+  // Tab and Shift+Tab go round its two buttons while it asks
+  await page.keyboard.press('Tab');
+  await expect(yes).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(keep).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(yes).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(keep).toBeFocused();
+  // a tip showing takes the first Escape (ledger ruling P2-R21b): the confirm still asks, the focus still on Keep it
+  await settings.locator('.settings-target .item-icon').hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(confirm).toBeVisible();
+  await expect(keep).toBeFocused();
+  // the next is the confirm's: the token stays, the focus goes back to its Revoke, and the drawer stays open (one layer per press)
+  await page.keyboard.press('Escape');
+  await expect(confirm).toHaveCount(0);
+  await expect(settings.getByText(/^Steve · gpt_/)).toBeVisible();
+  await expect(revoke).toBeFocused();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.drawer-backdrop')).toHaveCount(1);
+  // the next closes the drawer, the focus back on the Settings button
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeHidden();
+  await expect(toggle).toBeFocused();
+  // answered inside the drawer, Revoke token revokes, the field takes the focus and the drawer stays open
+  await toggle.click();
+  await expect(settings).toBeVisible();
+  await revoke.click();
+  await yes.click();
+  await expect(settings.getByText('No tokens yet.')).toBeVisible();
+  await expect(settings.getByLabel('Who is it for?')).toBeFocused();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  expect(await lost(page), 'the focus is never left on the page').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// spec §13.4: a revoke that fails keeps the confirm, says why in it, and keeps the focus on Keep it. While it is on its way Revoke token cannot
+// be pressed again, and the focus it had moves to Keep it first: a disabled button would leave it on the page
+test('a revoke that fails keeps asking, says why in the confirm, and keeps the focus on Keep it', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector failed revoke');
+  await steveToken(page, page);
+  const held: Route[] = [];
+  await page.route('**/api/projects/*/tokens/*', (route) => {
+    if (route.request().method() === 'DELETE') held.push(route);
+    else void route.continue();
+  });
+  await watchFocus(page);
+  await page.getByRole('button', { name: 'Revoke' }).click();
+  const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
+  const yes = confirm.getByRole('button', { name: 'Revoke token' });
+  const keep = confirm.getByRole('button', { name: 'Keep it' });
+  await yes.click();
+  await expect.poll(() => held.length, { message: 'the revoke is held on its way' }).toBe(1);
+  await expect(yes).toBeDisabled();
+  await expect(keep).toBeFocused();
+  await held[0]!.fulfill({ status: 503, json: { error: 'unavailable', message: 'The planner could not revoke it just now' } });
+  await expect(confirm.getByRole('alert')).toHaveText('The planner could not revoke it just now');
+  await expect(yes).toBeEnabled();                                                          // the list came back: the panel is not busy
+  await expect(keep).toBeFocused();
+  await expect(page.getByText(/^Steve · gpt_/)).toBeVisible();
+  await expect(page.locator('.projector-body > .error')).toHaveCount(0);                   // said in the confirm, and only there
+  await page.unroute('**/api/projects/*/tokens/*');
+  await yes.click();                                                                         // the next try goes through
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await expect(page.getByLabel('Who is it for?')).toBeFocused();
+  expect(await lost(page), 'the focus is never left on the page').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// someone else revoked the token while it was asked about: the server no longer has it, the row and its question go, the field takes the
+// focus, and the server's reason is said under the form, as before the confirm
+test('a token revoked elsewhere first takes its question with it, and the panel says why', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Projector revoked elsewhere');
+  const tokenId = await steveToken(page, page);
+  await watchFocus(page);
+  await page.getByRole('button', { name: 'Revoke' }).click();
+  const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
+  await expect(confirm.getByRole('button', { name: 'Keep it' })).toBeFocused();
+  const gone = await page.request.delete(`/api/projects/${id}/tokens/${tokenId}`, { headers: { 'X-Planner-Name': 'Bob' } });
+  expect(gone.status()).toBe(204);
+  await confirm.getByRole('button', { name: 'Revoke token' }).click();
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await expect(confirm).toHaveCount(0);
+  await expect(page.locator('.projector-body > .error').getByRole('alert')).toHaveText(`No token ${tokenId} in project ${id}`);
+  await expect(page.getByLabel('Who is it for?')).toBeFocused();
+  expect(await lost(page), 'the focus is never left on the page').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// spec §3.3: the confirm rises in once (opacity and transform), and not at all under reduced motion
+test('under reduced motion the confirm appears with no entrance', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector still');
+  await steveToken(page, page);
+  const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
+  const entrance = (): Promise<string> => confirm.evaluate((el) => { const s = getComputedStyle(el); return `${s.animationName} ${s.animationDuration}`; });
+  await page.getByRole('button', { name: 'Revoke' }).click();
+  await expect(confirm).toBeVisible();
+  await expect.poll(entrance).toBe('rise-in 0.001s');
+  // without the preference it rises in over its 160 ms, so the check above is not vacuous
+  await confirm.getByRole('button', { name: 'Keep it' }).click();
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.getByRole('button', { name: 'Revoke' }).click();
+  await expect.poll(entrance).toBe('rise-in 0.16s');
+  expect(dialogs).toEqual([]);
+});
+
+// forced colours (spec §20, ledger ruling P2-R41): a contrast theme drops the chat face's colour and keeps its edge, a border, in the theme's
+// text colour; the face over the panel is the theme's canvas, as the panel is. Read from the painted pixels: the frame shows round the question
+test('in forced colours the confirm keeps its frame, in the theme\'s text colour round the theme\'s canvas', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await page.emulateMedia({ forcedColors: 'active' });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector forced');
+  await steveToken(page, page);
+  await page.getByRole('button', { name: 'Revoke' }).click();
+  const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
+  await expect(confirm).toBeVisible();
+  await confirm.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));   // risen in: measured where it rests
+  const box = (await confirm.boundingBox())!;
+  const theme = await page.evaluate(() => {
+    const probe = document.createElement('div');
+    document.body.append(probe);
+    const colourOf = (value: string): string => { probe.style.color = value; return getComputedStyle(probe).color; };
+    const colours = { text: colourOf('CanvasText'), canvas: colourOf('Canvas') };
+    probe.remove();
+    return colours;
+  });
+  expect(theme.text).not.toBe(theme.canvas);
+  const shot = await page.screenshot({ animations: 'disabled', caret: 'hide' });
+  const at: Array<[string, number, number]> = [
+    ['the left edge', box.x + 1, box.y + box.height / 2], ['the top edge', box.x + box.width / 2, box.y + 1],
+    ['the right edge', box.x + box.width - 1, box.y + box.height / 2], ['the bottom edge', box.x + box.width / 2, box.y + box.height - 1],
+    ['the face', box.x + 5, box.y + 5], ['the panel beside it', box.x - 3, box.y + 5],
+  ];
+  const painted = await page.evaluate(async ([png, points]) => {
+    const image = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
+    const g = new OffscreenCanvas(image.width, image.height).getContext('2d')!;
+    g.drawImage(image, 0, 0);
+    return points.map(([, x, y]) => { const [r, gr, b] = g.getImageData(Math.floor(x), Math.floor(y), 1, 1).data; return `rgb(${r}, ${gr}, ${b})`; });
+  }, [shot.toString('base64'), at] as const);
+  const seen = Object.fromEntries(at.map(([what], i) => [what, painted[i]]));
+  expect(seen).toEqual({
+    'the left edge': theme.text, 'the top edge': theme.text, 'the right edge': theme.text, 'the bottom edge': theme.text,
+    'the face': theme.canvas, 'the panel beside it': theme.canvas,
+  });
+  expect(dialogs).toEqual([]);
 });

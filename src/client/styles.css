@@ -158,11 +158,11 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. The Compare card's notes are named by their place with the `p` in `:where()`, which keeps
    them at the specificity of one class, so .muted and .error still win on them. A recipe card's readout tile is a screen (Phase 2 §8.4),
-   and a toast a chat box (Phase 2 §12.3). */
+   and a toast a chat box (Phase 2 §12.3), as is the in-app confirm (Phase 2 §13.2). */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
 .search-results, .mat-unlock, .flow-issues, .flow-infeasible,
 .flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made,
-.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p), .readout, .toast {
+.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p), .readout, .toast, .inline-confirm {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   color: var(--ink);
@@ -1786,6 +1786,19 @@ details.mat-needed[open]::details-content { block-size: auto; }
 .projector-commands code {
   padding: 1px 5px; background: var(--screen); color: var(--screen-text); font-family: ui-monospace, Menlo, Consolas, monospace;
 }
+
+/* The in-app confirm (Phase 2 spec §13.2): a question asked in the page, never in a browser dialog, in a chat box in the light ink of the
+   dark boxes (the group at the top), the same in both looks, which rises in once; the question and why an answer failed have no margin of
+   their own, the column's gap spaces them. In the projector's token list it is drawn in the row of the token it would revoke, in place of
+   the row's Revoke button, on a line of its own under the token's name. In forced colours it needs no rule: it lies in a panel, whose face
+   the theme paints its canvas, as it paints the confirm's 82 % face, and its edge, a border, takes the theme's text colour. */
+.inline-confirm {
+  display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; background: var(--chat); border: 2px solid var(--outline);
+  animation: rise-in var(--dur-base) var(--ease-out);
+}
+.inline-confirm p { margin: 0; }
+.key-list > li:has(> .inline-confirm) { flex-wrap: wrap; }
+.key-list > li > .inline-confirm { flex: 1 1 100%; }
 
 /* The settings drawer (design spec §7a). The page is one column and the settings column leaves it: it waits off the left edge, slides in
    over a dimmed page when the Settings button opens it, and slides out again, faster and easing in as exits do (ruling R36: the closed

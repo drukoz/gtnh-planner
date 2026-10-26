@@ -35,7 +35,9 @@ describe('one layer per press, app-wide', () => {
       });
     }
     expect(deaf).toEqual([]);
-    // the scan sees them: the tip's, the two search lists', the three drafts', the project name's, the drawer's, the pin dialog's and Flow's
-    expect(found.length, found.join('\n')).toBeGreaterThanOrEqual(10);
+    // the scan sees them: the tip's, the two search lists', the three drafts', the project name's, the drawer's, the pin dialog's, Flow's and
+    // the in-app confirm's (Task 10)
+    expect(found.length, found.join('\n')).toBeGreaterThanOrEqual(11);
+    expect(found.some((at) => at.startsWith('components/InlineConfirm.tsx:')), found.join('\n')).toBe(true);
   });
 });

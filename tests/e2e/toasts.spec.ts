@@ -8,7 +8,8 @@
 // drawer says so in place, and makes no toast (P2-R56). Undo or Dismiss from the keyboard moves the focus on before the toast goes (P2-R57),
 // and a rename's toast goes with its page (P2-R54). Task 9b adds the deleted project, whose Undo restores it on the list it leaves for, and
 // the deleted note, whose delete waits out its toast in the page's store and is posted then, or at once as the page goes (Phase 2 spec
-// §12.2); and the page posts its changes one at a time, so an Undo never lands before what it undoes (ledger ruling P2-R59).
+// §12.2); and the page posts its changes one at a time, so an Undo never lands before what it undoes (ledger ruling P2-R59). Since Task 10 a
+// note's delete asks nothing first, its toast's Undo being the way back: each note test counts the browser dialogs it meets, none.
 
 import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
@@ -455,18 +456,21 @@ async function browserOf(browser: Browser, name: string): Promise<Page> {
   return page;
 }
 
-/** A project of its own with one note, Bob's, open at its Notes tab on a page logged in as Ann; resolves with its id. */
-async function oneNote(page: Page, name: string, text: string): Promise<string> {
-  page.on('dialog', (d) => void d.accept());                                              // the note delete still confirms (Task 10 takes it out)
+/**
+ * A project of its own with one note, Bob's, open at its Notes tab on a page logged in as Ann; resolves with its id and the browser dialogs the
+ * page meets from then on, each dismissed: a note's delete asks nothing since Task 10 (its toast's Undo takes it back), so there are none.
+ */
+async function oneNote(page: Page, name: string, text: string): Promise<{ id: string; dialogs: string[] }> {
+  const dialogs: string[] = []; page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
   const id = await createProject(page, name);
   await addNote(page, id, { id: 'n1', text }, 'Bob');
   await page.goto(`/p/${id}#notes`);
   await expect(page.locator('.note-text')).toHaveText(text);
-  return id;
+  return { id, dialogs };
 }
 
 test('deleting a note offers Undo, which keeps its author, time and place', async ({ page }) => {
-  page.on('dialog', (d) => void d.accept());                                              // the note delete still confirms (Task 10 takes it out)
+  const dialogs: string[] = []; page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });   // the delete asks nothing (Task 10)
   await login(page); await setName(page, 'Ann');
   const id = await createProject(page, 'Toasts note undone');
   await addNote(page, id, { id: 'first', text: 'Bob\'s note, first' }, 'Bob');
@@ -487,12 +491,13 @@ test('deleting a note offers Undo, which keeps its author, time and place', asyn
   await expect(back.locator('.note-by')).toHaveText('Bob');
   await expect(back.locator('time')).toHaveAttribute('datetime', at!);
   expect((await notesOf(page, id)).map((n) => n.id)).toEqual(['first', 'second']);
+  expect(dialogs).toEqual([]);
 });
 
 test('a note deleted without Undo reaches another browser within 7 s', async ({ browser }) => {
   const pa = await browserOf(browser, 'Ann');
   const pb = await browserOf(browser, 'Bob');
-  const id = await oneNote(pa, 'Toasts note gone', 'gone in 5 s');
+  const { id, dialogs } = await oneNote(pa, 'Toasts note gone', 'gone in 5 s');
   await pb.goto(`/p/${id}#notes`);
   await expect(pb.locator('.note-text')).toHaveText('gone in 5 s');
   await expect(pb.locator('.connection.live')).toBeVisible();                             // B's event stream is open
@@ -501,6 +506,7 @@ test('a note deleted without Undo reaches another browser within 7 s', async ({ 
   await expect(pa.locator('.note')).toHaveCount(0);
   await expect(pb.locator('.note')).toHaveCount(0, { timeout: 7000 });
   await expect(toastOf(pa, 'Note deleted')).toHaveCount(0);                               // posted as its toast went, so its Undo has gone
+  expect(dialogs).toEqual([]);
   await pa.context().close(); await pb.context().close();
 });
 
@@ -529,7 +535,7 @@ const keptAlive = (page: Page): Promise<boolean[]> =>
 test('a note deleted just before a reload stays deleted', async ({ page }) => {
   await noteKeepalive(page);
   await login(page); await setName(page, 'Ann');
-  const id = await oneNote(page, 'Toasts note reloaded', 'deleted, then reloaded');
+  const { id, dialogs } = await oneNote(page, 'Toasts note reloaded', 'deleted, then reloaded');
   await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
   await expect(toastOf(page, 'Note deleted')).toBeVisible();
   await page.reload();
@@ -537,6 +543,7 @@ test('a note deleted just before a reload stays deleted', async ({ page }) => {
   await expect(page.locator('.note-text')).toHaveCount(0);
   await expect.poll(() => notesOf(page, id)).toEqual([]);
   expect(await keptAlive(page), 'the delete was the one post, made to outlive its page').toEqual([true]);
+  expect(dialogs).toEqual([]);
 });
 
 // Review Focus 3, going back to the list: the page's store closes, and posts the delete as it does (spec §12.2). The note's Undo would act
@@ -544,7 +551,7 @@ test('a note deleted just before a reload stays deleted', async ({ page }) => {
 test('a note deleted just before going back to the list stays deleted, and its toast goes with its page', async ({ page }) => {
   await noteKeepalive(page);
   await login(page); await setName(page, 'Ann');
-  const id = await oneNote(page, 'Toasts note left', 'deleted, then left');
+  const { id, dialogs } = await oneNote(page, 'Toasts note left', 'deleted, then left');
   await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
   const toast = toastOf(page, 'Note deleted');
   await expect(toast).toBeVisible();
@@ -553,17 +560,19 @@ test('a note deleted just before going back to the list stays deleted, and its t
   await expect(toast).toHaveCount(0, { timeout: 2000 });                                  // well inside the 5 s it would have lived
   await expect.poll(() => notesOf(page, id), { timeout: 2000 }).toEqual([]);
   expect(await keptAlive(page), 'the delete was the one post, made to outlive its page').toEqual([true]);
+  expect(dialogs).toEqual([]);
 });
 
 // Review Focus 3, closing the tab: the page is hidden for good, as for a reload
 test('a note deleted just before its tab closes stays deleted', async ({ browser }) => {
   const page = await browserOf(browser, 'Ann');
-  const id = await oneNote(page, 'Toasts note closed', 'deleted, then closed');
+  const { id, dialogs } = await oneNote(page, 'Toasts note closed', 'deleted, then closed');
   await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
   await expect(toastOf(page, 'Note deleted')).toBeVisible();
   const asking = page.context().request;
   await page.close();
   await expect.poll(async () => ((await (await asking.get(`/api/projects/${id}`)).json()) as { notes: unknown[] }).notes).toEqual([]);
+  expect(dialogs).toEqual([]);
   await page.context().close();
 });
 
@@ -613,7 +622,7 @@ test('an Undo pressed while its rename is still on its way lands after it, so th
 // page is hidden here as the region hears it: `document.hidden` and a visibilitychange.
 test('a note deleted just before the page is hidden still goes about 5 s later, while it is hidden', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
-  const id = await oneNote(page, 'Toasts note hidden', 'deleted, then hidden');
+  const { id, dialogs } = await oneNote(page, 'Toasts note hidden', 'deleted, then hidden');
   await rename(page, 'Toasts note hidden, renamed');
   const renamed = toastOf(page, 'Renamed to “Toasts note hidden, renamed”');
   await expect(renamed).toBeVisible();
@@ -629,6 +638,7 @@ test('a note deleted just before the page is hidden still goes about 5 s later, 
   await expect(deleted).toHaveCount(0);
   await expect(renamed).toHaveAttribute('data-state', 'open');                            // an ordinary toast waits for the page
   expect(await page.evaluate(() => document.hidden), 'the page is still hidden').toBe(true);
+  expect(dialogs).toEqual([]);
 });
 
 // P2-R63: Chrome freezes a hidden page it may discard later, and a frozen page runs no timer, so the deferred delete is posted as the page
@@ -637,7 +647,7 @@ test('a note deleted just before the page is hidden still goes about 5 s later, 
 test('a note deleted just before the page is frozen is posted as it freezes, with keepalive', async ({ page }) => {
   await noteKeepalive(page);
   await login(page); await setName(page, 'Ann');
-  const id = await oneNote(page, 'Toasts note frozen', 'deleted, then frozen');
+  const { id, dialogs } = await oneNote(page, 'Toasts note frozen', 'deleted, then frozen');
   await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
   const toast = toastOf(page, 'Note deleted');
   await expect(toast).toBeVisible();
@@ -645,6 +655,7 @@ test('a note deleted just before the page is frozen is posted as it freezes, wit
   await expect.poll(() => notesOf(page, id), { timeout: 3000, message: 'posted as the page froze' }).toEqual([]);
   expect(await keptAlive(page), 'the delete was the one post, made to outlive its page').toEqual([true]);
   await expect(toast).toHaveCount(0);                                                     // posted, so its Undo has gone
+  expect(dialogs).toEqual([]);
 });
 
 // M1: a note deleted just before its project is posted before the project's own delete, which would otherwise find the project gone (404)
@@ -652,7 +663,7 @@ test('a note deleted just before the page is frozen is posted as it freezes, wit
 test('a note deleted just before its project stays deleted when the project is restored', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
   const name = runName('Toasts note, then project');
-  const id = await oneNote(page, name, 'deleted, then its project');
+  const { id, dialogs } = await oneNote(page, name, 'deleted, then its project');
   await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
   await expect(toastOf(page, 'Note deleted')).toBeVisible();
   await deleteProject(page, name);                                                        // well inside the note's 5 s
@@ -660,4 +671,5 @@ test('a note deleted just before its project stays deleted when the project is r
   await toastOf(page, `Deleted “${name}”`).getByRole('button', { name: 'Undo' }).click();
   await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
   expect(await notesOf(page, id)).toEqual([]);
+  expect(dialogs).toEqual([]);
 });

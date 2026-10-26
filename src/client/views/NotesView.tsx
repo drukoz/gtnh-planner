@@ -1,5 +1,6 @@
 // The project's notes (spec §3.7, §3.11): anyone can add, edit or delete one, and everyone sees who wrote it and when.
-// Notes with a map pin (added from Plan 4's map) show where they point. A deleted note's toast offers Undo (Phase 2 spec §12.2).
+// Notes with a map pin (added from Plan 4's map) show where they point. A note's Delete asks nothing first: its toast offers Undo instead
+// (Phase 2 spec §12.2, §13.1), and no browser dialog is left in the client.
 
 import { useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
@@ -34,7 +35,6 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
     setDraft(null);
   };
   const remove = (): void => {
-    if (!confirm('Delete this note for everyone?')) return;
     const ops: ProjectOp[] = [{ op: 'deleteNote', id: note.id }];
     if (sendLater === undefined) {
       send(ops);

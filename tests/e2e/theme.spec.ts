@@ -227,6 +227,19 @@ const DARK_TOUR: DarkStop[] = [
     },
     rows: [{ what: 'a toast', selector: '.toast', property: 'background-color', expected: 'rgba(0, 0, 0, 0.82)' }],
   },
+  // Task 10: the in-app confirm is a chat box, the same in both looks (spec §13.2): a token's Revoke, read while it asks
+  {
+    name: 'a confirm',
+    open: async (page) => {
+      await createProject(page, 'Dark confirm');
+      await page.getByText('In-game projector').click();
+      await page.getByLabel('Who is it for?').fill('Steve');
+      await page.getByRole('button', { name: 'Create token' }).click();
+      await page.getByRole('button', { name: 'Revoke' }).click();
+      await expect(page.locator('.inline-confirm')).toBeVisible();
+    },
+    rows: [{ what: 'a confirm', selector: '.inline-confirm', property: 'background-color', expected: 'rgba(0, 0, 0, 0.82)' }],
+  },
 ];
 
 // a fresh context per test, in a dark OS

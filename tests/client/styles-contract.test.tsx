@@ -2645,6 +2645,15 @@ const TOAST = '.toast';
 const TOAST_LEAVING = ".toast[data-state='leaving']";
 const TOAST_RULES = [TOASTS, '.toasts > ol', TOAST, '.toast > span', TOAST_LEAVING];
 
+/**
+ * Phase 2 Task 10 (spec §13.2): the in-app confirm, a chat box drawn where the control that asks was; in the projector's token list it takes
+ * a line of its own under the token's name.
+ */
+const CONFIRM = '.inline-confirm';
+const CONFIRM_ROW = '.key-list > li:has(> .inline-confirm)';
+const CONFIRM_IN_ROW = '.key-list > li > .inline-confirm';
+const CONFIRM_RULES = [CONFIRM, '.inline-confirm p', CONFIRM_ROW, CONFIRM_IN_ROW];
+
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
   '.theme-button', '.theme-button::before', ".theme-button[data-choice='dark']::before", ".theme-button[data-choice='light']::before",
@@ -2662,6 +2671,7 @@ const PHASE2_RULES: string[] = [
   ...SKELETON_RULES, ...COMPARE_SKELETON_RULES,                                      // Task 8: the skeletons (spec §11.2, compare-skeletons)
   ...BUSY_RULES,                                                                     // Task 8: the busy line out of the flow (P2-R18)
   ...TOAST_RULES,                                                                    // Task 9a: the toasts (spec §12.3)
+  ...CONFIRM_RULES,                                                                  // Task 10: the in-app confirm (spec §13.2)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3264,5 +3274,39 @@ describe('the Machine GUI Phase 2: toasts', () => {
     // alpha), which would let what a toast floats over show through its words: the face is the theme's canvas, whole, after the rule it repaints
     expect(inQuery(FORCED, TOAST)).toEqual([['background', 'Canvas']]);
     expect(position(TOAST)).toBeLessThan(blocks.indexOf(forcedBlock().block));
+  });
+});
+
+// The in-app confirm (Phase 2 spec §13, Task 10): a question asked in the page, never in a browser dialog. It is a chat box in the light ink of
+// the dark boxes, the same in both looks, which rises in once (`rise-in`, which moves opacity and transform alone); its question and its
+// failure have no margin of their own, its column's gap spaces them. In the projector's token list it is drawn in the row of the token it would
+// revoke, in place of that row's Revoke button, on a line of its own under the token's name.
+describe('the Machine GUI Phase 2: the in-app confirm', () => {
+  it('asks in a chat box in the light ink, which rises in once, on a line of its own in the token\'s row', () => {
+    expectDeclared([
+      [CONFIRM, 'display', 'flex'], [CONFIRM, 'flex-direction', 'column'], [CONFIRM, 'gap', '8px'], [CONFIRM, 'padding', '8px 10px'],
+      [CONFIRM, 'background', 'var(--chat)'], [CONFIRM, 'border', '2px solid var(--outline)'],
+      [CONFIRM, 'animation', 'rise-in var(--dur-base) var(--ease-out)'],
+      ['.inline-confirm p', 'margin', '0'],
+      [CONFIRM_ROW, 'flex-wrap', 'wrap'], [CONFIRM_IN_ROW, 'flex', '1 1 100%'],
+    ]);
+    // a chat box in the light ink of the dark boxes: appended to the group, after its 7 pinned members and Task 9a's toast
+    const dark = inkGroup('.banner').prelude.split(', ');
+    expect(dark.slice(7)).toContain(CONFIRM);
+    expect(dark.indexOf(CONFIRM)).toBeGreaterThan(dark.indexOf(TOAST));
+    expect(inkGroup('.tab-panel').prelude.split(', ')).not.toContain(CONFIRM);
+    // it rises in once and keeps no frame of it; and every rule is drawn after the projector's, the panel it asks in
+    expect(declared(CONFIRM, 'animation')).not.toMatch(/infinite|forwards|backwards|both/);
+    for (const selector of CONFIRM_RULES) {
+      expect(position(selector), selector).toBeGreaterThan(position('.projector-commands code'));
+      expect(ruleBody(selector), selector).not.toMatch(OLD_ALIASES);
+      expect(declared(selector, 'border-radius') ?? '0', selector).toBe('0');
+    }
+    // the row it asks in is the list's own row, which still lays the name and the question out, and wraps the question under the name
+    expectDeclared([['.key-list li', 'display', 'flex'], ['.key-list li', 'gap', '8px']]);
+    // forced colours: it lies in the panel, whose face the theme paints its canvas, as it paints the confirm's 82 % face, so nothing shows through
+    // its words (a toast floats, and needs its rule); its edge, a border, is the theme's text colour already: no rule (projector.spec.ts reads
+    // the painted pixels)
+    expect(forcedBlock().rules.flatMap((r) => selectorList(r.prelude)).filter((s) => s.includes(CONFIRM))).toEqual([]);
   });
 });
