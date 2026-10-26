@@ -7,14 +7,18 @@
 // ride and the pipes run on through a pan (they are inside the pan group); and a panel's Close while a pan runs gives the focus to the box head
 // where the pan ends (ledger rulings P2-R35 and P2-R36 read the view the attribute holds, not the picture on its way there).
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
+import { EASE_OUT } from '../../src/client/state/motion.ts';
 import { matrixView, panTransform, type PanView } from '../../src/client/views/glide.ts';
 import { circuitLv, platesTwoWays } from './fixtures/plans.ts';
 import { bodyFocusCount, finishMotion, openConnections, openWithPlan, watchBodyFocus } from './helpers.ts';
 
+/** A box on the page, as Playwright measures one. */
+interface Box { x: number; y: number; width: number; height: number }
+
 /** One `animate()` call: the element's class, its box or arrow (`data-node-id`, `data-edge-id` or `data-node`), its timing and its keyframes. */
 interface AnimationRecord {
-  cls: string | null; node: string | null; duration: unknown; delay: unknown; fill: unknown; frames: Array<Record<string, unknown>>;
+  cls: string | null; node: string | null; duration: unknown; delay: unknown; fill: unknown; easing: unknown; frames: Array<Record<string, unknown>>;
 }
 
 /** Runs in the page before its scripts: records every `Element.prototype.animate` call in `window.__animations`, then makes it as asked. */
@@ -29,7 +33,8 @@ function recordAnimations(): void {
     records.push({
       cls: this.getAttribute('class'),
       node: this.getAttribute('data-node-id') ?? this.getAttribute('data-edge-id') ?? this.getAttribute('data-node'),
-      duration: timing.duration, delay: timing.delay ?? 0, fill: timing.fill, frames: JSON.parse(JSON.stringify(frames)) as unknown,
+      duration: timing.duration, delay: timing.delay ?? 0, fill: timing.fill, easing: timing.easing,
+      frames: JSON.parse(JSON.stringify(frames)) as unknown,
     });
     return animate.call(this, frames, options);
   };
@@ -58,21 +63,62 @@ async function dragCanvas(page: Page, dx: number, dy: number): Promise<void> {
   await page.mouse.up();
 }
 
+/** The Flow diagram's pan group, and the Connections picture's. */
+const FLOW_PAN = 'svg.flow-canvas > g.flow-pan';
+const CONN_PAN = 'g.conn-pan';
+
 /**
- * Clicks Fit (a script's click, which moves no focus) and, a frame later, holds the pan it started, at `ms` of its 250 ms: returns the
- * transform the browser computes for the pan group then, the picture on screen, which only the pan sets.
+ * Clicks the shown diagram's Fit (a script's click, which moves no focus) and, a frame later, holds the pan it started on the group `group`,
+ * at `ms` of its 250 ms: returns the transform the browser computes for the group then, the picture on screen, which only the pan sets.
  */
-function fitHeldAt(page: Page, ms: number): Promise<string> {
-  return page.getByRole('button', { name: 'Fit' }).evaluate(async (button, at) => {
+function fitHeldAt(page: Page, ms: number, group = FLOW_PAN): Promise<string> {
+  return page.getByRole('button', { name: 'Fit', exact: true }).evaluate(async (button, [at, selector]) => {
     (button as HTMLButtonElement).click();
     await new Promise((done) => requestAnimationFrame(done));
-    const g = document.querySelector('svg.flow-canvas > g.flow-pan');
+    const g = document.querySelector(selector);
     const pan = g?.getAnimations()[0];
     if (g === null || pan === undefined) throw new Error('Fit started no pan');
     pan.pause();
     pan.currentTime = at;
     return getComputedStyle(g).transform;
+  }, [ms, group] as const);
+}
+
+/**
+ * Holds the pan under way on the Flow pan group, once it has started (within a few frames of what asked for it: a reveal's waits for its
+ * effect), at `ms` of its 250 ms; returns the transform the browser computes for the group then.
+ */
+function panHeldAt(page: Page, ms: number): Promise<string> {
+  return page.locator(FLOW_PAN).evaluate(async (g, at) => {
+    for (let frame = 0; frame < 30; frame++) {
+      const pan = g.getAnimations()[0];
+      if (pan !== undefined) {
+        pan.pause();
+        pan.currentTime = at;
+        return getComputedStyle(g).transform;
+      }
+      await new Promise((done) => requestAnimationFrame(done));
+    }
+    throw new Error('no pan started');
   }, ms);
+}
+
+/** A pan's keyframe, `translate(xpx, ypx) scale(s)` (`panTransform`), as a view. */
+function keyframeView(transform: unknown): PanView {
+  const [x, y, scale] = (/^translate\((\S+)px, (\S+)px\) scale\((\S+)\)$/.exec(String(transform)) ?? []).slice(1).map(Number);
+  if (x === undefined || y === undefined || scale === undefined) throw new Error(`no view in the keyframe "${String(transform)}"`);
+  return { x, y, scale };
+}
+
+/** The pans running on the group `group` now. */
+const pansOn = (page: Page, group = FLOW_PAN): Promise<number> => page.locator(group).evaluate((g) => g.getAnimations().length);
+
+/** One wheel turn's zoom (`WHEEL_ZOOM`, 0.0015 a pixel) of 100 px up, as both diagrams make it. */
+const TURN = Math.exp(100 * 0.0015);
+
+/** `v` zoomed by `k` around (px, py) of its svg, as both diagrams' wheel does (the scale within 0.15–3, as here). */
+function zoomedAt(v: PanView, px: number, py: number, k: number): PanView {
+  return { scale: v.scale * k, x: px - (px - v.x) * k, y: py - (py - v.y) * k };
 }
 
 /**
@@ -100,7 +146,7 @@ test('Fit pans over 250 ms, its attribute already final', async ({ page }) => {
   expect(fitted, 'Fit moves the view').not.toBe(dragged);
   const glides = await records(page);
   expect(glides).toHaveLength(1);
-  expect(glides[0]).toMatchObject({ cls: 'flow-pan', node: null, duration: 250, delay: 0, fill: 'none' });
+  expect(glides[0]).toMatchObject({ cls: 'flow-pan', node: null, duration: 250, delay: 0, fill: 'none', easing: EASE_OUT });
   // absolute keyframes, from the picture on screen to the attribute (spec §16.1: never an implicit end)
   expect(glides[0]!.frames).toEqual([{ transform: panTransform(attributeView(dragged)) }, { transform: panTransform(attributeView(fitted)) }]);
   await finishMotion(page);
@@ -113,6 +159,10 @@ test('Fit pans over 250 ms, its attribute already final', async ({ page }) => {
   // the first pan asked whether the browser can pan, on a probe of its own that is gone again (notes 5)
   expect((await allRecords(page)).filter((r) => r.cls === 'glide-probe'), 'canGlide()\'s probe ran once').toHaveLength(1);
   await expect(page.locator('.glide-probe')).toHaveCount(0);
+  // fix round 1 (T4): Fit on the fitted view has nowhere to go, and makes no pan
+  await page.getByRole('button', { name: 'Fit' }).click();
+  expect(await pan.getAttribute('transform')).toBe(fitted);
+  expect(await records(page), 'no pan between equal views').toHaveLength(1);
 });
 
 // spec §16.5 (3)
@@ -191,7 +241,7 @@ test('Connections\' Fit glides, its attribute final at once', async ({ page }) =
   expect(await pan.getAttribute('transform'), 'the attribute is the fitted view at once').toBe(fitted);
   const glides = await pictures();
   expect(glides).toHaveLength(1);
-  expect(glides[0]).toMatchObject({ cls: 'conn-pan', node: null, duration: 250, delay: 0, fill: 'none' });
+  expect(glides[0]).toMatchObject({ cls: 'conn-pan', node: null, duration: 250, delay: 0, fill: 'none', easing: EASE_OUT });
   expect(glides[0]!.frames).toEqual([{ transform: panTransform(attributeView(dragged)) }, { transform: panTransform(attributeView(fitted)) }]);
 });
 
@@ -237,7 +287,7 @@ test('the zoom buttons and Find item pan too, each to the attribute', async ({ p
   await expect.poll(async () => (await records(page)).length, { message: 'Find item pans' }).toBe(3);
   ends.push(panTransform(attributeView(await pan.getAttribute('transform'))));
   const glides = await records(page);
-  expect(glides.map((g) => [g.cls, g.duration, g.fill, g.frames.length])).toEqual(Array(3).fill(['flow-pan', 250, 'none', 2]));
+  expect(glides.map((g) => [g.cls, g.duration, g.fill, g.easing, g.frames.length])).toEqual(Array(3).fill(['flow-pan', 250, 'none', EASE_OUT, 2]));
   expect(glides.map((g) => g.frames[1]?.transform)).toEqual(ends);
 });
 
@@ -256,13 +306,44 @@ test('a new plan\'s view is panned to from the picture of the last', async ({ pa
   await expect(page.locator('svg.flow-canvas [data-step-id]')).toHaveCount(3);
   await expect.poll(async () => (await records(page)).length, { message: 'the new plan\'s view pans' }).toBe(1);
   const [glide] = await records(page);
-  expect(glide).toMatchObject({ cls: 'flow-pan', node: null, duration: 250, delay: 0, fill: 'none' });
+  expect(glide).toMatchObject({ cls: 'flow-pan', node: null, duration: 250, delay: 0, fill: 'none', easing: EASE_OUT });
   const after = await pan.getAttribute('transform');
   expect(glide!.frames).toEqual([{ transform: panTransform(attributeView(before)) }, { transform: panTransform(attributeView(after)) }]);
 });
 
+// Fix round 1 (ledger ruling P2-R108): a pan goes with the view `glideTo` made, never with whatever view is drawn next. Find item's reveal asks
+// for its pan from an effect, which React runs in the microtask that draws the light, so the pan's view waits for React's default lane; a wheel
+// turn in that same task updates at the continuous lane, drawn with it or before it. Either way the turn is an instant move: the view it gives,
+// on top of the reveal's, is drawn at once and never panned to (the reveal's pan gives way to it, as to any instant move)
+test('a wheel turn in the task of a reveal is drawn at once, never panned to', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  const pan = canvas.locator(':scope > g.flow-pan');
+  const before = await pan.getAttribute('transform');
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('no canvas');
+  const [px, py] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)];
+  const run = await page.getByLabel('Find item').evaluate(async (select, [x, y]) => {
+    const find = select as HTMLSelectElement;
+    find.value = [...find.options].find((o) => o.textContent === '1x Copper Wire')?.value ?? '';
+    find.dispatchEvent(new Event('change', { bubbles: true }));
+    // React draws the light in a microtask, and runs the reveal's effect there, which asks for the reveal's pan; then, in this task, the turn
+    await Promise.resolve();
+    const svg = document.querySelector('svg.flow-canvas');
+    if (svg === null) throw new Error('no canvas');
+    svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+    return { focusing: svg.classList.contains('focusing'), pans: svg.querySelector(':scope > g.flow-pan')?.getAnimations().length };
+  }, [px, py] as const);
+  expect(run, 'the good is lit and no pan runs').toEqual({ focusing: true, pans: 0 });
+  expect(await records(page), 'nothing was panned to').toEqual([]);
+  expect(await pan.getAttribute('transform'), 'the reveal and the turn moved the view').not.toBe(before);
+});
+
 // Task 13a (notes 6): the pipes' dashes and the goods riding them are inside the pan group, so they move with it; a pan is no drag, so it
-// neither stops them nor starts them over: the same animations run on, their times going forward, the goods along their routes
+// neither stops them nor starts them over: the same animations run on, their times going forward, the goods along their routes. Fix round 1
+// (T6): read in the first frame after the press, while the 250 ms pan is surely under way, however slow the frames
 test('a pan leaves the pipes running and the goods riding: the same animations, on and going forward', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   await dragCanvas(page, 100, 60);
@@ -276,13 +357,14 @@ test('a pan leaves the pipes running and the goods riding: the same animations, 
         return { el, animation, time: Number(animation?.currentTime), at: getComputedStyle(el).offsetDistance };
       })
     );
-    const two = (): Promise<void> => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
-    await two();
+    const frame = (): Promise<void> => new Promise((done) => requestAnimationFrame(() => done()));
+    await frame();
+    await frame();
     const before = moving();
     (button as HTMLButtonElement).click();
-    await two();
-    const after = moving();
+    await frame();                                       // the press's first frame: one frame of the pan, of its 250 ms, has run
     const pans = svg.querySelector(':scope > g.flow-pan')?.getAnimations() ?? [];
+    const after = moving();
     const riders = before.filter((b) => b.el.classList.contains('flow-rider'));
     return {
       panning: pans.length === 1 && pans[0]?.playState === 'running', dragging: svg.classList.contains('dragging'),
@@ -335,4 +417,289 @@ test('Close while Fit pans gives the focus to the box head where the pan ends', 
   if (end === null || area === null) throw new Error('no box');
   expect(end.y + end.height, 'the head ends in the canvas\'s view').toBeLessThanOrEqual(area.y + area.height);
   expect(end.y).toBeGreaterThanOrEqual(area.y);
+});
+
+/**
+ * Waits for the Connections picture of the tab shown, and for the view it was fitted at, once the area has its size (a read that holds from one
+ * poll to the next, as shortcuts.spec.ts reads it): returns the area, its pan group and that view's attribute.
+ */
+async function fittedConnections(page: Page): Promise<{ area: Locator; pan: Locator; fitted: string | null }> {
+  const view = page.getByTestId('connections');
+  await expect(view).toContainText('2× Basic Bending Machine');
+  const pan = view.locator(CONN_PAN);
+  let fitted = await pan.getAttribute('transform');
+  await expect.poll(async () => {
+    const now = await pan.getAttribute('transform');
+    const held = now === fitted;
+    fitted = now;
+    return held;
+  }).toBe(true);
+  return { area: view.getByRole('group', { name: 'Connections of the line' }), pan, fitted };
+}
+
+/** Drags `area` by (dx, dy) from its middle (whole pixels): an instant move. */
+async function dragFromMiddle(page: Page, area: Locator, dx: number, dy: number): Promise<void> {
+  const box = await area.boundingBox();
+  if (box === null) throw new Error('no area');
+  const [x, y] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)];
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + dx, y + dy, { steps: 6 });
+  await page.mouse.up();
+}
+
+// Fix round 1 (T1; review focus 1): Connections' instant moves while its Fit pans, the pan held at 125 ms each time: a drag, a wheel turn and an
+// arrow key (the area focused) each start from the picture on screen, and no pan runs after them
+test('Connections: a drag, a wheel turn and an arrow key during Fit\'s pan each start from the picture on screen', async ({ page }) => {
+  await openConnections(page);
+  const { area, pan } = await fittedConnections(page);
+  /** The picture dragged off its fitted view, then Fit, its pan held at 125 ms: the picture on screen. */
+  const held = async (): Promise<PanView> => {
+    await dragFromMiddle(page, area, 100, 60);
+    const view = matrixView(await fitHeldAt(page, 125, CONN_PAN));
+    if (view === null) throw new Error('no pan on screen');
+    const going = attributeView(await pan.getAttribute('transform'));
+    expect(view.x === going.x && view.y === going.y, 'the premise: the picture on screen is not yet where the pan goes').toBe(false);
+    return view;
+  };
+  const now = async (): Promise<PanView> => attributeView(await pan.getAttribute('transform'));
+  // a drag, 40 px right and 20 down
+  let from = await held();
+  await dragFromMiddle(page, area, 40, 20);
+  await expect.poll(async () => (await now()).x, { message: 'the drag moves the picture on screen' }).toBeCloseTo(from.x + 40, 0);
+  expect((await now()).y).toBeCloseTo(from.y + 20, 0);
+  expect((await now()).scale, 'at the zoom on screen').toBe(from.scale);
+  await expect.poll(() => pansOn(page, CONN_PAN), { message: 'no pan runs after the drag' }).toBe(0);
+  // a wheel turn, 100 px up, around the pointer
+  from = await held();
+  const box = await area.boundingBox();
+  if (box === null) throw new Error('no area');
+  const [px, py] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)];   // a wheel event's clientX and clientY are whole
+  await page.mouse.move(px, py);
+  await page.mouse.wheel(0, -100);
+  const zoomed = zoomedAt(from, px - box.x, py - box.y, TURN);
+  await expect.poll(async () => (await now()).scale, { message: 'the turn zooms the picture on screen' }).toBeCloseTo(zoomed.scale, 6);
+  expect((await now()).x).toBeCloseTo(zoomed.x, 0);
+  expect((await now()).y).toBeCloseTo(zoomed.y, 0);
+  await expect.poll(() => pansOn(page, CONN_PAN), { message: 'no pan runs after the turn' }).toBe(0);
+  // ArrowRight, the area focused: the picture moves 40 px left (KEY_PAN), as a page scrolls
+  from = await held();
+  await area.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => (await now()).x, { message: 'the key moves the picture on screen' }).toBeCloseTo(from.x - 40, 0);
+  expect((await now()).y).toBeCloseTo(from.y, 0);
+  await expect.poll(() => pansOn(page, CONN_PAN), { message: 'no pan runs after the key' }).toBe(0);
+});
+
+// Fix round 1 (T1; ledger ruling P2-R105): a resize while Connections' Fit pans fits the picture again at once, for the new size, and ends the
+// pan; the view it lands on is the fitted one, so Fit then has nowhere to go
+test('Connections: a resize during Fit\'s pan fits the picture again at once and ends the pan', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await openConnections(page);
+  const { area, pan } = await fittedConnections(page);
+  await dragFromMiddle(page, area, 100, 60);
+  await fitHeldAt(page, 125, CONN_PAN);
+  const going = await pan.getAttribute('transform');                                   // the fitted view of the wider area
+  await page.setViewportSize({ width: 1100, height: 720 });                             // the area narrows
+  await expect.poll(() => pan.getAttribute('transform'), { message: 'fitted again for the new size' }).not.toBe(going);
+  await expect.poll(() => pansOn(page, CONN_PAN), { message: 'the pan has ended' }).toBe(0);
+  const refitted = await pan.getAttribute('transform');
+  const pictures = async (): Promise<number> => (await records(page)).filter((r) => r.cls === 'conn-pan').length;
+  const made = await pictures();
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  expect(await pan.getAttribute('transform'), 'the refit is the fitted view').toBe(refitted);
+  expect(await pictures(), 'so Fit has nowhere to go').toBe(made);
+});
+
+// Fix round 1 (T2; review focus 1): a wheel turn that comes while a pan runs, nothing but the turn holding it, holds the pan where it is at once
+// (paused, with no pause left pending) and zooms the picture on screen at that moment, read in the task the turn comes in; a second turn before
+// React draws the first builds on it
+test('a wheel turn while a pan runs holds it where it is, and a second turn before React draws builds on the first', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  await dragCanvas(page, 100, 60);
+  const box = await page.locator('svg.flow-canvas').boundingBox();
+  if (box === null) throw new Error('no canvas');
+  const [px, py] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)];
+  const run = await page.getByRole('button', { name: 'Fit', exact: true }).evaluate(async (button, [x, y]) => {
+    (button as HTMLButtonElement).click();
+    await new Promise((done) => requestAnimationFrame(done));                         // the press's first frame: the pan runs
+    const svg = document.querySelector('svg.flow-canvas');
+    const g = svg?.querySelector(':scope > g.flow-pan');
+    const pan = g?.getAnimations()[0];
+    if (svg === null || svg === undefined || g === null || g === undefined || pan === undefined) throw new Error('Fit started no pan');
+    const turn = (): boolean => svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    const state = pan.playState;
+    const time = pan.currentTime;
+    const onScreen = getComputedStyle(g).transform;                                     // the picture the turn finds
+    turn();
+    const held = { state: pan.playState, pending: pan.pending, same: pan.currentTime === time };
+    turn();                                                                              // before React draws the first
+    await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+    const area = svg.getBoundingClientRect();
+    return { state, onScreen, held, wx: x - area.left, wy: y - area.top, transform: g.getAttribute('transform'), pans: g.getAnimations().length };
+  }, [px, py] as const);
+  expect(run.state, 'the turn comes while the pan runs').toBe('running');
+  expect(run.held, 'the turn holds the pan where it is, at once').toEqual({ state: 'paused', pending: false, same: true });
+  expect(run.pans, 'no pan runs once React has drawn the turns').toBe(0);
+  const from = matrixView(run.onScreen);
+  if (from === null) throw new Error('no pan on screen');
+  const twice = zoomedAt(zoomedAt(from, run.wx, run.wy, TURN), run.wx, run.wy, TURN);
+  const now = attributeView(run.transform);
+  expect(now.scale, 'two turns, the second on the first').toBeCloseTo(twice.scale, 6);
+  expect(now.x).toBeCloseTo(twice.x, 0);
+  expect(now.y).toBeCloseTo(twice.y, 0);
+});
+
+// Fix round 1 (T3; ledger ruling P2-R103): a pan asked for while another runs starts from the picture on screen, not from where the other was
+// going: Zoom out, pressed while Zoom in's pan is held at 60 ms, starts from that picture
+test('a pan asked for during another starts from the picture on screen', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await openWithPlan(page, circuitLv());
+  const run = await page.locator('.flow-toolbar').evaluate(async (bar) => {
+    const press = (name: string): void => {
+      const button = [...bar.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === name);
+      if (button === undefined) throw new Error(`no ${name}`);
+      button.click();
+    };
+    const g = document.querySelector('svg.flow-canvas > g.flow-pan');
+    if (g === null) throw new Error('no pan group');
+    press('Zoom in');
+    await new Promise((done) => requestAnimationFrame(done));
+    const pan = g.getAnimations()[0];
+    if (pan === undefined) throw new Error('Zoom in started no pan');
+    pan.pause();
+    pan.currentTime = 60;
+    const going = g.getAttribute('transform');                                          // where Zoom in's pan goes
+    const onScreen = getComputedStyle(g).transform;                                     // the picture Zoom out finds
+    press('Zoom out');
+    return { going, onScreen };
+  });
+  await expect.poll(async () => (await records(page)).length, { message: 'Zoom out pans' }).toBe(2);
+  const start = keyframeView((await records(page))[1]?.frames[0]?.transform);
+  const onScreen = matrixView(run.onScreen);
+  if (onScreen === null) throw new Error('no pan on screen');
+  expect(start.x).toBeCloseTo(onScreen.x, 0);
+  expect(start.y).toBeCloseTo(onScreen.y, 0);
+  expect(start.scale).toBeCloseTo(onScreen.scale, 3);
+  const going = attributeView(run.going);
+  expect(Math.abs(start.x - going.x) + Math.abs(start.y - going.y), 'not where Zoom in was going').toBeGreaterThan(1);
+});
+
+// Fix round 1 (T4): Fit on a view that is already the fitted one has nowhere to go: no pan, and the browser is not even asked whether it can pan
+// (equal views are asked before `canGlide()`). Connections opens fitted; the page is loaded again on that tab, so no pan of the Flow tab shown
+// first while the line was planned comes before
+test('Fit on the fitted view makes no pan, and the probe never runs', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await openConnections(page);
+  await page.reload();
+  const { pan, fitted } = await fittedConnections(page);
+  expect(await allRecords(page), 'opened fitted, at once').toEqual([]);
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  expect(await pan.getAttribute('transform')).toBe(fitted);
+  expect(await allRecords(page), 'no pan, and no probe').toEqual([]);
+});
+
+/** Whether two boxes share no area (FlowView's `disjoint`). */
+const apart = (a: Box, b: Box): boolean => a.y + a.height <= b.y || a.y >= b.y + b.height || a.x + a.width <= b.x || a.x >= b.x + b.width;
+
+/**
+ * Opens circuitLv and the Basic Assembler's panel from its box head, once it has slid in; returns the canvas, the head and the panel. Then drags
+ * the picture up or down until the head's bottom edge is at `bottom` (page px, measured from the canvas's middle up), and holds Zoom in's pan,
+ * which zooms about the canvas's middle, at its start: on screen the head is where it was dragged, and at rest a quarter further from the middle.
+ */
+async function headHeldAboveMiddle(page: Page, bottom: (canvas: { top: number; middle: number }) => number): Promise<{ canvas: Locator; head: Locator; panel: Locator }> {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  const head = page.locator('[data-step-id="circuit-lv"] .flow-node-head');
+  await head.click();
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Assembler' });
+  await expect(panel).toBeVisible();
+  await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
+  // the canvas's middle, which Zoom in keeps where it is: its content box's (the pan group's origin is inside its 2 px border)
+  const middle = await canvas.evaluate((svg) => {
+    const box = svg.getBoundingClientRect();
+    return { top: box.top + svg.clientTop, middle: box.top + svg.clientTop + svg.clientHeight / 2 };
+  });
+  const h = await head.boundingBox();
+  const c = await canvas.boundingBox();
+  if (h === null || c === null) throw new Error('no box');
+  const dy = Math.round(bottom(middle) - (h.y + h.height));
+  const [x, y] = [Math.round(c.x + 12), Math.round(dy < 0 ? c.y + c.height - 12 : c.y + 12)];
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y + dy, { steps: 8 });
+  await page.mouse.up();
+  await page.mouse.move(1, 1);
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await panHeldAt(page, 0);
+  return { canvas, head, panel };
+}
+
+// Fix round 1 (T7; ledger ruling P2-R36), the Close case the other way round: on screen the box head shows in the canvas, 10 px of it below the
+// canvas's top edge, but Zoom in's pan, held at its start, takes it wholly above that edge: Close gives the focus to the canvas, as it would to
+// a head panned out of its view
+test('Close while a pan takes the head out of the canvas gives the focus to the canvas', async ({ page }) => {
+  const { canvas, head, panel } = await headHeldAboveMiddle(page, ({ top }) => top + 10);
+  const [h, c] = [await head.boundingBox(), await canvas.boundingBox()];
+  if (h === null || c === null) throw new Error('no box');
+  expect(apart(h, c), 'the premise: on screen the head shows in the canvas').toBe(false);
+  await watchBodyFocus(page);
+  await panel.getByRole('button', { name: 'Close the panel' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(canvas).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  // and where the pan ends, the canvas shows none of the head
+  await finishMotion(page);
+  const [end, area] = [await head.boundingBox(), await canvas.boundingBox()];
+  if (end === null || area === null) throw new Error('no box');
+  expect(apart(end, area), 'the premise: at rest the head is out of the canvas\'s view').toBe(true);
+});
+
+// Fix round 1 (T7; ledger ruling P2-R35): the scroll. The page is scrolled so that, on screen, the box head's bottom shows in the window and, at
+// rest (Zoom in's pan, held at its start, takes the head a quarter further up), the head is wholly above the window though still in the
+// canvas's view. Close gives the focus to the head, ends the pan at once, and scrolls the head into the window by the least scroll. At 1000 px
+// the panel stacks under the diagram, so its Close shows while the canvas's top is above the window
+test('Close while a pan takes the head out of the window ends the pan, then scrolls the head in', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 900 });
+  const { canvas, head, panel } = await headHeldAboveMiddle(page, ({ middle }) => middle - 60);
+  // a spacer after the page lets it scroll, and the window's top goes 67 px above the canvas's middle: between the head's bottom on screen (60 px
+  // above) and at rest (75 px above)
+  const scrolled = await canvas.evaluate((svg) => {
+    const spacer = document.createElement('div');
+    spacer.setAttribute('data-test-spacer', '');
+    spacer.style.height = '2000px';
+    document.body.append(spacer);
+    const box = svg.getBoundingClientRect();
+    scrollTo(0, Math.round(scrollY + box.top + svg.clientTop + svg.clientHeight / 2 - 67));
+    return scrollY;
+  });
+  const close = panel.getByRole('button', { name: 'Close the panel' });
+  await expect(close, 'the premise: Close shows').toBeInViewport();
+  const h = await head.boundingBox();
+  if (h === null) throw new Error('no head');
+  expect(h.y + h.height, 'the premise: on screen the head\'s bottom shows in the window').toBeGreaterThan(0);
+  // where the held pan ends: seek it to its end (no fill: the group on its attribute) and back, in one task, so nothing is painted
+  const rest = await head.evaluate((el) => {
+    const g = el.closest<SVGGElement>('g.flow-pan');
+    const pan = g?.getAnimations()[0];
+    const area = g?.ownerSVGElement?.getBoundingClientRect();
+    if (g === null || g === undefined || pan === undefined || area === undefined) throw new Error('no pan held');
+    const time = pan.currentTime;
+    pan.currentTime = 250;
+    const box = el.getBoundingClientRect();
+    pan.currentTime = time;
+    return { bottom: box.bottom, top: box.top, canvasTop: area.top };
+  });
+  expect(rest.bottom, 'the premise: at rest the head is wholly above the window').toBeLessThan(0);
+  expect(rest.top, 'and still in the canvas\'s view').toBeGreaterThanOrEqual(rest.canvasTop);
+  await watchBodyFocus(page);
+  await close.focus();
+  await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(head).toBeFocused();
+  expect(await pansOn(page), 'the pan ended before the scroll').toBe(0);
+  await expect(head, 'the head is in the window').toBeInViewport();
+  expect(await page.evaluate(() => scrollY), 'the page scrolled up to it').toBeLessThan(scrolled);
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
 });

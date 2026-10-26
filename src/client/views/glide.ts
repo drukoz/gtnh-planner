@@ -6,7 +6,7 @@
 // ends the pan. Where the browser cannot move a group so (`canGlide`, ledger ruling P2-D46) or the user asks for less motion, the view moves
 // at once, as before; there is no SMIL fallback. Flow's pan group is `g.flow-pan` and Connections' `g.conn-pan`, each driven by `usePan`.
 
-import { useLayoutEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { EASE_OUT, PAN_MS, prefersReducedMotion } from '../state/motion.ts';
 
 /** A diagram's view: its picture's top left at (x, y) in the svg's px, zoomed by `scale` (the group's `translate(x y) scale(scale)`). */
@@ -39,9 +39,10 @@ let glides: boolean | undefined;
 /**
  * Whether this browser can pan a diagram (ledger ruling P2-D46): a WAAPI `transform` on a `<g transform>` moves the group while it runs and
  * hands it back to its attribute when it ends, as Task 12's spike (b) found in Chromium and WebKit (ledger ruling P2-R92). Checked once, by
- * that spike's probe in an svg of its own out of sight, which takes no pointer and no focus and is gone once checked: a group at
- * translate(10 20) whose pan from (0, 0) to (40, 80), held at 500 of 1000 ms, puts its rect at (20, 40), and cancelled, back at (10, 20).
- * False with no `Element.prototype.animate` (node), or when the probe throws.
+ * that spike's probe in an svg of its own out of sight, which takes no pointer and no focus and is gone once checked, with the scale a pan
+ * zooms by too (fix round 1): a group at translate(10 20) whose pan from translate(0, 0) scale(1) to translate(40px, 80px) scale(3), held at
+ * 500 of 1000 ms, puts its 10 × 10 rect half way and scaled 2 about the group's origin, from (20, 40) to (40, 60), and cancelled, back on the
+ * attribute, from (10, 20) to (20, 30). False with no `Element.prototype.animate` (node), or when the probe throws.
  */
 export function canGlide(): boolean {
   glides ??= probe();
@@ -59,23 +60,26 @@ function probe(): boolean {
   g.setAttribute('class', 'glide-probe');
   g.setAttribute('transform', 'translate(10 20)');
   const rect = document.createElementNS(SVG_NS, 'rect');
-  rect.setAttribute('width', '1');
-  rect.setAttribute('height', '1');
+  rect.setAttribute('width', '10');
+  rect.setAttribute('height', '10');
   g.append(rect);
   svg.append(g);
   document.body.append(svg);
   try {
-    const at = (): [number, number] => {
+    /** The rect's top left and bottom right corners, in the svg's px. */
+    const at = (): number[] => {
       const area = svg.getBoundingClientRect();
       const box = rect.getBoundingClientRect();
-      return [box.left - area.left, box.top - area.top];
+      return [box.left - area.left, box.top - area.top, box.right - area.left, box.bottom - area.top];
     };
-    const pan = g.animate([{ transform: 'translate(0px, 0px)' }, { transform: 'translate(40px, 80px)' }], { duration: 1000, fill: 'none' });
+    const pan = g.animate(
+      [{ transform: 'translate(0px, 0px) scale(1)' }, { transform: 'translate(40px, 80px) scale(3)' }], { duration: 1000, fill: 'none' },
+    );
     pan.pause();
     pan.currentTime = 500;
     const half = at();
     pan.cancel();
-    return near(half, [20, 40]) && near(at(), [10, 20]);
+    return near(half, [20, 40, 40, 60]) && near(at(), [10, 20, 20, 30]);
   } catch {
     return false;
   } finally {
@@ -83,8 +87,9 @@ function probe(): boolean {
   }
 }
 
-function near([x, y]: [number, number], [wx, wy]: [number, number]): boolean {
-  return Math.abs(x - wx) <= 0.5 && Math.abs(y - wy) <= 0.5;
+/** Whether each number is within half a pixel of the one wanted. */
+function near(got: number[], want: number[]): boolean {
+  return got.length === want.length && got.every((n, i) => Math.abs(n - (want[i] ?? Number.NaN)) <= 0.5);
 }
 
 /**
@@ -159,18 +164,20 @@ export function restingBox(g: SVGGElement, el: Element): DOMRect {
 
 /**
  * The pan of a diagram whose view is `view`, set by `setView` and drawn by the group `panRef` (its `transform` attribute), `toPan` and `fromPan`
- * translating that view (Phase 2 spec §16.2). Every commit of a new view ends a pan under way; a view set through `glideTo` is panned to, from
- * the picture on screen (the pan's, else the view drawn before), started in the commit, before the frame is painted, so the new attribute and
- * the pan come together and nothing flashes. `holdView` holds a pan under way where it is and gives that picture as a view, for an instant move
- * to start from (the wheel, a drag, the arrow keys: review focus 1); null when none runs, or once it is held, as a move after the first starts
- * from the view the first set.
+ * translating that view (Phase 2 spec §16.2). Every commit of a new view ends a pan under way; a view `glideTo` made is panned to, from the
+ * picture on screen (the pan's, else the view drawn before), started in the commit, before the frame is painted, so the new attribute and the
+ * pan come together and nothing flashes. A pan goes with the view object `glideTo` made, never with whatever commit comes next (ledger ruling
+ * P2-R108): its update can wait for React's default lane while an instant move's commits first, and an instant move made on top of it gives a
+ * view of its own, drawn at once. `holdView` holds a pan under way where it is and gives that picture as a view, for an instant move to start
+ * from (the wheel, a drag, the arrow keys: review focus 1); null when none runs, or once it is held, as a move after the first starts from the
+ * view the first set.
  */
-export function usePan<V>(
+export function usePan<V extends object>(
   view: V, setView: Dispatch<SetStateAction<V>>, toPan: (v: V) => PanView, fromPan: (p: PanView) => V,
 ): { panRef: RefObject<SVGGElement | null>; glideTo(next: SetStateAction<V>): void; holdView(): V | null } {
   const panRef = useRef<SVGGElement | null>(null);
-  /** The view set next is panned to (`glideTo`), not drawn at once. */
-  const pendingGlide = useRef(false);
+  /** The views `glideTo` made: a commit of one of them is panned to; any other view is drawn at once. */
+  const [glided] = useState(() => new WeakSet<V>());
   /** The view the attribute held after the last commit: the picture on screen while no pan runs. */
   const drawn = useRef<V | null>(null);
   /** A pan was started since: the next commit looks for it, and ends it. */
@@ -180,8 +187,7 @@ export function usePan<V>(
   useLayoutEffect(() => {
     const before = drawn.current;
     drawn.current = view;
-    const glide = pendingGlide.current;
-    pendingGlide.current = false;
+    const glide = glided.has(view);
     const g = panRef.current;
     if (g === null) return;
     let from = before === null ? null : toPan(before);
@@ -195,10 +201,12 @@ export function usePan<V>(
   }, [view]);   // reads the current `toPan`; only a new view moves the picture
   return {
     panRef,
-    glideTo: (next) => {
-      pendingGlide.current = true;
-      setView(next);
-    },
+    // the view the update makes is marked as the pan's, each time React applies it (a rebase over an instant move applies it again)
+    glideTo: (next) => setView((v) => {
+      const to = typeof next === 'function' ? (next as (prev: V) => V)(v) : next;
+      glided.add(to);
+      return to;
+    }),
     holdView: () => {
       const g = panRef.current;
       const on = g === null || !panning.current || held.current ? null : holdPan(g);

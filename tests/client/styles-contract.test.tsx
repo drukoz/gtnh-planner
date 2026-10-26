@@ -3443,9 +3443,11 @@ describe('the Machine GUI Phase 2: the diagrams glide', () => {
     expect(EASE_IN, 'EASE_IN').toBe(tokens.get('--ease-in'));
     expect(PAN_MS, 'a pan is 250 ms: nothing the user waits for takes more than 300 ms').toBe(250);
     expect(declarations(ruleBody(FADES))).toEqual([['transition', 'opacity var(--dur-base) var(--ease-out)']]);
-    // the class whole: `.flow-panel` is no pan group; and neither the property nor one of its parts, which would add to it
+    // the class whole: `.flow-panel` is no pan group; and neither the property nor one of its parts, which would add to it, nor a transition or
+    // an animation, which would move it besides the pan (fix round 1, T5: a transition's property may be `all`, its default, which takes the
+    // transform in)
     const pans = blocks.filter((b) => /\.(?:flow|conn)-pan(?![\w-])/.test(b.prelude));
-    const moving = pans.filter((b) => declarations(b.inner).some(([property]) => /^(transform|translate|scale|rotate)$/.test(property)));
+    const moving = pans.filter((b) => declarations(b.inner).some(([property]) => /^(transform|translate|scale|rotate|transition|animation)(-|$)/.test(property)));
     expect(moving.map((b) => b.prelude)).toEqual([]);
     expect(/\.(?:flow|conn)-pan(?![\w-])/.test('.flow-panel'), 'the pattern names the class whole').toBe(false);
     expect(/\.(?:flow|conn)-pan(?![\w-])/.test('.flow-canvas > .flow-pan'), 'and finds it').toBe(true);
