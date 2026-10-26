@@ -94,6 +94,8 @@ Single theme. B is inherently one look (Minecraft GUIs are always light-grey pan
 `@media (prefers-color-scheme: dark)` blocks go away and `<meta name="color-scheme">` becomes `dark` (page) — the
 panels stay light. *(Designer's call; see §10.)*
 
+*Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default.*
+
 | Token | Value | Use |
 |---|---|---|
 | `--page` | `#2b2b2b` + checker `#262626` (16 px, CSS gradients) | page background ("stone") |
@@ -151,6 +153,7 @@ bold. One source of truth used by CSS (custom properties) and TS (the Flow SVG).
 
 - **Pixelify Sans** (SIL OFL 1.1) — headings, tabs, buttons, readout numbers, tier chips, stack counts, tooltips.
   Never below 13 px, never for paragraphs.
+  *Superseded by Phase 2 (2026-10-24 spec §25): figures in VT323, words in Pixelify.*
 - **Inter** (SIL OFL 1.1) — everything else, 14 px base, line-height 1.45; tabular numbers for amounts and rates. The
   14 px is set on `body`; the root keeps the browser's 16 px, so a `rem` means what it did (R9).
 - Bundled through Vite, not a CDN: add `@fontsource/pixelify-sans` and `@fontsource/inter` (pinned exact versions,
@@ -473,7 +476,7 @@ list as large tiles, real block textures as panel backgrounds when assets exist.
 
 ## 10. Calls the designer made (nobody asked the user)
 
-1. Single theme, no automatic dark mode (B is one look).
+1. Single theme, no automatic dark mode (B is one look). *Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default.*
 2. Pixelify Sans + Inter, bundled via `@fontsource` packages (new dependencies).
 3. Diagram box text keeps the system UI stack it had (`system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif`, §5),
    which keeps its measured box metrics valid; the pixel font only outside the SVG text.

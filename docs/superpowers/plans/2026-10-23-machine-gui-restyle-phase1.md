@@ -27,11 +27,12 @@ lists, `1-chrome.md` Map, `4-chrome.md` 3D/World/projector).
 ## Global Constraints
 
 - No change to planning logic, server, API, data or the mods; map terrain and 3D WebGL drawing are untouched.
-- One theme: no `prefers-color-scheme` rule anywhere; `<meta name="color-scheme" content="dark">`.
+- One theme: no `prefers-color-scheme` rule anywhere; `<meta name="color-scheme" content="dark">`. *Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default.*
 - Radius 0 everywhere; the only round shapes are the map's `.pin-dot` (mirrors the canvas markers).
 - Pixelify Sans only for headings, tabs, buttons, readouts, chips, stack counts and tooltips; never below 13 px; every
   stack is `'Pixelify Sans', Inter, sans-serif`. Body is Inter 14 px / 1.45. Diagram SVG text keeps
   `system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif` (its metrics are pinned by tests).
+  *Superseded by Phase 2 (2026-10-24 spec §25): figures in VT323, words in Pixelify.*
 - Motion: animate only `transform`/`opacity` (plus `stroke-dashoffset` for pipes and `background-color` on hover);
   nothing over 300 ms that the user waits for; never a CSS `transform` on an SVG `<g>`; no infinite `transform`
   animation on anything clickable (Playwright waits for stable elements); under `prefers-reduced-motion: reduce`
@@ -51,7 +52,7 @@ lists, `1-chrome.md` Map, `4-chrome.md` 3D/World/projector).
 ## Review Focus
 
 1. **The OS is in dark mode (or light mode).** The app must look identical either way, since the dark-mode blocks are
-   gone → Task 1 `tests/e2e/theme.spec.ts`.
+   gone → Task 1 `tests/e2e/theme.spec.ts`. *Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default.*
 2. **Web fonts load late or not at all** (LAN, first visit). Control heights must not change when Pixelify/Inter
    arrive, or the e2e coordinate tests and the layout jump → Task 3 `tests/e2e/chrome.spec.ts` "fonts blocked".
 3. **Keyboard-only use.** The focus ring must be visible on a light panel and on the dark top bar → Task 2

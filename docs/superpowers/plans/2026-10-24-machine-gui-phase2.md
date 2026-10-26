@@ -120,7 +120,7 @@ edits of Tasks 3a–14 were added the same day, for spec §25.
 - Every `file:line` is at `main` `01da27d` (`cfaa05b` plus add-on 23's pack textures, the Make-picker fix, and add-on 17 in the
   Machine GUI look with its three fixes). A file unchanged since `cfaa05b` reads the same at both; every anchor in a file that changed
   in between was moved and checked against its text. Once an earlier task has edited a file, find the cited code by its text.
-- `$SCRATCH` = `/private/tmp/claude-501/-Users-drukoz-gtnh-planner/1fda0de6-6cd6-4a4f-ad51-448ca5885d74/scratchpad`, and
+- `$SCRATCH` = `<the design session's scratchpad, not in the repo>`, and
   `$P2` = `$SCRATCH/p2` (scratch scripts, never committed). The screenshot tour starts its own server on 18787: never run it beside
   `npm run e2e`; it serves the client `npm run e2e` last built.
 - **Review shots** (every task from 1b on; spec §20: both looks at 1440 × 900 and 800 × 900): `node --disable-warning=ExperimentalWarning $P2/tour.mjs 1440 light <label>`,
@@ -2873,3 +2873,229 @@ task numbers of this plan; the last column says how the plan now settles each ro
 | 13a | Yes. Wording issues: finding 20. | Reduced motion before `canGlide()`, the whole-class match, `matrixView` parsed in node (20) |
 | 13b | No: the `[{ opacity: 0 }]` keyframes against the stated "implicit end" (finding 2). | `FADE_IN = [{ opacity: 0, offset: 0 }]`, and glide.spec (2) reads the recorded frames, delays and fills |
 | 14 | No: the audit against 1a, the forced-colours claim, and the slot names filed as spec-open (findings 4, 6, 3). | The audit names the §3.5 rewrite and `RING_RULE` (4, 29); five specs' forced-colours cases (6); the slot names gone from "As built" (3) |
+
+## As built
+
+The rulings made while this plan was executed (pre-flight, the task reviews and their fix rounds; all kept in the SDD ledger, which
+is not committed) changed or read the steps above. Where a ruling supersedes a step, the code and the spec follow the ruling; the
+task text is left as it was planned. `file:line` anchors in the tasks are at `01da27d`. Rulings are numbered in the order they were
+made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's words shortened:
+
+**Process (before Task 1a)**
+- **P2-R1** — The worktree is `.worktrees/feat-machine-gui-phase2`, not `.worktrees/machine-gui-phase2`; the branch name is the plan's.
+- **P2-R2** — Implementers write `task-<id>-report.md` in the SDD workspace, or return it as their final message for the controller to save.
+- **P2-R3** — The plan was edited in the main checkout until the VT323 amendment landed, then synced into the worktree with a docs commit (`e04e955`); later edits in the worktree only.
+- **P2-R4** — Task 2's brief is cut with an exact `### Task 2:` pattern (a "Task 2" pattern also matches "Task 2b").
+- **P2-R5** — `figures-vt323`: the user chose VT323 (`@fontsource/vt323` 5.3.0) for figures and kept Pixelify Sans for words; Task 2b switches every figure and adds `--font-digits`; the one dependency beside "no new dependencies".
+
+**Task 1a**
+- **P2-R6** — "The light look is unchanged" is proved by swapping the base and the new stylesheet into one page state, with a base-against-base control, not by masked diffs of two tour runs.
+- **P2-R7** — `contrast-phase1.json` records each pair's minimum; the guard case needs a light-running row at least as strict.
+
+**Task 1b** (P2-R8 made with the VT323 amendment, for Task 4)
+- **P2-R8** — With the fonts blocked, "UHV" and "MAX" overflow a 27 px chip: Task 4 sizes chips for the fallback font too.
+- **P2-R9** — The slider thumb's pin `var(--btn)` → `var(--thumb)` (TOKENS pins `--thumb: var(--btn)`) is spec §3.9's kind of change; nothing is loosened.
+- **P2-R10** — The dark lists hold only values that change: `--stack-ink` (white in both looks) stays out, like `--field-edge`, `--flow-group` and `--dye-casing`.
+- **P2-R11** — The tour pins its dates and seeds `crypto` (no `page.clock`, which broke the swap control); review shots are compared by eye, and every "light unchanged" proof stays the swap.
+
+**Task 2**
+- **P2-R12** — "Six turns, then still" means six the user sees: 7 iterations (4.62 s), because the negative delays spend each overlay's first run before the first paint.
+
+**Task 2b**
+- **P2-R13** — Exact line boxes, 26.390625 px and 18.1875 px: Chromium floors a unitless line height to 1/64 px but rounds a px one, and 26.4 px moved what is below a Compare tile.
+- **P2-R14** — A pre-existing race in `view3d-links.spec.ts` (a read of the 3D canvas before its viewer) blocked verification: interstitial Task F1 made it deterministic without loosening its assertion.
+- **P2-R15** — A title or heading that can carry a figure renders through `<Figs>` (the 3D details box's `h3`); names without figures stay Pixelify.
+
+**Task F1**
+- **P2-R16** — A pre-existing Connections drag flake (the view moved under the pointer as a banner line came and went): interstitial Task F2 made it deterministic and checked whether a user's drag fails the same way (it did, and both diagrams were fixed).
+
+**Task F2**
+- **P2-R17** — Task F2's fix (pointer events taken relative to the diagram's current box) is applied to Flow as well as Connections.
+- **P2-R18** — The busy state no longer reflows the page: no height changes above the tabs when a plan event comes or goes, the text kept.
+- **P2-R19** — MapView too decides click or drag on the pointer's move in the window and anchors its pan to the map.
+
+**Task 3a**
+- **P2-R20** — A tap acts when the trigger or any ancestor is an acting element (spec §6.1's "where a tap acts, it only acts"); the svg rule stays trigger-only.
+- **P2-R21** — Search lists honour `defaultPrevented` on Escape: one layer per press.
+- **P2-R22** — A mod line is a name (plain Pixelify, not `<Figs>`); a tip's description is its lines minus the trigger's accessible name.
+- **P2-R21b** — Every Escape consumer honours `defaultPrevented` (field drafts, the project name, the pin dialog, the tip's own Escape); a unit guard lists every handler.
+- **P2-R21c** — Flow's window Escape keeps ignoring `defaultPrevented` (spec §6.1, P2-D22): one press hides the tip and clears the highlight.
+
+**Task 3b**
+- **P2-R23** — A zero-area box whose extent meets the view counts as in view (a straight Flow arrow), so a long press shows its tip.
+- **P2-R24** — Descriptions fold " · " and ", ": an arrow gets no description, a box head's is its rows.
+- **P2-R24a** — Authorised: `tooltip-model.test.tsx:115` now expects `[]` (P2-R24's effect).
+- **P2-R24b** — Name and tip compare by parts, and a line whose parts begin the name repeats it ("Iron" never matches "Iron Ingot").
+- **P2-R25** — A fixed wait in an e2e only proves an absence over the host's own wait window, and is followed by a positive check.
+
+**Task 4**
+- **P2-R8a** — `CHIP_CHAR_WIDTH` is 10, not 9: at 9 px a character seven tier labels spill with the fonts blocked; four chip widths become 30/15.
+- **P2-R26** — The Flow machine slot gets a forced-colours rule (spec §7.3 left it out).
+
+**Task 5a**
+- **P2-R27** — The overclock chips are `oc-now` / `oc-note`: Phase 1's `.note` rule framed the amber chip.
+- **P2-R28** — No overclock chips for crafting tables or furnaces (no voltage tier).
+- **P2-R29** — A short slot's red ring replaces its bevel; stack counts go on to M and MB; empty slot lists are left out.
+- **P2-R30** — Recorded exception: in dark, an empty bar track (busy band 1.49:1, energy bar 1.37:1) and a readout tile's edge (1.37:1) are decorative, each fill reaching 3:1 on its track in both looks.
+- **P2-R31** — Recorded exception: the short ring is 2.27:1 against the light slot face inside it (the shortage is in the slot's name and tip), 3:1 against what is outside it.
+- **P2-R32** — A slot's name is the good, ", N per run" (≠ 1), ", P% chance" (< 100 %) and ", not supplied in full".
+- **P2-R33** — The energy track, the short ring and the GT arrow's base each get a forced-colours rule.
+- **P2-R34** — A chance tag is a whole percent, "<1%" below 1 %, at most "99%" below 100 %; the name and the tip keep the full chance.
+- **P2-R32a** — A fluid slot's name always states its litres.
+- **P2-R24c** — The description also drops any line whose parts all appear in the name, so P2-R32's chance is not heard twice.
+
+**Task 5b**
+- **P2-R35** — A pick focuses the panel head with `preventScroll`, then scrolls it into view only when it is outside the window.
+- **P2-R36** — Close the panel gives the focus back to the box that opened it, else to the canvas, never to `<body>`.
+- **P2-R35a** — "Outside the window" means wholly outside: a head cut at an edge counts as visible (WCAG 2.4.11).
+
+**Task 6a**
+- **P2-R37** — `margin-block: -4px` on the List/Grid toggle, so the List view stays pixel-identical.
+- **P2-R38** — Recorded exception: the tick's black edge on a ticked light slot is 2.73:1 (the green tick reads 5.80:1 there); the meter's dark track and edge fall under P2-R30.
+- **P2-R39** — "+N" rolls up past 999 ("+1k").
+- **P2-R40** — One browser-choice store: `createBrowserChoice` in `state/browser-choice.ts`; pipes-paused, theme and materials-view (and later the single-key switch) are thin wrappers. This supersedes the plan's "no shared `browser-setting.ts`".
+- **P2-R41** — A forced-colours frame must paint over the slot's own icon, and its e2e reads a painted pixel, not a computed style.
+- **P2-R42** — `isolation: isolate` stays on `button.mat-slot`.
+
+**Task 6b**
+- **P2-R43** — Recorded exception: `.mat-row > .tick { align-items: flex-start }` moves shut rows' shorter items by under a pixel (a badge's edge 1 px at 800), confined to Materials tick lines.
+- **P2-R44** — Two browser pins for Task 6b: an open row's tick level with its icon, and a picked map row's ring by keyboard and by pointer in forced colours.
+
+**Task 7**
+- **P2-R45** — A strip figure's line box may be 30 px beside a unit; the tile stays exactly 52 px and the figures line up.
+- **P2-R47** — The strip wraps to two rows below a 780 px window.
+- **P2-R48** — The strip's wait box takes the strip's own grid (five empty 52 px blocks), so it is as tall as the loaded strip at every width.
+- **P2-R49** — The strip remembers the unit of each settings state it drew; a figure that arrives in another unit neither counts up nor flashes.
+
+**Task 8**
+- **P2-R50** — Authorised: `key-numbers.test.tsx:77`'s wait-box pin changes, as the skeleton fills that grid.
+- **P2-R51** — The busy line is a 20 px chip on the strip's top-right, over a label row, never a figure or a control; with no strip it is visually hidden.
+- **P2-R52** — The drawer's status says "No problems" when an update ends with none.
+- **P2-R53** — The strip's skeleton uses the tiles' dark readout face in both looks.
+- **P2-R50b** — The dead `.key-numbers-wait > div` rule and its pin are retired.
+
+**Task 9a**
+- **P2-R54** — A rename's toast goes when its page closes.
+- **P2-R55** — `.toast { background: Canvas; }` in the forced block, checked by painted pixels.
+- **P2-R56** — A toast born while its region is inert (the drawer open) waits, timer stopped, and shows once the drawer closes.
+- **P2-R57** — Undo or Dismiss from the keyboard moves the focus before the toast goes: back to where it came from, else the next toast's same button, else `<main>`.
+- **P2-R58** — `act()` retires a toast before running its action.
+- **P2-R59** — A project's op batches are posted one at a time, in order, so a rename's Undo lands after the rename.
+- **P2-R56a** — No take-back: a toast already drawn stays drawn and paused under the drawer and is announced once.
+- **P2-R60** — Authorised: `toasts.spec.ts:131`'s hover precondition becomes a poll.
+
+**Task 9b**
+- **P2-R62** — On `pagehide` whatever still waits is sent at once with keepalive.
+- **P2-R63** — A toast whose expiry commits a change (the note delete) runs while the page is hidden (`runsHidden`), and `freeze` flushes as `pagehide` does.
+- **P2-R64** — A queued post aborts after 60 s, counts as failed, and the store resyncs from the server.
+- **P2-R65** — No hold stops a `runsHidden` toast; a project delete waits for its deferred posts; merged keepalive posts split at the server's 100-op limit.
+
+**Task 10**
+- **P2-R66** — The confirm keeps Tab while it asks; a revoke on its way moves the focus to Keep it; the focus is given back only when lost, never to `<body>`; no forced-colours rule; the Escape guard's floor 10 → 11.
+- **P2-R67** — Recorded exception: every chat box's black edge and 82 % face on the dark panel (toast, inline confirm, Flow issues, Compare notes, banners) is 1.40–1.46:1; containers, not controls.
+
+**Task F3 (P2-R71–R73 made then, for Task 11)**
+- **P2-R68** — Interstitial Task F3 before Task 11: the focus and announcement follow-ups of Task 10's review.
+- **P2-R69** — A held Enter on a note's Delete or a toast's Dismiss acts once (replaced by P2-R69a).
+- **P2-R70** — A failed revoke and its failed refresh in the same words alert once.
+- **P2-R71** — The sheet's focus back: an opener that is `<body>` counts as none, so the Shortcuts button, the selected tab, then `<main>`.
+- **P2-R72** — The sheet holds the toasts as the drawer does.
+- **P2-R73** — No shortcut acts inside an inline confirm.
+- **P2-R74** — A note's Undo gives the focus back to the restored note's Delete when it ended on `<main>` or was lost.
+- **P2-R69a** — One document-level guard: a repeated Enter keydown whose target is not where its press began is prevented, wherever the focus went.
+- **P2-R70a** — One alert under the form at a time; where two go to different places, both are said.
+- **P2-R75** — F3's fix round 4 resumed the same implementer: each round had closed its list.
+- **P2-R76** — Every Enter keydown handler in `src/client` skips a prevented key, pinned by a source guard.
+- **P2-R77** — The Connections panel's Close gives the focus back to the box that opened it, else the diagram, else `<main>`.
+- **P2-R78** — The Make section's Clear hands the focus to the item search before the target clears.
+- **P2-R79** — The held-key guard's ordering rule is written down in `focus.ts` and `main.tsx`.
+
+**Task 11**
+- **P2-R80** — When the window outgrows the drawer, a focus already lost counts as the drawer's and the settings column takes it.
+- **P2-R81** — The sheet keeps the keyboard (amended by P2-R81a).
+- **P2-R82** — The tooltip host counts a button's own words and its `aria-keyshortcuts` as said; it stands, with a comment that `aria-keyshortcuts` is spoken only where supported.
+- **P2-R83** — The Shortcuts button sits before Delete project in the head (not last).
+- **P2-R84** — The diagram hints get no taller for "? shows the shortcuts": the words before it are shortened.
+- **P2-R85** — WCAG 2.1.4: the single-key shortcuts can be turned off in the sheet, per browser; off, no key acts, `aria-keyshortcuts` and the Fit/Pipes tips are left off and the hints drop their ending; below 900 px a Keyboard shortcuts button ends the settings column.
+- **P2-R86** — `/`, `?` and the range's en dash are spoken as words (visually hidden) beside their aria-hidden glyphs.
+- **P2-R87** — The tooltip host drops a shown tip whose trigger has come inside `[inert]`.
+- **P2-R88** — `setToastsInert` composes: the toasts stay inert while any layer (the drawer, the sheet) holds them.
+- **P2-R81a** — Tab stays in the sheet, its words can be selected (the dialog takes `tabIndex` −1), and the backdrop's mousedown is prevented.
+- **P2-R89** — `describes()`, which nothing in `src` called, is deleted with its tests; its behaviour stays pinned through `describedLines`.
+- **P2-R90** — In the sheet's focus-back chain, an element inside a closed drawer counts as not drawn.
+
+**Task 12**
+- **P2-R91** — `rider mechanism`: branch A, CSS `offset-path` on an SVG `<image>` (Chromium 153 and WebKit 26.6 centre it on the path's ends exactly); no SMIL; the endless list has four rules.
+- **P2-R92** — `WebKit glide`: WebKit 26.6 behaves as Chromium 153 (a WAAPI transform on a `<g transform>` ends exactly on the attribute); `canGlide()` still feature-detects.
+- **P2-R93** — `riderEdges` chooses by the spec's ranking but returns riders in the edges' order, so a hover restarts no ride.
+- **P2-R94** — `.flow-rider` takes the FADES opacity transition, so a dimmed rider fades with its pipe.
+- **P2-R95** — Recorded exception: riders take no forced-colours rule (decorative, aria-hidden, painted the same with forced colours on and off).
+- **P2-R96** — A rider is one `<image>` from its mount: its placeholder is a data URI of the fallback colour, swapped in place, so its ride never restarts.
+- **P2-R97** — A ride starts and ends under the boxes: the rider's path runs `RIDE_OVERHANG` (9 px) into each box.
+- **P2-R98** — Over `RIDER_LIMIT`, pipes rank by the units their dashes use (a fluid's litres / 1000).
+
+**Task 14 (made during Task 13a)**
+- **P2-R99** — Task 14's VoiceOver smoke test runs as accessibility-tree checks, with a list for the user to confirm by ear; no assistive technology is started on the user's machine.
+- **P2-R100** — Task 14's probes run headless, with `recordVideo`; motion is timed from its WAAPI or CSS animation and from input timestamps.
+- **P2-R101** — README's "Using the planner" also says how to see the shortcuts and turn the single-key ones off.
+
+**Task 13a**
+- **P2-R102** — One `usePan` hook in `glide.ts` drives both diagrams' pans.
+- **P2-R103** — A pan's start is read at the commit (`viewOnScreen`, else the view drawn before), not in `glideTo`.
+- **P2-R104** — The wheel, a drag past `DRAG_THRESHOLD` and the arrow keys hold a running pan where it is (`holdPan` / `holdView`) and go on from that picture; a click lets it run.
+- **P2-R105** — Connections' resize refit ends a Fit in flight and refits at once.
+- **P2-R106** — While a pan runs, the focus checks of P2-R35/R36 read where the head will rest (`restingBox`); a needed scroll ends the pan first.
+- **P2-R107** — The reduced-motion e2e accepts the global block's 1 ms transitions: nothing that ends lasts over 1 ms, and the `canGlide()` probe never runs.
+- **P2-R108** — A pan belongs to the view object `glideTo` made (tagged in a WeakSet), replacing the `pendingGlide` flag, so an instant update on top stays instant.
+
+**Task 13b**
+- **P2-R109** — A ghost fades from the opacity its box was drawn at, not from 1.
+- **P2-R110** — `glideLayout` returns at once when nothing moved, entered or rerouted.
+- **P2-R111** — Boxes and arrows are found by one pass per attribute; ghosts only when the layout glides, and only for boxes.
+- **P2-R112** — When a re-layout removes what had the focus, it goes to the same line's button if redrawn, else to the canvas.
+- **P2-R113** — `restingBox` reads a gliding box where it will land, and `settle` ends that glide before a scroll.
+- **P2-R114** — Connections refits a new picture at once, then its boxes glide (no ghosts there); a pan and a glide never run together there.
+- **P2-R115** — Recorded exception: ghosts take no forced-colours rule, as the boxes' fills have none.
+- **P2-R116** — Authorised narrowing: 13a's "a new plan's view" e2e counts only the pan group's animations (a new plan now also glides boxes).
+- **P2-R117** — A new layout that lands mid-glide starts each box from where it is drawn; a box dropped mid-glide ghosts there.
+- **P2-R118** — A ghost copies its box's edge (the kind's dashes, a leaf-unavailable edge, a partly owned step's pattern), not the accent edge or the shadow.
+- **P2-R119** — A re-layout glides when moved + entered + left boxes number 200 or fewer (spec §16.3 counted moved boxes only).
+- **P2-R120** — Lit arrows' tags fade in with their rerouted arrows.
+- **P2-R121** — The Flow canvas keeps the taller of the old and new heights while a glide runs, then settles.
+- **P2-R122** — The focus survives a re-layout across a window blur, and a replan that removes the selected panel hands it to the canvas.
+- **P2-R123** — When a replan removes a panel control but the panel stays, the focus goes to the panel, never the canvas or `<body>`.
+- **P2-R124** — StepPanel's "N more…" hands the focus to the first revealed item, else the panel, before it goes.
+**Plan rulings** (the plan's Conventions give each in full; signed off before Task 1a, the last six on 2026-10-24 with the VT323 choice)
+- **`baseline-shots`** — Task 1a diffs the light look against fresh shots of the base, not spec §19's older after-shots.
+- **`view-transition-split`** — The cross-fade's `::view-transition-old(root)` and `-new(root)` are two rules, not one list (R28).
+- **`motion-in-1b`** — `state/motion.ts` is created in Task 1b for the cross-fade; Task 13a adds the glide constants.
+- **`pseudo-tier-chip`** — A crafting-table or furnace step that is not by hand draws no tier chip in Flow either.
+- **`base-surfaces-dark`** — The base's surfaces (add-on 17's Compare card, Plan for, farms, `.mat-taken`; the Make-picker fix's readout and drawer) reach the dark look through the tokens they read.
+- **`compare-frame-dark`** — The mode in use keeps its black edge (1.46:1 on the dark panel) and its yellow ring, which carries the frame.
+- **`farm-line-dark`** — The farm fields' 2 px line is decorative: 1.35:1 on the dark panel, no new token.
+- **`aside-refocus`** — R46: the settings column takes the focus only when the control that had it is no longer drawn.
+- **`shortcuts-button-wide`** — The head's Shortcuts button is drawn above 900 px only; `?` works at every width.
+- **`farm-step-readout`** — A farm step is a machine step in Flow: the farm machine's icon, its tier chip, ×count, power and busy band.
+- **`farm-step-card`** — On the recipe card an expected drop below 1 is one item at that chance; a tree farm's tool is drawn as worn.
+- **`p2-d44-landed`** — Add-on 17 merged first: its Compare modes button stays where it is; the strip is the first banner and the card stays last.
+- **`strip-figures`** — The strip keeps one line and does not shrink; only a long line's end can be cut by the ellipsis.
+- **`drawer-status-words`** — The drawer's status says "The plan is updating…", not the banner's words.
+- **`drawer-status-count`** — The drawer's problem count leaves out the "Pick something to make" hint.
+- **`compare-skeletons`** — The Compare card's two skeletons lay their blocks in the loaded card's grids.
+- **`figures-vt323`** — Figures in VT323, words in Pixelify (the user's choice, spec §25).
+- **`digits-token`** — `--font-digits: VT323, ui-monospace, Menlo, Consolas, monospace`, each rule with `font-size-adjust: cap-height 0.56`.
+- **`digits-floor`** — VT323 only at 14 px or more.
+- **`digits-mixed`** — A figure readout is whole VT323; any other figure among words goes through `<Figs>`.
+- **`digits-sizes`** — VT323 15/16/21/28 px for Pixelify 13/14/18/24, each keeping its old line box in px.
+- **`compare-shrink-vt323`** — The Compare figures shrink from 28 px to a 14 px floor at 0.41 em a glyph.
+
+**Decisions this plan made that the spec left open (§21)**
+- One browser-choice store after all: the plan's "no shared `browser-setting.ts`" was overturned by P2-R40.
+- The recipe card has no slot for the programmed circuit and no frame on the main output.
+- No tips on the Theme button or the strip's tiles.
+- F7 (each pipe on its own two flanges, `loosePipeEnds`) and F8 (the 201-edge fixture) are done.
+- Connections' re-layout glide shipped in Task 13b with Flow's, without ghosts (P2-R114).
+- No `.theme-fade` fallback: where a browser has no View Transitions the look switches at once (`theme.ts`).
+
+**Recorded exceptions** to the Global Constraints, besides spec §3.5's and §4.5's: P2-R30, P2-R31, P2-R38, P2-R43 and P2-R67 (contrast or
+pixels), P2-R95 and P2-R115 (forced colours), and the plan rulings `compare-frame-dark` and `farm-line-dark`.
