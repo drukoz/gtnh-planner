@@ -8,9 +8,9 @@
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
 // it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms, at once, while Fit, the zoom buttons, a reveal,
-// a line opened or closed and a new plan's view pan there over 250 ms (Phase 2 spec §16.2, ./glide.ts), and a new layout glides into place
-// from the last over 260 ms, what it drops fading out where it stood (§16.3). A good rides each pipe, its icon carried from the output to the
-// input (Phase 2 spec §15), and stops with the pipe's contents.
+// a line opened or closed and a new plan's view pan there over 250 ms (Phase 2 spec §16.2, ./glide.ts; the last two only when the new layout
+// glides), and a new layout glides into place from the last over 260 ms, what it drops fading out where it stood (§16.3). A good rides each
+// pipe, its icon carried from the output to the input (Phase 2 spec §15), and stops with the pipe's contents.
 // The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6), and
 // its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone or out of the canvas's view
 // (ledger ruling P2-R36). While the plan, or its layout, is on its way the view says so beside a skeleton of a diagram (Phase 2 spec
@@ -47,7 +47,7 @@ import {
   TOGGLE_SPACE,
   DIM_OPACITY, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
   fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
-  type FlowLayout, type FlowNode, type FlowNodeKind, type FlowRow, type FocusSets, type MachineReadout,
+  type FlowLayout, type FlowNode, type FlowNodeKind, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
 } from './flow-model.ts';
 import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
 import { pointIn } from './pan-zoom.ts';
@@ -627,12 +627,23 @@ function settledCanvas(svg: SVGSVGElement, height: number): { box: DOMRect; inne
  * px (75vh) at most, so a hold that would draw it no taller than the new layout is none. Pure, but for the motion setting, so the canvas
  * decides it as it draws the new layout, and holding costs it no render of its own (fix round 2).
  */
-export function heldHeight(before: FlowLayout, after: FlowLayout, held: number | null, room: number): number | null {
-  const change = layoutChange(before, after);
+export function heldHeight(
+  before: FlowLayout, after: FlowLayout, held: number | null, room: number, change: LayoutChange = layoutChange(before, after),
+): number | null {
   if (change.moved.length + change.entered.length + change.left.length + change.rerouted.length === 0) return held;
   if (prefersReducedMotion() || !glidable(change)) return null;
   const drawnAt = held ?? before.height;
   return Math.min(canvasPx(drawnAt), room) > Math.min(canvasPx(after.height), room) ? drawnAt : null;
+}
+
+/**
+ * Whether the view a new layout brings (a new plan's, or the box of a line opened or closed, centred) is panned to over PAN_MS (Phase 2 spec
+ * §16.2): only when the layout glides into place, as `glidable` decides for its glide too; a layout that snaps (it changes more than
+ * GLIDE_LIMIT boxes) takes its view at once, as it draws its boxes, so no pan runs over a picture drawn anew (ledger ruling P2-R126). Where
+ * the user asks for less motion, or the browser cannot glide, `usePan` takes every view at once already.
+ */
+export function viewPans(change: LayoutChange): boolean {
+  return glidable(change);
 }
 
 /**
@@ -641,7 +652,8 @@ export function heldHeight(before: FlowLayout, after: FlowLayout, held: number |
  * one column" toggle; hovering lights what is under the pointer, a click pins it (a box click also calls `onOpen`),
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
  * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`). Its first view is drawn at once; Fit,
- * the zoom buttons, a reveal, a line opened or closed and a later plan's view are panned to over 250 ms (Phase 2 spec §16.2, `usePan`),
+ * the zoom buttons, a reveal, a line opened or closed and a later plan's view are panned to over 250 ms (Phase 2 spec §16.2, `usePan`; the
+ * last two only when the new layout glides, else they are taken at once: ledger ruling P2-R126),
  * while the wheel and a drag move the view at once, from the picture on screen, where they stop a pan under way (review focus 1). A new
  * layout glides into place from the last (§16.3, `glideLayout`), and the boxes it dropped fade out where they stood, as ghosts. The
  * canvas can take the focus from a script, out of the tab order: a panel's Close gives it there once the box that opened the panel is
@@ -672,24 +684,32 @@ function FlowCanvas(props: {
   const hovered = useRef('');
   /** A line just opened or closed: its box, to centre once the new layout has it. */
   const centreNext = useRef<string | null>(null);
-  /** The layout drawn before, which a new one glides from (`layoutChange`); null before the first. */
+  /**
+   * The layout whose glide ran last (its effect's), whose boxes a new one drops fade out where they stood; null before the first. The new
+   * layout's `change` is worked out against the same one, as it is drawn (`drawn`).
+   */
   const placedBefore = useRef<FlowLayout | null>(null);
   /** The boxes the last new layout dropped, fading out where they stood (Phase 2 spec §16.3, P2-D42). */
   const [ghosts, setGhosts] = useState<Ghost[]>([]);
   /** The ghosts drawn now, as what takes them away sees them (`ghosts` is what a render draws): the two are set together. */
   const shownGhosts = useRef<Ghost[]>([]);
   /**
+   * The layout drawn last, and what it changed of the one before (`layoutChange`), worked out once, as the new layout is drawn: the one result
+   * its glide, the height the canvas keeps and the way its view is taken all go by (ledger rulings P2-R121, P2-R126; Task F4).
+   */
+  const [drawn, setDrawn] = useState(() => ({ layout, change: layoutChange(null, layout) }));
+  /**
    * While a new layout that shortens the diagram glides, the height the canvas keeps (the diagram's, in its units), null at rest (ledger ruling
-   * P2-R121, `heldHeight`). It is decided as each new layout is drawn (`heldFor`, the layout it was decided for), so the layout's own commit
-   * draws the canvas held, and it is released once, by whichever ends last of the layout's glides and its ghosts: holding costs the canvas one
-   * render, the release's (fix round 2).
+   * P2-R121, `heldHeight`). It is decided as each new layout is drawn, so the layout's own commit draws the canvas held, and it is released
+   * once, by whichever ends last of the layout's glides and its ghosts: holding costs the canvas one render, the release's (fix round 2).
    */
   const [hold, setHold] = useState<number | null>(null);
-  const [heldFor, setHeldFor] = useState(layout);
-  if (heldFor !== layout) {
-    setHeldFor(layout);
-    setHold(heldHeight(heldFor, layout, hold, innerHeight * 0.75));
+  if (drawn.layout !== layout) {
+    const next = layoutChange(drawn.layout, layout);
+    setDrawn({ layout, change: next });
+    setHold(heldHeight(drawn.layout, layout, hold, innerHeight * 0.75, next));
   }
+  const { change } = drawn;
   /** The glides of the layout that holds the canvas, until they have run; null once they have, or when no layout holds it. */
   const holding = useRef<Promise<unknown> | null>(null);
   /** What in the canvas has the focus (its last `focusin`), until the focus has really moved from it (ledger ruling P2-R122). */
@@ -718,28 +738,32 @@ function FlowCanvas(props: {
     if (svg === null) return { width: 0, height: 0 };
     return { width: svg.clientWidth, height: hold === null ? svg.clientHeight : settledCanvas(svg, layout.height).inner };
   };
-  /** Pans to the box (or open line) `id`, centred (a reveal, a line opened or closed); false when this layout has none. */
-  const centre = (id: string, minZoom = 0): boolean => {
+  /**
+   * Pans to the box (or open line) `id`, centred (a reveal, a line opened or closed), or moves there at once (`pans` false: the box of a line
+   * whose new layout snaps, P2-R126); false when this layout has none.
+   */
+  const centre = (id: string, minZoom = 0, pans = true): boolean => {
     const box = byId.get(id) ?? layout.groups.find((g) => g.id === id);
     if (box === undefined) return false;
-    glideTo((v) => centreOn(box, { ...v, zoom: Math.max(v.zoom, minZoom) }, canvas()));
+    (pans ? glideTo : setView)((v) => centreOn(box, { ...v, zoom: Math.max(v.zoom, minZoom) }, canvas()));
     return true;
   };
 
   // A new plan: open on what someone asked to see, else on the target (fix spec §6.2). The first plan this canvas shows opens there at once
-  // (flow-focus.spec.ts measures it, and so does a reveal that mounts the diagram); a later one is panned to from the picture of the last.
+  // (flow-focus.spec.ts measures it, and so does a reveal that mounts the diagram); a later one is panned to from the picture of the last when
+  // its layout glides, and taken at once when it snaps (`viewPans`, ledger ruling P2-R126). So is the box of a line opened or closed, centred.
   useLayoutEffect(() => {
     const anchor = focusAnchor(layout, getFlowFocus());
     const box = anchor === undefined ? undefined : byId.get(anchor);
     const next = box === undefined ? initialView(layout, canvas()) : centreOn(box, { zoom: INITIAL_ZOOM, x: 0, y: 0 }, canvas());
     // StrictMode runs this twice on the first mount, for the same steps
-    if (openedOn.current === null || openedOn.current === viewKey) setView(next);
+    if (openedOn.current === null || openedOn.current === viewKey || !viewPans(change)) setView(next);
     else glideTo(next);
     openedOn.current = viewKey;
   }, [viewKey]);   // reads the current layout; only a change of the plan's steps resets the view
   useLayoutEffect(() => {
     const id = centreNext.current;
-    if (id !== null && centre(id)) centreNext.current = null;
+    if (id !== null && centre(id, 0, viewPans(change))) centreNext.current = null;
   }, [layout]);
   // A new layout glides into place from the last, before it is painted (Phase 2 spec §16.3): the boxes that moved, came and went, and the
   // arrows and goods that changed (`glideLayout`); while it glides, the boxes it dropped fade out as ghosts where they were drawn in the last
@@ -754,7 +778,6 @@ function FlowCanvas(props: {
   useLayoutEffect(() => {
     const before = placedBefore.current;
     placedBefore.current = layout;
-    const change = layoutChange(before, layout);
     const pan = panRef.current;
     const gone: Ghost[] = [];
     if (before !== null && change.left.length > 0 && layoutGlides(change)) {

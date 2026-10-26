@@ -13,7 +13,7 @@ import {
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
-import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, heldHeight, outsideWindow } from '../../src/client/views/FlowView.tsx';
+import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, heldHeight, outsideWindow, viewPans } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import { settingsHash } from '../../src/shared/project/settings-hash.ts';
@@ -948,6 +948,22 @@ describe('the height the canvas keeps while a new layout glides', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// Task F4 (ledger ruling P2-R126): the view a new layout brings is panned to only when the layout glides; one that snaps (more than GLIDE_LIMIT
+// boxes changed, the count its glide goes by) takes its view at once
+describe('how a new layout\'s view is taken', () => {
+  const ids = (n: number, prefix: string): string[] => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+  const change = (moved: number, entered: number, left: number): LayoutChange => ({
+    moved: ids(moved, 'm').map((id) => ({ id, from: [0, 0], to: [1, 0] })), entered: ids(entered, 'e'), left: ids(left, 'l'), rerouted: [],
+  });
+  it('pans to it when the layout glides, and takes it at once when the layout snaps', () => {
+    expect(viewPans(change(100, 50, 50)), 'glides: pans').toBe(true);
+    expect(viewPans(change(0, 0, 0)), 'the same layout again').toBe(true);
+    expect(viewPans(change(0, 202, 202)), 'a whole-plan swap snaps: at once').toBe(false);
+    expect(viewPans(change(100, 50, 51)), 'one past the limit').toBe(false);
+    for (const c of [change(100, 50, 50), change(0, 202, 202), change(201, 0, 0)]) expect(viewPans(c), 'as the glide goes').toBe(glidable(c));
   });
 });
 

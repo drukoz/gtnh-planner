@@ -1460,6 +1460,87 @@ test('a replan that changes more than 200 boxes snaps into place, and one that c
   expect(changed, 'the premise: few boxes moved').toBeLessThanOrEqual(2);
   expect((await allRecords(page)).slice(settled), 'it snaps: nothing glides, fades or goes as a ghost').toEqual([]);
   await expect(page.locator('svg.flow-canvas .flow-ghost')).toHaveCount(0);
+  // Task F4 (ledger ruling P2-R126): a whole-plan swap, its step another too (`whole`), so the plan's view starts over (`viewKey`) as every box
+  // goes and as many come: it snaps, and it takes its new view at once, as it draws its boxes. Nothing is recorded (no pan of the view), no pan
+  // runs, and the view drawn is the pan group's attribute. The view is dragged first (an instant move), so the new one is somewhere else
+  await dragCanvas(page, 40, 30);
+  const dragged = await page.locator(FLOW_PAN).getAttribute('transform');
+  const swapped = (await allRecords(page)).length;
+  served = {
+    ...other, steps: other.steps.map((s) => ({ ...s, id: 'whole', recipeId: 'whole' })),
+    flows: other.flows.map((f) => ({ ...f, from: f.from === 'big' ? 'whole' : f.from, to: f.to === 'big' ? 'whole' : f.to })),
+  };
+  await replan(page, id, 34);
+  await expect(page.locator('svg.flow-canvas [data-step-id="whole"]'), 'the whole plan swapped').toHaveCount(1);
+  expect((await allRecords(page)).slice(swapped), 'it snaps and takes its view at once: no pan, glide, fade or ghost').toEqual([]);
+  expect(await pansOn(page), 'no pan runs').toBe(0);
+  const view = await viewDrawn(page);
+  expect(view.at, 'the premise: a new view').not.toBe(dragged);
+  expectDrawnAtAttribute(view);
+});
+
+/** The Flow pan group's `transform` attribute and the transform the browser draws it with. */
+const viewDrawn = (page: Page): Promise<{ at: string | null; drawn: string }> => page.locator(FLOW_PAN).evaluate((g) => ({
+  at: g.getAttribute('transform'), drawn: getComputedStyle(g).transform,
+}));
+
+/**
+ * Checks that the pan group is drawn at its attribute's view: no CSS transform (a pan's) draws it anywhere else. Chromium computes the
+ * attribute's matrix for a group its attribute alone moves; WebKit computes `none` for it.
+ */
+function expectDrawnAtAttribute({ at, drawn }: { at: string | null; drawn: string }): void {
+  if (drawn === 'none') return;
+  const [view, picture] = [attributeView(at), matrixView(drawn)];
+  if (picture === null) throw new Error(`no view in "${drawn}"`);
+  expect(picture.x, 'drawn at the attribute').toBeCloseTo(view.x, 3);
+  expect(picture.y).toBeCloseTo(view.y, 3);
+  expect(picture.scale).toBeCloseTo(view.scale, 6);
+}
+
+// Task F4 (ledger ruling P2-R126): a line opened or closed has its box centred (`centreNext`), panned to only when the new layout glides. In a
+// supporting line of its own, manyEdges' assembler and its 201 stubs are drawn inside the line's frame; closed from the keyboard, the line's box
+// takes their place and the stubs feed it (each a new box, `import:<good>@line:<key>`), past GLIDE_LIMIT: it snaps, and the box is centred at
+// once. The view is dragged first, so the centred one is somewhere else
+test('a line whose closing snaps centres its box at once', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  const big = manyEdges();
+  await openWithPlan(page, { ...big, steps: big.steps.map((s) => ({ ...s, line: { key: 't:gline@0', name: 'Big line' } })) });
+  const toggle = page.locator('svg.flow-canvas [data-line-toggle="t:gline@0"]');
+  await expect(toggle, 'the premise: a short plan opens its lines').toHaveAttribute('aria-expanded', 'true');
+  await dragCanvas(page, 40, 30);
+  const dragged = await page.locator(FLOW_PAN).getAttribute('transform');
+  const before = (await allRecords(page)).length;
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:gline@0"]'), 'the line closed: one box').toHaveCount(1);
+  await expect(page.locator('svg.flow-canvas [data-node-id="import:t:g0@0@line:t:gline@0"]'), 'the premise: its stubs are new boxes').toHaveCount(1);
+  expect((await allRecords(page)).slice(before), 'it snaps and centres the line at once: no pan, glide, fade or ghost').toEqual([]);
+  expect(await pansOn(page), 'no pan runs').toBe(0);
+  const view = await viewDrawn(page);
+  expect(view.at, 'the premise: the line\'s box centred, somewhere else').not.toBe(dragged);
+  expectDrawnAtAttribute(view);
+  await expect(toggle).toBeFocused();
+});
+
+// Task F4 (ledger ruling P2-R126): a re-layout of the same steps that glides keeps its view's pan: the wiremill's line (lined) closed from the
+// keyboard glides its boxes, and its box is centred by one pan of 250 ms, from the view dragged before to the attribute
+test('a line whose closing glides pans to its box, once', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await openWithPlan(page, lined());
+  await dragCanvas(page, 40, 30);
+  const dragged = await page.locator(FLOW_PAN).getAttribute('transform');
+  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
+  const made = await records(page);
+  expect(made.filter((r) => r.cls?.startsWith('flow-node') === true && r.frames.some((f) => 'transform' in f)).length, 'the premise: it glides')
+    .toBeGreaterThan(0);
+  const pans = made.filter((r) => r.cls === 'flow-pan');
+  expect(pans, 'one pan').toEqual([expect.objectContaining({ duration: 250, delay: 0, fill: 'none', easing: EASE_OUT })]);
+  const at = await page.locator(FLOW_PAN).getAttribute('transform');
+  expect(pans[0]?.frames, 'from the dragged view to the attribute').toEqual([
+    { transform: panTransform(attributeView(dragged)) }, { transform: panTransform(attributeView(at)) },
+  ]);
 });
 
 // ---- Task 13b fix round 1 ----
