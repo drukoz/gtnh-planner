@@ -716,14 +716,15 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
  * image, so every HTML icon is 4px wider and taller than its size. The size is the markup's own inline width and height (the unit
  * tests pin them), which is why the box is content-box: the padding must not eat into it. Nothing styles the image inside, and the
  * end-to-end test reads that image's own bitmap. The letters of a placeholder are 7 to 12px, below what the pixel font may be, so
- * they are Inter.
+ * they are Inter. A long press, the touch route to an icon's tip, opens no iOS image callout over the tip (ledger ruling P2-R135: iOS
+ * fires no contextmenu that the tip's host could prevent); the image inherits it.
  */
 .item-icon {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
   box-sizing: content-box; position: relative; padding: 2px; border-radius: 0;
   background-color: var(--slot); box-shadow: var(--bevel-slot);
   color: #fff; font-family: var(--font-ui); font-weight: 700; letter-spacing: -0.02em; line-height: 1;
-  user-select: none; text-shadow: 0 1px 1px rgb(0 0 0 / 0.35);
+  user-select: none; -webkit-touch-callout: none; text-shadow: 0 1px 1px rgb(0 0 0 / 0.35);
 }
 /* A placeholder (no texture yet or none at all) keeps the inline `background: rgb()` of its markup, which beats the slot face, and has a
    dark ring under the bevel, so a white square still reads as an icon; its letters turn dark when the colour is too light for white

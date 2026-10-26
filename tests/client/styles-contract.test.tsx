@@ -1110,6 +1110,9 @@ describe('the Machine GUI item slots', () => {
       [SLOT, 'background-color', 'var(--slot)'], [SLOT, 'box-shadow', 'var(--bevel-slot)'],
       // the letters of a placeholder are 7 to 12px, below what the pixel font may be
       [SLOT, 'font-family', 'var(--font-ui)'],
+      // a long press shows the icon's tip, never iOS's image callout over it (ledger ruling P2-R135: iOS fires no contextmenu to prevent); the
+      // image inherits it, and so do the icons on the Flow and Connections canvases, which wear the same class
+      [SLOT, '-webkit-touch-callout', 'none'],
     ]);
     // `* { box-sizing: border-box }` would let the padding eat into the inline width and height that the unit tests pin
     expect(declared('*', 'box-sizing')).toBe('border-box');
