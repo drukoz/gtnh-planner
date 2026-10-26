@@ -1694,9 +1694,15 @@ details.mat-needed[open]::details-content { block-size: auto; }
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
   .flow-side { position: static; }
   .flow-panel { max-height: none; }
-  /* as many readouts to a row as are 110 px wide: the four in one where there is room, two on a phone, where a seven-glyph figure ran into the
-     next tile (ledger ruling P2-R131) */
-  .recipe-stats { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+  /* the four readouts in one row (ledger ruling P2-R142, amending P2-R131: a row sized by how many fit wrapped them three and one beside the
+     settings column, and spread a hand step's lone readout over the whole row); two a row on a phone, the block below */
+  .recipe-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* A phone (P2-R131, P2-R142): two readouts a row, where four ran a seven-glyph figure ("131,072") into the next tile. After the 1100 px block,
+   which it narrows. */
+@media (max-width: 600px) {
+  .recipe-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /*

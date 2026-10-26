@@ -71,6 +71,36 @@ test('on a phone the step panel keeps a seven-glyph figure inside its tile, and 
   }
 });
 
+// ledger ruling P2-R142, amending P2-R131: below 1100 px the readouts stand four to a row, as the plan had them, and two at 600 px or less. A row
+// sized by how many fit (auto-fit) wrapped them three and one where the settings column stands beside the views (901 to 1100 px), and spread a
+// hand step's lone Busy readout over the whole row
+test('below 1100 px the readouts stand four in a row, and a hand step\'s one readout one column wide', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await openWithPlan(page, platesTwoWays());
+  /** The readouts' boxes in the open step panel, and the box of their grid. */
+  const readouts = (): Promise<{ grid: { x: number; width: number }; tiles: Array<{ x: number; y: number; width: number }> }> =>
+    page.locator('aside.flow-panel .recipe-stats').evaluate((dl) => {
+      const box = (el: Element) => el.getBoundingClientRect();
+      return { grid: box(dl), tiles: [...dl.querySelectorAll('.readout')].map((el) => box(el)) };
+    });
+  for (const width of [1000, 901]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.locator('[data-step-id="circuit-lv"] .flow-node-head').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('complementary', { name: 'Step: Basic Assembler' })).toBeVisible();
+    const { grid, tiles } = await readouts();
+    expect(tiles, `at ${width} px`).toHaveLength(4);
+    expect(new Set(tiles.map((t) => Math.round(t.y))).size, `at ${width} px: one row`).toBe(1);
+    expect(tiles.map((t) => Math.round(t.width)), `at ${width} px: four even columns`).toEqual(Array(4).fill(Math.round((grid.width - 18) / 4)));
+  }
+  await page.locator('[data-step-id="hammer-plate"] .flow-node-head').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('aside.flow-panel .recipe-stats .readout')).toHaveCount(1);
+  const hand = await readouts();
+  expect(hand.tiles, 'a hand step shows Busy alone').toHaveLength(1);
+  expect(Math.round(hand.tiles[0]!.width), 'one column of four').toBe(Math.round((hand.grid.width - 18) / 4));
+});
+
 test('hovering a slot lights its good in the Flow', async ({ page }) => {
   const { panel } = await openAssembler(page);
   const canvas = page.locator('svg.flow-canvas');

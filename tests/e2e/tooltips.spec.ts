@@ -6,7 +6,9 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { createProject, login, LV_CIRCUITS, markTips, openConnections, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
+import {
+  createProject, escapesTaken, login, LV_CIRCUITS, markTips, openConnections, openWithPlan, recordEscapes, setName, SETTINGS_BUTTON,
+} from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
 /** Opens a new project that makes 30 Basic Circuits a minute on its Materials & steps tab, and gives the icons of its rows. */
@@ -26,17 +28,6 @@ const inWindow = (tip: Locator): Promise<boolean> => tip.evaluate((el) => {
 });
 
 /** The Settings button of a narrow window and its drawer, opened. */
-/**
- * From now on, notes whether each Escape the document hears in the bubble phase, once every layer has had it, was taken (`defaultPrevented`):
- * a tip that hides itself takes it, a list or a note that closes does not (ledger ruling P2-R138's cases). Read with `escapesTaken`.
- */
-const recordEscapes = (page: Page): Promise<void> => page.evaluate(() => {
-  const w = window as unknown as { escapes: boolean[] };
-  w.escapes = [];
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') w.escapes.push(e.defaultPrevented); });
-});
-const escapesTaken = (page: Page): Promise<boolean[]> => page.evaluate(() => (window as unknown as { escapes: boolean[] }).escapes);
-
 async function openDrawer(page: Page): Promise<{ toggle: Locator; settings: Locator }> {
   const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
   await toggle.click();
@@ -546,7 +537,7 @@ test.describe('on a touch screen', () => {
 
   // Review Focus 2 again, for a tip no pointer event takes away: a long press's. Chromium sends the mouse a pointerover on what is under it
   // once a list empties, which hides a hovered tip; a finger's tip goes only because the host watches its trigger every frame
-  test('a long-pressed tip whose trigger goes away goes too, the press picks nothing, and the next Escape is the drawer\'s', async ({ page }) => {
+  test('a long-pressed tip whose trigger goes away goes too, the press picks nothing, and the next Escapes close the emptied search\'s note, then the drawer', async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 900 });
     await login(page); await setName(page, 'Ann');
     await createProject(page, 'Pressed tip goes', LV_CIRCUITS);

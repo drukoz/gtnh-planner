@@ -358,6 +358,28 @@ test('a press let go outside the canvas before it moved 4 px is over: the bare m
   expect(await page.locator('.flow-edge-flow').first().evaluate((el) => getComputedStyle(el).animationPlayState)).toBe('running');
 });
 
+// the final fix wave's R4 (FW-11's residue): a press that leaves the canvas before 4 px and is let go out there is over, wherever its release
+// lands: a later press outside the canvas, dragged into it, resumes nothing (the stale press took that drag up, from where it began)
+test('a press let go outside the canvas is over: a later press outside, dragged into the canvas, moves nothing', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  const pan = page.locator('svg.flow-canvas > g.flow-pan');
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('no canvas');
+  const view = await pan.getAttribute('transform');
+  await page.mouse.move(box.x + 2, box.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 6, box.y + 30, { steps: 4 });
+  await page.mouse.up();
+  await page.mouse.move(box.x - 6, box.y + 60);                                      // pressed again outside the canvas
+  await page.mouse.down();
+  await page.mouse.move(box.x + 80, box.y + 90, { steps: 8 });                        // and dragged into it
+  await expect(canvas).not.toHaveClass(/\bdragging\b/);
+  expect(await pan.getAttribute('transform'), 'the view did not take the drag up').toBe(view);
+  await page.mouse.up();
+  expect(await pan.getAttribute('transform')).toBe(view);
+});
+
 test('reduced motion stills the pipes', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openWithPlan(page, circuitLv());

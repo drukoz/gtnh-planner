@@ -13,7 +13,10 @@
 
 import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { addNote, bodyFocusCount, createProject, login, LV_CIRCUITS, noDialogs, openWithPlan, setName, SETTINGS_BUTTON, watchBodyFocus } from './helpers.ts';
+import {
+  addNote, bodyFocusCount, createProject, escapesTaken, login, LV_CIRCUITS, noDialogs, openWithPlan, recordEscapes, setName, SETTINGS_BUTTON,
+  watchBodyFocus,
+} from './helpers.ts';
 
 /** The toast that says `text`, in the region of notifications. */
 const toastOf = (page: Page, text: string): Locator =>
@@ -58,11 +61,7 @@ test('a rename from the keyboard keeps the focus in the name, and Escape takes a
   await login(page); await setName(page, 'Ann');
   const id = await createProject(page, 'Kept focus');
   const field = page.getByRole('textbox', { name: 'Project name' });
-  await page.evaluate(() => {
-    const w = window as unknown as { escapes: boolean[] };
-    w.escapes = [];
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') w.escapes.push(e.defaultPrevented); });
-  });
+  await recordEscapes(page);
   await watchBodyFocus(page);
   await field.fill('Kept focus, renamed');
   await field.press('Enter');
@@ -75,7 +74,7 @@ test('a rename from the keyboard keeps the focus in the name, and Escape takes a
   await expect(field).toBeFocused();
   await page.keyboard.press('Escape');                                                     // nothing to take back
   await expect(field).toBeFocused();
-  expect(await page.evaluate(() => (window as unknown as { escapes: boolean[] }).escapes)).toEqual([true, false]);
+  expect(await escapesTaken(page)).toEqual([true, false]);
   expect(await bodyFocusCount(page)).toBe(0);
   await field.blur();                                                                      // the draft taken back renames nothing
   await landed(page, id, 'Kept focus, renamed');

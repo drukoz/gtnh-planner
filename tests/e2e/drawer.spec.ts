@@ -282,6 +282,110 @@ test('Escape takes back a draft in the drawer, or closes a search\'s note, befor
   await expect(toggle).toBeFocused();
 });
 
+/** Project `id`'s settings on the server. */
+async function settingsOf(page: Page, id: string): Promise<{ amount: number; costOverrides: Record<string, number>; farms?: { crops?: { stats?: Record<string, number> } } }> {
+  return ((await (await page.request.get(`/api/projects/${id}`)).json()) as { settings: never }).settings;
+}
+
+// Ledger ruling P2-R141 (the residue of FW-9): a settings draft takes Escape only while it differs from what the field would show without it.
+// The Amount kept its draft after a commit (Enter, or its 500 ms timer), equal to the amount the store then shows, so the first Escape after it
+// was taken for nothing and the drawer stayed open. Each draft field, the Amount, a cost and a crop seed's stat: a committed value, then Escape,
+// closes the drawer; a draft equal to what is shown, the same; a draft that differs is taken back, the drawer staying open, and the next
+// Escape closes the drawer
+test('Escape after a committed Amount closes the drawer, and a draft that differs is taken back first (P2-R141)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Committed amount', TARGET);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  const amount = settings.getByLabel('Amount', { exact: true });
+  const reopen = async (): Promise<void> => {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  };
+  await reopen();
+  await amount.fill('45');
+  await amount.press('Enter');                                                            // committed: the store shows 45 at once
+  await expect(amount).toHaveValue('45');
+  await page.keyboard.press('Escape');
+  await expect(toggle, 'nothing to take back: the drawer\'s Escape').toHaveAttribute('aria-expanded', 'false');
+  await reopen();
+  await amount.fill('46');                                                                // committed by its timer
+  await expect.poll(async () => (await settingsOf(page, id)).amount).toBe(46);
+  await expect(amount).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(toggle, 'the timer\'s commit too').toHaveAttribute('aria-expanded', 'false');
+  await reopen();
+  await amount.fill('2x');                                                                // a draft that differs (and that nothing sends)
+  await page.keyboard.press('Escape');
+  await expect(amount).toHaveValue('46');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('Escape after a committed cost or crop seed stat, or a draft equal to it, closes the drawer; one that differs is taken back first (P2-R141)', async ({ page }) => {
+  // the crop seed's stats are drawn while the pack has a crop table, which the e2e pack lacks: the page is told it has one (the server checks
+  // the farm settings for their shape alone, so the stats are sent and stored as for a pack that has)
+  await page.route('**/api/pack', async (route) => {
+    const res = await route.fetch();
+    const info = (await res.json()) as { manifest?: { counts?: Record<string, number> } };
+    return route.fulfill({ response: res, json: { ...info, manifest: { ...info.manifest, counts: { ...info.manifest?.counts, crops: 179 } } } });
+  });
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Committed cost and stat', { ...TARGET, costOverrides: { 't:iron_ingot@0': 2 } });
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  const reopen = async (): Promise<void> => {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  };
+  await reopen();
+  await settings.getByRole('checkbox', { name: 'CropsNH Crop Manager' }).check();
+  const fields = [
+    { field: settings.getByLabel('Cost of Iron Ingot'), stored: async () => (await settingsOf(page, id)).costOverrides['t:iron_ingot@0'] },
+    { field: settings.getByLabel('Growth', { exact: true }), stored: async () => (await settingsOf(page, id)).farms?.crops?.stats?.growth },
+  ];
+  for (const { field, stored } of fields) {
+    await field.fill('3');
+    await field.press('Enter');
+    await expect.poll(stored, 'committed').toBe(3);
+    await page.keyboard.press('Escape');
+    await expect(toggle, 'nothing to take back after a commit: the drawer\'s Escape').toHaveAttribute('aria-expanded', 'false');
+    await reopen();
+    await field.fill('5');
+    await field.fill('3');                                                                // a draft, typed, equal to what the field shows
+    await page.keyboard.press('Escape');
+    await expect(toggle, 'nothing to take back: the drawer\'s Escape').toHaveAttribute('aria-expanded', 'false');
+    await reopen();
+    await field.fill('7');                                                                // a draft that differs
+    await page.keyboard.press('Escape');
+    await expect(field).toHaveValue('3');
+    await expect(toggle, 'the draft\'s Escape').toHaveAttribute('aria-expanded', 'true');
+    await page.keyboard.press('Escape');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await reopen();
+  }
+});
+
+// the final fix wave's R2 (P2-R138 kept to its note): an item search that shows an error is no layer of its own, as Escape does not take its note
+// away: the drawer closes on the first Escape
+test('an item search showing an error is no layer: the first Escape closes the drawer', async ({ page }) => {
+  await page.route('**/api/pack/search?**', (route) => route.fulfill({ status: 500, json: { error: 'search-failed', message: 'The search failed' } }));
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Search error', TARGET);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await settings.getByPlaceholder('Search items and fluids').fill('iron');
+  await expect(settings.getByText('The search failed')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+});
+
 test('the avoid box\'s list, and a key something inside the drawer has handled, keep the drawer open too', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');

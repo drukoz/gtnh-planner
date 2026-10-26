@@ -28,7 +28,7 @@ import type { LeafClass, Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { useItemIcon } from '../assets/icons.ts';
 import { Figs } from '../components/Figs.tsx';
-import { focusLost, focusOn } from '../components/focus.ts';
+import { focusLost, focusMain, focusOn } from '../components/focus.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
 import { SHEET_KEY_HINT } from '../components/ShortcutsSheet.tsx';
@@ -685,6 +685,11 @@ function FlowCanvas(props: {
    * `pointIn`), and the view then (the picture on screen once it is a drag, when a pan was under way).
    */
   const drag = useRef<{ pointer: number; cx: number; cy: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  /**
+   * While that press is pending (pressed on the canvas, not yet a drag, so its pointer is not captured and a release off the canvas goes
+   * unheard there), how to stop the window's listening for its release (`hearRelease`); null when no press is pending.
+   */
+  const unhearRelease = useRef<(() => void) | null>(null);
   const dragged = useRef(false);
   /** A drag past `DRAG_THRESHOLD` is under way: the pipes stand still while it is (`dragging` on the svg). */
   const [dragging, setDragging] = useState(false);
@@ -941,10 +946,37 @@ function FlowCanvas(props: {
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
     if (e.button === 0) {
       const [sx, sy] = pointIn(e);
-      drag.current = { pointer: e.pointerId, cx: e.clientX, cy: e.clientY, sx, sy, ox: view.x, oy: view.y, moved: false };
+      const press = { pointer: e.pointerId, cx: e.clientX, cy: e.clientY, sx, sy, ox: view.x, oy: view.y, moved: false };
+      drag.current = press;
+      hearRelease(press);
     }
     settleDragging();
   };
+  /**
+   * The release of a pending press ends it wherever it happens: let go off the canvas, which never hears it there (the canvas captures the
+   * pointer only once the press is a drag), it would otherwise stay pending, and a later press elsewhere, dragged onto the canvas, would carry
+   * it on (the final fix wave's residuals, R4). A one-shot listener on the window, in the bubble phase, so a release on the canvas reaches
+   * `onPointerEnd` first (React's root is under the window); that end, the press's capture and a newer press each stop it.
+   */
+  const hearRelease = (press: NonNullable<typeof drag.current>): void => {
+    unhearRelease.current?.();
+    const release = (e: globalThis.PointerEvent): void => {
+      if (e.pointerId !== press.pointer) return;
+      unhear();
+      if (drag.current !== press) return;
+      drag.current = null;
+      settleDragging();
+    };
+    const unhear = (): void => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      if (unhearRelease.current === unhear) unhearRelease.current = null;
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    unhearRelease.current = unhear;
+  };
+  useEffect(() => () => unhearRelease.current?.(), []);
   const onPointerMove = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
     if (d !== null && d.pointer === e.pointerId && (e.buttons & 1) === 0) {
@@ -963,6 +995,7 @@ function FlowCanvas(props: {
       if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < DRAG_THRESHOLD) return;
       d.moved = true;
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
+      unhearRelease.current?.();                         // the canvas hears its release now
       setDragging(true);
       // a pan under way stops where it is on screen, and the drag carries on from that picture, its zoom too, as the move below sets x and y
       // only (review focus 1); a click lets it run on
@@ -981,6 +1014,7 @@ function FlowCanvas(props: {
     const d = drag.current;
     if (d !== null && d.pointer === e.pointerId) {
       drag.current = null;
+      unhearRelease.current?.();
       if (d.moved) {
         dragged.current = true;   // the click that ends a drag picks nothing
         setTimeout(() => {
@@ -1322,6 +1356,34 @@ function Infeasible(props: { plan: Plan }): ReactElement {
 
 export function FlowView(props: ProjectViewProps): ReactElement {
   const { project, plan, send } = props;
+  /** What in the diagram has the focus (its last `focusin`), until the focus has really moved from it (as FlowDiagram's own records). */
+  const focusedIn = useRef<Element | null>(null);
+  useEffect(() => {
+    const into = (e: FocusEvent): void => {
+      focusedIn.current = e.target instanceof Element && e.target.closest('.flow') !== null ? e.target : null;
+    };
+    const out = (e: FocusEvent): void => {
+      const was = e.target;
+      queueMicrotask(() => {
+        if (focusedIn.current === was && document.activeElement !== was) focusedIn.current = null;
+      });
+    };
+    document.addEventListener('focusin', into);
+    document.addEventListener('focusout', out);
+    return () => {
+      document.removeEventListener('focusin', into);
+      document.removeEventListener('focusout', out);
+    };
+  }, []);
+  // A replan that takes the whole diagram away (a plan that cannot be planned, Planning…, Pick something…) with the focus in it gives the focus
+  // to the page's main, never to the body (ledger ruling P2-R57; the final fix wave's residuals, R5). After the diagram's own effects, which
+  // give a lost focus on within it while it stays.
+  useLayoutEffect(() => {
+    const had = focusedIn.current;
+    if (had === null || had.isConnected || !focusLost()) return;
+    focusedIn.current = null;
+    focusMain();
+  });
   if (plan === null) return <><p className="muted">Planning…</p><Skeleton shape="diagram" /></>;
   if (plan.status === 'empty') return <p className="muted">Pick something to make in the settings</p>;
   if (plan.status === 'infeasible') return <Infeasible plan={plan} />;

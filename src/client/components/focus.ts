@@ -33,9 +33,10 @@ export function focusLost(): boolean {
  * repeated Enter whose target is not where the press began is prevented, which keeps it from pressing a button or typing. A handler that acts
  * on Enter itself skips a prevented key, each on the line that tests for Enter (ledger ruling P2-R76; enter-layers.test.tsx reads them all):
  * the Flow canvas's pick (FlowView), the Make search's pick (ItemSearch), the avoid box's add (AvoidPicker), the tooltip's quiet on a focused
- * trigger (Tooltip), the project name's blur (ProjectPage) and the three settings drafts' commit (SettingsPanel: the amount, a cost, a crop
- * stat). A press held where it began repeats as before (Enter held in a text area types line after line). It listens on `doc` in the capture
- * phase, so it sees each key before any element does; installed once for the page's life (main.tsx), it returns how to stop.
+ * trigger (Tooltip), the project name's commit (ProjectPage, ledger ruling P2-R132) and the three settings drafts' commit (SettingsPanel: the
+ * amount, a cost, a crop stat). A press held where it began repeats as before (Enter held in a text area types line after line). It listens on
+ * `doc` in the capture phase, so it sees each key before any element does; installed once for the page's life (main.tsx), it returns how to
+ * stop.
  *
  * Its order is a rule: it must see each key first (ledger ruling P2-R79). Capture listeners on one target run in the order they were added, and
  * the window's run before the document's, so a native key listener that reads `defaultPrevented` is added, on the document, after the guard is

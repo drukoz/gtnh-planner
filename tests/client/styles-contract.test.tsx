@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { EASE_IN, EASE_OUT, EXIT_MS, GLIDE_MS, PAN_MS } from '../../src/client/state/motion.ts';
 import { DIM_OPACITY } from '../../src/client/views/flow-model.ts';
-import { ROOT, sources, withoutComments } from './client-sources.ts';
+import { ROOT, sources, withoutComments as codeWithoutComments } from './client-sources.ts';
 import { cssBlocks, declarations, scan, themeTokens, type Block } from './css-blocks.ts';
 
 const read = (file: string): string => readFileSync(new URL(`../../src/client/${file}`, import.meta.url), 'utf8');
@@ -2458,6 +2458,18 @@ describe('the Machine GUI in forced colours', () => {
 // browser). Paused, the Flow canvas has `pipes-paused` and the Connections area `data-pipes="paused"`, and the dashes stay where they
 // are. The dot of the connection stops by itself within 5 s. pipes.spec.ts presses the button in a browser.
 
+/**
+ * Whether a rule's declarations run an animation for ever: the shorthand or the iteration-count longhand, however spaced (FW-3: the longhand once
+ * passed unseen).
+ */
+const runsForever = (body: string): boolean => declarations(body).some(([name, value]) =>
+  (name === 'animation' || name === 'animation-iteration-count') && /\binfinite\b/i.test(value));
+/**
+ * Whether a client source runs a WAAPI animation for ever (`iterations: Infinity`), its comments left out, line comments too (client-sources.ts's
+ * reader: this file's own `withoutComments` below drops block comments only).
+ */
+const scriptRunsForever = (code: string): boolean => /\biterations\s*:\s*(?:Infinity|Number\.POSITIVE_INFINITY)\b/.test(codeWithoutComments(code));
+
 const FLOW_PAUSED = '.flow-canvas.pipes-paused .flow-edge-flow';
 const CONN_PAUSED = ".connections[data-pipes='paused'] .conn-edge-flow";
 
@@ -2471,15 +2483,20 @@ describe('the Machine GUI pause of the pipes', () => {
   });
 
   it('lets nothing but the pipes move for ever, and the button stops those', () => {
-    // the shorthand or the longhand, however it is spaced (FW-3: the longhand once passed unseen)
-    const endless = blocks.filter((b) => !b.prelude.startsWith('@') && declarations(b.inner).some(([name, value]) =>
-      (name === 'animation' || name === 'animation-iteration-count') && /\binfinite\b/i.test(value))).map((b) => b.prelude);
+    const endless = blocks.filter((b) => !b.prelude.startsWith('@') && runsForever(b.inner)).map((b) => b.prelude);
     // Phase 2 spec §3.9 (deliberate; P2-D18, ratified as P2-D45): the goods riding the Flow pipes are pipe contents too, the fourth rule,
     // which Pause pipes stops with the other three
     expect(endless.sort()).toEqual([CONTENTS, LIT_CONTENTS, CONN_CONTENTS, RIDER].sort());
     // and no script runs an animation for ever: a WAAPI animation's `iterations` is never Infinity (the glides and the pan are bounded)
-    const forever = sources().filter((file) => /\biterations\s*:\s*(?:Infinity|Number\.POSITIVE_INFINITY)\b/.test(withoutComments(readFileSync(new URL(file, ROOT), 'utf8'))));
+    const forever = sources().filter((file) => scriptRunsForever(readFileSync(new URL(file, ROOT), 'utf8')));
     expect(forever).toEqual([]);
+    // the two readers, on samples of what they must and must not find (the final fix wave's R6)
+    expect(['animation-iteration-count:infinite', 'animation: pipe-flow 1s linear INFINITE', 'animation-iteration-count : infinite',
+      'animation-iteration-count: 3', 'animation: sheen 1.4s var(--ease-out) 3', 'content: "infinite"'].map(runsForever))
+      .toEqual([true, true, true, false, false, false]);
+    expect(['el.animate(frames, { iterations: Infinity })', '{ iterations:Number.POSITIVE_INFINITY }', '{ iterations: 3 }',
+      '// el.animate(frames, { iterations: Infinity })', '/* iterations: Infinity */ el.animate(frames, { duration: 250 })'].map(scriptRunsForever))
+      .toEqual([true, true, false, false, false]);
   });
 
   it('stops the dot of the connection by itself within 5 s, on the dot\'s full opacity', () => {
@@ -2972,9 +2989,13 @@ describe('the Machine GUI Phase 2: the recipe card', () => {
     // a tone's class is its own (oc-now, oc-note): a bare .note is the Notes tab's card, whose panel, edge and bevel would frame the chip
     expect(position('.oc-chip.note')).toBe(-1); expect(position('.oc-chip.now')).toBe(-1);
     expect(ruleBody('.note, .note-add')).toMatch(/box-shadow: var\(--bevel-panel\)/);
-    // below 1100 px the panel is the window's width, and the four readouts stand as many to a row as are 110 px wide: one row where there is
-    // room, two on a phone, where a seven-glyph figure ran into the next tile (ledger ruling P2-R131, which changes the plan's four columns)
-    expect(declaredIn('@media (max-width: 1100px)', '.recipe-stats', 'grid-template-columns')).toBe('repeat(auto-fit, minmax(110px, 1fr))');
+    // below 1100 px the panel is the window's width, and the four readouts make one row (ledger ruling P2-R142, amending P2-R131: an auto-fit row
+    // wrapped them three and one beside the settings column, and spread a hand step's lone readout over it); at 600 px or less two a row, where
+    // four ran a seven-glyph figure into the next tile (P2-R131), in a block of its own after the 1100 px one
+    expect(declaredIn('@media (max-width: 1100px)', '.recipe-stats', 'grid-template-columns')).toBe('repeat(4, minmax(0, 1fr))');
+    expect(declaredIn('@media (max-width: 600px)', '.recipe-stats', 'grid-template-columns')).toBe('repeat(2, minmax(0, 1fr))');
+    expect(blocks.findIndex((b) => b.prelude === '@media (max-width: 600px)'), 'after the 1100 px block')
+      .toBeGreaterThan(blocks.findLastIndex((b) => b.prelude === '@media (max-width: 1100px)'));
     // a readout is a screen in the dark box's light ink: it joins the dark group, after the seven members the chrome case pins
     const dark = inkGroup('.banner').prelude.split(', ');
     expect(dark.indexOf('.readout')).toBeGreaterThanOrEqual(7);

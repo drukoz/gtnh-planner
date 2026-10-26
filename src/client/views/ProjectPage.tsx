@@ -429,15 +429,16 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // While it is open, Escape closes it, one layer per press: a key that something inside has already handled (`defaultPrevented`: a draft
   // taken back, FW-9) is not the drawer's, and neither is the key that closes a search list open in it (the item search and the avoid box close
   // on Escape without preventing the default, which would stop the browser clearing a search field), nor the key that closes the note a search
-  // shows when nothing matches, its list closed (ledger ruling P2-R138). React has drawn such a list or note closed by the time the key reaches
-  // the document, so `look` reads whether one is open on the way down, before the search's own handler runs, and `closeOnEscape` decides on
-  // the way up.
+  // shows when nothing matches, its list closed (ledger ruling P2-R138; `data-no-match`: a search's error note, which its Escape leaves, is no
+  // layer). React has drawn such a list or note closed by the time the key reaches the document, so `look` reads whether one is open on the way
+  // down, before the search's own handler runs, and `closeOnEscape` decides on the way up.
   useEffect(() => {
     if (!settingsOpen) return;
     let listOpen = false;
     const look = (e: KeyboardEvent): void => {
       const at = e.target instanceof Element ? e.target : null;
-      listOpen = at !== null && (at.closest('[role="combobox"][aria-expanded="true"]') !== null || at.closest('.item-search')?.querySelector('.search-note') != null);
+      listOpen = at !== null
+        && (at.closest('[role="combobox"][aria-expanded="true"]') !== null || at.closest('.item-search')?.querySelector('.search-note[data-no-match]') != null);
     };
     const closeOnEscape = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented || listOpen) return;

@@ -232,6 +232,19 @@ export const sideways = (page: Page): Promise<{ over: number; past: string[] }> 
   return { over: root.scrollWidth - root.clientWidth, past: past.slice(0, 12) };
 });
 
+/**
+ * From now on, notes whether each Escape the open page's document hears in the bubble phase, once every layer has had it, was taken
+ * (`defaultPrevented`): a tip that hides itself or a draft taken back takes it, a list or a note that closes does not (ledger rulings P2-R132,
+ * P2-R138, P2-R141). Read with `escapesTaken`.
+ */
+export const recordEscapes = (page: Page): Promise<void> => page.evaluate(() => {
+  const w = window as unknown as { escapes: boolean[] };
+  w.escapes = [];
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') w.escapes.push(e.defaultPrevented); });
+});
+/** Whether each Escape since `recordEscapes` was taken, in order. */
+export const escapesTaken = (page: Page): Promise<boolean[]> => page.evaluate(() => (window as unknown as { escapes: boolean[] }).escapes);
+
 /** The browser dialogs `page` meets from now on, each dismissed: a page that asks in the app (Phase 2 spec §13) meets none. */
 export function noDialogs(page: Page): string[] {
   const dialogs: string[] = [];

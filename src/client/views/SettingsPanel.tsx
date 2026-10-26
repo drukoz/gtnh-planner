@@ -152,9 +152,11 @@ function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElem
             // a held Enter's repeat that landed here is not a commit (P2-R69a)
             if (e.key === 'Enter' && draft !== null && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);
             // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b); one
-            // that takes a draft back is taken, so the drawer stays open (FW-9), and one with no draft goes on to it
+            // that takes back a draft differing from the amount shown without it is taken, so the drawer stays open (FW-9); a draft equal to
+            // it (a commit's, by Enter or the timer, which leaves the draft as typed) takes nothing back, and its Escape is the drawer's
+            // (ledger ruling P2-R141)
             if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {
-              e.preventDefault();
+              if (draft !== String(amount)) e.preventDefault();
               stopTimer();
               setDraft(null);
             }
@@ -295,8 +297,9 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
           onBlur={(e) => commit(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
-            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {   // one layer per press: a draft taken back takes the key (FW-9)
-              e.preventDefault();
+            // one layer per press: a draft that differs from the cost shown without it is taken back, and takes the key (FW-9, P2-R141)
+            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {
+              if (draft !== String(value)) e.preventDefault();
               setDraft(null);
             }
           }}
@@ -791,8 +794,9 @@ export function StatInput(props: {
         onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
-          if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {   // one layer per press: a draft taken back takes the key (FW-9)
-            e.preventDefault();
+          // one layer per press: a draft that differs from the stat shown without it is taken back, and takes the key (FW-9, P2-R141)
+          if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {
+            if (draft !== String(value)) e.preventDefault();
             onDraft(null);
           }
         }}

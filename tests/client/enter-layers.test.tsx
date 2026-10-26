@@ -126,7 +126,7 @@ describe('a held Enter acts once, app-wide', () => {
     }
     expect(deaf).toEqual([]);
     // the scan sees them: the item search's pick, the avoid box's add, the tip's quiet, Flow's pick, the three settings drafts' commit and the
-    // project name's blur; and the guard's own two, exempt by their lines, not by their file
+    // project name's commit (ledger ruling P2-R132); and the guard's own two, exempt by their lines, not by their file
     expect(found.length, found.join('\n')).toBeGreaterThanOrEqual(8);
     expect([...exempted].sort()).toEqual(EXEMPT.map((x) => `${x.file}: ${x.line}`).sort());
   });

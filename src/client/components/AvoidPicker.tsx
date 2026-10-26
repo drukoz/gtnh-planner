@@ -148,7 +148,7 @@ function MaterialBox(props: { materials: readonly AvoidMaterial[]; onAdd(entry: 
         </ul>
       )}
       {open && text.trim() !== '' && hits.length === 0 && (
-        <p className="search-note muted">No material is called that; Enter adds it as typed</p>
+        <p className="search-note muted" data-no-match="">No material is called that; Enter adds it as typed</p>
       )}
     </div>
   );

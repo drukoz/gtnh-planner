@@ -146,6 +146,24 @@ test('Plan them as supporting lines from the keyboard leaves the focus on the pa
   expect(await bodyFocusCount(page)).toBe(0);
 });
 
+// the final fix wave's R5: a replan that takes the diagram away with the focus in it (a plan that cannot run, here; one on its way; nothing to
+// make) hands the focus to the page's main (P2-R57), never the body
+test('a replan that turns the plan infeasible while an issue line\'s Show has the focus gives the focus to the page\'s main', async ({ page }) => {
+  let served: Plan = platesTwoWays();
+  const id = await openWithPlan(page, served);
+  await page.route('**/api/projects/*/plan', (route) => route.fulfill({ json: served }));
+  await watchBodyFocus(page);
+  await page.locator('.flow-issues li[data-issue="multi-producer"]').getByRole('button', { name: 'Show' }).focus();
+  served = {
+    ...circuitLv(), status: 'infeasible', steps: [], flows: [], rawInputs: [], buildList: [],
+    warnings: [{ code: 'no-recipe', text: 'Nothing the line can reach makes Basic Circuit' }],
+  };
+  await replan(page, id);
+  await expect(page.locator('.flow-infeasible')).toBeVisible();
+  await expect(page.locator('main')).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});
+
 test('(6) a line at 1 an hour never reads 0/h and gives fluids in litres', async ({ page }) => {
   await openWithPlan(page, circuitMvPerHour(), { target: 't:circuit@0', amount: 1, per: 'hour', tier: 2 });
   const canvas = page.locator('svg.flow-canvas');

@@ -51,6 +51,7 @@ test('a project is deleted from its row on the list, and a row someone else dele
   const listed = `Row delete ${run}`;
   const stale = `Stale row ${run}`;
   await createProject(page, listed);
+  await createProject(page, `Kept row ${run}`);                                        // the stale row's neighbour, which nothing deletes
   const staleId = await createProject(page, stale);
   await page.goto('/');
   const rowOf = (name: string) => page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
@@ -72,7 +73,12 @@ test('a project is deleted from its row on the list, and a row someone else dele
   const res = await page.context().request.delete(`/api/projects/${staleId}`, { headers: { 'X-Planner-Name': 'Dee' } });
   expect(res.status()).toBe(204);
   await expect(page.getByRole('link', { name: stale, exact: true })).toBeVisible();
+  // ledger ruling P2-R140 on a row found gone (onGone): the focus the confirm had goes on to the nearest row left's link, never to the body
+  const nearest = await rowOf(stale).evaluate((li) => (li.nextElementSibling ?? li.previousElementSibling)?.querySelector('a.project-link')?.textContent ?? null);
+  await watchBodyFocus(page);
   await confirmDelete(stale);
+  await expect(nearest === null ? page.getByLabel('New project') : page.getByRole('link', { name: nearest, exact: true })).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
   await expect(page.getByText(`${stale} was already deleted`)).toHaveCount(1);
   await expect(page.getByRole('alert')).toHaveCount(0);                                 // no "No project <id>"
   await expect(page.getByRole('link', { name: stale, exact: true })).toHaveCount(0);
