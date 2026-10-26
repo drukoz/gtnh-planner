@@ -784,7 +784,11 @@ svg .item-icon::after { content: none; }
 .skeleton-strip .skeleton-block { height: 52px; background: var(--screen); }
 .skeleton-strip .skeleton-block::after { background: linear-gradient(90deg, transparent, var(--screen-lo), transparent); }
 .skeleton-diagram, .skeleton-scene { background: var(--well); border: 2px solid var(--outline); box-shadow: var(--bevel-well); }
-.skeleton-diagram { display: grid; grid-template-columns: repeat(3, 110px); gap: 40px; align-content: center; height: 240px; padding: 20px; }
+/* Its columns and gaps shrink with a narrow window (ledger ruling P2-R131): three 110 px columns 40 px apart once its box is about 670 px
+   wide, so a phone's window never scrolls sideways while a first plan or layout is on its way. */
+.skeleton-diagram {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 110px)); gap: clamp(12px, 6%, 40px); align-content: center; height: 240px; padding: 20px;
+}
 .skeleton-diagram .skeleton-block { height: 70px; background: var(--skeleton-well); }
 .skeleton-scene { height: 360px; padding: 20px; }
 .skeleton-scene .skeleton-block { flex: 1; }
@@ -1367,7 +1371,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .mat-view-toggle { display: flex; margin-block: -4px; }
 .mat-view-toggle button + button { border-left: 0; }
 .mat-view-toggle button[aria-pressed='true'] { background: var(--btn-lo); box-shadow: var(--bevel-btn-down); color: var(--accent); }
-.mat-meter-box { margin-left: auto; display: flex; flex-direction: column; gap: 3px; min-width: 240px; }
+.mat-meter-box { margin-left: auto; display: flex; flex-direction: column; gap: 3px; min-width: min(240px, 100%); }
 .mat-meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .mat-meter { position: relative; height: 14px; overflow: hidden; background: var(--screen); border: 2px solid var(--outline); }
 .mat-meter-fill {
@@ -1472,10 +1476,11 @@ details.mat-needed[open]::details-content { block-size: auto; }
 .map-tooltip > :first-child { color: #ffffff; }
 /* The page's one NEI tooltip (Phase 2 §6): the map tooltip's look, placed in the window by TooltipHost. It never takes the
    pointer (hit tests and Playwright's clicks need that) and sits above every layer, the modal included. Its mod line is a lighter
-   blue than NEI's own, which would not read on the box (#5555ff: 3.70:1). It fades out as it goes, and is then removed. */
+   blue than NEI's own, which would not read on the box (#5555ff: 3.70:1). It fades out as it goes, and is then removed. It is at most as
+   wide as the window (a fixed box's containing block), so a long tip in a phone's window wraps inside it (ledger ruling P2-R131). */
 .nei-tooltip {
   position: fixed; top: 0; left: 0; z-index: 200; pointer-events: none;
-  width: max-content; max-width: 360px; padding: 6px 8px; overflow-wrap: anywhere;
+  width: max-content; max-width: min(360px, 100%); padding: 6px 8px; overflow-wrap: anywhere;
   background: var(--tip-bg); border: 2px solid var(--tip-border); box-shadow: 0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner);
   color: #aaaaaa; font: 14px/1.35 var(--font-pixel); animation: tip-in 120ms var(--ease-out);
 }
@@ -1688,7 +1693,9 @@ details.mat-needed[open]::details-content { block-size: auto; }
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
   .flow-side { position: static; }
   .flow-panel { max-height: none; }
-  .recipe-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  /* as many readouts to a row as are 110 px wide: the four in one where there is room, two on a phone, where a seven-glyph figure ran into the
+     next tile (ledger ruling P2-R131) */
+  .recipe-stats { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
 }
 
 /*

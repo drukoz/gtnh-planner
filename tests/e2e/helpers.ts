@@ -212,6 +212,18 @@ export async function addNote(page: Page, id: string, note: { id: string; text: 
   expect(res.ok(), await res.text()).toBe(true);
 }
 
+/**
+ * How far the open page scrolls sideways: the document's scroll width past its client width (0 or less: it does not), and the elements that
+ * reach past the window's right edge, for a failure's message (the final fix wave, FW-4: a narrow window keeps everything inside it, ledger
+ * ruling P2-R131; WCAG 1.4.10).
+ */
+export const sideways = (page: Page): Promise<{ over: number; past: string[] }> => page.evaluate(() => {
+  const root = document.documentElement;
+  const name = (el: Element): string => `${el.tagName.toLowerCase()}${[...el.classList].map((c) => `.${c}`).join('')}`;
+  const past = [...document.body.querySelectorAll('*')].filter((el) => el.getBoundingClientRect().right > root.clientWidth + 0.5).map(name);
+  return { over: root.scrollWidth - root.clientWidth, past: past.slice(0, 12) };
+});
+
 /** The browser dialogs `page` meets from now on, each dismissed: a page that asks in the app (Phase 2 spec §13) meets none. */
 export function noDialogs(page: Page): string[] {
   const dialogs: string[] = [];

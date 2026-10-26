@@ -628,3 +628,21 @@ test('a held Enter whose first press hands the focus to a box head leaves the he
   await expect(head).toHaveAttribute('aria-describedby', (await tip.getAttribute('id'))!);
   await expect(panel).toHaveCount(0);
 });
+
+// the final fix wave, FW-4 (ledger ruling P2-R131; WCAG 1.4.10): a tip is at most as wide as the window, `min(360px, 100%)` (a fixed box's
+// containing block is the window), so a long one in a 320 px window wraps inside it instead of losing its right edge past the window's (an
+// element tip is kept inside the window while it fits: placeTip)
+test('a long tip in a 320 px window stays inside it', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Narrow tip', LV_CIRCUITS);                                  // a target: no drawer opens by itself
+  const name = page.getByRole('textbox', { name: 'Project name' });
+  await name.evaluate((el) => el.setAttribute('data-tip', 'A tip as long as a sentence that runs on and on, so that its box is as wide as a tip may ever be'));
+  await name.focus();
+  const tip = page.locator('.nei-tooltip[role="tooltip"]');
+  await expect(tip).toBeVisible();
+  const box = (await tip.boundingBox())!;
+  const room = await page.evaluate(() => document.documentElement.clientWidth);
+  expect(box.x, 'from the window\'s left edge').toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, 'to its right edge').toBeLessThanOrEqual(room);
+});

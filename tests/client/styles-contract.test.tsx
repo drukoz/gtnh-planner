@@ -2850,7 +2850,8 @@ describe('the Machine GUI Phase 2: the shared NEI tooltip', () => {
   it('draws the shared tooltip as an NEI tooltip above every layer, and fades it out in 80 ms', () => {
     expectDeclared([
       [NEI_TIP, 'position', 'fixed'], [NEI_TIP, 'top', '0'], [NEI_TIP, 'left', '0'], [NEI_TIP, 'z-index', '200'], [NEI_TIP, 'pointer-events', 'none'],
-      [NEI_TIP, 'width', 'max-content'], [NEI_TIP, 'max-width', '360px'], [NEI_TIP, 'padding', '6px 8px'], [NEI_TIP, 'overflow-wrap', 'anywhere'],
+      // at most as wide as the window, a fixed box's containing block (ledger ruling P2-R131, which changes spec §6.3's 360px; WCAG 1.4.10)
+      [NEI_TIP, 'width', 'max-content'], [NEI_TIP, 'max-width', 'min(360px, 100%)'], [NEI_TIP, 'padding', '6px 8px'], [NEI_TIP, 'overflow-wrap', 'anywhere'],
       [NEI_TIP, 'background', 'var(--tip-bg)'], [NEI_TIP, 'border', '2px solid var(--tip-border)'],
       [NEI_TIP, 'box-shadow', '0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner)'],
       [NEI_TIP, 'color', '#aaaaaa'], [NEI_TIP, 'font', '14px/1.35 var(--font-pixel)'], [NEI_TIP, 'animation', 'tip-in 120ms var(--ease-out)'],
@@ -2968,8 +2969,9 @@ describe('the Machine GUI Phase 2: the recipe card', () => {
     // a tone's class is its own (oc-now, oc-note): a bare .note is the Notes tab's card, whose panel, edge and bevel would frame the chip
     expect(position('.oc-chip.note')).toBe(-1); expect(position('.oc-chip.now')).toBe(-1);
     expect(ruleBody('.note, .note-add')).toMatch(/box-shadow: var\(--bevel-panel\)/);
-    // below 1100 px the panel is the window's width, and the four readouts make one row
-    expect(declaredIn('@media (max-width: 1100px)', '.recipe-stats', 'grid-template-columns')).toBe('repeat(4, minmax(0, 1fr))');
+    // below 1100 px the panel is the window's width, and the four readouts stand as many to a row as are 110 px wide: one row where there is
+    // room, two on a phone, where a seven-glyph figure ran into the next tile (ledger ruling P2-R131, which changes the plan's four columns)
+    expect(declaredIn('@media (max-width: 1100px)', '.recipe-stats', 'grid-template-columns')).toBe('repeat(auto-fit, minmax(110px, 1fr))');
     // a readout is a screen in the dark box's light ink: it joins the dark group, after the seven members the chrome case pins
     const dark = inkGroup('.banner').prelude.split(', ');
     expect(dark.indexOf('.readout')).toBeGreaterThanOrEqual(7);
@@ -3023,6 +3025,8 @@ describe('the Machine GUI Phase 2: the inventory grid', () => {
       // its count in the middle
       ['.mat-view-toggle button + button', 'border-left', '0'], ['.mat-meter', 'background', 'var(--screen)'], ['.mat-meter', 'border', '2px solid var(--outline)'],
       ['.mat-meter-fill', 'transform-origin', 'left'], ['.mat-meter-fill', 'background', 'var(--screen-text)'],
+      // the meter's box: 240 px, or as wide as its head where that is narrower (ledger ruling P2-R131: it stuck out of a 320 px window's head)
+      ['.mat-meter-box', 'min-width', 'min(240px, 100%)'],
       ['button.mat-slot-more', 'display', 'grid'], ['button.mat-slot-more', 'place-items', 'center'], ['button.mat-slot-more', 'background', 'var(--slot)'],
       ['button.mat-slot-more', 'box-shadow', 'var(--bevel-slot)'], ['button.mat-slot-more > .stack-count', 'position', 'static'],
     ]);
@@ -3168,7 +3172,10 @@ describe('the Machine GUI Phase 2: skeletons', () => {
       ['.skeleton-cards .skeleton-block', 'height', '58px'], ['.skeleton-cards', 'gap', '10px'], ['.skeleton-cards', 'margin', '0 0 20px'],
       ['.skeleton-project .skeleton-block:nth-child(1)', 'width', '40%'], ['.skeleton-project .skeleton-block:nth-child(1)', 'height', '36px'],
       ['.skeleton-project .skeleton-block:nth-child(2)', 'height', '52px'], ['.skeleton-project .skeleton-block:nth-child(3)', 'height', '360px'],
-      ['.skeleton-diagram', 'display', 'grid'], ['.skeleton-diagram', 'grid-template-columns', 'repeat(3, 110px)'], ['.skeleton-diagram', 'gap', '40px'],
+      // its three columns and their gaps shrink with a narrow window, so it never scrolls a phone's window sideways; from about 760 px up they are
+      // the 110 px and 40 px they were (ledger ruling P2-R131)
+      ['.skeleton-diagram', 'display', 'grid'], ['.skeleton-diagram', 'grid-template-columns', 'repeat(3, minmax(0, 110px))'],
+      ['.skeleton-diagram', 'gap', 'clamp(12px, 6%, 40px)'],
       ['.skeleton-diagram', 'align-content', 'center'], ['.skeleton-diagram', 'height', '240px'], ['.skeleton-diagram', 'padding', '20px'],
       ['.skeleton-diagram .skeleton-block', 'height', '70px'],
       ['.skeleton-scene', 'height', '360px'], ['.skeleton-scene', 'padding', '20px'], ['.skeleton-scene .skeleton-block', 'flex', '1'],

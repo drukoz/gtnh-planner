@@ -12,7 +12,7 @@
 
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { circuitLv, circuitMvPerHour, copperUnsourced, platesTwoWays } from './fixtures/plans.ts';
-import { LV_CIRCUITS, openWithPlan } from './helpers.ts';
+import { LV_CIRCUITS, openWithPlan, sideways } from './helpers.ts';
 
 /** Opens circuitLv and the Basic Assembler's panel; returns the panel and the project's id. */
 async function openAssembler(page: Page): Promise<{ panel: Locator; id: string }> {
@@ -41,6 +41,34 @@ test('one run of the assembler as NEI draws it', async ({ page }) => {
   await expect(panel.locator('[data-recipe-key="t:copper_wire@0"] .stack-count')).toHaveText('2');
   // strict: the card writes no second copy of the overclock line plan.spec.ts reads
   await expect(page.getByText('0 overclocks → 16 EU/t × 200 t')).toBeVisible();
+});
+
+// the final fix wave, FW-4 (ledger ruling P2-R131): below 1100 px the panel is as wide as the window, and its four readouts stood in one row, so
+// on a phone a tile was narrower than a VT323 figure of seven glyphs ('131,072'), which ran into the next tile and gave the panel a scroll bar
+// of its own; as many stand in a row as are 110 px wide now, four where there is room, two on a phone
+test('on a phone the step panel keeps a seven-glyph figure inside its tile, and nothing scrolls sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const plan = circuitLv();
+  await openWithPlan(page, { ...plan, steps: plan.steps.map((s) => (s.id === 'circuit-lv' ? { ...s, euPerTick: 131_072 } : s)) });
+  await page.locator('[data-step-id="circuit-lv"] .flow-node-head').focus();
+  await page.keyboard.press('Enter');
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Assembler' });
+  await expect(panel.locator('.readout').filter({ hasText: 'EU/t each' }).locator('dd')).toHaveText('131,072');
+  await holdStill(page);
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const { over, past } = await sideways(page);
+    expect(over, `at ${width} px, past the window's edge: ${past.join(', ')}`).toBeLessThanOrEqual(0);
+    const fit = await panel.evaluate((aside) => ({
+      over: aside.scrollWidth - aside.clientWidth,
+      spilt: [...aside.querySelectorAll('.readout dd')].flatMap((dd) => {
+        const text = document.createRange();
+        text.selectNodeContents(dd);
+        return text.getBoundingClientRect().right > dd.getBoundingClientRect().right + 0.5 ? [dd.textContent ?? ''] : [];
+      }),
+    }));
+    expect(fit, `at ${width} px: the panel scrolls sideways by over px, and these figures spill out of their tiles`).toEqual({ over: 0, spilt: [] });
+  }
 });
 
 test('hovering a slot lights its good in the Flow', async ({ page }) => {

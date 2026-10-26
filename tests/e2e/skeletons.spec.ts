@@ -8,7 +8,7 @@
 
 import { test, expect, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { createProject, holdPlans, holdReplan, login, LV_CIRCUITS, openWithPlan, setName } from './helpers.ts';
+import { createProject, holdPlans, holdReplan, login, LV_CIRCUITS, openWithPlan, setName, sideways } from './helpers.ts';
 
 /** What the sheen of a skeleton's first block runs: its count and duration. */
 const sheenOf = (page: Page): Promise<{ count: string; duration: string }> => page.locator('.tab-panel .skeleton-block').first().evaluate((el) => {
@@ -30,6 +30,23 @@ test('a plan on its way shows its loading line and a skeleton, which go when the
   await expect(page.locator('svg.flow-canvas [data-step-id]').first()).toBeVisible();
   await expect(page.locator('.skeleton')).toHaveCount(0);
   expect(waiting, 'the strip\'s skeleton is in the face of the tiles that take its place').toBe(await page.locator('.key-number').first().evaluate(face));
+});
+
+// the final fix wave, FW-4 (ledger ruling P2-R131): the diagram's skeleton was at least 454 px wide (three 110 px columns 40 px apart in its
+// padding), so a phone's window scrolled sideways while every first plan was on its way; its columns and gaps shrink with the window now
+test('a plan on its way scrolls no phone\'s window sideways: the diagram\'s skeleton shrinks with it', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const plans = await holdPlans(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Skeleton narrow', LV_CIRCUITS);                            // a target: no drawer opens by itself
+  await expect(page.locator('.tab-panel .skeleton-diagram')).toBeVisible();
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const { over, past } = await sideways(page);
+    expect(over, `at ${width} px, past the window's edge: ${past.join(', ')}`).toBeLessThanOrEqual(0);
+  }
+  await plans.release();
+  await expect(page.locator('.skeleton')).toHaveCount(0);
 });
 
 test('under reduced motion the sheen runs once, for a millisecond', async ({ page }) => {

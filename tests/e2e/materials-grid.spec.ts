@@ -9,7 +9,7 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { Plan } from '../../src/shared/types/plan.ts';
-import { createProject, login, LV_CIRCUITS, markTips, setName } from './helpers.ts';
+import { createProject, login, LV_CIRCUITS, markTips, setName, sideways } from './helpers.ts';
 
 const TRANSPARENT = 'rgba(0, 0, 0, 0)';
 
@@ -224,6 +224,26 @@ test.describe('on a touch screen', () => {
 
 // spec §9.1, §9.2: an item past nine stacks ends in a +N slot that says how many more there are; like the item's other stacks it is a hidden
 // copy, out of the tab order, and it ticks the same row
+// the final fix wave, FW-4 (ledger ruling P2-R131): the meter's box was at least 240 px wide, and in a 320 px window it stuck out of the
+// section's head by 16 px, past the section's edge into the page's padding; it is as wide as its head allows now, so it stays inside its head
+// and section, and the grid never scrolls a phone's window sideways
+test('with Grid shown on a phone the meter stays inside its head, and nothing scrolls sideways', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openMaterials(page, 'Grid narrow');
+  await showGrid(page);
+  await expect(toBuild(page).locator('.mat-meter')).toBeVisible();
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    const { over, past } = await sideways(page);
+    expect(over, `at ${width} px, past the window's edge: ${past.join(', ')}`).toBeLessThanOrEqual(0);
+    const sticksOut = await toBuild(page).evaluate((section) => {
+      const head = section.querySelector('.mat-head')!;
+      return { head: head.scrollWidth - head.clientWidth, section: section.scrollWidth - section.clientWidth };
+    });
+    expect(sticksOut, `at ${width} px: px past the head's edge, and the section's`).toEqual({ head: 0, section: 0 });
+  }
+});
+
 test('the +N slot of an item past nine stacks is out of the tab order, and a click on it ticks the row', async ({ page }) => {
   const id = await openMaterials(page, 'Grid more');
   // the server's own plan, its power line at 1,000: sixteen stacks, nine drawn and a +7 slot
