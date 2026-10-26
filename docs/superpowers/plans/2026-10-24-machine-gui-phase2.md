@@ -3082,6 +3082,9 @@ made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's 
 - **P2-R135** — `.item-icon` gains `-webkit-touch-callout: none`, so a long press opens no iOS image callout over the tip.
 - **P2-R136** — Recorded dark exceptions, beside P2-R30, P2-R67 and P2-R95: button faces and the unselected tabs on the stone (1.67:1, 1.12:1) and on the top bar (1.78:1), named by their labels; a modal's or the sheet's frame on the dimmed page (1.40:1), a container.
 - **P2-R137** — Keyboard access to the Connections boxes (they take no focus) is a follow-up task after this branch.
+- **P2-R138** — In the drawer an item search showing its "No item or fluid matches" note is a layer of its own, as an open list is: Escape closes the note and the drawer stays open (no `preventDefault` in the search field, which the browser clears). Authorised: the two Review Focus 2 cases of `tooltips.spec.ts` press Escape twice, the note's (taken by no layer) and then the drawer's.
+- **P2-R139** — P2-R133's mirror: a window that widens past 900 px moves a focus on the Settings button to the project's name and one on the bar's Compare modes to the head's; never to `<body>`.
+- **P2-R140** — A delete confirmed from a list row hands the focus on as the row goes: to the nearest row left's link (the next, else the one before), else the New project field, else `<main>`; never `<body>` (P2-R57's and P2-R68's pattern).
 
 **Plan rulings** (the plan's Conventions give each in full; signed off before Task 1a, the last six on 2026-10-24 with the VT323 choice)
 - **`baseline-shots`** — Task 1a diffs the light look against fresh shots of the base, not spec §19's older after-shots.

@@ -1,6 +1,6 @@
 # Machine GUI restyle, Phase 2 — design
 
-Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R137, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
+Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R140, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
 Phase 1 merged. Every `file:line` below is at that commit. §24 and the plan were re-checked against `main` at `01da27d` (Phase 1, the
 Make-picker fix, add-on 23 and add-on 17 merged), and their cites are at `01da27d`. On 2026-10-24 the user also chose VT323 for
 figures, Pixelify Sans kept for words: §25 records it, adds its one dependency and overrides anything above that disagrees.
@@ -374,7 +374,8 @@ behaviour. Nothing is deleted or loosened. Additions are not listed here.
 > test event that carries `nativeEvent` (P2-R76); and, in the final fix wave, the scroll bars' two pins `var(--btn)` → `var(--thumb)`
 > (P2-R128), the selected tab's ink `var(--text)` → `var(--tab-on-ink)` (P2-R129), the range tracks' `var(--bevel-well)` →
 > `var(--bevel-track)` (P2-R130), `.item-icon`'s pin gaining `-webkit-touch-callout: none` (P2-R135), and the project-name case of
-> `tooltips.spec.ts`, whose second Escape now leaves the focus in the field (P2-R132). Inside tests this phase added, P2-R24a,
+> `tooltips.spec.ts`, whose second Escape now leaves the focus in the field (P2-R132), and its two Review Focus 2 cases, which now
+> press Escape twice, the emptied search's note's and then the drawer's (P2-R138). Inside tests this phase added, P2-R24a,
 > P2-R32, P2-R50, P2-R50b, P2-R60, P2-R74, P2-R86, P2-R89, P2-R96, P2-R97 and P2-R116 changed pins deliberately, and so did the final
 > fix wave: P2-R131 (the diagram skeleton's columns and gap, the narrow recipe readouts, the tooltip's `max-width`), P2-R134 (the
 > sheet's Esc row), the drawer status's signature (FW-10), the strip's `planDrawn` record (FW-13), `glide.spec.ts`'s drawn-at check
@@ -928,7 +929,8 @@ works unchanged on SVG `<g>` elements inside the pan and zoom groups, with no st
 > ignores it (P2-R21c). The host drops a shown tip whose trigger has come inside `[inert]`, under the sheet or the drawer
 > (P2-R87). The project name's Enter renames and its Escape takes a draft back, each leaving the focus in the field (P2-R132,
 > which reverses Task 3a's blur); an Escape with no draft goes on to the layers below. A settings draft that Escape takes back
-> takes the key, so the drawer stays open (the final fix wave, FW-9).
+> takes the key, so the drawer stays open (the final fix wave, FW-9), and so is an item search's "No item or fluid matches" note
+> a layer of its own, which the drawer's look reads as an open list (P2-R138).
 
 ### 6.2 Placement
 
@@ -2124,7 +2126,9 @@ after `useProject` had already closed the store.
 > still waits is sent at once with keepalive, merged and split at the server's 100-op limit (P2-R62, P2-R63, P2-R65); a project
 > delete waits for its deferred posts (P2-R65). Cancel in the type-the-name confirm stops a delete still waiting for them, and
 > leaves the confirm ready to ask again; Cancel and Escape in it give the focus back to the button that opened it, and the
-> keyboard's Delete keeps the focus in the form while it waits (the final fix wave, FW-6).
+> keyboard's Delete keeps the focus in the form while it waits (the final fix wave, FW-6). A delete confirmed from a list row hands
+> the focus on as the row goes: to the nearest row left's link, the next, else the one before, else the New project field, else
+> `<main>` (P2-R140).
 
 ### 12.3 Markup and CSS
 
@@ -2337,7 +2341,9 @@ export function InlineConfirm(props: { question: string; confirmLabel: string; c
 > named a panel no Escape closes (P2-R134). R46: the column takes the focus when the window outgrows the drawer only if the
 > control that had it is no longer drawn, or the focus was already lost (plan ruling `aside-refocus`; P2-R80); and a window that
 > narrows to the drawer's width moves a focus in the column, or on the head's Shortcuts button, to the Settings button, and one on
-> the head's Compare modes to its twin in the bar under the banner (P2-R133).
+> the head's Compare modes to its twin in the bar under the banner (P2-R133); one that widens past it moves a focus on the Settings
+> button to the project's name, and one on the bar's Compare modes to the head's (P2-R139). Escape layers in the drawer: a draft
+> taken back (FW-9) and an item search's no-match note (P2-R138) each take a press before the drawer closes.
 
 ### 14.2 Tests
 
@@ -2716,7 +2722,8 @@ Each fix goes in the task that touches its code (D1, P2-D40).
 > something to make" hint (plan rulings `drawer-status-words`, `drawer-status-count`); it says "No problems" when an update ends
 > with none (P2-R52). It says first why a change the page sent failed or was refused (the store's error, which the inert
 > banner's alert says), as the changed field in the drawer snaps back (the final fix wave, FW-10). R46 is built as plan ruling
-> `aside-refocus`, with P2-R80; its twin for a window that narrows is P2-R133 (§14.1).
+> `aside-refocus`, with P2-R80; its twin for a window that narrows is P2-R133, and a widening with the drawer closed is P2-R139
+> (§14.1).
 
 ## 18. Moved to Phase 3 (not in this work)
 
