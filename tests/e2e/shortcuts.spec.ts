@@ -17,6 +17,16 @@ const fitOf = (page: Page): Locator => page.locator('.tab-panel').getByRole('but
 /** The page's hash, which a digit sets as it is pressed: read at once, it says whether the key switched the tab. */
 const hashOf = (page: Page): Promise<string> => page.evaluate(() => location.hash);
 
+/** A finger's long press on `target`, held until its tip reads `tip`, then lifted (in a context with touch: the tip stays until the next tap). */
+async function longPressTip(page: Page, target: Locator, tip: string): Promise<void> {
+  const box = (await target.boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+  await expect(page.getByRole('tooltip')).toHaveText(tip);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}
+
 test('5 selects Materials & steps and moves the focus to it', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   const materials = page.getByRole('tab', { name: 'Materials & steps' });
@@ -276,6 +286,49 @@ test('Escape closes the sheet alone: the Flow highlight stays lit until the next
   await expect(canvas).toHaveClass(/\bfocusing\b/);
   await page.keyboard.press('Escape');
   await expect(canvas).not.toHaveClass(/\bfocusing\b/);
+});
+
+// Fix round 1, I1 (ledger ruling P2-R87): a tip a finger's long press showed stays until the next tap, whatever the pointer does; the sheet
+// makes the page inert, and the tip goes with it, so the next Escape is the sheet's; and that Escape stops at the sheet, Flow's highlight lit
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true });
+
+  test('a long-pressed tip goes as the sheet opens, and one Escape closes the sheet, Flow\'s highlight still lit (P2-R87)', async ({ page }) => {
+    await openWithPlan(page, circuitLv());
+    const canvas = page.locator('svg.flow-canvas');
+    await page.getByLabel('Find item').selectOption({ label: '1x Copper Wire' });
+    await expect(canvas).toHaveClass(/\bfocusing\b/);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());  // the key on the page, not in the select
+    await longPressTip(page, fitOf(page), 'Fit · F');
+    await page.keyboard.press('?');
+    const sheet = sheetOf(page);
+    await expect(sheet).toBeVisible();
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(sheet).toHaveCount(0);
+    await expect(canvas).toHaveClass(/\bfocusing\b/);
+  });
+});
+
+// Fix round 1, I1 (a): the sheet stops every Escape. One a layer above has taken (the shared tooltip's capture listener prevents an Escape and
+// never stops it) is not the sheet's, and goes no further: Flow's window listener, which clears its highlight whatever a layer above did
+// (P2-R21c), never hears it behind the open sheet
+test('an Escape a layer above has taken goes no further than the open sheet', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  await page.getByLabel('Find item').selectOption({ label: '1x Copper Wire' });
+  await expect(canvas).toHaveClass(/\bfocusing\b/);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('?');
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await page.evaluate(() => document.addEventListener('keydown', (e) => { if (e.key === 'Escape') e.preventDefault(); }, { capture: true, once: true }));
+  await page.keyboard.press('Escape');
+  await expect(sheet).toBeVisible();
+  await expect(canvas).toHaveClass(/\bfocusing\b/);
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(canvas).toHaveClass(/\bfocusing\b/);
 });
 
 // P2-R72: while the sheet is open the toasts behind it wait, as they wait out the drawer (P2-R56, P2-R56a): a toast drawn before it stays,

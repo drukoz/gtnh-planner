@@ -18,7 +18,8 @@
 //   the tip has prevented is not the tip's either.
 // - A scroll, the wheel or a resize hide it, and the pointer and the focus then wait again on what they are on; the window's blur and a
 //   hidden page hide it too. While a tip shows, one loop a frame hides it when its trigger has left the document (a list that empties under
-//   a still pointer fires no pointerout, and a finger's tip hears no pointer event at all: Review Focus 2), re-reads its lines (a replan
+//   a still pointer fires no pointerout, and a finger's tip hears no pointer event at all: Review Focus 2) or come inside an inert layer (the
+//   page behind the shortcuts sheet or the settings drawer: ledger ruling P2-R87; and no tip shows there), re-reads its lines (a replan
 //   rewrites a box's), and keeps a focus or touch tip at its element.
 // - Its box gives the focused element (focus) or the trigger its id as one more `aria-describedby` token, unless the tip says no more than
 //   the element's own name (P2-D36) and keys (`aria-keyshortcuts`, which a screen reader says with the name: Fit's tip "Fit · F" describes
@@ -64,6 +65,12 @@ export function TipLines(props: { lines: readonly string[]; mod: string | null; 
     </>
   );
 }
+
+/**
+ * Whether `el` is inside an inert layer, under a modal or the settings drawer (`#root` behind the shortcuts sheet, the page behind the drawer):
+ * its tip goes, and none shows, while it is (ledger ruling P2-R87). A finger's tip stays until the next tap, so no pointer event takes it away.
+ */
+const covered = (el: Element): boolean => el.closest('[inert]') !== null;
 
 /** The trigger of an event's target: the innermost element with a `data-tip`, itself included. */
 function triggerOf(target: EventTarget | null): Element | null {
@@ -178,7 +185,7 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
   const show = (trigger: Element, anchor: Element, mode: TipMode): void => {
     const text = trigger.getAttribute(TIP_ATTR) ?? '';
     const lines = tipLines(text);
-    if (lines.length === 0 || !trigger.isConnected || !anchor.isConnected) return;
+    if (lines.length === 0 || !trigger.isConnected || !anchor.isConnected || covered(trigger) || covered(anchor)) return;
     // an element out of its svg's view (panned past the diagram's edge) shows no tip, not even for a frame (spec §6.2)
     if (mode !== 'pointer' && anchorBox(anchor) === null) return;
     if (exitTimer !== null) clearTimeout(exitTimer);
@@ -249,12 +256,12 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
     el.style.top = `${top}px`;
   };
 
-  /** Once a frame while a tip shows: gone with its trigger, its lines read again, a focus or touch tip kept at its element. */
+  /** Once a frame while a tip shows: gone with its trigger or under an inert layer, its lines read again, a focus or touch tip at its element. */
   const watch = (): void => {
     frame = null;
     const t = shown;
     if (t === null) return;
-    if (!t.trigger.isConnected || !t.anchor.isConnected) {
+    if (!t.trigger.isConnected || !t.anchor.isConnected || covered(t.trigger) || covered(t.anchor)) {
       hide();
       return;
     }

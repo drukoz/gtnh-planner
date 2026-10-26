@@ -542,6 +542,24 @@ test.describe('on a touch screen', () => {
     await expect(toggle).toHaveText(/Make: Basic Circuit$/);                             // the long press picked nothing
   });
 
+  // Fix round 1 of Task 11 (ledger ruling P2-R87): a tip whose trigger comes inside an inert layer goes. A finger's tip stays until the next
+  // tap; at 800 px the drawer makes the page behind it inert, and a tip a long press showed on Fit before the drawer opened goes as it opens
+  test('at 800 px a long-pressed tip goes as the drawer makes the page behind it inert', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 900 });
+    await openWithPlan(page, circuitLv());                                            // a target: the drawer stays shut until asked
+    const fit = page.locator('.tab-panel').getByRole('button', { name: 'Fit', exact: true });
+    const box = (await fit.boundingBox())!;
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+    const tip = page.getByRole('tooltip');
+    await expect(tip).toHaveText('Fit · F');
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.locator('.settings-toggle').focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.settings-toggle')).toHaveAttribute('aria-expanded', 'true');
+    await expect(tip).toHaveCount(0);
+  });
+
   // spec §6.1, P2-D21: a diagram picks on a tap, so a tap on an svg trigger only acts; a long press or the focus shows a box's tip
   test('a tap on a Flow box picks it and shows no tip', async ({ page }) => {
     await openWithPlan(page, circuitLv());

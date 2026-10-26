@@ -18,11 +18,10 @@ export function ShortcutsDialog(props: { onClose(): void; closeRef?: Ref<HTMLBut
   const { onClose, closeRef } = props;
   const titleId = useId();
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
-    if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {   // one layer per press: not a key a tip has hidden itself with
-      e.preventDefault();
-      e.stopPropagation();   // the modal top layer: nothing under it hears this Escape (P2-D22)
-      onClose();
-    } else if (e.key === 'Tab') {
+    // The modal top layer: no Escape gets past it (P2-D22), not even one a layer above took (a tip's, which it prevents and never stops); it
+    // closes on one nobody took, one layer per press (P2-R21b)
+    if (e.key === 'Escape') { e.stopPropagation(); if (!e.nativeEvent.defaultPrevented) { e.preventDefault(); onClose(); } return; }
+    if (e.key === 'Tab') {
       // Close is the sheet's one control, and Tab and Shift+Tab stay on it: the page behind is inert, and past it the focus would fall to
       // the page's body, where Escape is no longer the sheet's
       e.preventDefault();
