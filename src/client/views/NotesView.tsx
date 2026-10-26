@@ -5,13 +5,16 @@
 // A button pressed here that goes, or is disabled, hands the keyboard's focus on, never leaving it on the page's body (ledger rulings P2-R57,
 // P2-R68): Delete before its note goes, to the next note's Delete, else the previous note's, else the field to add a note; Add note, which the
 // field it clears disables, to that field; Save and Cancel, whose form goes, back to the note's Edit. A held Enter deletes one note, not the
-// next one Delete hands the focus to (P2-R69).
+// next one Delete hands the focus to (P2-R69). A note's Undo gives the focus back to the note it restored (P2-R74): once its row is back, its
+// Delete takes the focus that the Undo left on the page's main (P2-R57's last resort) or to be lost (a pointer's Undo, which moves none); a
+// focus anywhere else stays where it is, and a row not drawn moves nothing.
 
-import { useLayoutEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent, type ReactElement, type RefObject } from 'react';
 import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import type { Note, ProjectOp } from '../../shared/types/project.ts';
 import { focusLost, focusMain, focusOn, ignoreHeldEnter } from '../components/focus.ts';
+import { focusInLeavingToast } from '../components/Toasts.tsx';
 import { localTime } from '../format.ts';
 import { dismissToast, showToast } from '../state/toasts.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -47,10 +50,22 @@ function handFocusOn(row: Element): void {
   if (!focusOn(row.closest('.notes')?.querySelector('.note-add textarea'))) focusMain();
 }
 
-function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps['send']; sendLater: ProjectViewProps['sendLater'] }): ReactElement {
-  const { note, plan, send, sendLater } = props;
+function NoteItem(props: {
+  note: Note; plan: Plan | null; send: ProjectViewProps['send']; sendLater: ProjectViewProps['sendLater'];
+  /** The note whose toast's Undo has just run: its row, as it comes back, may take the focus (P2-R74). */
+  refocus: RefObject<string | null>;
+}): ReactElement {
+  const { note, plan, send, sendLater, refocus } = props;
   const [draft, setDraft] = useState<string | null>(null);
   const edit = useRef<HTMLButtonElement>(null);
+  const del = useRef<HTMLButtonElement>(null);
+  // P2-R74: the row of a note whose Undo has just run, back again, takes the focus that Undo left on the page's main or to be lost with its
+  // toast; a focus elsewhere (where P2-R57 gave it back, or the user put it) stays
+  useLayoutEffect(() => {
+    if (refocus.current !== note.id) return;
+    refocus.current = null;
+    if (document.activeElement === document.querySelector('main') || focusLost() || focusInLeavingToast()) focusOn(del.current);
+  }, []);
   const wasEditing = useRef(false);
   // Save and Cancel take the form away with the button pressed: the focus that leaves on the body goes back to the note's Edit
   useLayoutEffect(() => {
@@ -77,7 +92,11 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
     // left, so it takes the toast away. Its toast's going posts it, so its time runs on while the page is hidden (ledger ruling P2-R63).
     const key = `note:${note.id}`;
     const later = sendLater(ops, { onFlush: () => dismissToast(key) });
-    showToast('Note deleted', { key, action: { label: 'Undo', run: () => later.cancel() }, onExpire: () => later.flush(), runsHidden: true });
+    const undo = (): void => {
+      refocus.current = note.id;                                                          // before its row comes back (P2-R74)
+      later.cancel();
+    };
+    showToast('Note deleted', { key, action: { label: 'Undo', run: undo }, onExpire: () => later.flush(), runsHidden: true });
   };
   return (
     <li className="note" data-note-id={note.id}>
@@ -102,7 +121,7 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
         <div className="row note-actions">
           <button ref={edit} type="button" onClick={() => setDraft(note.text)}>Edit</button>
           {/* a held Enter deletes one note, not the next one this hands the focus to (ledger ruling P2-R69) */}
-          <button type="button" onClick={(e) => remove(e.currentTarget)} onKeyDown={ignoreHeldEnter}>Delete</button>
+          <button ref={del} type="button" onClick={(e) => remove(e.currentTarget)} onKeyDown={ignoreHeldEnter}>Delete</button>
         </div>
       )}
     </li>
@@ -112,6 +131,11 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
 export function NotesView(props: ProjectViewProps): ReactElement {
   const { project, plan, send, sendLater } = props;
   const [text, setText] = useState('');
+  const refocus = useRef<string | null>(null);
+  // a mark no row took, its note not drawn, goes with the commit that would have drawn it (its rows' effects run first): nothing moves (P2-R74)
+  useLayoutEffect(() => {
+    refocus.current = null;
+  });
   const add = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
     const note = text.trim();
@@ -129,7 +153,7 @@ export function NotesView(props: ProjectViewProps): ReactElement {
         <p className="muted">No notes yet.</p>
       ) : (
         <ul className="note-list">
-          {project.notes.map((note) => <NoteItem key={note.id} note={note} plan={plan} send={send} sendLater={sendLater} />)}
+          {project.notes.map((note) => <NoteItem key={note.id} note={note} plan={plan} send={send} sendLater={sendLater} refocus={refocus} />)}
         </ul>
       )}
       <form className="note-add" onSubmit={add}>

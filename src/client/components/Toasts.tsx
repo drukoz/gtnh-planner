@@ -31,6 +31,14 @@ const takesTyping = (el: Element): boolean =>
   el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TYPED.has(el.type)) || (el instanceof HTMLElement && el.isContentEditable);
 
 /**
+ * Whether the focus is in a toast that is leaving, where it is lost as the toast goes: a pointer's Undo or Dismiss moves no focus, so Chromium
+ * leaves it on the button it pressed (the keyboard's press has moved it on before the toast leaves, `moveFocusOff`).
+ */
+export function focusInLeavingToast(): boolean {
+  return document.activeElement?.closest('.toast[data-state="leaving"]') != null;
+}
+
+/**
  * Before the toast of `button` goes from under the focus (its Undo, `acting`, or its Dismiss), the focus moves on (P2-R57): back to where it came
  * into the region from, while that is in the page and not inert, and, for an Undo, not a field that takes typing (a field being edited keeps its
  * draft, so the project's name would keep the name the Undo takes back and send it again on its blur); else to the same button of the next toast
