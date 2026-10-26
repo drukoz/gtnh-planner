@@ -204,4 +204,41 @@ describe('solveBuildRunsAside (release gate round 2, G1)', () => {
       posted.mockRestore();
     }
   });
+
+  // The retry Duty plate's leanest line takes (its first solve stops at 0.16 s, its root LP relaxation unsolved at
+  // MIP_FEASIBILITY_TOLERANCE, then the retry at 1e-9). No small planner model reaches that path, so this is a synthetic
+  // one: the 30 x 30 Hilbert matrix (about as ill-conditioned as a matrix gets), all integer, its equalities met by every
+  // third column at 1, and no start. At 1e-10 HiGHS stops its first solve with no finite dual bound (`rootLpFailed`); at
+  // 1e-9 it proves the optimum, 65.
+  const n = 30;
+  const hilbert: LpModel = {
+    sense: 'min', colCost: Array.from({ length: n }, (_, j) => (j % 2 === 1 ? 1e-12 : 1 + j)),
+    colLower: new Array<number>(n).fill(0), colUpper: new Array<number>(n).fill(1e4), integer: new Array<boolean>(n).fill(true),
+    rows: Array.from({ length: n }, (_, i) => {
+      const entries = Array.from({ length: n }, (_, j): [number, number] => [j, 1 / (i + j + 1)]);
+      const b = entries.reduce((sum, [j, h]) => sum + (j % 3 === 0 ? h : 0), 0);
+      return { lower: b, upper: b, entries };
+    }),
+  };
+  const retryJob: BuildRunsJob = {
+    model: { ...hilbert, maxNodes: 50, maxIterations: 50_000, timeLimit: 30, strongBranching: false, keepImproving: true },
+    retryTolerance: 1e-9, tiny: 1e-9,
+  };
+
+  it('retries where the root LP relaxation did not solve, and gives exactly that on the solver thread in one job', async () => {
+    const here = await solveBuildRuns(retryJob);
+    expect(here.retried).toBe(true);
+    expect(here.runs).toHaveLength(2);
+    expect(here.runs[0]?.rootLpFailed).toBe(true);
+    expect(here.runs[1]?.rootLpFailed).toBeUndefined();
+    expect(here.runs[1]?.status).toBe('optimal');
+    await solveLpAside(cover);   // the solver thread started
+    const posted = vi.spyOn(Worker.prototype, 'postMessage');
+    try {
+      expect(await solveBuildRunsAside(retryJob)).toStrictEqual(here);
+      expect(posted).toHaveBeenCalledTimes(1);
+    } finally {
+      posted.mockRestore();
+    }
+  });
 });
