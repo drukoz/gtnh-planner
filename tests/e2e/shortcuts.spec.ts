@@ -4,8 +4,9 @@
 // field is typed, and no key is a shortcut while the drawer, the sheet or another modal is open, nor inside an in-app confirm (ledger ruling
 // P2-R73). The sheet is the top layer: #root is inert behind it, Escape closes it alone (P2-D22) and the focus goes back to the opener (the
 // button pressed, or what had the focus for `?`), else to the head's Shortcuts button, else to the drawer's Keyboard shortcuts button while
-// the drawer is open, else to the selected tab (P2-R71), never to the page's body; the toasts wait it out as they wait out the drawer
-// (P2-R72). Every project here has a target, so no drawer opens by itself, but in the last case, where that drawer is what it tests.
+// the drawer is open, else to the selected tab (P2-R71), never to the page's body nor into a closed drawer (P2-R90); the toasts wait it out
+// as they wait out the drawer (P2-R72). Every project here has a target, so no drawer opens by itself, but in the last case, where that
+// drawer is what it tests.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
@@ -38,6 +39,21 @@ async function longPressTip(page: Page, target: Locator, tip: string): Promise<v
   await expect(page.getByRole('tooltip')).toHaveText(tip);
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await cdp.detach();
+}
+
+/**
+ * Holds the page's animations still over CDP, as the developer tools' Animations panel pauses them: a transition started meanwhile stays at
+ * its start however slow the machine is (CSS transitions run on the browser's time, which `page.clock` does not fake). Gives back what lets
+ * them run again.
+ */
+async function holdAnimations(page: Page): Promise<() => Promise<void>> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Animation.enable');
+  await cdp.send('Animation.setPlaybackRate', { playbackRate: 0 });
+  return async () => {
+    await cdp.send('Animation.setPlaybackRate', { playbackRate: 1 });
+    await cdp.detach();
+  };
 }
 
 test('5 selects Materials & steps and moves the focus to it', async ({ page }) => {
@@ -535,16 +551,14 @@ test('at 1280 px the sheet gives the focus back to the head\'s Shortcuts button 
 
 // Fix round 3: the drawer's Keyboard shortcuts button is the sheet's way back only while the drawer is open. A window narrowed to 900 px or
 // less under the sheet no longer draws the head's Shortcuts button that opened it, and draws the closed drawer for the 180 ms it slides out:
-// its button would take the focus then, and the focus would drop to the page's body as the drawer is hidden. The page's animations are held
-// still over CDP (as the developer tools' Animations panel pauses them), so that exit is held at its start however slow the machine is
+// its button would take the focus then, and the focus would drop to the page's body as the drawer is hidden (ledger ruling P2-R90, which
+// covers the opener too: the next case). That exit is held at its start (`holdAnimations`)
 test('a window narrowed to 800 px under the sheet gives the focus to the selected tab, not to the closed drawer\'s Keyboard shortcuts button', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   await page.getByRole('button', { name: 'Shortcuts', exact: true }).click();
   const sheet = sheetOf(page);
   await expect(sheet).toBeVisible();
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Animation.enable');
-  await cdp.send('Animation.setPlaybackRate', { playbackRate: 0 });
+  const release = await holdAnimations(page);
   await page.setViewportSize({ width: 800, height: 900 });
   await expect(page.locator('.project-body')).not.toHaveClass(/\bsettings-open\b/);
   // found when hidden too, so that its last check says it is hidden, not gone
@@ -555,9 +569,39 @@ test('a window narrowed to 800 px under the sheet gives the focus to the selecte
   await expect(sheet).toHaveCount(0);
   const tab = page.getByRole('tab', { selected: true });
   await expect(tab).toBeFocused();
-  await cdp.send('Animation.setPlaybackRate', { playbackRate: 1 });
-  await cdp.detach();
+  await release();
   await expect(drawerButton).toBeHidden();                                             // the drawer's exit has ended
+  await expect(tab).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});
+
+// Ledger ruling P2-R90: nothing in the settings column takes the focus back while the column is a closed drawer, the opener included. `?`
+// pressed at 1280 on the reuse tick, which takes no typing, makes the tick the opener; a window narrowed under the sheet then makes the
+// column a closed drawer, drawn for the 180 ms it slides out, and the tick would take the focus then and lose it to the body
+test('? pressed on a column tick at 1280 px, then the window narrowed to 800 px under the sheet: the focus goes to the selected tab, not into the closed drawer (P2-R90)', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  // found when hidden too, so that its last check says it is hidden, not gone
+  const tick = page.locator('aside[aria-label="Project settings"]').getByRole('checkbox', { name: 'Reuse machines we have', includeHidden: true });
+  await tick.focus();
+  await page.keyboard.press('?');
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press('Escape');                                                 // control: at 1280 the tick is the opener, drawn
+  await expect(sheet).toHaveCount(0);
+  await expect(tick).toBeFocused();
+  await page.keyboard.press('?');
+  await expect(sheet).toBeVisible();
+  const release = await holdAnimations(page);
+  await page.setViewportSize({ width: 800, height: 900 });
+  await expect(page.locator('.project-body')).not.toHaveClass(/\bsettings-open\b/);
+  await expect(tick).toBeVisible();                                                    // the closed drawer, held on its way out
+  await watchBodyFocus(page);
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  const tab = page.getByRole('tab', { selected: true });
+  await expect(tab).toBeFocused();
+  await release();
+  await expect(tick).toBeHidden();                                                     // the drawer's exit has ended
   await expect(tab).toBeFocused();
   expect(await bodyFocusCount(page)).toBe(0);
 });

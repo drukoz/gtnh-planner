@@ -496,10 +496,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // column, the drawer there, ends with a Keyboard shortcuts button, which opens the sheet over the open drawer. The sheet
   // (components/ShortcutsSheet.tsx) gives the focus back as it closes: to its opener while that is still drawn (the button pressed, focused or
   // not, or what had the focus for `?`), else to the head's Shortcuts button if it is drawn (not below 900 px), else to the drawer's Keyboard
-  // shortcuts button while the drawer is open (a window narrowed under the sheet draws the closed drawer for the 180 ms it slides out: the
-  // focus its button took then would drop to the body as the drawer is hidden, fix round 3), else to the selected tab, else to the page's
-  // main, never to the body (ledger ruling P2-R71: when nothing had the focus, there is no opener to go back to). The sheet turns the
-  // single-key shortcuts off for this browser (ledger ruling P2-R85, WCAG 2.1.4): off, no key acts and nothing says a key.
+  // shortcuts button if it is drawn (below 900 px, the drawer open), else to the selected tab, else to the page's main, never to the body
+  // (ledger ruling P2-R71: when nothing had the focus, there is no opener to go back to). Nothing in the settings column counts as drawn
+  // while the column is a closed drawer (ledger ruling P2-R90): a window narrowed under the sheet draws that drawer for the 180 ms it slides
+  // out, and a focus given into it then (to the drawer's button, or to a column control `?` was pressed on above 900 px) would drop to the
+  // body as the drawer is hidden. The sheet turns the single-key shortcuts off for this browser (ledger ruling P2-R85, WCAG 2.1.4): off, no
+  // key acts and nothing says a key.
   const keysOn = useSingleKeyShortcuts();
   const [sheetOpen, setSheetOpen] = useState(false);
   const shortcutsButton = useRef<HTMLButtonElement | null>(null);
@@ -550,9 +552,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
     refocusFromSheet.current = false;
     const opener = sheetOpener.current;
     sheetOpener.current = null;
-    const drawn = (el: Element | null): boolean => el !== null && el.isConnected && el.getClientRects().length > 0;
+    // P2-R90: what the column holds is not drawn while the column is a closed drawer, though the drawer is drawn for the 180 ms it slides out
+    const closedDrawer = matchMedia(NARROW).matches && !settingsOpen;
+    const drawn = (el: Element | null): boolean =>
+      el !== null && el.isConnected && el.getClientRects().length > 0 && !(closedDrawer && settingsPanel.current?.contains(el) === true);
     const selectedTab = document.querySelector('.tabs [aria-selected="true"]');
-    for (const el of [opener, shortcutsButton.current, settingsOpen ? settingsShortcuts.current : null, selectedTab]) if (drawn(el) && focusOn(el)) return;
+    for (const el of [opener, shortcutsButton.current, settingsShortcuts.current, selectedTab]) if (drawn(el) && focusOn(el)) return;
     focusMain();
   }, [sheetOpen]);
   useLayoutEffect(() => {
