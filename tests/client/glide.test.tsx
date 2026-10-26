@@ -2,10 +2,10 @@
 // animation of its pan group's CSS `transform`, from absolute keyframes that end on the group's `transform` attribute, which holds the view
 // at once. These cases pin the view's two spellings (the keyframe a pan animates, and the matrix the browser computes while it runs) and that
 // nothing glides where the browser cannot animate an element: node here, where the view then moves at once. glide.spec.ts drives the pans in
-// a browser.
+// a browser. Task 13b adds a new layout's glide (spec §16.3): its fade in, and that node, which cannot animate, glides none either.
 
 import { describe, it, expect, vi } from 'vitest';
-import { PAN_ANIMATION_ID, canGlide, glideView, matrixView, panTransform } from '../../src/client/views/glide.ts';
+import { FADE_IN, PAN_ANIMATION_ID, canGlide, glideLayout, glideView, matrixView, panTransform } from '../../src/client/views/glide.ts';
 
 describe('the diagrams glide', () => {
   it('writes a view as the CSS transform a pan animates: px for the offset, which is the SVG\'s user units', () => {
@@ -51,5 +51,17 @@ describe('the diagrams glide', () => {
       vi.unstubAllGlobals();
       vi.resetModules();
     }
+  });
+
+  // Task 13b: a box that comes in fades from nothing to its own opacity, one keyframe at the start (an end one would fade it out), so a box that
+  // comes in under a focus ends at its `.dim` 0.18
+  it('fades a box in from nothing to its own opacity: one keyframe, at the start', () => {
+    expect(FADE_IN).toEqual([{ opacity: 0, offset: 0 }]);
+  });
+
+  it('never glides a new layout where the browser cannot animate an element (node): the boxes move at once', () => {
+    const root = { querySelector: vi.fn(() => null) } as unknown as SVGGElement;
+    glideLayout(root, { moved: [{ id: 'a', from: [0, 0], to: [10, 0] }], entered: ['b'], left: ['c'], rerouted: ['e'] }, { boxes: ['data-node-id'], edges: 'data-edge-id', extra: '.flow-riders' });
+    expect(root.querySelector).not.toHaveBeenCalled();
   });
 });

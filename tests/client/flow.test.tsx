@@ -8,11 +8,12 @@ import {
   collapsedLines, firstProducer, edgeTag, rowNameRoom, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, flowIssueLines, type FlowLayout, type FlowNode,
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
   CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
+  layoutChange, glidable, GLIDE_LIMIT, type LayoutChange, type PlacedPicture,
 } from '../../src/client/views/flow-model.ts';
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
-import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, disjoint, outsideWindow } from '../../src/client/views/FlowView.tsx';
+import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, outsideWindow } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import { settingsHash } from '../../src/shared/project/settings-hash.ts';
@@ -866,5 +867,59 @@ describe('flow diagram: a box outside the window', () => {
     expect(disjoint({ top: 690, bottom: 720, left: 100, right: 300 }, canvas), 'cut by its bottom').toBe(false);
     expect(disjoint({ top: 400, bottom: 430, left: 880, right: 1000 }, canvas), 'cut by its right').toBe(false);
     expect(disjoint({ top: 400, bottom: 430, left: 100, right: 300 }, canvas), 'inside').toBe(false);
+  });
+});
+
+// The diagrams glide (Phase 2 spec §16.3, Task 13b): what a new layout changed, which `glideLayout` animates — the boxes (and the open lines'
+// frames) that moved, came and went, and the arrows whose points changed or that are new. The same layout again (every SSE refetch) and a
+// first one change nothing, and a change that moves more than GLIDE_LIMIT boxes snaps (review focus 4).
+describe('what a new layout changed', () => {
+  const at = (nodes: Array<[string, number, number]>, edges: Array<[string, Array<[number, number]>]> = [], groups: Array<[string, number, number]> = []): PlacedPicture =>
+    ({ nodes: nodes.map(([id, x, y]) => ({ id, x, y })), edges: edges.map(([id, points]) => ({ id, points })), groups: groups.map(([id, x, y]) => ({ id, x, y })) });
+  it('reports the boxes that moved, came and went, and the arrows that changed', () => {
+    expect(layoutChange(at([['a', 0, 0], ['b', 10, 0], ['g', 5, 5]], [['e', [[0, 0], [10, 0]]], ['f', [[1, 1], [2, 2]]]]), at([['a', 0, 0], ['b', 20, 0], ['c', 0, 50]], [['e', [[0, 0], [20, 0]]], ['f', [[1, 1], [2, 2]]], ['h', [[0, 0], [0, 50]]]], [['line:x', 0, 0]])))
+      .toEqual({ moved: [{ id: 'b', from: [10, 0], to: [20, 0] }], entered: ['c', 'line:x'], left: ['g'], rerouted: ['e', 'h'] });
+  });
+  it('animates nothing for the same layout again (every SSE refetch), or for a first one', () => {
+    const same = at([['a', 1, 2]], [['e', [[0, 0], [1, 1]]]]);
+    expect(layoutChange(same, at([['a', 1, 2]], [['e', [[0, 0], [1, 1]]]]))).toEqual({ moved: [], entered: [], left: [], rerouted: [] });
+    expect(layoutChange(null, same)).toEqual({ moved: [], entered: [], left: [], rerouted: [] });
+  });
+  it('glides a change of up to 200 moved boxes, and snaps a bigger one', () => {   // Review Focus 4
+    const moved = (n: number): LayoutChange => ({ moved: Array.from({ length: n }, (_, i) => ({ id: `n${i}`, from: [0, 0], to: [1, 0] })), entered: [], left: [], rerouted: [] });
+    expect(GLIDE_LIMIT).toBe(200); expect(glidable(moved(200))).toBe(true); expect(glidable(moved(201))).toBe(false);
+  });
+  // a line opened or closed keeps its id (`line:<key>`) from its collapsed box to its open frame: one box, moved, not one gone and one come;
+  // an arrow that loses or gains a bend is rerouted, and one that is gone is not (it has nothing left to fade in)
+  it('moves a line from its collapsed box to its open frame, and reroutes an arrow whose bends changed', () => {
+    expect(layoutChange(at([['line:k', 40, 10]], [['e', [[0, 0], [5, 0]]], ['gone', [[0, 0], [1, 0]]]]), at([], [['e', [[0, 0], [2, 2], [5, 0]]]], [['line:k', 30, 0]])))
+      .toEqual({ moved: [{ id: 'line:k', from: [40, 10], to: [30, 0] }], entered: [], left: [], rerouted: ['e'] });
+    // a box that went keeps the old layout's order; one moved on one axis only still moved
+    expect(layoutChange(at([['z', 0, 0], ['y', 0, 0], ['x', 0, 0]]), at([['x', 0, 1]])))
+      .toEqual({ moved: [{ id: 'x', from: [0, 0], to: [0, 1] }], entered: [], left: ['z', 'y'], rerouted: [] });
+  });
+});
+
+// A box a new layout dropped fades out where it was, as a ghost (Phase 2 spec §16.3, P2-D42; Task 13b): a plain copy of its box in its kind's
+// colours, `owned` for a step owned in whole or in part, `new` for a new one, else its stub's kind. It carries nothing a box carries for the
+// hit test, the focus, the tips or the tests (the `[data-step-id]` counts, the `.dim` count, `loosePipeEnds`), so none of them sees it.
+describe('a removed box\'s ghost', () => {
+  const ghost = (kind: FlowNode['kind'], owned: FlowNode['owned'] = 'none'): string =>
+    renderToStaticMarkup(<svg><FlowGhostShape ghost={{ id: 'wire', kind, owned, x: 10, y: 20.5, width: 190, height: 80, opacity: 0.18 }} onGone={() => {}} /></svg>);
+  it('draws a plain copy of the box, where it was, in its kind\'s colours', () => {
+    expect(ghost('step')).toBe('<svg><g class="flow-ghost new" aria-hidden="true" transform="translate(10 20.5)"><rect class="flow-ghost-box" width="190" height="80"></rect></g></svg>');
+    expect(['all', 'some', 'none'].map((owned) => /class="flow-ghost (\w+)"/.exec(ghost('step', owned as FlowNode['owned']))?.[1])).toEqual(['owned', 'owned', 'new']);
+    for (const kind of ['import', 'missing', 'sink', 'out', 'line'] as const) expect(ghost(kind), kind).toContain(`<g class="flow-ghost ${kind}" aria-hidden="true"`);
+  });
+  it('carries nothing a box carries for the pointer, the focus, the tips or the tests', () => {
+    for (const kind of ['step', 'import', 'missing', 'sink', 'out', 'line'] as const) {
+      const html = ghost(kind, 'some');
+      for (const attr of ['data-node-id', 'data-step-id', 'data-kind', 'data-port', 'data-key', 'data-tip', 'role', 'tabindex', 'aria-label']) {
+        expect(html, `${kind}: ${attr}`).not.toContain(`${attr}=`);
+      }
+      expect(html, kind).not.toMatch(/\b(hl|dim)\b/);
+      expect(html, `${kind}: its opacity is its fade's`).not.toContain('opacity');
+      expect(html, kind).not.toMatch(/flow-port|flow-node-box|flow-node\b/);
+    }
   });
 });

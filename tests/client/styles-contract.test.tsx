@@ -6,6 +6,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { EASE_IN, EASE_OUT, EXIT_MS, GLIDE_MS, PAN_MS } from '../../src/client/state/motion.ts';
+import { DIM_OPACITY } from '../../src/client/views/flow-model.ts';
 import { cssBlocks, declarations, scan, themeTokens, type Block } from './css-blocks.ts';
 
 const read = (file: string): string => readFileSync(new URL(`../../src/client/${file}`, import.meta.url), 'utf8');
@@ -1297,6 +1298,14 @@ const MANY_CONTENTS = '.flow-canvas.many-edges .flow-edge:not(.hl) .flow-edge-fl
 const RIDER = '.flow-rider';
 const RIDER_STOPS = '.flow-canvas.dragging .flow-rider, .flow-canvas.pipes-paused .flow-rider, .flow-rider.dim';
 const RIDER_RULES = [RIDER, RIDER_STOPS];
+/**
+ * Phase 2 Task 13b (spec §16.3, P2-D42): a box a new layout dropped, fading out where it was as a ghost, in its kind's colours: `owned` for a
+ * step owned in whole or in part, `new` for a new one, else its stub's kind.
+ */
+const GHOST = '.flow-ghost';
+const GHOST_BOX = '.flow-ghost-box';
+const GHOST_KINDS = ['owned', 'new', 'out', 'import', 'missing', 'sink', 'line'];
+const GHOST_RULES = [GHOST, GHOST_BOX, ...GHOST_KINDS.map((kind) => `.flow-ghost.${kind} > .flow-ghost-box`)];
 const FADES = '.flow-node, .flow-row, .flow-edge, .flow-group';
 const LIT_BOX = '.flow-node.selected > .flow-node-box, .flow-node.producer > .flow-node-box';
 const TAKER_BOX = '.flow-node.consumer > .flow-node-box';
@@ -1341,6 +1350,7 @@ const FLOW_RULES = [
   ...TIER_RULES, ...READOUT_RULES,                                                   // Phase 2 Task 4: the machine readout (spec §7.3)
   ...RECIPE_RULES,                                                                   // Phase 2 Task 5a: the step panel's recipe card (spec §8.4)
   ...RIDER_RULES,                                                                    // Phase 2 Task 12: the goods riding the pipes (spec §15.3)
+  ...GHOST_RULES,                                                                    // Phase 2 Task 13b: a removed box's ghost (spec §16.3)
 ];
 
 describe('the Machine GUI Flow diagram', () => {
@@ -2697,6 +2707,7 @@ const PHASE2_RULES: string[] = [
   ...SHORTCUT_RULES, SHORTCUTS_OPEN,                                                 // Task 11: the shortcuts sheet and the head's button (spec §14.1)
   SETTINGS_SHORTCUTS, SHEET,                                                         // Task 11, fix round 1: the drawer's way in (P2-R85), M5
   ...RIDER_RULES,                                                                    // Task 12: the goods riding the Flow pipes (spec §15.3)
+  ...GHOST_RULES,                                                                    // Task 13b: a removed box's ghost (spec §16.3)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3451,5 +3462,29 @@ describe('the Machine GUI Phase 2: the diagrams glide', () => {
     expect(moving.map((b) => b.prelude)).toEqual([]);
     expect(/\.(?:flow|conn)-pan(?![\w-])/.test('.flow-panel'), 'the pattern names the class whole').toBe(false);
     expect(/\.(?:flow|conn)-pan(?![\w-])/.test('.flow-canvas > .flow-pan'), 'and finds it').toBe(true);
+  });
+
+  // Task 13b (spec §16.3, P2-D42): a box a new layout dropped fades out where it was, as a ghost that never takes the pointer, so the arrow or the
+  // box under it keeps its hover, its click and its tip; a plain copy of its box, each kind's fill and edge its box's, from the same tokens, so
+  // the dark look reaches it with no rule of its own (ledger ruling P2-R10). It has no shadow (among the Flow rules only a box's has one: a case
+  // above), and the stylesheet animates nothing for it: its fade is a WAAPI animation, and FADES stays as it is
+  it('lets a removed box\'s ghost take no pointer', () => {
+    expect(declarations(ruleBody(GHOST))).toEqual([['pointer-events', 'none']]);
+    expect(declarations(ruleBody(GHOST_BOX))).toEqual([['fill', 'var(--flow-raw)'], ['stroke', 'var(--flow-raw-line)'], ['stroke-width', '2']]);
+    expect(declared(GHOST_BOX, 'stroke-width'), 'a box\'s edge').toBe(declared('.flow-node-box', 'stroke-width'));
+    for (const kind of GHOST_KINDS) {
+      const box = `.flow-node.${kind} > .flow-node-box`;
+      expect(declarations(ruleBody(`.flow-ghost.${kind} > .flow-ghost-box`)), kind).toEqual([['fill', declared(box, 'fill')], ['stroke', declared(box, 'stroke')]]);
+    }
+    expect(declarations(ruleBody(FADES))).toEqual([['transition', 'opacity var(--dur-base) var(--ease-out)']]);
+    // a ghost of a box a focus dims fades from where that box was drawn, the stylesheet's dimmed opacity, which FlowView reads as DIM_OPACITY
+    expect(String(DIM_OPACITY), 'DIM_OPACITY').toBe(declared('.flow-canvas.focusing .dim', 'opacity'));
+  });
+
+  // forced colours: a ghost is a box's fill and edge, SVG paints the theme leaves as they are, as it leaves the boxes' own (which have no forced
+  // rule either), decorative and aria-hidden; Task 13b found both ghosts of a replan painted the same with forced colours on and off, whole and
+  // held half way through their fade, so it has no rule: the boxes' treatment
+  it('leaves a ghost as it is in forced colours, as it leaves the boxes', () => {
+    expect(forcedBlock().rules.flatMap((r) => selectorList(r.prelude)).filter((s) => s.includes(GHOST) || s.includes('.flow-node-box'))).toEqual([]);
   });
 });

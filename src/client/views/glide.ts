@@ -1,13 +1,17 @@
-// The diagrams glide (Phase 2 spec §16.1–§16.2, P2-D6; Task 13a): Fit, the zoom buttons and a reveal move a diagram's view in a pan of PAN_MS,
-// a WAAPI animation of its pan group's CSS `transform` from absolute keyframes: from the picture on screen to the view the group's `transform`
-// attribute already holds (React writes it at once), with no fill, so the pan hands the group back to its attribute where it ends (spec §3.3's
-// one exception to "no CSS transform on a <g>"). In SVG a CSS px is a user unit and the origin is 0 0, so the keyframes write the attribute's
-// view as it is. An instant move (the wheel, a drag) holds a pan under way where it is and starts from that picture; the view it commits then
-// ends the pan. Where the browser cannot move a group so (`canGlide`, ledger ruling P2-D46) or the user asks for less motion, the view moves
-// at once, as before; there is no SMIL fallback. Flow's pan group is `g.flow-pan` and Connections' `g.conn-pan`, each driven by `usePan`.
+// The diagrams glide (Phase 2 spec §16.1–§16.3, P2-D6; Tasks 13a and 13b): Fit, the zoom buttons and a reveal move a diagram's view in a pan of
+// PAN_MS, a WAAPI animation of its pan group's CSS `transform` from absolute keyframes: from the picture on screen to the view the group's
+// `transform` attribute already holds (React writes it at once), with no fill, so the pan hands the group back to its attribute where it ends
+// (spec §3.3's one exception to "no CSS transform on a <g>"). In SVG a CSS px is a user unit and the origin is 0 0, so the keyframes write the
+// attribute's view as it is. An instant move (the wheel, a drag) holds a pan under way where it is and starts from that picture; the view it
+// commits then ends the pan. A new layout glides into place the same way (`glideLayout`, Task 13b): each box that moved from where it stood to
+// where its own `transform` attribute already puts it, over GLIDE_MS, while what came fades in; the pan and the boxes' glides are on different
+// groups, so they compose. Where the browser cannot move a group so (`canGlide`, ledger ruling P2-D46) or the user asks for less motion, the
+// view and the boxes move at once, as before; there is no SMIL fallback. Flow's pan group is `g.flow-pan` and Connections' `g.conn-pan`, each
+// driven by `usePan`.
 
 import { useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
-import { EASE_OUT, PAN_MS, prefersReducedMotion } from '../state/motion.ts';
+import { EASE_OUT, GLIDE_MS, PAN_MS, prefersReducedMotion } from '../state/motion.ts';
+import { glidable, type LayoutChange } from './flow-model.ts';
 
 /** A diagram's view: its picture's top left at (x, y) in the svg's px, zoomed by `scale` (the group's `translate(x y) scale(scale)`). */
 export interface PanView { x: number; y: number; scale: number }
@@ -141,25 +145,113 @@ function matrixOf(v: PanView): DOMMatrix {
 }
 
 /**
- * Where `el`, drawn in the pan group `g`, stands on screen once a pan under way there has ended (where it is when none runs): in the view the
- * group's attribute holds, not in the picture on its way there. What decides where the focus goes reads it, so the focus goes where it will
- * be seen (ledger rulings P2-R35 and P2-R36).
+ * The matrix of `el`'s `transform` attribute. Chromium and WebKit give the SVG DOM's matrices as the old SVGMatrix, whose `multiply` takes no
+ * DOMMatrix: each is read as its numbers.
+ */
+function attributeMatrix(el: SVGGraphicsElement): DOMMatrix {
+  const list = el.transform.baseVal;
+  let matrix = new DOMMatrix();
+  for (let i = 0; i < list.numberOfItems; i++) matrix = matrix.multiply(DOMMatrix.fromMatrix(list.getItem(i).matrix));
+  return matrix;
+}
+
+/**
+ * Where `el`, drawn in the pan group `g`, stands on screen once the motion under way there has ended (where it is when none runs): in the view
+ * the group's attribute holds, not in the picture on its way there, and, inside a box that glides into a new layout's place (`glideLayout`,
+ * Task 13b), where that box's own attribute puts it. What decides where the focus goes reads it, so the focus goes where it will be seen
+ * (ledger rulings P2-R35 and P2-R36): a panel's Close pressed while a replan glides the box that opened it judges the box where it lands.
  */
 export function restingBox(g: SVGGElement, el: Element): DOMRect {
   const box = el.getBoundingClientRect();
-  const on = viewOnScreen(g);
   const ctm = g.ownerSVGElement?.getScreenCTM() ?? null;
-  if (on === null || ctm === null) return box;
-  // Chromium and WebKit give the SVG DOM's matrices as the old SVGMatrix, whose `multiply` takes no DOMMatrix: each is read as its numbers
+  if (ctm === null) return box;
+  // how far each box gliding on the way up from `el` to the pan group has yet to go (a glide is a translation), in the diagram's units
+  let glide = new DOMMatrix();
+  for (let a: Element | null = el; a !== null && a !== g; a = a.parentElement) {
+    if (!(a instanceof SVGGraphicsElement) || a.getAnimations().length === 0) continue;
+    const drawn = matrixView(getComputedStyle(a).transform);
+    if (drawn !== null) glide = glide.multiply(attributeMatrix(a)).multiply(matrixOf(drawn).inverse());
+  }
+  const on = viewOnScreen(g);
+  if (on === null && glide.isIdentity) return box;
   const screen = DOMMatrix.fromMatrix(ctm);
-  const list = g.transform.baseVal;
-  let rest = new DOMMatrix();
-  for (let i = 0; i < list.numberOfItems; i++) rest = rest.multiply(DOMMatrix.fromMatrix(list.getItem(i).matrix));
-  // screen px to the svg's units, to the diagram's through the picture on screen, back through the attribute's view, and to screen px
-  const move = screen.multiply(rest).multiply(matrixOf(on).inverse()).multiply(screen.inverse());
+  const rest = attributeMatrix(g);
+  // screen px to the svg's units, to the diagram's through the picture on screen, on by what the boxes have yet to glide, back through the
+  // attribute's view, and to screen px
+  const move = screen.multiply(rest).multiply(glide).multiply((on === null ? rest : matrixOf(on)).inverse()).multiply(screen.inverse());
   const a = new DOMPoint(box.left, box.top).matrixTransform(move);
   const b = new DOMPoint(box.right, box.bottom).matrixTransform(move);
   return new DOMRect(a.x, a.y, b.x - a.x, b.y - a.y);
+}
+
+/**
+ * Ends the motion that moves `el` in the pan group `g`: a pan under way, and the glide of each box `el` is in, so `el` is drawn where it rests
+ * (`restingBox`), as a scroll to it needs.
+ */
+export function settle(g: SVGGElement, el: Element): void {
+  stopPan(g);
+  for (let a: Element | null = el; a !== null && a !== g; a = a.parentElement) {
+    for (const animation of a.getAnimations()) if (animation.effect?.getComputedTiming().endTime !== Infinity) animation.finish();
+  }
+}
+
+/**
+ * What a new layout's glide moves in a diagram (`glideLayout`): the attributes that name its boxes (by the box's id), the one that names its
+ * arrows, and what fades in with the arrows (`extra`, a selector: Flow's rider layer).
+ */
+export interface GlideTargets { boxes: readonly string[]; edges: string; extra?: string }
+
+/**
+ * A fade in, from nothing to the element's own opacity: one keyframe, at offset 0, so its end is the element's own opacity, an implicit one (a
+ * box that comes in under a focus ends at its `.dim` 0.18). A lone keyframe with no offset would be the end one, and fade the element out.
+ */
+export const FADE_IN: Keyframe[] = [{ opacity: 0, offset: 0 }];
+
+/**
+ * Whether a new layout glides into place (Phase 2 spec §16.3): never under reduced motion, nor when it moves more than GLIDE_LIMIT boxes (it snaps:
+ * review focus 4), nor where the browser cannot move a group so (`canGlide`, ledger ruling P2-D46); asked in that order, so the probe never runs
+ * for a layout that would not glide. The boxes a layout drops fade out (FlowView's ghosts) only when it glides.
+ */
+export function layoutGlides(change: LayoutChange): boolean {
+  return !prefersReducedMotion() && glidable(change) && canGlide();
+}
+
+/** The elements of `root` that carry one of `attrs`, by its value (the first attribute that names a value wins). */
+function named(root: Element, attrs: readonly string[]): Map<string, Element> {
+  const found = new Map<string, Element>();
+  for (const attr of attrs) {
+    for (const el of root.querySelectorAll(`[${attr}]`)) {
+      const id = el.getAttribute(attr);
+      if (id !== null && !found.has(id)) found.set(id, el);
+    }
+  }
+  return found;
+}
+
+/**
+ * Glides a diagram's new layout into place in its pan group `root` (Phase 2 spec §16.3), the layout drawn and not yet painted: each box that moved
+ * from where it stood to where its `transform` attribute already puts it, absolute keyframes with no fill, so it hands the box back to its
+ * attribute, over GLIDE_MS with `--ease-out`; each box that came in fades in (`FADE_IN`) over the same time; and each arrow whose points changed
+ * or that came, with `targets.extra` when any did, fades in over the second half (a backwards fill keeps it invisible through the first), so a
+ * pipe is never seen hanging off a box on its way. Each element is found by its id in the attributes `targets` names, all of them in one pass.
+ * Nothing moves for the same layout again (every SSE refetch's), and then the browser is not even asked whether it can glide; nor where
+ * `layoutGlides` says no, so the new layout is drawn at once.
+ */
+export function glideLayout(root: SVGGElement, change: LayoutChange, targets: GlideTargets): void {
+  const { moved, entered, rerouted } = change;
+  if (moved.length + entered.length + rerouted.length === 0 || !layoutGlides(change)) return;
+  const boxes = named(root, targets.boxes);
+  for (const { id, from: [fx, fy], to: [tx, ty] } of moved) {
+    boxes.get(id)?.animate(
+      [{ transform: `translate(${fx}px, ${fy}px)` }, { transform: `translate(${tx}px, ${ty}px)` }], { duration: GLIDE_MS, easing: EASE_OUT, fill: 'none' },
+    );
+  }
+  for (const id of entered) boxes.get(id)?.animate(FADE_IN, { duration: GLIDE_MS, easing: EASE_OUT, fill: 'none' });
+  if (rerouted.length === 0) return;
+  const secondHalf: KeyframeAnimationOptions = { delay: GLIDE_MS / 2, duration: GLIDE_MS / 2, fill: 'backwards' };
+  const arrows = named(root, [targets.edges]);
+  for (const id of rerouted) arrows.get(id)?.animate(FADE_IN, secondHalf);
+  if (targets.extra !== undefined) root.querySelector(targets.extra)?.animate(FADE_IN, secondHalf);
 }
 
 /**

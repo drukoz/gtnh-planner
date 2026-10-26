@@ -6,7 +6,8 @@
 // the picture, the wheel zooms it and Fit shows all of it (./pan-zoom.ts), as for the flow diagram; a click on a box, one
 // of its face rows or a link shows its full configuration in the side panel, and a picked link marks the face rows it
 // leaves and enters. When the panel opens or closes beside it, the picture is fitted again if it still is the fitted one,
-// else keeps its middle (the review of 401d0ca). The Fit button pans the picture there over 250 ms (Phase 2 spec §16.2, P2-D20).
+// else keeps its middle (the review of 401d0ca). The Fit button pans the picture there over 250 ms (Phase 2 spec §16.2, P2-D20), and a
+// new picture glides into place from the last over 260 ms (§16.3).
 
 import {
   Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactElement,
@@ -30,7 +31,8 @@ import { usePipesPaused } from '../state/pipes-paused.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
-import { usePan, type PanView } from './glide.ts';
+import { layoutChange } from './flow-model.ts';
+import { glideLayout, usePan, type GlideTargets, type PanView } from './glide.ts';
 import { DRAG_THRESHOLD, fitView, pointIn, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
 import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -89,6 +91,9 @@ const PAN_KEYS: Readonly<Record<string, readonly [number, number]>> = { ArrowLef
  * 2.8:1): their pipes get a panel-grey casing instead, on which each reads at 3.6:1 or more (design spec §7).
  */
 const DARK_DYES: ReadonlySet<DyeColor> = new Set(['black', 'brown', 'blue', 'gray', 'green', 'purple', 'red']);
+
+/** What a new picture glides (./glide.ts): its boxes and its links. */
+const CONN_GLIDE: GlideTargets = { boxes: ['data-node'], edges: 'data-edge' };
 
 /** A view as its pan's (./glide.ts): the zoom `k` is the pan group's scale. */
 function toPan(v: View): PanView {
@@ -229,7 +234,8 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
  * the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling). The Fit button pans the
  * picture over 250 ms (Phase 2 spec §16.2, P2-D20: `usePan`), its attribute the fitted view at once; every other move is
  * instant and ends a pan under way, the wheel, the drag and the arrow keys from the picture on screen (review focus 1),
- * a refit from the view it was going to, the fitted one.
+ * a refit from the view it was going to, the fitted one. A new picture glides into place from the last (§16.3, `glideLayout`),
+ * inside the view it is drawn in, which a new picture of other boxes fits at once first: one motion a box at a time.
  */
 function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: boolean; onPick(pick: ConnPick): void }): ReactElement {
   const { picture, pick, busy, onPick } = props;
@@ -256,6 +262,8 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const dragged = useRef(false);
   // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
   const shape = useMemo(() => picture.nodes.map((n) => n.id).join('\n'), [picture]);
+  /** The picture drawn before, which a new one glides from (`layoutChange`); null before the first. */
+  const placedBefore = useRef<ConnLayout | null>(null);
   /** The view the last fit gave, the area's size then (or at its last change), and the latest view and picture. */
   const fitted = useRef<View | null>(null);
   const area = useRef<Size>({ width: 0, height: 0 });
@@ -276,6 +284,16 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     else setView(next);
   };
   useLayoutEffect(() => fit(), [shape]);   // reads the current picture; only a change of boxes refits
+  // A new picture glides into place from the last, before it is painted (Phase 2 spec §16.3): its boxes that moved, came and went, and its
+  // links that changed (no ghosts here: Flow's). One of other boxes was fitted at once just above, so its view is drawn as it lands, in this
+  // frame, and the boxes glide inside that view: no pan runs with them (the refit is never panned), so a box moves along one path only. The
+  // first picture, and StrictMode's second run of this effect, which finds the same one, change nothing.
+  useLayoutEffect(() => {
+    const change = layoutChange(placedBefore.current, picture);
+    placedBefore.current = picture;
+    const pan = panRef.current;
+    if (pan !== null) glideLayout(pan, change, CONN_GLIDE);
+  }, [picture]);
 
   useEffect(() => {
     const svg = svgRef.current;

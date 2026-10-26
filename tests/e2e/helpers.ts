@@ -2,10 +2,10 @@
 // display name and a look, open a new project (or one with an EnderIO line laid out on the sample world, on its Connections tab),
 // hold its plan on the way (a replan's busy line), and move the views under its banners (a spacer). Task F3 adds a note through the API, the
 // guard against browser dialogs, and the count of the focus left on the page's body. Task 13a adds the end of every motion that ends (the
-// diagrams' pans), and the check of the Flow pipes' ends that waits for it (pipes.spec.ts's, moved here). All of it but holding a plan, the
-// spacer, the focus count and those two (which watch or act on the page that is open) works before the first navigation,
-// because the request context of `page.context()` resolves relative URLs against `use.baseURL` and shares the browser context's
-// cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
+// diagrams' pans), and the check of the Flow pipes' ends that waits for it (pipes.spec.ts's, moved here), which Task 13b ties to each pipe's
+// own two flanges (Phase 2 spec §16.4's deferred F7). All of it but holding a plan, the spacer, the focus count and those two (which watch or
+// act on the page that is open) works before the first navigation, because the request context of `page.context()` resolves relative URLs
+// against `use.baseURL` and shares the browser context's cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
 
 import { expect, type Locator, type Page, type Route } from '@playwright/test';
 import type { Plan, PlanSettings } from '../../src/shared/types/plan.ts';
@@ -251,13 +251,19 @@ export const finishMotion = (page: Page): Promise<void> => page.evaluate(() => {
 });
 
 /**
- * The ends of the Flow pipes that no flange holds (`[]` when every one is on a flange), and how many pipes were measured; once every motion
- * that ends has ended (`finishMotion`), so a pan under way is measured where it ends (pipes.spec.ts's, moved here by Task 13a).
+ * The ends of the Flow pipes that their own flanges do not hold (`[]` when every one is on its own), and how many pipes were measured; once every
+ * motion that ends has ended (`finishMotion`), so a pan or a new layout's glide under way is measured where it ends (pipes.spec.ts's, moved here
+ * by Task 13a). A pipe's start is on the flange of the row it leaves, its end on the flange of the row it enters: the two ports its arrow's
+ * `data-edge-id` names, `<fromPort>-><toPort>` (Phase 2 spec §16.4's F7, Task 13b), each `[data-port="<port>"] > rect.flow-port`.
  */
 export async function loosePipeEnds(page: Page): Promise<{ loose: string[]; pipes: number }> {
   await finishMotion(page);
   return page.evaluate(() => {
-    const flanges = [...document.querySelectorAll('svg.flow-canvas rect.flow-port')].map((flange) => flange.getBoundingClientRect());
+    const flanges = new Map<string, DOMRect>();
+    for (const row of document.querySelectorAll('svg.flow-canvas [data-port]')) {
+      const flange = row.querySelector(':scope > rect.flow-port');
+      if (flange !== null) flanges.set(row.getAttribute('data-port') ?? '', flange.getBoundingClientRect());
+    }
     const pipes = [...document.querySelectorAll<SVGPathElement>('svg.flow-canvas path.flow-edge-line')];
     const loose: string[] = [];
     for (const pipe of pipes) {
@@ -267,12 +273,16 @@ export async function loosePipeEnds(page: Page): Promise<{ loose: string[]; pipe
         loose.push(`${id}: not drawn`);
         continue;
       }
-      const ends: Array<[string, DOMPoint]> = [['start', pipe.getPointAtLength(0)], ['end', pipe.getPointAtLength(pipe.getTotalLength())]];
-      for (const [which, point] of ends) {
+      const ports = id.split('->');
+      const ends: Array<[string, DOMPoint, string | undefined]> = [
+        ['start', pipe.getPointAtLength(0), ports[0]], ['end', pipe.getPointAtLength(pipe.getTotalLength()), ports[1]],
+      ];
+      for (const [which, point, port] of ends) {
         const at = new DOMPoint(point.x, point.y).matrixTransform(toScreen);
-        // inside some flange: across it give or take a pixel, and within its height
-        const held = flanges.some((f) => at.x >= f.left - 1 && at.x <= f.right + 1 && at.y >= f.top && at.y <= f.bottom);
-        if (!held) loose.push(`${id} ${which} at (${at.x.toFixed(1)}, ${at.y.toFixed(1)})`);
+        // inside its own port's flange: across it give or take a pixel, and within its height
+        const f = ports.length === 2 && port !== undefined ? flanges.get(port) : undefined;
+        const held = f !== undefined && at.x >= f.left - 1 && at.x <= f.right + 1 && at.y >= f.top && at.y <= f.bottom;
+        if (!held) loose.push(`${id} ${which} at (${at.x.toFixed(1)}, ${at.y.toFixed(1)})${f === undefined ? `: no flange of ${port ?? '?'}` : ''}`);
       }
     }
     return { loose, pipes: pipes.length };

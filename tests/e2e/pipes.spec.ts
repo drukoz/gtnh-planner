@@ -1,7 +1,8 @@
 // The pipes of the diagrams move and stay connected (restyle plan Phase 1 Tasks 6 and 7, design spec §7 and §7a, review focuses 4
 // and 5). The Flow part opens a real project of the Mini-GT e2e server and serves a fixture plan in place of the server's, the way
-// flow-focus.spec.ts does: the contents of every pipe move, every pipe starts and ends on the flange of a port at any zoom, a
-// drag stops them, and a user who asked for reduced motion gets pipes that hold still. The Connections part lays an EnderIO line
+// flow-focus.spec.ts does: the contents of every pipe move, every pipe starts and ends on the flange of a port at any zoom (since
+// Phase 2 Task 13b each on its own two ports' flanges, `loosePipeEnds`), a drag stops them, and a user who asked for reduced motion gets
+// pipes that hold still. The Connections part lays an EnderIO line
 // out on the uploaded sample world, the way connections.spec.ts does: the contents of its pipes move too. Phase 2 Task 12 (spec §15):
 // goods ride the Flow pipes, never take the pointer, stop with the pipes and are not drawn for reduced motion; above 200 arrows only
 // the lit pipes carry them.

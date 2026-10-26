@@ -8,8 +8,9 @@
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
 // it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms, at once, while Fit, the zoom buttons, a reveal,
-// a line opened or closed and a new plan's view pan there over 250 ms (Phase 2 spec §16.2, ./glide.ts). A good rides each pipe, its icon
-// carried from the output to the input (Phase 2 spec §15), and stops with the pipe's contents.
+// a line opened or closed and a new plan's view pan there over 250 ms (Phase 2 spec §16.2, ./glide.ts), and a new layout glides into place
+// from the last over 260 ms, what it drops fading out where it stood (§16.3). A good rides each pipe, its icon carried from the output to the
+// input (Phase 2 spec §15), and stops with the pipe's contents.
 // The panel slides in once and each new one fades in; a step picked inside a panel takes the focus to its own (Phase 2 spec §8.6), and
 // its Close gives the focus back to the box head that opened it, or to the canvas once that box is gone or out of the canvas's view
 // (ledger ruling P2-R36). While the plan, or its layout, is on its way the view says so beside a skeleton of a diagram (Phase 2 spec
@@ -27,6 +28,7 @@ import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { useItemIcon } from '../assets/icons.ts';
 import { Figs } from '../components/Figs.tsx';
+import { focusLost, focusOn } from '../components/focus.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
 import { SHEET_KEY_HINT } from '../components/ShortcutsSheet.tsx';
@@ -35,6 +37,7 @@ import { tipText } from '../components/tooltip-model.ts';
 import {
   endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
 } from '../state/flow-focus.ts';
+import { EASE_IN, EXIT_MS } from '../state/motion.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
@@ -42,11 +45,11 @@ import {
   BUSY_BAND, BUSY_TRACK_HEIGHT, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
   NODE_TITLE_HEIGHT, PORT_SIZE, POWER_GAP, READOUT_LEFT, ROW_HEIGHT, SLOT_TOP, STEP_HEAD_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
   TOGGLE_SPACE,
-  busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets, fromElk,
-  lineNodeId, problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
-  type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type MachineReadout,
+  DIM_OPACITY, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
+  fromElk, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
+  type FlowLayout, type FlowNode, type FlowNodeKind, type FlowRow, type FocusSets, type MachineReadout,
 } from './flow-model.ts';
-import { restingBox, stopPan, usePan, type PanView } from './glide.ts';
+import { glideLayout, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
 import { pointIn } from './pan-zoom.ts';
 import { RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, rideRoute, riderEdges, riderPhase, riderSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -442,6 +445,39 @@ function EdgeTagShape(props: { edge: PlacedEdge }): ReactElement | null {
   );
 }
 
+/**
+ * A box a new layout dropped (Phase 2 spec §16.3, P2-D42): its kind, how much of it the group owned, where it stood and its size, from that layout,
+ * and the opacity it was drawn at: whole, or DIM_OPACITY for a box a focus did not light.
+ */
+interface Ghost { id: string; kind: FlowNodeKind; owned: FlowNode['owned']; x: number; y: number; width: number; height: number; opacity: number }
+
+/**
+ * A box a new layout dropped, fading out where it stood (Phase 2 spec §16.3, P2-D42): a plain copy of its box in its kind's colours, `owned` for a
+ * step the group owns in whole or in part, `new` for a new one, else its stub's kind. It is aria-hidden and the stylesheet gives it no pointer,
+ * and it carries nothing a box carries for the hit test, the focus, the tips or the tests (no id, kind or port, no role or tab stop, no light, no
+ * flange), so none of them sees it. From the moment it is drawn it fades over EXIT_MS with `--ease-in`, from the opacity its box was drawn at (a
+ * dimmed box's ghost never flashes whole first) to nothing, where it is held until `onGone` takes it away.
+ */
+export function FlowGhostShape(props: { ghost: Ghost; onGone(ghost: Ghost): void }): ReactElement {
+  const { ghost, onGone } = props;
+  const ref = useRef<SVGGElement | null>(null);
+  useLayoutEffect(() => {
+    const fade = ref.current?.animate([{ opacity: ghost.opacity }, { opacity: 0 }], { duration: EXIT_MS, easing: EASE_IN, fill: 'forwards' });
+    if (fade === undefined) return undefined;
+    fade.addEventListener('finish', () => onGone(ghost));
+    return () => fade.cancel();
+  }, [ghost]);   // a new ghost of the same box fades again from the start; `onGone` takes away the ghost it is given, whichever render made it
+  const look = ghost.kind === 'step' ? (ghost.owned === 'none' ? 'new' : 'owned') : ghost.kind;
+  return (
+    <g ref={ref} className={`flow-ghost ${look}`} aria-hidden="true" transform={`translate(${ghost.x} ${ghost.y})`}>
+      <rect className="flow-ghost-box" width={ghost.width} height={ghost.height} />
+    </g>
+  );
+}
+
+/** What a new layout of the Flow diagram glides (./glide.ts): its boxes and open lines, its arrows, and the goods riding them. */
+const FLOW_GLIDE: GlideTargets = { boxes: ['data-node-id', 'data-group-id'], edges: 'data-edge-id', extra: '.flow-riders' };
+
 /** Each arrow head, `[marker id, head class]`: one per colour, since CSS cannot pass an arrow's colour into its marker. */
 const ARROW_HEADS: Array<[string, string]> = [
   ['flow-arrow', 'flow-arrow-head'], ['flow-arrow-fluid', 'flow-arrow-head-fluid'], ['flow-arrow-hl', 'flow-arrow-head-hl'],
@@ -544,9 +580,12 @@ interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
  * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`). Its first view is drawn at once; Fit,
  * the zoom buttons, a reveal, a line opened or closed and a later plan's view are panned to over 250 ms (Phase 2 spec §16.2, `usePan`),
- * while the wheel and a drag move the view at once, from the picture on screen, where they stop a pan under way (review focus 1). The
+ * while the wheel and a drag move the view at once, from the picture on screen, where they stop a pan under way (review focus 1). A new
+ * layout glides into place from the last (§16.3, `glideLayout`), and the boxes it dropped fade out where they stood, as ghosts. The
  * canvas can take the focus from a script, out of the tab order: a panel's Close gives it there once the box that opened the panel is
- * gone or panned out of its view (P2-R36). A press focuses it too, with no ring; the keyboard's ring is drawn inside it.
+ * gone or panned out of its view (P2-R36), and so does a new layout that takes away what had the focus (a box a replan dropped), unless it
+ * draws the same line's open/collapse button again elsewhere, which takes it back. A press focuses it too, with no ring; the keyboard's
+ * ring is drawn inside it.
  */
 function FlowCanvas(props: {
   layout: FlowLayout; viewKey: string; selectedId: string | null; goods: Array<{ key: StuffKey; name: string }>;
@@ -571,6 +610,12 @@ function FlowCanvas(props: {
   const hovered = useRef('');
   /** A line just opened or closed: its box, to centre once the new layout has it. */
   const centreNext = useRef<string | null>(null);
+  /** The layout drawn before, which a new one glides from (`layoutChange`); null before the first. */
+  const placedBefore = useRef<FlowLayout | null>(null);
+  /** The boxes new layouts dropped, fading out where they stood (Phase 2 spec §16.3, P2-D42). */
+  const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  /** What in the canvas has the focus (its last `focusin`), until the focus leaves it while that is still drawn. */
+  const focusedIn = useRef<Element | null>(null);
   const focus = useFlowFocus();
   const reveal = useFlowReveal();
   const seenReveal = useRef(reveal);
@@ -609,6 +654,33 @@ function FlowCanvas(props: {
     const id = centreNext.current;
     if (id !== null && centre(id)) centreNext.current = null;
   }, [layout]);
+  // A new layout glides into place from the last, before it is painted (Phase 2 spec §16.3): the boxes that moved, came and went, and the
+  // arrows and goods that changed (`glideLayout`); while it glides, the boxes it dropped fade out where they stood in the last, as ghosts, each
+  // from the opacity it was drawn at under the focus (a ghost of a box dropped again starts over). The first layout, and StrictMode's second run
+  // of this effect, which finds the same one, change nothing.
+  // What had the focus and is gone with the last layout gives it on, never to the body (ledger rulings P2-R36, P2-R57): to the same line's
+  // open/collapse button where the new layout draws it again, else to the canvas, where nothing moves the page.
+  useLayoutEffect(() => {
+    const before = placedBefore.current;
+    placedBefore.current = layout;
+    const change = layoutChange(before, layout);
+    const pan = panRef.current;
+    if (pan !== null) glideLayout(pan, change, FLOW_GLIDE);
+    if (before !== null && change.left.length > 0 && layoutGlides(change)) {
+      const left = new Set(change.left);
+      const lit = focusSets(before, focus);
+      const gone = before.nodes.filter((n) => left.has(n.id)).map(({ id, kind, owned, x, y, width, height }) => (
+        { id, kind, owned, x, y, width, height, opacity: lit === null || lit.nodes.has(id) ? 1 : DIM_OPACITY }
+      ));
+      setGhosts((shown) => [...shown.filter((ghost) => !left.has(ghost.id)), ...gone]);
+    }
+    const had = focusedIn.current;
+    const svg = svgRef.current;
+    if (had === null || had.isConnected || svg === null || !focusLost()) return;
+    const line = had.getAttribute('data-line-toggle');
+    const again = line === null ? undefined : [...svg.querySelectorAll('[data-line-toggle]')].find((el) => el.getAttribute('data-line-toggle') === line);
+    if (!focusOn(again, { preventScroll: true })) focusOn(svg, { preventScroll: true });
+  }, [layout]);
   useEffect(() => {
     if (reveal === seenReveal.current) return;
     seenReveal.current = reveal;
@@ -632,6 +704,28 @@ function FlowCanvas(props: {
     return () => svg.removeEventListener('wheel', onWheel);
   }, []);
   useEffect(() => {
+    const svg = svgRef.current;
+    if (svg === null) return undefined;
+    // what in the canvas takes the focus; the focus leaving it while it is still drawn (for another control, or for nothing: a press on the
+    // page) leaves nothing to give on. A microtask later: a new layout that takes it away removes it first, and the layout's effect, which runs
+    // before the microtask, gives the focus on
+    const into = (e: FocusEvent): void => {
+      focusedIn.current = e.target instanceof Element ? e.target : null;
+    };
+    const out = (e: FocusEvent): void => {
+      const was = e.target;
+      queueMicrotask(() => {
+        if (focusedIn.current === was && was instanceof Element && was.isConnected) focusedIn.current = null;
+      });
+    };
+    svg.addEventListener('focusin', into);
+    svg.addEventListener('focusout', out);
+    return () => {
+      svg.removeEventListener('focusin', into);
+      svg.removeEventListener('focusout', out);
+    };
+  }, []);
+  useEffect(() => {
     // Esc clears the focus wherever the keyboard is; a hover still lit when the diagram goes away is put back.
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
@@ -646,6 +740,8 @@ function FlowCanvas(props: {
   }, []);
 
   const fit = (minZoom: number): void => glideTo(fitView(layout, canvas().width, canvas().height, minZoom));
+  /** A ghost whose fade has run goes (that one: a newer ghost of the same box stays). */
+  const dropGhost = (ghost: Ghost): void => setGhosts((shown) => shown.filter((other) => other !== ghost));
   const zoomCentre = (factor: number): void => glideTo((v) => zoomed(v, canvas().width / 2, canvas().height / 2, factor));
 
   const hitOf = (target: EventTarget | null): Hit | null => {
@@ -806,6 +902,8 @@ function FlowCanvas(props: {
           <g className="flow-riders" aria-hidden="true">
             {riders.map((edge) => <FlowRiderShape key={edge.id} edge={edge} lit={sets === null ? null : sets.edges.has(edge.id)} />)}
           </g>
+          {/* the boxes new layouts dropped, fading out where they stood (Phase 2 spec §16.3): over the goods, whose rides end under the boxes */}
+          {ghosts.map((ghost) => <FlowGhostShape key={ghost.id} ghost={ghost} onGone={dropGhost} />)}
           {layout.nodes.map((node) => <FlowNodeShape key={node.id} node={node} sets={sets} selected={node.id === selectedId} />)}
           {sets !== null && layout.edges.filter((edge) => sets.edges.has(edge.id)).map((edge) => <EdgeTagShape key={edge.id} edge={edge} />)}
         </g>
@@ -830,7 +928,8 @@ export function outsideWindow(box: PageBox, width: number, height: number): bool
 
 /**
  * Where `el` stands on screen; for what the diagram draws, where it stands once a pan under way has ended, in the view the pan group's attribute
- * holds (Task 13a): what the focus will show is judged where it will be, not on the picture on its way there.
+ * holds (Task 13a), and once a new layout's glide of its box has ended, where the box's attribute puts it (Task 13b): what the focus will show is
+ * judged where it will be, not on the picture on its way there.
  */
 function boxAtRest(el: Element): DOMRect {
   const pan = el.closest<SVGGElement>('g.flow-pan');
@@ -840,14 +939,14 @@ function boxAtRest(el: Element): DOMRect {
 /**
  * Gives `el` the focus without moving the page, then, only when the window shows no part of `seen` (what must be in sight: a panel's head, or
  * `el` itself) where it rests (`boxAtRest`), scrolls `seen` in by the least scroll, so the focus stays in sight (ledger rulings P2-R35 and
- * P2-R36; WCAG 2.4.11). What the window shows, even in part, never moves the page. The scroll goes by where `seen` is drawn, so a pan under way
- * ends at once first, where it rests.
+ * P2-R36; WCAG 2.4.11). What the window shows, even in part, never moves the page. The scroll goes by where `seen` is drawn, so a pan under way,
+ * and the glide of a new layout that moves its box, end at once first, where it rests.
  */
 function focusInWindow(el: HTMLElement | SVGElement, seen: Element = el): void {
   el.focus({ preventScroll: true });
   if (!outsideWindow(boxAtRest(seen), innerWidth, innerHeight)) return;
   const pan = seen.closest<SVGGElement>('g.flow-pan');
-  if (pan !== null) stopPan(pan);
+  if (pan !== null) settle(pan, seen);
   seen.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
@@ -907,7 +1006,8 @@ function FlowDiagram(props: {
   // pick on the canvas leaves the focus where it is.
   // The new panel stands where the old one stood, so neither moves the page unless the window shows nothing of the panel's head or of the
   // box head (a plain focus would jump the page to show a panel's cut-off end): then that comes in by the least scroll (P2-R35, P2-R36).
-  // While Fit, a zoom button or a reveal still pans the diagram, the box head is judged where the pan ends (`boxAtRest`, Task 13a).
+  // While Fit, a zoom button or a reveal still pans the diagram, or a new layout glides the box, the box head is judged where it will rest
+  // (`boxAtRest`, Tasks 13a and 13b).
   useLayoutEffect(() => {
     if (focusPanel.current) {
       focusPanel.current = false;

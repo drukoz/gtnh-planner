@@ -6,9 +6,10 @@
 // material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
 // laid-out picture read back from it, what a focus lights (an item, a box or an arrow), what does not add up, the rate
 // and overclock texts (the shared formatter of fix spec §6.1), the word for each kind of import, the settings patches
-// the panels send (fix spec §6.3), each with the whole new value of one setting, and the numbers of the step panel's
-// recipe card (Phase 2 spec §8: its slots and stack counts, its readouts, its overclock chips and its energy bar). Base
-// materials sit on the left and the target on the right.
+// the panels send (fix spec §6.3), each with the whole new value of one setting, the numbers of the step panel's
+// recipe card (Phase 2 spec §8: its slots and stack counts, its readouts, its overclock chips and its energy bar), and
+// what a new layout changed of the last, which the diagrams glide (Phase 2 spec §16.3). Base materials sit on the left
+// and the target on the right.
 
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -130,6 +131,9 @@ export type Focus = { kind: 'item'; key: StuffKey } | { kind: 'node'; id: string
 
 /** What a focus lights (fix spec §6.2): boxes, arrows and rows (ports), and of the boxes those that make and that take. */
 export interface FocusSets { nodes: Set<string>; edges: Set<string>; ports: Set<string>; producers: Set<string>; consumers: Set<string> }
+
+/** How what a focus does not light is drawn (fix spec §6.2): dimmed, at the stylesheet's `.flow-canvas.focusing .dim` opacity. */
+export const DIM_OPACITY = 0.18;
 
 /** Box widths come from their text, between these (fix spec §6.2). */
 export const MIN_NODE_WIDTH = 190;
@@ -1040,6 +1044,65 @@ export function centreOn(
   node: { x: number; y: number; width: number; height: number }, view: { zoom: number; x: number; y: number }, canvas: { width: number; height: number },
 ): { zoom: number; x: number; y: number } {
   return { zoom: view.zoom, x: canvas.width / 2 - (node.x + node.width / 2) * view.zoom, y: canvas.height / 2 - (node.y + node.height / 2) * view.zoom };
+}
+
+/**
+ * A laid-out picture as a new layout's glide reads it (Phase 2 spec §16.3): where its boxes stand (a Flow diagram's open lines' frames too,
+ * `groups`), each by its id, and the points of its arrows. A Flow layout and a Connections picture are both one.
+ */
+export interface PlacedPicture {
+  nodes: ReadonlyArray<{ id: string; x: number; y: number }>;
+  edges: ReadonlyArray<{ id: string; points: ReadonlyArray<readonly [number, number]> }>;
+  groups?: ReadonlyArray<{ id: string; x: number; y: number }>;
+}
+
+/**
+ * What a new layout changed (Phase 2 spec §16.3): the boxes on both at another place, from where to where (`moved`); those only on the new
+ * (`entered`) and only on the old (`left`); and the arrows whose points changed, with the new ones (`rerouted`).
+ */
+export interface LayoutChange {
+  moved: Array<{ id: string; from: [number, number]; to: [number, number] }>;
+  entered: string[]; left: string[]; rerouted: string[];
+}
+
+/** A new layout that moves more boxes than this snaps into place instead of gliding, so no frame of a big plan runs long (review focus 4). */
+export const GLIDE_LIMIT = 200;
+
+/** Whether two arrows run through the same points. */
+function samePoints(a: ReadonlyArray<readonly [number, number]>, b: ReadonlyArray<readonly [number, number]>): boolean {
+  return a.length === b.length && a.every(([x, y], i) => x === b[i]?.[0] && y === b[i]?.[1]);
+}
+
+/**
+ * What `after` changed of `before` (Phase 2 spec §16.3): a box is a node or an open line's frame, by its id (a line keeps its id, `line:<key>`,
+ * from its collapsed box to its open frame, so it moves); one at the same place is not moved, and an arrow through the same points is not
+ * rerouted, so the same layout again (every SSE refetch's) changes nothing, and so does a first one (`before` null). The lists follow `after`'s
+ * order, `left` `before`'s.
+ */
+export function layoutChange(before: PlacedPicture | null, after: PlacedPicture): LayoutChange {
+  const change: LayoutChange = { moved: [], entered: [], left: [], rerouted: [] };
+  if (before === null) return change;
+  const boxes = (p: PlacedPicture): ReadonlyArray<{ id: string; x: number; y: number }> => [...p.nodes, ...(p.groups ?? [])];
+  const was = new Map(boxes(before).map((b) => [b.id, b]));
+  const now = boxes(after);
+  for (const box of now) {
+    const old = was.get(box.id);
+    if (old === undefined) change.entered.push(box.id);
+    else if (old.x !== box.x || old.y !== box.y) change.moved.push({ id: box.id, from: [old.x, old.y], to: [box.x, box.y] });
+  }
+  const kept = new Set(now.map((b) => b.id));
+  for (const box of boxes(before)) if (!kept.has(box.id)) change.left.push(box.id);
+  const routes = new Map(before.edges.map((e) => [e.id, e.points]));
+  for (const edge of after.edges) {
+    const old = routes.get(edge.id);
+    if (old === undefined || !samePoints(old, edge.points)) change.rerouted.push(edge.id);
+  }
+  return change;
+}
+
+/** Whether a new layout's change glides: it moves GLIDE_LIMIT boxes or fewer (review focus 4); a bigger one snaps. */
+export function glidable(change: LayoutChange): boolean {
+  return change.moved.length <= GLIDE_LIMIT;
 }
 
 /** The tag in which a lit arrow writes its good and rate ("1x Copper Wire · 2/h", fix spec §6.2), drawn above the boxes. */
