@@ -1,6 +1,6 @@
 # Machine GUI restyle, Phase 2 — design
 
-Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R140, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
+Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R142, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
 Phase 1 merged. Every `file:line` below is at that commit. §24 and the plan were re-checked against `main` at `01da27d` (Phase 1, the
 Make-picker fix, add-on 23 and add-on 17 merged), and their cites are at `01da27d`. On 2026-10-24 the user also chose VT323 for
 figures, Pixelify Sans kept for words: §25 records it, adds its one dependency and overrides anything above that disagrees.
@@ -377,10 +377,11 @@ behaviour. Nothing is deleted or loosened. Additions are not listed here.
 > `tooltips.spec.ts`, whose second Escape now leaves the focus in the field (P2-R132), and its two Review Focus 2 cases, which now
 > press Escape twice, the emptied search's note's and then the drawer's (P2-R138). Inside tests this phase added, P2-R24a,
 > P2-R32, P2-R50, P2-R50b, P2-R60, P2-R74, P2-R86, P2-R89, P2-R96, P2-R97 and P2-R116 changed pins deliberately, and so did the final
-> fix wave: P2-R131 (the diagram skeleton's columns and gap, the narrow recipe readouts, the tooltip's `max-width`), P2-R134 (the
-> sheet's Esc row), the drawer status's signature (FW-10), the strip's `planDrawn` record (FW-13), `glide.spec.ts`'s drawn-at check
-> (FW-14) and `map-summary.test.tsx`'s plain-number pattern (FW-15); and test set-ups a fix needed (an event passed to Keep only, a
-> stand-in `main` for the supporting-lines button, a blur before `?`, an icon named before it is hovered).
+> fix wave: P2-R131 (the diagram skeleton's columns and gap, the narrow recipe readouts, the tooltip's `max-width`), P2-R142 (the
+> narrow recipe readouts again, and a phone's block of its own), P2-R134 (the sheet's Esc row), the drawer status's signature
+> (FW-10), the strip's `planDrawn` record (FW-13), `glide.spec.ts`'s drawn-at check (FW-14) and `map-summary.test.tsx`'s
+> plain-number pattern (FW-15); and test set-ups a fix needed (an event passed to Keep only, a stand-in `main` for the
+> supporting-lines button, a blur before `?`, an icon named before it is hovered).
 
 ## 4. The theme system (dark mode)
 
@@ -928,9 +929,11 @@ works unchanged on SVG `<g>` elements inside the pan and zoom groups, with no st
 > so one press closes one layer app-wide (P2-R21, P2-R21b); Flow's `window` listener is the one named exemption and still
 > ignores it (P2-R21c). The host drops a shown tip whose trigger has come inside `[inert]`, under the sheet or the drawer
 > (P2-R87). The project name's Enter renames and its Escape takes a draft back, each leaving the focus in the field (P2-R132,
-> which reverses Task 3a's blur); an Escape with no draft goes on to the layers below. A settings draft that Escape takes back
-> takes the key, so the drawer stays open (the final fix wave, FW-9), and so is an item search's "No item or fluid matches" note
-> a layer of its own, which the drawer's look reads as an open list (P2-R138).
+> which reverses Task 3a's blur); an Escape with no draft goes on to the layers below. A settings draft that Escape takes back takes
+> the key, so the drawer stays open (the final fix wave, FW-9), but only while it differs from what its field would show without it:
+> one equal to it, as the Amount's draft is after a commit, is dropped and the Escape goes on to the drawer (P2-R141); and so is an
+> item search's "No item or fluid matches" note a layer of its own, which the drawer's look reads as an open list (P2-R138; the
+> search's error note, which its Escape leaves, is none).
 
 ### 6.2 Placement
 
@@ -1504,11 +1507,12 @@ The tokens follow [SR] §4.4, with these changes:
 > empty slot lists are left out (P2-R29). A slot's name is the good, ", N per run" (when not 1), ", P% chance" (below 100 %) and
 > ", not supplied in full", and a fluid's always states its litres (P2-R32, P2-R32a); a chance tag is a whole percent, "<1%"
 > below 1 % and at most "99%" (P2-R34). The energy track, the short ring and the arrow's base have forced-colours rules
-> (P2-R33). Not built: the programmed-circuit slot and the main output's frame (§21). Below 1100 px the readouts stand as many
-> to a row as are 110 px wide, four where there is room and two on a phone, where four ran a seven-glyph figure ("131,072") into
-> the next tile (P2-R131, which changes §8.1's four columns). A good a run takes and gives back in full (a cell, a catalyst) leaves
-> its rate in the line out of its tips, as its ports carry no flow and no need; an input the line does not supply keeps its true
-> "0/min" (the final fix wave, FW-13).
+> (P2-R33). Not built: the programmed-circuit slot and the main output's frame (§21). Below 1100 px the readouts stand four in one
+> row, as §8.1 has them, and at 600 px or less two a row, where four ran a seven-glyph figure ("131,072") into the next tile
+> (P2-R131, P2-R142: a row of as many as were 110 px wide wrapped them three and one beside the settings column, and spread a hand
+> step's lone readout over the row). A good a run takes and gives back in full (a cell, a catalyst) leaves its rate in the line out
+> of its tips, as its ports carry no flow and no need; an input the line does not supply keeps its true "0/min" (the final fix wave,
+> FW-13).
 
 ### 8.5 Data
 
@@ -2343,7 +2347,8 @@ export function InlineConfirm(props: { question: string; confirmLabel: string; c
 > narrows to the drawer's width moves a focus in the column, or on the head's Shortcuts button, to the Settings button, and one on
 > the head's Compare modes to its twin in the bar under the banner (P2-R133); one that widens past it moves a focus on the Settings
 > button to the project's name, and one on the bar's Compare modes to the head's (P2-R139). Escape layers in the drawer: a draft
-> taken back (FW-9) and an item search's no-match note (P2-R138) each take a press before the drawer closes.
+> taken back, one that differs from what its field shows without it (FW-9, P2-R141), and an item search's no-match note (P2-R138)
+> each take a press before the drawer closes.
 
 ### 14.2 Tests
 
@@ -2562,7 +2567,8 @@ drag and wheel stay instant. `connections.spec.ts:45-46` reads the attribute, wh
 > picture; a click lets it run (P2-R104). Connections' resize refit ends a Fit in flight (P2-R105). A new plan's view and a line's
 > box centred are panned to only when the new layout glides; one that snaps takes its view at once (P2-R126, Task F4). A press
 > let go outside the Flow canvas before it became a drag ends at the next move with no button held, as Connections' does, so
-> the view never follows the bare mouse (the final fix wave, FW-11).
+> the view never follows the bare mouse (the final fix wave, FW-11), and its release anywhere, heard on the window while the press
+> is pending, ends it, so a later press elsewhere dragged onto the canvas carries nothing on (the final fix wave's residuals).
 
 ### 16.3 Then the re-layout
 
@@ -2622,9 +2628,10 @@ export function layoutChange(before: FlowLayout | null, after: FlowLayout): Layo
 > focus: a re-layout that removes it hands it to the same line's button if redrawn, else to the canvas; across a window blur it
 > survives; a removed panel control hands it to its panel, a removed panel to the canvas; "N more…" to the first item it reveals
 > (P2-R112, P2-R122, P2-R123, P2-R124); Keep only hands it to its own issue line's Show, and an issue line a replan drops to the
-> first Show left, else the canvas (the final fix wave, FW-7). Connections refits a new picture at once, then its boxes glide,
-> with no ghosts (P2-R114). A second run of the layout effect for the layout it placed (StrictMode's, Fast Refresh's, an Activity
-> shown again) glides, ghosts and holds nothing again (FW-14).
+> first Show left, else the canvas (the final fix wave, FW-7); a replan that takes the whole diagram away (a plan that cannot be
+> planned, Planning…, Pick something…) with the focus in it hands it to `<main>` (P2-R57; the final fix wave's residuals).
+> Connections refits a new picture at once, then its boxes glide, with no ghosts (P2-R114). A second run of the layout effect for
+> the layout it placed (StrictMode's, Fast Refresh's, an Activity shown again) glides, ghosts and holds nothing again (FW-14).
 
 ### 16.4 Keeping e2e deterministic
 
