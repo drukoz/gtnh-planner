@@ -59,18 +59,46 @@ function changedPixels(): { changed: number; white: number; point: [number, numb
   return { changed, white, point: null, rgb: null };
 }
 
-/** Opens the 3D tab (again, while the layout's warnings coming in above the tabs move them) and waits until the line is drawn. */
+/**
+ * Runs in the page before its scripts: marks a canvas once a draw call of its WebGL 2 context ran (the 3D view's first
+ * frame), and keeps the drawing buffer for the test.
+ */
+function markDrawn(): void {
+  try { localStorage.setItem('gp.test.preserveDrawingBuffer', '1'); } catch { /* private mode */ }
+  const proto = WebGL2RenderingContext.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
+  for (const name of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced', 'drawRangeElements']) {
+    const draw = proto[name];
+    if (draw === undefined) continue;
+    proto[name] = function (this: WebGL2RenderingContext, ...args: unknown[]) {
+      (this.canvas as unknown as { gpDrawn?: true }).gpDrawn = true;
+      return draw.apply(this, args);
+    };
+  }
+}
+
+/** Runs in the page: whether the 3D canvas drew its first frame (`markDrawn`). */
+function drawn(): boolean {
+  return document.querySelector<HTMLCanvasElement & { gpDrawn?: true }>('[data-testid=view3d-canvas] canvas')?.gpDrawn === true;
+}
+
+/**
+ * Opens the 3D tab (again, while the layout's warnings coming in above the tabs move them) and waits until the line is
+ * drawn. It reads the canvas only after the viewer's first frame (the controller's ruling G4 at the integration's release
+ * gate, round 2): under load the textures can take longer than the first read, and a `getContext` of the test's own
+ * before the viewer's makes the canvas's context without a kept drawing buffer, so every later read saw 0 pixels.
+ */
 async function open3d(page: Page): Promise<void> {
   await expect(async () => {
     await page.getByRole('tab', { name: '3D' }).click();
     await expect(page.getByTestId('view3d')).toBeVisible({ timeout: 2_000 });
   }).toPass();
   await expect(page.getByTestId('block-list')).toContainText('Item Conduit');
+  await expect.poll(() => page.evaluate(drawn), { timeout: 30_000 }).toBe(true);
   await expect.poll(() => page.evaluate(keepPixels), { timeout: 15_000 }).toBeGreaterThan(50);
 }
 
 test('show the Connections links in 3D, name one by hovering it and mark its faces by clicking it', async ({ page }) => {
-  await page.addInitScript(() => { try { localStorage.setItem('gp.test.preserveDrawingBuffer', '1'); } catch { /* private mode */ } });
+  await page.addInitScript(markDrawn);
   await login(page);
   await setName(page, 'E2E');
   const scanId = await uploadSampleWorld(page);
