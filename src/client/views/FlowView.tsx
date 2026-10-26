@@ -941,6 +941,13 @@ function FlowCanvas(props: {
   };
   const onPointerMove = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
+    if (d !== null && d.pointer === e.pointerId && (e.buttons & 1) === 0) {
+      // let go outside the canvas before it was a drag, so the canvas never heard it (it captures the pointer only once a press is a drag): the
+      // press is over, and the bare pointer lights what it is on, as Connections' drag does (the final fix wave, FW-11)
+      onPointerEnd(e);
+      hover(hitOf(e.target)?.focus ?? null);
+      return;
+    }
     if (d === null || d.pointer !== e.pointerId) {
       hover(hitOf(e.target)?.focus ?? null);
       return;

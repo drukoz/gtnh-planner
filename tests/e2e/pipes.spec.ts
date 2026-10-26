@@ -334,6 +334,30 @@ test('a second pointer cannot leave the flow pipes stopped', async ({ page }) =>
   expect(await page.locator('.flow-edge-flow').first().evaluate((el) => getComputedStyle(el).animationPlayState)).toBe('running');
 });
 
+// the final fix wave, FW-11: the canvas captures the pointer only once a press has moved 4 px (a plain click must reach the box under it), so a
+// press that leaves it before that and is let go outside it never reaches its pointerup: the press stayed down for it, and the bare mouse coming
+// back made the view follow it, every pipe stopped, until the next press. A move with no button held ends such a press, as Connections' does
+// (ConnectionsView's twin of this guard), and lights what is under it again
+test('a press let go outside the canvas before it moved 4 px is over: the bare mouse coming back moves nothing', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const canvas = page.locator('svg.flow-canvas');
+  const pan = page.locator('svg.flow-canvas > g.flow-pan');
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('no canvas');
+  const view = await pan.getAttribute('transform');
+  // pressed 2 px in from the canvas's left edge, near its empty top left corner; out past the edge before 4 px, and let go out there
+  await page.mouse.move(box.x + 2, box.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 6, box.y + 30, { steps: 4 });
+  await page.mouse.up();
+  // the bare mouse comes back in, well past 4 px from where it was pressed
+  await page.mouse.move(box.x + 60, box.y + 50, { steps: 6 });
+  await page.mouse.move(box.x + 90, box.y + 70, { steps: 3 });
+  await expect(canvas).not.toHaveClass(/\bdragging\b/);
+  expect(await pan.getAttribute('transform'), 'the view did not follow the bare mouse').toBe(view);
+  expect(await page.locator('.flow-edge-flow').first().evaluate((el) => getComputedStyle(el).animationPlayState)).toBe('running');
+});
+
 test('reduced motion stills the pipes', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openWithPlan(page, circuitLv());
