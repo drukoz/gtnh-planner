@@ -16,7 +16,7 @@ import type { Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { prefersReducedMotion } from '../state/motion.ts';
 import {
-  COUNT_UP_MS, compactNumber, countUpAt, keyNumbers, nextCount, nextFlash, planUnit, type Count, type Flash, type KeyNumber,
+  COUNT_UP_MS, compactNumber, countUpAt, keyNumbers, nextCount, nextFlash, planDrawn, type Count, type Drawn, type Flash, type KeyNumber,
 } from './key-numbers.ts';
 
 /**
@@ -82,14 +82,14 @@ function KeyNumberTile(props: { n: KeyNumber }): ReactElement {
 /**
  * The strip for a project's plan: nothing without a target; while the plan is on its way, its own grid of five empty blocks as tall as a
  * tile, so it takes the strip's height at every width (ledger ruling P2-R48), the strip's skeleton, which draws no box of its own; else the
- * five tiles, the rate in the unit of the settings the plan was made for, which it remembers of every settings state it draws (`planUnit`,
- * ledger ruling P2-R49).
+ * five tiles, the rate in the unit, and a Make N batch's count, of the settings the plan was made for, which it remembers of every settings
+ * state it draws (`planDrawn`, ledger ruling P2-R49; the final fix wave, FW-13).
  */
 export function KeyNumbers(props: { plan: Plan | null; settings: PlanSettings }): ReactElement | null {
   const { plan, settings } = props;
-  const units = useRef<Map<string, PlanSettings['per']> | null>(null);
-  units.current ??= new Map();   // made once, on the first render
-  const planned = planUnit(units.current, settings, plan);
+  const drawn = useRef<Map<string, Drawn> | null>(null);
+  drawn.current ??= new Map();   // made once, on the first render
+  const planned = planDrawn(drawn.current, settings, plan);
   if (settings.target === null) return null;
   const numbers = keyNumbers(plan, settings, planned);
   if (numbers === null) {

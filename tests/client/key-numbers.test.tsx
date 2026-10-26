@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { compactNumber, countUpAt, keyNumbers, machineCount, nextCount, nextFlash, planUnit, type Count } from '../../src/client/views/key-numbers.ts';
+import { compactNumber, countUpAt, keyNumbers, machineCount, nextCount, nextFlash, planDrawn, type Count, type Drawn } from '../../src/client/views/key-numbers.ts';
 import { KeyNumbers } from '../../src/client/views/KeyNumbers.tsx';
 import { PlanBanner } from '../../src/client/views/ProjectPage.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
@@ -132,10 +132,11 @@ describe('the key-numbers strip', () => {
     const [minute30, minute60, hour60] = [drawn(30, 'min'), drawn(60, 'min'), drawn(60, 'hour')];
     const onScreen = planOf({ ...plan, settingsHash: settingsHash(minute30) });                                  // 0.5 a second
     const arrived = planOf({ ...plan, settingsHash: settingsHash(hour60), targetPerSecond: 60 / 3600 });
-    const units = new Map<string, 'min' | 'hour'>();
-    expect([minute30, minute60, hour60].map((s) => planUnit(units, s, onScreen))).toEqual(['min', 'min', 'min']);   // one plan, three renders
-    expect(keyNumbers(onScreen, hour60, planUnit(units, hour60, onScreen))![0]).toMatchObject({ value: 30, text: '30', unit: '/min' });
-    const next = keyNumbers(arrived, hour60, planUnit(units, hour60, arrived))![0]!;
+    // the final fix wave (FW-13): each state's amount is kept beside its unit, which this case reads; the Make N case below reads the amount
+    const units = new Map<string, Drawn>();
+    expect([minute30, minute60, hour60].map((s) => planDrawn(units, s, onScreen))).toEqual(Array(3).fill({ per: 'min', amount: 30 }));   // one plan, three renders
+    expect(keyNumbers(onScreen, hour60, planDrawn(units, hour60, onScreen))![0]).toMatchObject({ value: 30, text: '30', unit: '/min' });
+    const next = keyNumbers(arrived, hour60, planDrawn(units, hour60, arrived))![0]!;
     expect(next).toMatchObject({ text: '60', unit: '/h' });
     // when it comes, the tile's two steps: the figure at once, never counted from 30 /min, and no flash: another unit, another figure
     expect(nextCount({ from: 30, to: 30, unit: '/min', shown: 30 }, next.value, next.unit, () => false)).toEqual({ from: next.value, to: next.value, unit: '/h', shown: next.value });
@@ -145,7 +146,22 @@ describe('the key-numbers strip', () => {
     expect(nextFlash(shown, { text: '30', unit: '/min', value: 30 })).toBe(shown);                                // nothing changed
     // a dash's figure coming flashes, as any changed text does; settings never drawn here leave the guess
     expect(nextFlash({ text: '—', unit: '', figure: false, changes: 0, running: false }, { text: '30', unit: '/min', value: 30 })).toMatchObject({ changes: 1, running: true });
-    expect(planUnit(new Map(), hour60, onScreen)).toBeUndefined();
+    expect(planDrawn(new Map(), hour60, onScreen)).toBeUndefined();
+  });
+  // the final fix wave, FW-13(a): in Make N the Output tile is the batch's count, which the plan does not carry (`plan.makeN` holds its time): the
+  // strip keeps the amount of every settings state it draws beside its unit and shows the one the plan on screen was made for, so an amount typed
+  // while the old plan is still on screen keeps the old count beside the old plan's time and machines until the new plan comes; it reads the
+  // settings' amount only for settings this page never drew
+  it('shows a Make N batch\'s count from the settings its plan was made for, beside that plan\'s time', () => {
+    const batch = (amount: number) => ({ ...defaultSettings(), target: 't:plate@0', mode: 'makeN' as const, amount });
+    const [of64, of128] = [batch(64), batch(128)];
+    const onScreen = planOf({ ...plan, settingsHash: settingsHash(of64), makeN: { totalSeconds: 600, leftovers: [] } });
+    const units = new Map<string, Drawn>();
+    expect(planDrawn(units, of64, onScreen)).toEqual({ per: of64.per, amount: 64 });
+    expect(keyNumbers(onScreen, of128, planDrawn(units, of128, onScreen))![0]).toMatchObject({ value: 64, text: '64', sub: '10 min' });
+    const arrived = planOf({ ...onScreen, settingsHash: settingsHash(of128), makeN: { totalSeconds: 1200, leftovers: [] } });
+    expect(keyNumbers(arrived, of128, planDrawn(units, of128, arrived))![0]).toMatchObject({ value: 128, text: '128', sub: '20 min' });
+    expect(keyNumbers(onScreen, of128, planDrawn(new Map(), of128, onScreen))![0]).toMatchObject({ value: 128 });   // never drawn: the settings'
   });
   // fix round 1, M3 and M4: useCountUp's step (`nextCount`), the same target changing nothing, a new one counting on from the figure shown, and
   // at once from a dash, to a dash, in another unit and under reduced motion

@@ -326,7 +326,10 @@ export function RecipeCard(props: { step: PlanStep; plan: Plan; index: PlanIndex
     const short = taken !== undefined && taken.needPerSecond > 0 && taken.perSecond < SHORT_INPUT_SHARE * taken.needPerSecond;
     const worn = side === 'in' && tools.has(s.key);
     const count = stackText(s.key, s.amount);
-    const rate = port === undefined ? [] : [`${rateOf(port.perSecond, per, s.key)} in the line`];
+    // a good a run takes and gives back in full (a cell, a catalyst) has ports with no flow and no need: nothing true to say of the line; an input
+    // the line does not supply keeps its 0/min, beside "not supplied in full" (the final fix wave, FW-13)
+    const idle = port === undefined || (port.perSecond === 0 && (taken === undefined || taken.needPerSecond === 0));
+    const rate = idle ? [] : [`${rateOf(port.perSecond, per, s.key)} in the line`];
     const tip = worn
       ? [`wears 1 of its ${formatNumber(Math.round(1 / s.chance))} uses per run`, ...rate]
       : [`${amountWords(s.key, s.amount, nameOf)} per run`, ...(s.chance < 1 ? [`${formatPercent(s.chance)} chance`] : []), ...rate];

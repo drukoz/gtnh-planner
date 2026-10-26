@@ -516,6 +516,19 @@ describe('step panel: recipe card', () => {
     expect(slotOf(panelHtml(circuit, wires), 't:copper_wire@0')).toMatch(/^<li class="recipe-slot"/);
   });
 
+  // the final fix wave, FW-13(b): a good a run takes and gives back in full (a cell, a catalyst) has ports with no flow and no need (indexPlan), so
+  // "0/min in the line" told nothing true of it: its two slots' tips leave the line out. An input the line does not supply keeps its true 0/min,
+  // beside "not supplied in full" in its name
+  it('leaves the rate in the line out of the tips of a good a run takes and gives back, and keeps 0/min for an input the line does not supply', () => {
+    const catalysed = { ...circuit, inputs: [...circuit.inputs, { key: 't:catalyst@0', amount: 1, chance: 1 }], outputs: [...circuit.outputs, { key: 't:catalyst@0', amount: 1, chance: 1 }] };
+    const plan = { ...wires, steps: wires.steps.map((s) => (s.id === catalysed.id ? catalysed : s)), names: { ...wires.names, 't:catalyst@0': 'Catalyst' } };
+    const slots = [...card(catalysed, plan).matchAll(/<li[^>]*data-recipe-key="t:catalyst@0"[^>]*>.*?<\/li>/gs)].map((m) => /data-tip="([^"]*)"/.exec(m[0])?.[1]);
+    expect(slots).toEqual(['Catalyst\nCatalyst per run', 'Catalyst\nCatalyst per run']);   // taken, and given back
+    const short = planOf({ ...wires, flows: wires.flows.filter((f) => f.from !== 'wire') });
+    const starved = slotOf(card(circuit, short), 't:copper_wire@0');
+    expect(starved).toContain('aria-label="1x Copper Wire, 2 per run, not supplied in full" data-tip="1x Copper Wire\n2× 1x Copper Wire per run\n0/min in the line"');
+  });
+
   it('writes a chance tag short enough to stay inside its slot, and the whole chance in the slot\'s name and tip', () => {
     // a 5-glyph tag ("<0.1%", "99.5%") ran past the 36 px slot onto the next one: the tag says "<1%" below 1 % and never "100%"
     const rare = { ...circuit, outputs: [...circuit.outputs, { key: 't:dust@0', amount: 0.0005, chance: 0.0005 }, { key: 't:gem@0', amount: 0.9995, chance: 0.9995 }] };

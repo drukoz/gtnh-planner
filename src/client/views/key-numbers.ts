@@ -48,7 +48,7 @@ const DASH = '—';
 const DASH_WORDS = 'not available';
 /** How near a rate must come to the settings' amount to be the plan of that amount: the server writes it to 9 significant digits (`sig9`). */
 const SAME_RATE = 1e-6;
-/** How many settings states `planUnit` remembers the unit of, the oldest forgotten first: far more than one replan's changes. */
+/** How many settings states `planDrawn` remembers, the oldest forgotten first: far more than one replan's changes. */
 const UNITS_KEPT = 64;
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 const PER_UNIT: Readonly<Record<PlanSettings['per'], string>> = { min: 'min', hour: 'h' };
@@ -113,23 +113,27 @@ export function nextFlash(flash: Flash, n: Pick<KeyNumber, 'text' | 'unit' | 'va
 /** Each settings object's hash, worked out once (a page draws the same settings object again and again). */
 const HASHES = new WeakMap<PlanSettings, string>();
 
+/** What a settings state asked of its plan, as the strip reads it: the unit of its rate and its amount (a Make N batch's count). */
+export interface Drawn { per: PlanSettings['per']; amount: number }
+
 /**
- * The unit the plan on screen was made in (fix round 2, ledger ruling P2-R49): `units` remembers the unit of every settings state the page
- * draws, by its hash, and the plan carries the hash of the settings it was made for (`Plan.settingsHash`, the same test as `flow-model.ts`'s
- * "is this the plan of those settings"). So while the plan of 30 a minute is on screen under settings of 60 an hour, its unit is the minute;
- * undefined for settings this page never drew (the strip then reads the plan's own figures: `planPer`).
+ * What the settings the plan on screen was made for asked of it (fix round 2, ledger ruling P2-R49; the final fix wave, FW-13): `drawn`
+ * remembers the unit and the amount of every settings state the page draws, by its hash, and the plan carries the hash of the settings it was
+ * made for (`Plan.settingsHash`, the same test as `flow-model.ts`'s "is this the plan of those settings"). So while the plan of 30 a minute is
+ * on screen under settings of 60 an hour, its unit is the minute, and while a Make N batch of 64 is on screen under settings of 128, its count is
+ * 64; undefined for settings this page never drew (the strip then reads the plan's own figures, `planPer`, and the settings' amount).
  */
-export function planUnit(units: Map<string, PlanSettings['per']>, settings: PlanSettings, plan: Plan | null): PlanSettings['per'] | undefined {
+export function planDrawn(drawn: Map<string, Drawn>, settings: PlanSettings, plan: Plan | null): Drawn | undefined {
   let hash = HASHES.get(settings);
   if (hash === undefined) {
     hash = settingsHash(settings);
     HASHES.set(settings, hash);
   }
-  if (!units.has(hash)) {
-    units.set(hash, settings.per);
-    if (units.size > UNITS_KEPT) units.delete(units.keys().next().value as string);
+  if (!drawn.has(hash)) {
+    drawn.set(hash, { per: settings.per, amount: settings.amount });
+    if (drawn.size > UNITS_KEPT) drawn.delete(drawn.keys().next().value as string);
   }
-  return plan === null ? undefined : units.get(plan.settingsHash);
+  return plan === null ? undefined : drawn.get(plan.settingsHash);
 }
 
 /**
@@ -165,7 +169,7 @@ function dash(id: KeyNumber['id'], label: string, sub = ''): KeyNumber {
 }
 
 /**
- * The unit the plan's rate was planned in, read from its own figures (fix round 1, M3), where `planUnit` does not know it: the settings' when
+ * The unit the plan's rate was planned in, read from its own figures (fix round 1, M3), where `planDrawn` does not know it: the settings' when
  * the rate gives their amount in it; else the other unit when it gives the amount there (the unit was changed, and the plan of the new one is
  * on its way); else the settings' (a new amount on its way, which the figure counts to).
  */
@@ -180,16 +184,20 @@ function planPer(perSecond: number, settings: Pick<PlanSettings, 'per' | 'amount
 /**
  * What the line makes. In rate mode the plan's own rate in the unit it was planned in (`/min` or `/h`, in litres for a fluid; one too rare
  * for a figure in words, as `formatRate` writes it), and the name of the plan's target: never the settings' target, which is a newer pick
- * while its first plan is on its way (the Settings button and the panel name that one). In Make N the batch's count and the time it takes.
+ * while its first plan is on its way (the Settings button and the panel name that one). In Make N the batch's count and the time it takes: the
+ * count of the settings the plan was made for (`planned`), never a newer amount typed while that plan is still on screen beside its time (FW-13).
  */
-function outputTile(plan: Plan, settings: Pick<PlanSettings, 'per' | 'amount'>, batch: boolean, ok: boolean, planned?: PlanSettings['per']): KeyNumber {
-  if (batch) return ok && plan.makeN !== undefined ? figure('output', 'Output', settings.amount, '', formatDuration(plan.makeN.totalSeconds)) : dash('output', 'Output');
+function outputTile(plan: Plan, settings: Pick<PlanSettings, 'per' | 'amount'>, batch: boolean, ok: boolean, planned?: Drawn): KeyNumber {
+  if (batch) {
+    if (!ok || plan.makeN === undefined) return dash('output', 'Output');
+    return figure('output', 'Output', planned?.amount ?? settings.amount, '', formatDuration(plan.makeN.totalSeconds));
+  }
   const target = plan.target;
   const name = target === undefined ? '' : plan.names?.[target] ?? target;
   const perSecond = plan.targetPerSecond;
   if (!ok || perSecond === undefined) return dash('output', 'Output', name);
   const fluid = target !== undefined && isFluidKey(target);
-  const per = planned ?? planPer(perSecond, settings);
+  const per = planned?.per ?? planPer(perSecond, settings);
   const rate = formatRate(perSecond, per, { fluid });
   if (rate.includes(' every ')) return { id: 'output', label: 'Output', value: null, text: rate, spoken: rate, unit: '', sub: name, words: true };
   return figure('output', 'Output', perSecond * SECONDS_PER[per], `${fluid ? 'L' : ''}/${PER_UNIT[per]}`, name);
@@ -210,13 +218,13 @@ function buildQualifiers(cost: NonNullable<Plan['cost']>, batch: boolean): strin
 }
 
 /**
- * The strip's five tiles for `plan` (spec §10.1), its rate in the unit it was planned in (`planned`, from `planUnit`, else read from its
- * figures) and a Make N batch's count; null while the plan is on its way. A plan that cannot run (not `ok`) gives the five tiles with `—`, and so does a figure a plan lacks (a plan with no cost). A plan with
+ * The strip's five tiles for `plan` (spec §10.1), its rate in the unit it was planned in and a Make N batch's count (`planned`, from `planDrawn`,
+ * else read from its figures and the settings); null while the plan is on its way. A plan that cannot run (not `ok`) gives the five tiles with `—`, and so does a figure a plan lacks (a plan with no cost). A plan with
  * figures says itself whether it is a batch's (`makeN`), so the tiles never mix a running line's figures with a batch's while a plan for the
  * other mode is on its way; a plan without any is read in the mode the settings ask for.
  */
 export function keyNumbers(
-  plan: Plan | null, settings: Pick<PlanSettings, 'mode' | 'per' | 'amount'>, planned?: PlanSettings['per'],
+  plan: Plan | null, settings: Pick<PlanSettings, 'mode' | 'per' | 'amount'>, planned?: Drawn,
 ): KeyNumber[] | null {
   if (plan === null) return null;
   const ok = (plan.status ?? 'ok') === 'ok';
