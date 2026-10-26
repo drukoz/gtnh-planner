@@ -11,7 +11,10 @@ import type { FarmRecipeMeta, TgsMode } from './farm.ts';
 export type OrePart = 'ore' | 'rawOre' | 'crushed' | 'dust' | 'ingot' | 'gem';
 
 export interface PackManifest {
-  format: 'gtnh-planner-export/1'; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string; mods: Record<string, string>; counts: Record<string, number>;
+  format: 'gtnh-planner-export/1' | 'gtnh-planner-export/2'; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string; mods: Record<string, string>; counts: Record<string, number>;
+  // optional addition (/2): the Minecraft version and loader the export came from; a /1 manifest loads with the
+  // loader's synthesis, mcVersion '1.7.10' and loader 'unknown'
+  mcVersion?: string; loader?: string;
   // optional additions: the exporter's own report
   nameFailures?: number; nameFailureSamples?: string[]; sectionMillis?: Record<string, number>;
   failedSections?: string[]; skippedSections?: string[]; warnings?: string[];

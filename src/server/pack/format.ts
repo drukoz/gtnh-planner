@@ -30,10 +30,16 @@
 // - Crop table: adds no line to items.jsonl.gz, so an export with it has the items and recipe ids of one without it;
 //   an item the item table lacks is written inline in the crop line (CropItemRef).
 // - Markers: EXPORT_OK or EXPORT_FAILED is written after every other file is closed.
+// - Format versions: the loader reads /1 (every export written before /2) and /2. /2 adds the manifest's
+//   mcVersion and loader, and an optional ns on a machine line (the namespace of a machine a later adapter
+//   contributes; absent means GregTech, as in /1).
 
 import type { MachineKind, OrePart } from '../../shared/types/pack.ts';
 
-export const EXPORT_FORMAT = 'gtnh-planner-export/1';
+export const EXPORT_FORMAT = 'gtnh-planner-export/2';
+/** The format of every export written before /2; the loader reads it too and synthesises its missing fields. */
+export const EXPORT_FORMAT_V1 = 'gtnh-planner-export/1';
+export type ExportFormat = typeof EXPORT_FORMAT | typeof EXPORT_FORMAT_V1;
 export const MARKER_OK = 'EXPORT_OK';
 export const MARKER_FAILED = 'EXPORT_FAILED';
 
@@ -54,6 +60,8 @@ export interface CraftingLine { cls: string; shape: 'shaped' | 'shapeless' | 'op
 export interface FurnaceLine { in: number; out: [number, number]; xp: number; ef?: [number, number]; mw?: [number, number] }
 export interface MachineLine {
   id: number; name: string; cls: string; dn?: string | null; item: number | null; kind: MachineKind;
+  // optional addition (/2): the namespace of a machine a later adapter contributes; absent means GregTech
+  ns?: string;
   tier?: number; voltage?: number; amps?: number; maps?: string[]; mapsError?: string; perfectOC?: boolean; heatOC?: boolean;
   cable?: { voltage: number; amps: number; lossPerBlock: number; insulated: boolean; material: string | null };
   fluidPipe?: { capacityPerSecond: number; pipes: number; maxTemp: number; gasProof: boolean; material: string | null };
@@ -130,7 +138,10 @@ export const EXPORT_FILES: { readonly manifest: 'manifest.json' } & { readonly [
 export const OPTIONAL_EXPORT_FILES: readonly ExportFileKey[] = ['structures', 'crops'];
 
 export interface ManifestFile {
-  format: typeof EXPORT_FORMAT; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string;
+  format: ExportFormat; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string;
+  // optional addition (/2): the Minecraft version and loader the export came from (a /1 manifest loads with
+  // mcVersion '1.7.10' and loader 'unknown', which the loader synthesises)
+  mcVersion: string; loader: string;
   mods: Record<string, string>;
   // counts[k] = number of lines in EXPORT_FILES[k]; optional addition (add-on 20): counts.hatchRules = the structure
   // lines with elements (exporter 0.6.0+)

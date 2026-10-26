@@ -21,7 +21,7 @@ import cpw.mods.fml.common.ModContainer;
 /** {@code manifest.json}: plain UTF-8 JSON with every field of {@code ManifestFile} in format.ts. */
 public final class Manifest {
 
-    public static final String FORMAT = "gtnh-planner-export/1";
+    public static final String FORMAT = "gtnh-planner-export/2";
     public static final String FILE_NAME = "manifest.json";
 
     private Manifest() {}
@@ -33,6 +33,11 @@ public final class Manifest {
             mods.put(mod.getModId(), mod.getVersion() != null ? mod.getVersion() : "unknown");
         }
         String gtVersion = mods.containsKey("gregtech") ? mods.get("gregtech") : "unknown";
+        // Forge's own values: the minecraft container of the mod list holds the MC version,
+        // Loader.getFMLVersionString() the Forge version; both are read on a dedicated server, where no client
+        // class is available
+        String mcVersion = mods.containsKey("minecraft") ? mods.get("minecraft") : "unknown";
+        String loader = "forge-" + Loader.instance().getFMLVersionString();
         NameResolver names = ctx.names();
 
         Writer out = new BufferedWriter(
@@ -46,6 +51,8 @@ public final class Manifest {
             w.name("exportedAt").value(Instant.now().truncatedTo(ChronoUnit.SECONDS).toString());
             w.name("packVersion").value(System.getProperty("gtnhplanner.packVersion", "unknown"));
             w.name("gtVersion").value(gtVersion);
+            w.name("mcVersion").value(mcVersion);
+            w.name("loader").value(loader);
             w.name("mods").beginObject();
             for (Map.Entry<String, String> e : mods.entrySet()) w.name(e.getKey()).value(e.getValue());
             w.endObject();

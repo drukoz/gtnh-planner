@@ -19,12 +19,12 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
-import { gtMachineId, machineIdOfLegacy } from '../../shared/ids.ts';
+import { gtMachineId, machineIdOfLegacy, makeId } from '../../shared/ids.ts';
 import { fluidKey, itemKey, type FluidKey, type ItemKey } from '../../shared/keys.ts';
 import type { Fluid, Item, Pack, PackManifest, RecipeMapInfo } from '../../shared/types/pack.ts';
 import { cropTable } from './crops.ts';
 import {
-  EXPORT_FILES, EXPORT_FORMAT, OPTIONAL_EXPORT_FILES,
+  EXPORT_FILES, EXPORT_FORMAT, EXPORT_FORMAT_V1, OPTIONAL_EXPORT_FILES,
   type ExportFileKey, type ExportLineTypes, type ItemLine, type ManifestFile, type RecipeMapLine,
 } from './format.ts';
 import { buildIndices, buildMachinesByMap, deriveFurnaceRecipes } from './indices.ts';
@@ -120,17 +120,28 @@ export async function* readJsonl(path: string): AsyncGenerator<{ line: number; v
   }
 }
 
+/**
+ * A manifest of /1 or /2: /1 (every export on disk before /2) is read with its missing /2 fields synthesised,
+ * mcVersion '1.7.10' and loader 'unknown', and its machine lines all read as GT; /2 must have both as strings.
+ */
 function checkManifest(value: unknown): ManifestFile {
   const fail = (reason: string) => new ExportFormatError(MANIFEST, 0, reason);
   if (!isPlainObject(value)) throw fail('expected a JSON object');
-  if (value.format !== EXPORT_FORMAT) throw fail(`format is ${JSON.stringify(value.format)}, this loader reads ${EXPORT_FORMAT}`);
+  const v1 = value.format === EXPORT_FORMAT_V1;
+  if (!v1 && value.format !== EXPORT_FORMAT) {
+    throw fail(`format is ${JSON.stringify(value.format)}, this loader reads ${EXPORT_FORMAT_V1} and ${EXPORT_FORMAT}`);
+  }
   for (const field of MANIFEST_STRINGS) if (typeof value[field] !== 'string') throw fail(`${field} is not a string`);
+  if (!v1) {
+    if (typeof value.mcVersion !== 'string') throw fail('mcVersion is not a string');
+    if (typeof value.loader !== 'string') throw fail('loader is not a string');
+  }
   if (!isPlainObject(value.mods)) throw fail('mods is not an object');
   const counts = value.counts;
   if (!isPlainObject(counts) || !Object.values(counts).every((n) => Number.isSafeInteger(n) && (n as number) >= 0)) {
     throw fail('counts is not an object of line counts');
   }
-  return value as unknown as ManifestFile;
+  return (v1 ? { ...value, mcVersion: '1.7.10', loader: 'unknown' } : value) as unknown as ManifestFile;
 }
 
 async function readManifest(dir: string): Promise<ManifestFile> {
@@ -323,7 +334,7 @@ interface LoadState {
 function toPackManifest(m: ManifestFile): PackManifest {
   return {
     format: m.format, exportId: m.exportId, exporterVersion: m.exporterVersion, exportedAt: m.exportedAt,
-    packVersion: m.packVersion, gtVersion: m.gtVersion, mods: { ...m.mods },
+    packVersion: m.packVersion, gtVersion: m.gtVersion, mcVersion: m.mcVersion, loader: m.loader, mods: { ...m.mods },
     counts: Object.fromEntries(Object.entries(m.counts).filter((e): e is [string, number] => e[1] !== undefined)),
     nameFailures: m.nameFailures, nameFailureSamples: m.nameFailureSamples, sectionMillis: m.sectionMillis,
     failedSections: m.failedSections, skippedSections: m.skippedSections, warnings: m.warnings,
@@ -487,15 +498,21 @@ async function readRecipes({ src, ctx, recipes, furnace }: LoadState): Promise<v
   });
 }
 
-/** The export's machines (a duplicate id warns, the first line wins), then the pack's copies of the pseudo machines. */
+/**
+ * The export's machines (a duplicate id warns, the first line wins), then the pack's copies of the pseudo machines.
+ * A /2 line with `ns` is a machine of that namespace, id `${ns}:${name}`; a /1 export and every line without `ns`
+ * read as GT. `machineByMteId` takes only the GT machines, whose mteId a world scan and a structure can hold.
+ */
 async function readMachines({ src, pack, ctx }: LoadState): Promise<void> {
+  const v2 = src.manifest.format === EXPORT_FORMAT;
   await eachLine(src, 'machines', (line, n) => {
-    const id = gtMachineId(line.id);
+    const ns = v2 ? line.ns : undefined;
+    const id = ns !== undefined ? makeId(ns, line.name) : gtMachineId(line.id);
     if (pack.machines.has(id)) ctx.warn(`${EXPORT_FILES.machines}:${n}: duplicate machine id ${id} ignored, the first line wins`);
     else {
-      const machine = toMachine(line, ctx);
+      const machine = toMachine(line, ctx, id);
       pack.machines.set(machine.id, machine);
-      pack.machineByMteId.set(machine.mteId, machine);
+      if (ns === undefined) pack.machineByMteId.set(machine.mteId, machine);
     }
   });
   for (const pseudo of PSEUDO_MACHINE_ENTRIES) {

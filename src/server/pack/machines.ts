@@ -7,7 +7,7 @@
 import { isExportHatchKind } from '../../shared/gt/hatch-kinds.ts';
 import { PSEUDO_MACHINES } from '../../shared/gt/tiers.ts';
 import { itemKey, type ItemKey } from '../../shared/keys.ts';
-import { gtMachineId, machineIdOfLegacy } from '../../shared/ids.ts';
+import { machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
 import type { BlockRef, Machine, StructureElement, StructureInfo } from '../../shared/types/pack.ts';
 import { EXPORT_FILES, type MachineLine, type StructureLine } from './format.ts';
 import type { LoadContext } from './load.ts';
@@ -72,14 +72,15 @@ function slotsFromName(line: MachineLine, ctx: LoadContext): number {
 }
 
 /**
- * A machine line: names, item, kind and maps, plus the stats the line has (pipe throughputs per second). A line whose
- * maps the exporter could not read warns and has no maps; a battery buffer exported with 0 slots takes them from its
- * name.
+ * A machine line: names, item, kind and maps, plus the stats the line has (pipe throughputs per second). `id` is the
+ * machine's identity, resolved by the caller (load.ts): `gt:<mteId>` for a GT line, `${ns}:${name}` for a /2 line
+ * with `ns`. A line whose maps the exporter could not read warns and has no maps; a battery buffer exported with 0
+ * slots takes them from its name.
  */
-export function toMachine(line: MachineLine, ctx: LoadContext): Machine {
+export function toMachine(line: MachineLine, ctx: LoadContext, id: MachineId): Machine {
   if (line.mapsError) ctx.warn(`machine ${line.id} (${line.name}): recipe maps unreadable: ${line.mapsError}`);
   const machine: Machine = {
-    id: gtMachineId(line.id), mteId: line.id, metaName: line.name, name: line.dn || line.name, cls: line.cls,
+    id, mteId: line.id, metaName: line.name, name: line.dn || line.name, cls: line.cls,
     itemKey: line.item == null ? itemKey(GT_MACHINE_BLOCK, line.id) : (ctx.items.optionsAt(line.item)[0] as ItemKey),
     kind: line.kind, maps: machineMaps(line.maps ?? []),
   };
