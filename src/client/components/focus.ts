@@ -23,3 +23,12 @@ export function focusMain(): void {
 export function focusLost(): boolean {
   return document.activeElement === null || document.activeElement === document.body;
 }
+
+/**
+ * A button's keydown that keeps a held Enter from pressing it again (ledger ruling P2-R69). Chromium presses a focused button once more on each
+ * auto-repeat of a held Enter, and a button that hands the focus on to the next one of its kind as it acts (a note's Delete, a toast's Dismiss)
+ * would press that one too, and the next. A repeated Enter's default is prevented, which prevents its press: one held press acts once.
+ */
+export function ignoreHeldEnter(e: { key: string; repeat: boolean; preventDefault(): void }): void {
+  if (e.repeat && e.key === 'Enter') e.preventDefault();
+}

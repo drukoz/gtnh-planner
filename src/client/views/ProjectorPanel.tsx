@@ -12,8 +12,9 @@
 // the page's body: a row's Revoke that cannot take it (the panel is busy) passes it to the field, and the field to the page's main.
 //
 // Ledger ruling P2-R68: Create token, disabled while the token is made, hands the focus to the field first, and once the token is made to its
-// command's Copy. A revoke that went through, which has no toast, is said on the panel's polite line. Why a revoke failed is said once: in the
-// confirm while its row is still listed after the refresh, else under the form.
+// command's Copy. A revoke that went through, which has no toast, is said on the panel's polite line, and a copy's 2 s never take it off. Why
+// a revoke failed is said once: in the confirm while its row is still listed after the refresh, else under the form, and a list that failed in
+// the same words (the server out of reach) is not said too (P2-R70).
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { messageOf } from '../api/client.ts';
@@ -198,6 +199,7 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
   const copyClick = useRef(0);          // number of the newest Copy click: only its outcome is shown
   const [said, setSaid] = useState<{ key: number; text: string } | null>(null);   // what the panel says aloud on its polite line
   const sayings = useRef(0);                                                          // the key of the last saying
+  const copySaying = useRef<number | null>(null);    // the key of the last copy's "Copied", the one saying a copy may take back
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [asking, setAsking] = useState<string | null>(null);              // the token whose Revoke asks, in its row (Phase 2 spec §13)
   const [revokeError, setRevokeError] = useState<string | null>(null);    // why the revoke it asked for failed
@@ -213,8 +215,14 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
   }, [error]);
 
   const failed = (err: unknown): void => setError(messageOf(err));
-  /** Says `text` aloud on the panel's polite line, as a new saying. */
-  const say = (text: string): void => setSaid({ key: ++sayings.current, text });
+  /** Says `text` aloud on the panel's polite line, as a new saying; returns its key. */
+  const say = (text: string): number => {
+    const key = ++sayings.current;
+    setSaid({ key, text });
+    return key;
+  };
+  /** Takes the saying `key` off the polite line, if it is still the one there: never a later one (a revoke's said meanwhile). */
+  const unsay = (key: number | null): void => setSaid((now) => (now !== null && now.key === key ? null : now));
   /** Asks in the row of token `tokenId`, or in none, with no reason from an earlier answer. */
   const ask = (tokenId: string | null): void => {
     askingNow.current = tokenId;
@@ -235,14 +243,18 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
     const back = panel.current?.querySelector(`li[data-token-id="${CSS.escape(was)}"] > button`);
     if (!focusOn(back) && !focusOn(panel.current?.querySelector('.projector-form input'))) focusMain();
   }, [asking, tokens]);
-  /** Loads the token list again; resolves with it, or with null when that failed (said under the form). */
-  const refresh = (): Promise<TokenInfo[] | null> => {
+  /**
+   * Loads the token list again; resolves with it, or with null when that failed, which is said under the form unless in the words of `unsaid`,
+   * a reason said already: a revoke and its list failing alike (the server out of reach) say it once (ledger ruling P2-R70).
+   */
+  const refresh = (unsaid: string | null = null): Promise<TokenInfo[] | null> => {
     const request = ++listRequest.current;
     return listTokens(projectId).then((list) => {
       if (request === listRequest.current) setTokens(list);
       return list;
     }, (err: unknown) => {
-      failed(err);
+      const why = messageOf(err);
+      if (why !== unsaid) setError(why);
       return null;
     });
   };
@@ -270,7 +282,7 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
     // Create token is disabled while the token is made, and a disabled button drops the focus it has on the body at its next frame: the field
     // takes it first (the confirm's Revoke token hands its focus to Keep it the same way)
     const form = panel.current?.querySelector('.projector-form');
-    if (document.activeElement === form?.querySelector('button[type="submit"]')) focusOn(form?.querySelector('input'));
+    if (document.activeElement === form?.querySelector('button[type="submit"]') && !focusOn(form?.querySelector('input'))) focusMain();
     setBusy(true);
     setError(null);
     createToken(projectId, label)
@@ -300,12 +312,12 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
       }, (err: unknown) => {
         reason = messageOf(err);
       })
-      .then(refresh)                                                                    // also when someone revoked it first: its row goes
+      .then(() => refresh(reason))                                                      // also when someone revoked it first: its row goes
       .then((list) => {
         if (reason === null) return;
-        // Said once (P2-R68). The row still listed (the server refused it, a 503 say; a list that failed to come keeps the rows), its question
-        // still asks: in the confirm, where the focus is on Keep it. Its row gone (someone revoked it first), its question has gone with it,
-        // or a question closed while the revoke was on its way: under the form.
+        // Said once (P2-R68; a list that failed in the same words is not said too, P2-R70). The row still listed (the server refused it, a 503
+        // say; a list that failed to come keeps the rows), its question still asks: in the confirm, where the focus is on Keep it. Its row gone
+        // (someone revoked it first), its question has gone with it, or a question closed while the revoke was on its way: under the form.
         const listed = list?.some((x) => x.tokenId === t.tokenId) ?? true;
         if (listed && askingNow.current === t.tokenId) setRevokeError(reason);
         else setError(reason);
@@ -316,7 +328,8 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
     const click = ++copyClick.current;
     if (copiedTimer.current !== null) clearTimeout(copiedTimer.current);
     copiedTimer.current = null;
-    setSaid(null);
+    unsay(copySaying.current);                                                         // the last copy's own "Copied", and no other saying
+    copySaying.current = null;
     // called right here in the click: without a clipboard API the selection must be copied before the click ends
     void copyCommand(text, browserCopyTools(panel.current)).then((done) => {
       if (click !== copyClick.current) return;
@@ -325,12 +338,13 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
       // that failed shows instead, stays until the next click. Inside the open drawer a toast would only wait behind it, so there is none: the
       // button's "Copied" is the feedback, and the panel's polite line says it aloud (ledger ruling P2-R56)
       if (!done) return;
+      const mine = toastsInert() ? say('Copied') : null;
+      copySaying.current = mine;
       copiedTimer.current = setTimeout(() => {
         setCopied(null);
-        setSaid(null);
+        unsay(mine);                                                                    // its own saying: a revoke's said since stays said
       }, COPIED_MS);
-      if (toastsInert()) say('Copied');
-      else showToast('Command copied');
+      if (mine === null) showToast('Command copied');
     });
   };
   return (

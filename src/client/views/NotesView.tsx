@@ -4,13 +4,14 @@
 //
 // A button pressed here that goes, or is disabled, hands the keyboard's focus on, never leaving it on the page's body (ledger rulings P2-R57,
 // P2-R68): Delete before its note goes, to the next note's Delete, else the previous note's, else the field to add a note; Add note, which the
-// field it clears disables, to that field; Save and Cancel, whose form goes, back to the note's Edit.
+// field it clears disables, to that field; Save and Cancel, whose form goes, back to the note's Edit. A held Enter deletes one note, not the
+// next one Delete hands the focus to (P2-R69).
 
 import { useLayoutEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import type { Note, ProjectOp } from '../../shared/types/project.ts';
-import { focusLost, focusMain, focusOn } from '../components/focus.ts';
+import { focusLost, focusMain, focusOn, ignoreHeldEnter } from '../components/focus.ts';
 import { localTime } from '../format.ts';
 import { dismissToast, showToast } from '../state/toasts.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -100,7 +101,8 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
       {draft === null && (
         <div className="row note-actions">
           <button ref={edit} type="button" onClick={() => setDraft(note.text)}>Edit</button>
-          <button type="button" onClick={(e) => remove(e.currentTarget)}>Delete</button>
+          {/* a held Enter deletes one note, not the next one this hands the focus to (ledger ruling P2-R69) */}
+          <button type="button" onClick={(e) => remove(e.currentTarget)} onKeyDown={ignoreHeldEnter}>Delete</button>
         </div>
       )}
     </li>
@@ -116,7 +118,7 @@ export function NotesView(props: ProjectViewProps): ReactElement {
     if (note === '') return;
     // the field it clears disables Add note, and a disabled button drops the focus it has on the body at its next frame: the field takes it first
     const form = e.currentTarget;
-    if (document.activeElement === form.querySelector('button[type="submit"]')) focusOn(form.querySelector('textarea'));
+    if (document.activeElement === form.querySelector('button[type="submit"]') && !focusOn(form.querySelector('textarea'))) focusMain();
     send([{ op: 'addNote', note: { id: newNoteId(), text: note } }]);
     setText('');
     showToast('Note added');

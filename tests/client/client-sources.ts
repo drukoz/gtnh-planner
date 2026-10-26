@@ -1,5 +1,5 @@
-// The client's sources, for the tests that read them as text (escape-layers.test.tsx, inline-confirm.test.tsx): the client tests run in node
-// with no DOM, so a rule every handler or call must keep is checked in the sources.
+// The client's sources, as files to read as text: the client tests run in node with no DOM, so a rule that every handler or call in the client
+// must keep is checked in its sources.
 
 import { readdirSync } from 'node:fs';
 

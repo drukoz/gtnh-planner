@@ -8,11 +8,12 @@
 // Undo and Dismiss pressed from the keyboard move the focus on before their toast goes from under it (ledger ruling P2-R57), so the keyboard
 // never falls to the page's body: back to where the focus came into the region from, else to the same button of the next toast still
 // showing, else to the page's main. A pointer's press moves nothing: Chromium focuses the button it presses, and moving that focus on would
-// put it in the toast beside, which would then hold it and stop its time (fix round 2, M6).
+// put it in the toast beside, which would then hold it and stop its time (fix round 2, M6). A held Enter dismisses one toast, not the next
+// one Dismiss hands the focus to (ledger ruling P2-R69).
 
 import { useEffect, type FocusEvent, type ReactElement } from 'react';
 import { actOnToast, dismissToast, pauseToast, resumeToast, toasts, useToasts, type Toast, type ToastStore } from '../state/toasts.ts';
-import { focusMain, focusOn } from './focus.ts';
+import { focusMain, focusOn, ignoreHeldEnter } from './focus.ts';
 
 /** Where the focus came into the region from: the element a focus from outside it left, or null when it came from nowhere (P2-R57). */
 let cameFrom: Element | null = null;
@@ -90,6 +91,7 @@ export function ToastList(props: { toasts: readonly Toast[] }): ReactElement {
                 if (e.detail === 0) moveFocusOff(e.currentTarget, false);
                 dismissToast(t.id);
               }}
+              onKeyDown={ignoreHeldEnter}   // a held Enter dismisses one toast, not the next one this hands the focus to (P2-R69)
             >
               ×
             </button>

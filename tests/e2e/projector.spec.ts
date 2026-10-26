@@ -95,6 +95,16 @@ const watchAlerts = (page: Page): Promise<void> => page.evaluate(() => {
 });
 const alertsSaid = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { alerts: string[] }).alerts);
 
+/** Notes down, in the page, the words of each saying put on the panel's polite line from now on; read with `sayings`. */
+const watchSayings = (page: Page): Promise<void> => page.locator('.projector-panel ~ p[aria-live="polite"]').evaluate((line) => {
+  const w = window as unknown as { sayings: string[] };
+  w.sayings = [];
+  new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) w.sayings.push(node.textContent ?? '');
+  }).observe(line, { childList: true });
+});
+const sayings = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { sayings: string[] }).sayings);
+
 /** Opens the projector panel in `scope` (the page, or the settings drawer), makes Steve a token and waits for its row; resolves with its id. */
 async function steveToken(page: Page, scope: Page | Locator): Promise<string> {
   await scope.getByText('In-game projector').click();
@@ -257,6 +267,9 @@ test('Create token hands the focus to the field while the token is made, then to
   await expect(copy).toBeFocused();
   const steve = await load.textContent();
   await page.unroute('**/api/projects/*/tokens');
+  // Copy takes the focus as the command is drawn, before the list after it is in: until then Create token is disabled, and the field's Enter
+  // makes no token (a form whose button is disabled is not sent)
+  await expect(create).toBeEnabled();                                                     // the list is in: the panel is not busy
   await field.fill('Alex');
   await field.press('Enter');
   await expect(load).not.toHaveText(steve!);                                               // Alex's command, shown in place of Steve's
@@ -278,13 +291,7 @@ test('a revoke that went through is said on the panel\'s polite line, each time'
   await expect(page.getByText(/^Alex · gpt_/)).toBeVisible();
   const said = page.locator('.projector-panel ~ p[aria-live="polite"]');
   await expect(said).toHaveText('');
-  await said.evaluate((line) => {
-    const w = window as unknown as { saidLines: string[] };
-    w.saidLines = [];
-    new MutationObserver((records) => {
-      for (const record of records) for (const node of record.addedNodes) w.saidLines.push(node.textContent ?? '');
-    }).observe(line, { childList: true });
-  });
+  await watchSayings(page);
   for (const who of ['Steve', 'Alex']) {
     await page.locator('li[data-token-id]', { hasText: `${who} · ` }).getByRole('button', { name: 'Revoke', exact: true }).click();
     await page.getByRole('alertdialog', { name: new RegExp(`Revoke "${who}"`) }).getByRole('button', { name: 'Revoke token' }).click();
@@ -292,7 +299,144 @@ test('a revoke that went through is said on the panel\'s polite line, each time'
     await expect(said).toHaveText('Token revoked');
   }
   await expect(page.getByText('No tokens yet.')).toBeVisible();
-  expect(await page.evaluate(() => (window as unknown as { saidLines: string[] }).saidLines)).toEqual(['Token revoked', 'Token revoked']);
+  expect(await sayings(page)).toEqual(['Token revoked', 'Token revoked']);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 1, M2: the Copy's 2 s take back only the copy's own saying, so a revoke said meanwhile stays said. The page's clock is held from
+// before the copy, so the revoke surely comes within the copy's 2 s, and is then let run past them
+test('a revoke said within a copy\'s 2 s is still said once they are up', async ({ page }) => {
+  await page.addInitScript(() => {                                                       // the old copy, with no clipboard API (as above)
+    Object.defineProperty(window, 'isSecureContext', { value: false });
+    Object.defineProperty(navigator, 'clipboard', { value: undefined });
+    document.execCommand = (command: string): boolean => command === 'copy';
+  });
+  await page.clock.install();
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector said, copied');
+  await steveToken(page, page);
+  const said = page.locator('.projector-panel ~ p[aria-live="polite"]');
+  const urlLine = page.locator('.command-line', { has: page.locator('code', { hasText: '/planner url ' }) });
+  await page.clock.pauseAt(Date.now() + 1000);
+  await urlLine.getByRole('button', { name: 'Copy' }).click();
+  await expect(urlLine.getByRole('button', { name: 'Copied' })).toBeVisible();
+  await page.getByRole('button', { name: 'Revoke', exact: true }).click();
+  await page.getByRole('alertdialog', { name: /Revoke "Steve"/ }).getByRole('button', { name: 'Revoke token' }).click();
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await expect(said).toHaveText('Token revoked');
+  await expect(urlLine.getByRole('button', { name: 'Copied' })).toBeVisible();          // the copy's 2 s have not run yet
+  await page.clock.runFor(2000);
+  await expect(urlLine.getByRole('button', { name: 'Copy' })).toBeVisible();            // they have
+  await expect(said).toHaveText('Token revoked');
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 1, M3: Keep it pressed while the revoke is on its way closes the question (the revoke goes on). A 503 then is said once, under
+// the form, the question having gone; a revoke that went through is said aloud once, and its row goes. The row's Revoke is disabled while the
+// revoke is on its way, so Keep it gives the focus to the field
+test('a question closed while its revoke is on its way: a failure said once under the form, a revoke that went through said once aloud', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector kept meanwhile');
+  await steveToken(page, page);
+  const held: Route[] = [];
+  await page.route('**/api/projects/*/tokens/*', (route) => {
+    if (route.request().method() === 'DELETE') held.push(route);
+    else void route.continue();
+  });
+  await watchBodyFocus(page);
+  await watchAlerts(page);
+  await watchSayings(page);
+  const revoke = page.getByRole('button', { name: 'Revoke', exact: true });
+  const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
+  const field = page.getByLabel('Who is it for?');
+  const reason = 'The planner could not revoke it just now';
+  await revoke.click();
+  await confirm.getByRole('button', { name: 'Revoke token' }).click();
+  await expect.poll(() => held.length, { message: 'the revoke is held on its way' }).toBe(1);
+  await confirm.getByRole('button', { name: 'Keep it' }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(field).toBeFocused();
+  await held[0]!.fulfill({ status: 503, json: { error: 'unavailable', message: reason } });
+  await expect(page.locator('.projector-body > .error').getByRole('alert')).toHaveText(reason);
+  await expect(revoke).toBeEnabled();                                                     // the list is in: the panel is not busy
+  await expect(page.getByText(/^Steve · gpt_/)).toBeVisible();
+  expect(await alertsSaid(page)).toEqual([reason]);
+  await revoke.click();
+  await confirm.getByRole('button', { name: 'Revoke token' }).click();
+  await expect.poll(() => held.length, { message: 'the second revoke is held on its way' }).toBe(2);
+  await confirm.getByRole('button', { name: 'Keep it' }).click();
+  await expect(field).toBeFocused();
+  await held[1]!.continue();                                                              // the server revokes it
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await expect(page.locator('.projector-panel ~ p[aria-live="polite"]')).toHaveText('Token revoked');
+  expect(await sayings(page)).toEqual(['Token revoked']);
+  expect(await alertsSaid(page), 'no alert since the first').toEqual([reason]);
+  await expect(field).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 1, M6: Create token that fails says why under the form, once each time, keeps the focus in the field it handed it to, is
+// enabled again, and makes no token
+test('Create token that fails says why once each time, and keeps the focus in the field', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector refused');
+  await page.getByText('In-game projector').click();
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  const reason = 'The planner cannot make a token just now';
+  await page.route('**/api/projects/*/tokens', (route) => {
+    if (route.request().method() === 'POST') void route.fulfill({ status: 503, json: { error: 'unavailable', message: reason } });
+    else void route.continue();
+  });
+  await watchBodyFocus(page);
+  await watchAlerts(page);
+  const field = page.getByLabel('Who is it for?');
+  const create = page.getByRole('button', { name: 'Create token' });
+  const alert = page.locator('.projector-body > .error').getByRole('alert');
+  await field.fill('Steve');
+  await create.click();                                                                   // by the pointer
+  await expect(alert).toHaveText(reason);
+  await expect(create).toBeEnabled();
+  await expect(field).toBeFocused();
+  expect(await alertsSaid(page)).toEqual([reason]);
+  await field.press('Enter');                                                             // and from the field
+  await expect.poll(() => alertsSaid(page)).toEqual([reason, reason]);
+  await expect(alert).toHaveText(reason);
+  await expect(create).toBeEnabled();
+  await expect(field).toBeFocused();
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await expect(page.locator('li[data-token-id]')).toHaveCount(0);
+  expect(await bodyFocusCount(page), 'the focus is never left on the page').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 1, M7 (ledger ruling P2-R70): with the server out of reach, the revoke and the list after it fail alike. Said once, where the
+// revoke's reason goes: in the confirm, whose question still asks, a list that failed to come keeping its row. The focus stays on Keep it
+test('a revoke and the list after it failing alike, the server out of reach, say it once', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector unreachable');
+  await steveToken(page, page);
+  await page.route('**/api/projects/*/tokens**', (route) => {
+    if (route.request().method() === 'POST') void route.continue();
+    else void route.abort();                                                              // the revoke and the list: no answer at all
+  });
+  await watchBodyFocus(page);
+  await watchAlerts(page);
+  await page.getByRole('button', { name: 'Revoke', exact: true }).click();
+  const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
+  const yes = confirm.getByRole('button', { name: 'Revoke token' });
+  await yes.click();
+  await expect(confirm.getByRole('alert')).toBeVisible();
+  await expect(yes).toBeEnabled();                                                        // the list has failed too: the panel is not busy
+  const why = await confirm.getByRole('alert').textContent();
+  expect(await alertsSaid(page)).toEqual([why]);
+  await expect(page.locator('.projector-body > .error')).toHaveCount(0);
+  await expect(confirm.getByRole('button', { name: 'Keep it' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page').toBe(0);
   expect(dialogs).toEqual([]);
 });
 

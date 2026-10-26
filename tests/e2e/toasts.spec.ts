@@ -317,6 +317,39 @@ test('Dismiss from the keyboard moves the focus to the next toast still showing,
   expect(await lostFocus(page)).toBe(0);
 });
 
+// ledger ruling P2-R69: Dismiss from the keyboard hands the focus to the next toast's Dismiss (P2-R57), and Chromium presses a focused button
+// again on each auto-repeat of a held Enter, so a held Enter would dismiss toast after toast (a deleted note's dismissed toast posts its delete,
+// and its Undo is gone). A repeated Enter is ignored there: one held press dismisses one toast. The second keydown is the key's auto-repeat
+// (Playwright sends it with `repeat` set).
+test('a held Enter dismisses one toast, not the next one its Dismiss hands the focus to', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Toasts held');
+  await addNote(page, id, { id: 'n1', text: 'first' }, 'Bob');
+  await addNote(page, id, { id: 'n2', text: 'second' }, 'Bob');
+  await page.goto(`/p/${id}#notes`);
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await page.locator('.note').first().getByRole('button', { name: 'Delete' }).click();
+  await page.locator('.note').first().getByRole('button', { name: 'Delete' }).click();
+  const deleted = toastOf(page, 'Note deleted');
+  const open = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' });   // not leaving
+  await expect(open).toHaveCount(2);
+  // the focus comes into the region from nowhere, as in P2-R57's Dismiss test above, so Dismiss hands it to the next toast's Dismiss (from a
+  // control still drawn it would go back there)
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await open.first().getByRole('button', { name: 'Dismiss' }).focus();
+  await page.keyboard.down('Enter');
+  await expect(open).toHaveCount(1);
+  const next = open.getByRole('button', { name: 'Dismiss' });
+  await expect(next).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the next toast's Dismiss
+  await page.keyboard.up('Enter');
+  await expect(deleted).toHaveCount(1);                                                   // the one dismissed has left: the other stays
+  await expect(open).toHaveCount(1);
+  await expect(next).toBeFocused();
+  expect(dialogs).toEqual([]);
+});
+
 // P2-R57: never back into the project's name in the tick of a rename's Undo. The field follows the name only while it is not being edited, so
 // it would keep the name the Undo takes back and send it again on its blur.
 test('a rename\'s Undo never gives the focus back to the project name, which keeps the name it gave back', async ({ page }) => {
