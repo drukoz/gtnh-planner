@@ -1,6 +1,6 @@
 # Machine GUI restyle, Phase 2 — design
 
-Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R142, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
+Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R143, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
 Phase 1 merged. Every `file:line` below is at that commit. §24 and the plan were re-checked against `main` at `01da27d` (Phase 1, the
 Make-picker fix, add-on 23 and add-on 17 merged), and their cites are at `01da27d`. On 2026-10-24 the user also chose VT323 for
 figures, Pixelify Sans kept for words: §25 records it, adds its one dependency and overrides anything above that disagrees.
@@ -932,8 +932,9 @@ works unchanged on SVG `<g>` elements inside the pan and zoom groups, with no st
 > which reverses Task 3a's blur); an Escape with no draft goes on to the layers below. A settings draft that Escape takes back takes
 > the key, so the drawer stays open (the final fix wave, FW-9), but only while it differs from what its field would show without it:
 > one equal to it, as the Amount's draft is after a commit, is dropped and the Escape goes on to the drawer (P2-R141); and so is an
-> item search's "No item or fluid matches" note a layer of its own, which the drawer's look reads as an open list (P2-R138; the
-> search's error note, which its Escape leaves, is none).
+> item search's "No item or fluid matches" note a layer of its own, which the drawer's look reads as an open list (P2-R138). The
+> search's error note is none, by ruling: the search's own Escape handler leaves it to the browser's clear of the field, which takes
+> it away with the text, and the drawer closes on that same press.
 
 ### 6.2 Placement
 
@@ -2568,7 +2569,8 @@ drag and wheel stay instant. `connections.spec.ts:45-46` reads the attribute, wh
 > box centred are panned to only when the new layout glides; one that snaps takes its view at once (P2-R126, Task F4). A press
 > let go outside the Flow canvas before it became a drag ends at the next move with no button held, as Connections' does, so
 > the view never follows the bare mouse (the final fix wave, FW-11), and its release anywhere, heard on the window while the press
-> is pending, ends it, so a later press elsewhere dragged onto the canvas carries nothing on (the final fix wave's residuals).
+> is pending, ends it, so a later press elsewhere dragged onto the canvas carries nothing on (the final fix wave's residuals);
+> Connections' area does the same (P2-R143).
 
 ### 16.3 Then the re-layout
 

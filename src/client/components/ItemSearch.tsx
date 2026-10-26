@@ -130,8 +130,9 @@ export function ItemSearch(props: {
           ))}
         </ul>
       )}
-      {/* `data-no-match`: a note this search's own Escape takes away (it closes with the list), which the settings drawer counts as a layer
-          of its own; the error note below stays, and is none (ledger ruling P2-R138) */}
+      {/* `data-no-match`: the note this search's own Escape takes away with its list, which the settings drawer counts as a layer of its own
+          (ledger ruling P2-R138). The error note below is none, by ruling: the Escape handler above leaves it to the browser's clear of the
+          field (the key is not prevented), which takes it away with the text, and the drawer closes on that same press */}
       {open && fresh && hits.length === 0 && error === null && (
         <p className="search-note muted" data-no-match="">No item or fluid matches</p>
       )}

@@ -259,6 +259,11 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
    * `pointIn`), and the view then (the picture on screen once it is a drag, when a pan was under way).
    */
   const drag = useRef<{ pointer: number; cx: number; cy: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  /**
+   * While that press is pending (pressed in the area, not yet a drag, so its pointer is not captured and a release off the area goes unheard
+   * there), how to stop the window's listening for its release (`hearRelease`); null when no press is pending.
+   */
+  const unhearRelease = useRef<(() => void) | null>(null);
   const dragged = useRef(false);
   // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
   const shape = useMemo(() => picture.nodes.map((n) => n.id).join('\n'), [picture]);
@@ -334,12 +339,38 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
     if (e.button !== 0 || drag.current !== null) return;   // one pointer at a time moves the picture
     const [sx, sy] = pointIn(e);
-    drag.current = { pointer: e.pointerId, cx: e.clientX, cy: e.clientY, sx, sy, ox: view.x, oy: view.y, moved: false };
+    const press = { pointer: e.pointerId, cx: e.clientX, cy: e.clientY, sx, sy, ox: view.x, oy: view.y, moved: false };
+    drag.current = press;
+    hearRelease(press);
   };
+  /**
+   * The release of a pending press ends it wherever it happens, as the Flow canvas's does (ledger ruling P2-R143): let go off the area, which
+   * never hears it there (the area captures the pointer only once the press is a drag), it would otherwise stay pending, and a later press
+   * elsewhere, dragged into the area, would carry it on. A one-shot listener on the window, in the bubble phase, so a release in the area
+   * reaches `onPointerEnd` first (React's root is under the window); that end, the press's capture and a newer press each stop it.
+   */
+  const hearRelease = (press: NonNullable<typeof drag.current>): void => {
+    unhearRelease.current?.();
+    const release = (e: globalThis.PointerEvent): void => {
+      if (e.pointerId !== press.pointer) return;
+      unhear();
+      if (drag.current === press) drag.current = null;
+    };
+    const unhear = (): void => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      if (unhearRelease.current === unhear) unhearRelease.current = null;
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    unhearRelease.current = unhear;
+  };
+  useEffect(() => () => unhearRelease.current?.(), []);
   const onPointerEnd = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
     if (d === null || d.pointer !== e.pointerId) return;
     drag.current = null;
+    unhearRelease.current?.();
     if (!d.moved) return;
     setDragging(false);
     dragged.current = true;   // the click that ends a drag picks nothing
@@ -360,6 +391,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
       d.moved = true;
       setDragging(true);
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
+      unhearRelease.current?.();                         // the area hears its release now
       // a pan under way stops where it is on screen, and the drag carries on from that picture, its zoom too, as the move below sets x and y
       // only (review focus 1); a click lets it run on
       const held = holdView();

@@ -214,6 +214,30 @@ test('a press that the page moves under stays a click: the box is picked and the
   await unshift();
 });
 
+// ledger ruling P2-R143 (the Flow canvas's twin, pipes.spec.ts): a press that leaves the area before it moved 4 px and is let go outside it is
+// over, wherever its release lands: a later press outside the area, dragged into it, resumes nothing (the stale press took that drag up, from
+// where it began)
+test('a press let go outside the area is over: a later press outside, dragged into the area, moves nothing', async ({ page }) => {
+  await conduitsLine(page);
+  await reopenSettled(page);
+  const view = await showConnections(page);
+  const svg = view.locator('svg[role=group]');
+  const box = (await svg.boundingBox())!;
+  const before = await viewOf(view);
+  await page.mouse.move(box.x + 2, box.y + 30);                                       // pressed 2 px in from the area's left edge
+  await page.mouse.down();
+  await page.mouse.move(box.x - 6, box.y + 30, { steps: 4 });                         // out past the edge before 4 px, and let go out there
+  await page.mouse.up();
+  await page.mouse.move(box.x - 6, box.y + 60);                                       // pressed again outside the area
+  await page.mouse.down();
+  await page.mouse.move(box.x + 80, box.y + 90, { steps: 8 });                         // and dragged into it
+  await expect(svg).not.toHaveClass(/\bdragging\b/);
+  expect(await viewOf(view), 'the view did not take the drag up').toEqual(before);
+  await page.mouse.up();
+  expect(await viewOf(view)).toEqual(before);
+  await expect(page.getByTestId('conn-panel')).toHaveCount(0);                         // and the release picked nothing
+});
+
 // ledger ruling P2-R77: the panel's Close gives the focus back, as Flow's does (P2-R36), before the panel goes. A Connections box takes no focus
 // (the diagram is one focus stop, which the arrow keys pan, and a box is picked by the pointer), so the diagram takes it, from the keyboard's
 // Close and from the pointer's

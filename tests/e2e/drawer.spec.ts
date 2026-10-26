@@ -369,8 +369,8 @@ test('Escape after a committed cost or crop seed stat, or a draft equal to it, c
   }
 });
 
-// the final fix wave's R2 (P2-R138 kept to its note): an item search that shows an error is no layer of its own, as Escape does not take its note
-// away: the drawer closes on the first Escape
+// the final fix wave's R2 (P2-R138 kept to its note): an item search that shows an error is no layer, by ruling: the search's own Escape handler
+// leaves the note to the browser's clear of the field, which takes it away with the text, and the drawer closes on that same, first, Escape
 test('an item search showing an error is no layer: the first Escape closes the drawer', async ({ page }) => {
   await page.route('**/api/pack/search?**', (route) => route.fulfill({ status: 500, json: { error: 'search-failed', message: 'The search failed' } }));
   await page.setViewportSize({ width: 800, height: 900 });
