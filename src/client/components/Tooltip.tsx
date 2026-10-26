@@ -162,9 +162,9 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
 
   /**
    * Gives `el` the tip as one more `aria-describedby` token when the tip says more than its name and keys (P2-D36, ledger ruling P2-R22: an
-   * icon's mod line is more), and gives back what those say (`spokenName`), whose lines `TipLines` hides from assistive technology; null when
-   * it describes nothing. Its name is its `aria-label` (an empty one names nothing); a button with none is named by its words, any other
-   * element by nothing.
+   * icon's mod line is more), and gives back its name and keys, the parts `spokenName` lists, for `describedLines` to fold: a line of the tip
+   * that only repeats one is no description, and `TipLines` hides it from assistive technology. Null when it describes nothing. Its name is
+   * its `aria-label` (an empty one names nothing); a button with none is named by its words, any other element by nothing.
    */
   const describe = (lines: readonly string[], mod: string | null, el: Element): string | null => {
     const label = el.getAttribute('aria-label') || (el instanceof HTMLButtonElement ? el.textContent : null);

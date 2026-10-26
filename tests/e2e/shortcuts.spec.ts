@@ -2,8 +2,9 @@
 // 1–6 switch the tabs and hand the focus to the one selected, F fits the diagram shown and P pauses or plays its pipes (on a diagram's tab only),
 // and ? opens a sheet that lists them, as the head's Shortcuts button does above 900 px (plan ruling shortcuts-button-wide). A key typed in a
 // field is typed, and no key is a shortcut while the drawer, the sheet or another modal is open, nor inside an in-app confirm (ledger ruling
-// P2-R73). The sheet is the top layer: #root is inert behind it, Escape closes it alone (P2-D22) and the focus goes back to what had it, else
-// to the Shortcuts button, else to the selected tab (P2-R71), never to the page's body; the toasts wait it out as they wait out the drawer
+// P2-R73). The sheet is the top layer: #root is inert behind it, Escape closes it alone (P2-D22) and the focus goes back to the opener (the
+// button pressed, or what had the focus for `?`), else to the head's Shortcuts button, else to the drawer's Keyboard shortcuts button while
+// the drawer is open, else to the selected tab (P2-R71), never to the page's body; the toasts wait it out as they wait out the drawer
 // (P2-R72). Every project here has a target, so no drawer opens by itself, but in the last case, where that drawer is what it tests.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
@@ -530,6 +531,35 @@ test('at 1280 px the sheet gives the focus back to the head\'s Shortcuts button 
   await page.keyboard.press('Escape');
   await expect(sheet).toHaveCount(0);
   await expect(button).toBeFocused();
+});
+
+// Fix round 3: the drawer's Keyboard shortcuts button is the sheet's way back only while the drawer is open. A window narrowed to 900 px or
+// less under the sheet no longer draws the head's Shortcuts button that opened it, and draws the closed drawer for the 180 ms it slides out:
+// its button would take the focus then, and the focus would drop to the page's body as the drawer is hidden. The page's animations are held
+// still over CDP (as the developer tools' Animations panel pauses them), so that exit is held at its start however slow the machine is
+test('a window narrowed to 800 px under the sheet gives the focus to the selected tab, not to the closed drawer\'s Keyboard shortcuts button', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  await page.getByRole('button', { name: 'Shortcuts', exact: true }).click();
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Animation.enable');
+  await cdp.send('Animation.setPlaybackRate', { playbackRate: 0 });
+  await page.setViewportSize({ width: 800, height: 900 });
+  await expect(page.locator('.project-body')).not.toHaveClass(/\bsettings-open\b/);
+  // found when hidden too, so that its last check says it is hidden, not gone
+  const drawerButton = page.locator('aside[aria-label="Project settings"]').getByRole('button', { name: 'Keyboard shortcuts', includeHidden: true });
+  await expect(drawerButton).toBeVisible();                                            // the closed drawer, held on its way out
+  await watchBodyFocus(page);
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  const tab = page.getByRole('tab', { selected: true });
+  await expect(tab).toBeFocused();
+  await cdp.send('Animation.setPlaybackRate', { playbackRate: 1 });
+  await cdp.detach();
+  await expect(drawerButton).toBeHidden();                                             // the drawer's exit has ended
+  await expect(tab).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
 });
 
 // Fix round 1, M1: a key held down repeats into whatever has the focus. A held `/` would type its repeats into the search its first press

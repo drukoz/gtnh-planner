@@ -1831,8 +1831,8 @@ details.mat-needed[open]::details-content { block-size: auto; }
    Below 700 px the head wraps whatever the button's width, so the 40% protects nothing there and only cut a short name ("· Make: Basi…",
    and an empty readout at 320 px, where the title does not show on a touch screen): the block after this one lets the button take the
    whole head, and only a name longer than the head is cut. Nothing else joins that row here: add-on 17's Compare modes button moves to a bar
-   of its own under the banner, and the head's Shortcuts button is not drawn (Phase 2 Task 11, plan ruling shortcuts-button-wide: ? opens
-   the sheet at every width). */
+   of its own under the banner, and the head's Shortcuts button is not drawn: below 900 px the drawer's Keyboard shortcuts button opens the
+   sheet (Phase 2 Task 11, ledger ruling P2-R85). */
 @media (max-width: 900px) {
   .project-body { grid-template-columns: 1fr; }
   .settings-toggle { display: inline-flex; align-items: center; gap: 8px; max-width: 40%; }
