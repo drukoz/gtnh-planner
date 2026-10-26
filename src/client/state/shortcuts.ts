@@ -7,8 +7,14 @@
 /** What a key does: switch to the tab of PROJECT_TABS at `index`, focus the item search, fit the diagram, pause its pipes, or show the sheet. */
 export type Shortcut = { kind: 'tab'; index: 0 | 1 | 2 | 3 | 4 | 5 } | { kind: 'search' } | { kind: 'fit' } | { kind: 'pipes' } | { kind: 'sheet' };
 
-/** The parts of a keydown event a shortcut is decided by. */
-export interface KeyLike { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented: boolean; isComposing: boolean; repeat: boolean }
+/**
+ * The parts of a keydown event a shortcut is decided by; `altGraph`, the event's `getModifierState('AltGraph')`, says Ctrl and Alt are AltGr's,
+ * with which some layouts type a key (Windows sends them together).
+ */
+export interface KeyLike {
+  key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean;
+  defaultPrevented: boolean; isComposing: boolean; repeat: boolean; altGraph?: boolean;
+}
 
 /** The parts of a key's target a shortcut is decided by (an HTML element). */
 export interface TargetLike { tagName: string; type?: string; isContentEditable?: boolean; closest(selector: string): unknown }
@@ -33,12 +39,13 @@ export function isTypingTarget(el: TargetLike | null): boolean {
 
 /**
  * The shortcut `e` stands for, pressed on `target` (null for none, or for an element that takes no typing outside HTML, such as a Flow box
- * in its svg); null when it is none. A key is left alone with Ctrl, Cmd or Alt held (the browser's and the system's), while it is being
+ * in its svg); null when it is none. A key is left alone with Ctrl, Cmd or Alt held (the browser's and the system's; but Ctrl and Alt that
+ * are AltGr's type the key, fix round 1), while it is being
  * composed, when it repeats (a held key acts once), once something has handled it, when it is typed (`isTypingTarget`), and inside an in-app
  * confirm, which keeps the keyboard while its question asks (ledger ruling P2-R73).
  */
 export function shortcutOf(e: KeyLike, target: TargetLike | null): Shortcut | null {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.repeat || e.defaultPrevented) return null;
+  if (e.metaKey || (e.altGraph !== true && (e.ctrlKey || e.altKey)) || e.isComposing || e.repeat || e.defaultPrevented) return null;
   if (isTypingTarget(target) || target?.closest('[role="alertdialog"]') != null) return null;
   const tab = TAB_KEYS.indexOf(e.key);
   if (tab >= 0) return { kind: 'tab', index: tab as 0 | 1 | 2 | 3 | 4 | 5 };

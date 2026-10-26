@@ -2663,6 +2663,8 @@ const SHORTCUT_RULES = ['.shortcut-list', '.shortcut-list > div', '.shortcut-lis
 const SHORTCUTS_OPEN = '.project-head > .shortcuts-open';
 /** Fix round 1 (ledger ruling P2-R85): the settings column's way to the sheet, drawn at 900 px or less, where the head's button is not. */
 const SETTINGS_SHORTCUTS = '.settings-shortcuts';
+/** Fix round 1, M5: the sheet itself, which scrolls inside a short or zoomed window. */
+const SHEET = '.shortcuts-sheet';
 
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
@@ -2683,7 +2685,7 @@ const PHASE2_RULES: string[] = [
   ...TOAST_RULES,                                                                    // Task 9a: the toasts (spec §12.3)
   ...CONFIRM_RULES,                                                                  // Task 10: the in-app confirm (spec §13.2)
   ...SHORTCUT_RULES, SHORTCUTS_OPEN,                                                 // Task 11: the shortcuts sheet and the head's button (spec §14.1)
-  SETTINGS_SHORTCUTS,                                                                // Task 11, fix round 1: the drawer's way to the sheet (P2-R85)
+  SETTINGS_SHORTCUTS, SHEET,                                                         // Task 11, fix round 1: the drawer's way in (P2-R85), M5
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3349,6 +3351,11 @@ describe('the Machine GUI Phase 2: keyboard shortcuts', () => {
     // forced colours: the sheet's frame and a cap's edge are borders, which the theme keeps in its text colour, and their faces are its canvas:
     // no rule (forced-colors.spec.ts reads the painted pixels)
     expect(forcedBlock().rules.flatMap((r) => selectorList(r.prelude)).filter((s) => s.includes('shortcut'))).toEqual([]);
+  });
+
+  // fix round 1, M5: in a window too short for it (or zoomed), the sheet scrolls inside the dimmed page, its title and Close both within reach
+  it('scrolls the sheet inside a window too short for it', () => {
+    expectDeclared([[SHEET, 'max-height', '100%'], [SHEET, 'overflow', 'auto']]);
   });
 
   it('draws no Shortcuts button in the head below 900 px, where its one row is full', () => {

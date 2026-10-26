@@ -507,6 +507,24 @@ export function ProjectPage(props: { id: string }): ReactElement {
   const refocusFromSheet = useRef(false);
   /** A digit switched the tab: the tab takes the focus once the page has drawn it selected. */
   const focusTab = useRef(false);
+  /** The key a shortcut acted on, while it is held: its repeats are taken, so a held `/` types nothing into the search it focused (M1). */
+  const heldShortcut = useRef<string | null>(null);
+  useEffect(() => {
+    // in the capture phase, so a repeat is taken before the search, which takes typing, sees it; a new press forgets the key held before
+    const down = (e: KeyboardEvent): void => {
+      if (!e.repeat) heldShortcut.current = null;
+      else if (e.key === heldShortcut.current) e.preventDefault();
+    };
+    const up = (e: KeyboardEvent): void => {
+      if (e.key === heldShortcut.current) heldShortcut.current = null;
+    };
+    document.addEventListener('keydown', down, true);
+    document.addEventListener('keyup', up, true);
+    return () => {
+      document.removeEventListener('keydown', down, true);
+      document.removeEventListener('keyup', up, true);
+    };
+  }, []);
   const openSheet = (): void => {
     const at = document.activeElement;
     sheetOpener.current = at === null || at === document.body ? null : at;
@@ -536,8 +554,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
     if (!listening) return undefined;
     const onKey = (e: KeyboardEvent): void => {
       if (document.querySelector('[aria-modal="true"]') !== null) return;
-      // an svg target (a Flow box's head) takes no typing
-      const shortcut = shortcutOf(e, e.target instanceof HTMLElement ? e.target : null);
+      // an svg target (a Flow box's head) takes no typing; Ctrl and Alt that are AltGr's type the key (M6)
+      const key = {
+        key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, defaultPrevented: e.defaultPrevented,
+        isComposing: e.isComposing, repeat: e.repeat, altGraph: e.getModifierState('AltGraph'),
+      };
+      const shortcut = shortcutOf(key, e.target instanceof HTMLElement ? e.target : null);
       if (shortcut === null) return;
       if (shortcut.kind === 'fit' || shortcut.kind === 'pipes') {
         // the button of the selected tab's panel, a diagram's, else none
@@ -546,11 +568,14 @@ export function ProjectPage(props: { id: string }): ReactElement {
         const button = panel == null ? null : document.getElementById(panel)?.querySelector<HTMLElement>(`[aria-keyshortcuts~="${key}"]`);
         if (button == null) return;
         e.preventDefault();
+        heldShortcut.current = e.key;
         button.click();   // the button's own path: Fit's fit, Pause pipes' setting
         return;
       }
-      // a key the page acts on is taken: the `/` is not typed into the search it focuses, nor opens a browser's quick find
+      // a key the page acts on is taken, and its repeats while it is held: the `/` is not typed into the search it focuses, nor opens a
+      // browser's quick find
       e.preventDefault();
+      heldShortcut.current = e.key;
       if (shortcut.kind === 'search') pickTarget();
       else if (shortcut.kind === 'sheet') openSheet();
       else {

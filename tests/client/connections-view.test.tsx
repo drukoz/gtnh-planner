@@ -281,6 +281,11 @@ describe('the Connections pipes', () => {
     expect(shell()).toContain('aria-busy="false" data-pipes="all">');
   });
 
+  // Task 11's fix round 1 (ledger ruling P2-R86): the hint ends with the sheet's key, its `?` said as a word, which a screen reader would skip
+  it('ends its hint with the sheet\'s key, its ? said as a word', () => {
+    expect(shell()).toContain('full configuration. <span aria-hidden="true">?</span><span class="visually-hidden">question mark</span> shows the shortcuts.</span>');
+  });
+
   // Task 11's fix round 1 (ledger ruling P2-R85): with the single-key shortcuts off, Fit and Pause pipes say no key and have no tip, as before
   // Task 11, and the hint says nothing of the sheet's key
   it('says no key, and has no tips, while the single-key shortcuts are off', () => {

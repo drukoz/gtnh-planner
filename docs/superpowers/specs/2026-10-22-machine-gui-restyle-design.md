@@ -292,7 +292,8 @@ Transitions (Phase 1 [CSS]: entrances; exits that need an element kept mounted a
   left over a dimmed page [TSX `ProjectPage.tsx`]. While it is open it is a layer of its own (R36): the focus moves to
   its "Close settings" button (drawn in the drawer only), the page behind is `inert` (the head, the banners, the views
   and the top bar), Escape (one layer per press: an open search list first, R15), a click on the dimmed page and Close
-  all close it and give the focus back to the Settings button, and it closes when the window grows past 900 px. It slides in with `--dur-slow`/`--ease-out` and out with `--dur-exit`/`--ease-in`.
+  all close it and give the focus back to the Settings button, and it closes when the window grows past 900 px. It
+  slides in with `--dur-slow`/`--ease-out` and out with `--dur-exit`/`--ease-in`.
   What to make is never out of sight behind it (the make-picker fix, after Phase 1): the Settings button reads
   "Settings · Make: <target>" or "Settings · Make: nothing yet" (the target part is Inter 13 px in `--ink-muted` on a
   `--screen` readout, since the muted ink is 2.3:1 on the button's own face; a long name ends in an ellipsis, and above
@@ -391,11 +392,11 @@ Limits: at most 1 per edge and 150 per diagram; when a diagram has more than 200
 `animation-play-state: paused` while the canvas is being dragged/zoomed if profiling shows jank. All animation
 stops under `prefers-reduced-motion: reduce`.
 
-**A way to stop the pipes** (WCAG 2.2.2 Pause, Stop, Hide; R31). The pipes move for as long as a diagram is shown,
-so the Flow and Connections toolbars have a text button after Fit, "Pause pipes" / "Play pipes" (its label says what a
-press does, R44), that stops them where they are, dashes showing. One setting for the browser, shared by both diagrams and kept in
-localStorage (`gtnh-planner:pipes-paused`); paused, the Flow svg has the class `pipes-paused` and the Connections area
-`data-pipes="paused"`.
+**A way to stop the pipes** (WCAG 2.2.2 Pause, Stop, Hide; R31). The pipes move for as long as a diagram is shown, so
+the Flow and Connections toolbars have a text button after Fit, "Pause pipes" / "Play pipes" (its label says what a
+press does, R44), that stops them where they are, dashes showing. One setting for the browser, shared by both diagrams
+and kept in localStorage (`gtnh-planner:pipes-paused`); paused, the Flow svg has the class `pipes-paused` and the
+Connections area `data-pipes="paused"`.
 
 ## 8. Per-screen treatment and phases
 

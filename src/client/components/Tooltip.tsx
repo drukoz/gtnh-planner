@@ -22,10 +22,11 @@
 //   page behind the shortcuts sheet or the settings drawer: ledger ruling P2-R87; and no tip shows there), re-reads its lines (a replan
 //   rewrites a box's), and keeps a focus or touch tip at its element.
 // - Its box gives the focused element (focus) or the trigger its id as one more `aria-describedby` token, unless the tip says no more than
-//   the element's own name (P2-D36) and keys (`aria-keyshortcuts`, which a screen reader says with the name: Fit's tip "Fit · F" describes
-//   nothing, Task 11); the lines that only repeat them, whatever the separators its parts are joined with, are hidden from assistive
-//   technology, so the description is what the tip adds: an icon's mod line, a step head's rows (P2-R22, P2-R24). The name is the element's
-//   `aria-label`, else, for a button named by its words (the toolbars' Fit and Pause pipes), its words. Only that token is taken back.
+//   the element's own name (P2-D36) and keys (`aria-keyshortcuts`, which a screen reader that speaks `aria-keyshortcuts` says with the name;
+//   the sheet lists every key: Fit's tip "Fit · F" describes nothing, P2-R82); the lines that only repeat them, whatever the separators its
+//   parts are joined with, are hidden from assistive technology, so the description is what the tip adds: an icon's mod line, a step head's
+//   rows (P2-R22, P2-R24). The name is the element's `aria-label`, else, for a button only, its words (the toolbars' Fit and Pause pipes).
+//   Only that token is taken back.
 // - An element out of view (its svg's, or the window's) shows no tip, not even for a frame; one never placed is dropped as it is, and only
 //   a tip that showed fades out (spec §6.2).
 
@@ -162,10 +163,11 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
   /**
    * Gives `el` the tip as one more `aria-describedby` token when the tip says more than its name and keys (P2-D36, ledger ruling P2-R22: an
    * icon's mod line is more), and gives back what those say (`spokenName`), whose lines `TipLines` hides from assistive technology; null when
-   * it describes nothing. A button with no `aria-label` is named by its words.
+   * it describes nothing. Its name is its `aria-label` (an empty one names nothing); a button with none is named by its words, any other
+   * element by nothing.
    */
   const describe = (lines: readonly string[], mod: string | null, el: Element): string | null => {
-    const label = el.getAttribute('aria-label') ?? (el instanceof HTMLButtonElement ? el.textContent : null);
+    const label = el.getAttribute('aria-label') || (el instanceof HTMLButtonElement ? el.textContent : null);
     const name = spokenName(label, el.getAttribute('aria-keyshortcuts'));
     if (describedLines(lines, mod, name).length === 0) return null;
     const ids = tokens(el.getAttribute('aria-describedby'));

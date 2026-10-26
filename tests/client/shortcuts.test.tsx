@@ -36,6 +36,14 @@ describe('keyboard shortcuts', () => {
     expect(shortcutOf(key('1'), el('INPUT', { type: 'text' }))).toBeNull();
   });
 
+  // fix round 1, M6: a layout that types a key with AltGr (Ctrl and Alt together, on Windows) gives it as typed: the key is its own, not a chord
+  it('reads a key typed with AltGr as its own, but not one with Ctrl and Alt alone, nor with Cmd', () => {
+    expect(shortcutOf(key('?', { ctrlKey: true, altKey: true, altGraph: true }), null)).toEqual({ kind: 'sheet' });
+    expect(shortcutOf(key('5', { ctrlKey: true, altKey: true, altGraph: true }), null)).toEqual({ kind: 'tab', index: 4 });
+    expect(shortcutOf(key('?', { ctrlKey: true, altKey: true }), null)).toBeNull();
+    expect(shortcutOf(key('?', { metaKey: true, altGraph: true }), null)).toBeNull();
+  });
+
   it('ignores Shift: AZERTY digits and ? still work', () => {   // Review Focus 5
     expect(shortcutOf(key('1', { shiftKey: true }), null)).toEqual({ kind: 'tab', index: 0 }); expect(shortcutOf(key('?', { shiftKey: true }), null)).toEqual({ kind: 'sheet' });
   });
@@ -52,8 +60,13 @@ describe('keyboard shortcuts', () => {
     expect(SHORTCUT_ROWS).toEqual([[['/'], 'Search items and fluids'], [['1', '–', '6'], 'Switch tabs: Map, 3D, Connections, Flow, Materials, Notes'], [['F'], 'Fit the diagram'],
       [['P'], 'Pause or play the pipes'], [['Esc'], 'Close a panel, clear the highlight, close the drawer'], [['?'], 'Show this sheet']]);
     const html = renderToStaticMarkup(<ShortcutsDialog onClose={() => {}} />);
-    expect(html).toMatch(/<div class="modal shortcuts-sheet" role="dialog" aria-modal="true" aria-labelledby="([^"]+)"><h2 id="\1">Keyboard shortcuts<\/h2>/);
-    expect(html).toContain('<dt><kbd><span class="fig">1</span></kbd>–<kbd><span class="fig">6</span></kbd></dt>'); expect(html.match(/<dt>/g)).toHaveLength(6); expect(html).toContain('<button type="button">Close</button>');   // a digit cap's digit in VT323 (spec §25)
+    // fix round 1: the dialog holds the focus a press on its words gives it (ledger ruling P2-R81a), and a cap a screen reader would skip or
+    // misread says its glyph as a word (P2-R86), the range's en dash too: authorized changes of the brief's two pins
+    expect(html).toMatch(/<div class="modal shortcuts-sheet" role="dialog" aria-modal="true" aria-labelledby="([^"]+)" tabindex="-1"><h2 id="\1">Keyboard shortcuts<\/h2>/);
+    expect(html).toContain('<dt><kbd><span class="fig">1</span></kbd><span aria-hidden="true">–</span><span class="visually-hidden"> to </span><kbd><span class="fig">6</span></kbd></dt>'); expect(html.match(/<dt>/g)).toHaveLength(6); expect(html).toContain('<button type="button">Close</button>');   // a digit cap's digit in VT323 (spec §25)
+    expect(html).toContain('<dt><kbd><span aria-hidden="true">/</span><span class="visually-hidden">slash</span></kbd></dt>');
+    expect(html).toContain('<dt><kbd><span aria-hidden="true">?</span><span class="visually-hidden">question mark</span></kbd></dt>');
+    expect(html).toContain('<dt><kbd>Esc</kbd></dt>');
   });
 
   // Task 11's fix round 1 (ledger ruling P2-R85, WCAG 2.1.4): single-key shortcuts can be turned off, per browser, in the sheet; they are on

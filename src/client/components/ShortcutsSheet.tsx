@@ -2,20 +2,29 @@
 // in the button's look beside what it does, a digit cap's digit in VT323 (`Figs`, spec §25). It is the top layer while it is open: a portal on
 // <body>, with #root inert behind it, so neither Tab nor a click reaches the page, and the toasts wait it out as they wait out the drawer
 // (ledger ruling P2-R72: a toast drawn already keeps its time, one shown meanwhile is drawn once the sheet has closed). Its Close button takes
-// the focus as it opens and keeps it: Tab stays on it, as a press on the sheet's words does (InlineConfirm keeps the keyboard the same way).
+// the focus as it opens, and the keyboard stays in the sheet: Tab and Shift+Tab go round its controls, and a press on its words leaves the focus
+// in the dialog, which takes it, its words still selectable (ledger ruling P2-R81a; InlineConfirm keeps the keyboard the same way).
 // Escape, Close or a press on the dimmed page closes it, and the page gives the focus back (ProjectPage). Escape stops at the sheet (P2-D22):
 // nothing under the modal top layer hears it, Flow's highlight included; a key a layer above has handled (the shared tooltip's, hiding a tip)
 // is not the sheet's, one layer per press (P2-R21b).
 
-import { Fragment, useId, useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactElement, type Ref } from 'react';
+import { useId, useLayoutEffect, useRef, type KeyboardEvent, type ReactElement, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { SHORTCUT_ROWS } from '../state/shortcuts.ts';
 import { setSingleKeyShortcuts, useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { setToastsInert } from '../state/toasts.ts';
 import { Figs } from './Figs.tsx';
 
-/** The end of the diagram hints, Flow's and Connections', while the single-key shortcuts are on (spec §14.1): the sheet's key. */
-export const SHEET_KEY_HINT = ' ? shows the shortcuts.';
+/** The words a screen reader says for a glyph it would skip or misread (ledger ruling P2-R86): the punctuation keys, and the range's dash. */
+const SPOKEN: Readonly<Record<string, string>> = { '/': 'slash', '?': 'question mark', '–': ' to ' };
+
+/** `glyph` as it is seen, hidden from a screen reader, which hears its word instead (P2-R86). Hook-free. */
+function Spoken(props: { glyph: string }): ReactElement {
+  return <><span aria-hidden="true">{props.glyph}</span><span className="visually-hidden">{SPOKEN[props.glyph]}</span></>;
+}
+
+/** The end of the diagram hints, Flow's and Connections', while the single-key shortcuts are on (spec §14.1): the sheet's key, said as a word. */
+export const SHEET_KEY_HINT = <>{' '}<Spoken glyph="?" /> shows the shortcuts.</>;
 
 /**
  * The sheet's dialog, named by its title: a row a key, its caps (an en dash between two stands for a range) and what it does; then the tick that
@@ -42,17 +51,19 @@ export function ShortcutsDialog(props: { onClose(): void; closeRef?: Ref<HTMLBut
       (e.shiftKey ? last : first).focus();
     }
   };
-  // a press on the sheet's words leaves the focus on Close, for the same reason (it would fall to the page's body)
-  const keepFocus = (e: MouseEvent<HTMLDivElement>): void => {
-    if (!(e.target instanceof Element && e.target.closest('button') !== null)) e.preventDefault();
-  };
+  // tabIndex -1: a press on the sheet's words gives the dialog the focus, where Escape and Tab are still the sheet's (it would fall to the body)
   return (
-    <div className="modal shortcuts-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={onKeyDown} onMouseDown={keepFocus}>
+    <div className="modal shortcuts-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
       <h2 id={titleId}>Keyboard shortcuts</h2>
       <dl className="shortcut-list">
         {SHORTCUT_ROWS.map(([caps, what]) => (
           <div key={what}>
-            <dt>{caps.map((cap, i) => (cap === '–' ? <Fragment key={i}>–</Fragment> : <kbd key={i}><Figs text={cap} /></kbd>))}</dt>
+            <dt>
+              {caps.map((cap, i) => {
+                if (cap === '–') return <Spoken key={i} glyph={cap} />;
+                return <kbd key={i}>{SPOKEN[cap] === undefined ? <Figs text={cap} /> : <Spoken glyph={cap} />}</kbd>;
+              })}
+            </dt>
             <dd>{what}</dd>
           </div>
         ))}

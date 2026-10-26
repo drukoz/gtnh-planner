@@ -29,6 +29,16 @@ async function longPressTip(page: Page, target: Locator, tip: string): Promise<v
 
 test('5 selects Materials & steps and moves the focus to it', async ({ page }) => {
   await openWithPlan(page, circuitLv());
+  // each tab says its digit, in order (fix round 1, M8)
+  const tabKeys = await page.locator('.tabs [role=tab]').evaluateAll((tabs) => tabs.map((tab) => tab.getAttribute('aria-keyshortcuts')));
+  expect(tabKeys).toEqual(['1', '2', '3', '4', '5', '6']);
+  // the digit of the tab shown already: no switch, the tab takes the focus at once, never by way of the body (fix round 1, M2)
+  await fitOf(page).focus();
+  await watchBodyFocus(page);
+  await page.keyboard.press('4');
+  await expect(page.locator('#tab-flow')).toBeFocused();
+  expect(await hashOf(page)).toBe('#flow');
+  expect(await bodyFocusCount(page)).toBe(0);
   const materials = page.getByRole('tab', { name: 'Materials & steps' });
   await page.keyboard.press('5');
   await expect(materials).toHaveAttribute('aria-selected', 'true');
@@ -76,7 +86,7 @@ test('? and the Shortcuts button open the sheet; Escape closes it and gives the 
   const sheet = sheetOf(page);
   const close = sheet.getByRole('button', { name: 'Close' });
   const fit = fitOf(page);
-  const button = page.getByRole('button', { name: 'Shortcuts' });
+  const button = page.getByRole('button', { name: 'Shortcuts', exact: true });
   await fit.focus();
   await watchBodyFocus(page);
   await page.keyboard.press('?');
@@ -96,8 +106,19 @@ test('? and the Shortcuts button open the sheet; Escape closes it and gives the 
   await expect(tick).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(close).toBeFocused();                                                   // from the first, round to the last
+  // a press on its words leaves the focus in the dialog, which takes it (ledger ruling P2-R81a), and whose words can be selected; from the
+  // dialog Tab goes to its first control and Shift+Tab to its last, and Escape is still the sheet's
   await sheet.getByText('Fit the diagram').click();
+  await expect(sheet).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(tick).toBeFocused();
+  await sheet.getByText('Fit the diagram').dblclick();
+  expect(await page.evaluate(() => String(getSelection()))).not.toBe('');
+  await expect(sheet).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
   await expect(close).toBeFocused();
+  await sheet.getByText('Fit the diagram').click();
+  await expect(sheet).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(sheet).toHaveCount(0);
   await expect(page.locator('#root')).not.toHaveAttribute('inert');
@@ -228,7 +249,7 @@ test('at 800 px the head keeps its one row: no Shortcuts button there, and ? sti
   await expect(page.locator('#tab-flow')).toBeFocused();
   expect(await bodyFocusCount(page)).toBe(0);
   await page.setViewportSize({ width: 1280, height: 720 });
-  await expect(page.getByRole('button', { name: 'Shortcuts' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Shortcuts', exact: true })).toBeVisible();
 });
 
 // Ledger ruling P2-R83: the Shortcuts button sits before Delete project, so the type-the-name confirm that takes Delete project's place, a row
@@ -241,8 +262,8 @@ test('the Shortcuts button stays on the head\'s first row while Delete project a
   const confirm = head.getByRole('form', { name: 'Confirm delete' });
   await expect(confirm).toBeVisible();
   const [name, compare, shortcuts, asks] = await Promise.all([
-    head.getByLabel('Project name', { exact: true }), head.getByRole('button', { name: 'Compare modes' }), head.getByRole('button', { name: 'Shortcuts' }),
-    confirm,
+    head.getByLabel('Project name', { exact: true }), head.getByRole('button', { name: 'Compare modes' }),
+    head.getByRole('button', { name: 'Shortcuts', exact: true }), confirm,
   ].map(async (part) => (await part.boundingBox())!));
   expect(Math.abs(shortcuts!.y + shortcuts!.height / 2 - (name!.y + name!.height / 2)), 'on the name\'s row').toBeLessThanOrEqual(0.5);
   expect(shortcuts!.y, 'level with Compare modes').toBe(compare!.y);
@@ -261,14 +282,14 @@ const hintHeight = (hint: Locator): Promise<number> => hint.evaluate(async (el) 
 test('the Flow hint ends with the shortcuts and stays one line at 1280 x 720 (P2-R84)', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   const hint = page.locator('.flow-toolbar > span.muted.small');
-  await expect(hint).toHaveText(/ \? shows the shortcuts\.$/);
+  await expect(hint).toHaveText(/ \?question mark shows the shortcuts\.$/);           // the `?` said as a word (P2-R86)
   expect(await hintHeight(hint)).toBe(HINT_LINE);
 });
 
 test('the Connections hint ends with the shortcuts and is as tall as at fc87ab8, at 1280 x 720 and 1440 x 900 (P2-R84)', async ({ page }) => {
   const view = await openConnections(page);
   const hint = page.locator('.conn-toolbar > span');
-  await expect(hint).toHaveText(/ \? shows the shortcuts\.$/);
+  await expect(hint).toHaveText(/ \?question mark shows the shortcuts\.$/);           // the `?` said as a word (P2-R86)
   expect(await hintHeight(hint), '1280 x 720').toBe(2 * HINT_LINE);
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(view).toBeVisible();
@@ -416,6 +437,71 @@ test('at 800 px the drawer\'s Keyboard shortcuts button opens the sheet over it,
   await expect(toast).toHaveCount(0);
 });
 
+// Fix round 1, M1: a key held down repeats into whatever has the focus. A held `/` would type its repeats into the search its first press
+// focused; the page takes the repeats of a key it acted on until that key goes up
+for (const [width, height] of [[1280, 720], [800, 900]] as const) {
+  test(`a held / types nothing into the search it focused, at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await openWithPlan(page, circuitLv());
+    const search = page.locator('aside[aria-label="Project settings"] input[aria-keyshortcuts="/"]');
+    await page.keyboard.down('/');
+    await page.keyboard.down('/');                                                      // the held key's repeat, on the search by now
+    await page.keyboard.up('/');
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue('');
+  });
+}
+
+// Fix round 1, M5: in a window too short for it (or a zoomed one), the sheet scrolls inside the dimmed page: it stays in the window, its
+// title can be scrolled to, and Close, which takes the focus, is scrolled into view
+test('in a window too short for it the sheet scrolls, its title and Close both within reach', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 360 });
+  await openWithPlan(page, circuitLv());
+  await page.keyboard.press('?');
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await sheet.evaluate((el) => Promise.all([...el.getAnimations(), ...el.parentElement!.getAnimations()].map((a) => a.finished)));
+  const box = (await sheet.boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(360);
+  expect(await sheet.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  const close = sheet.getByRole('button', { name: 'Close' });
+  await expect(close).toBeFocused();
+  await expect(close).toBeInViewport();
+  await sheet.evaluate((el) => { el.scrollTop = 0; });
+  await expect(sheet.getByRole('heading', { name: 'Keyboard shortcuts' })).toBeInViewport();
+});
+
+// Fix round 1, M8: the head keeps its one row of 36 px with Compare modes and Shortcuts drawn, the badge live, just above the drawer's width
+// and on a wide window
+for (const [width, height] of [[901, 900], [1440, 900]] as const) {
+  test(`at ${width} x ${height} the head keeps its one row with Compare modes and Shortcuts drawn`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await openWithPlan(page, circuitLv());
+    await expect(page.locator('.project-head .connection.live')).toBeVisible();
+    await expect(page.locator('.project-head').getByRole('button', { name: 'Compare modes' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Shortcuts', exact: true })).toBeVisible();
+    const head = await page.evaluate(async () => {
+      await document.fonts.ready;
+      return document.querySelector('.project-head')!.getBoundingClientRect().height;
+    });
+    expect(head, 'the head is one row').toBe(36);
+  });
+}
+
+// Fix round 1, M8: f gives Flow back the view Fit gives, after a zoom
+test('f gives Flow back its fitted view after a zoom', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const view = page.locator('svg.flow-canvas > g');
+  await fitOf(page).click();
+  const fitted = await view.getAttribute('transform');
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect.poll(() => view.getAttribute('transform')).not.toBe(fitted);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('f');
+  await expect.poll(() => view.getAttribute('transform')).toBe(fitted);
+});
+
 // P2-R72: while the sheet is open the toasts behind it wait, as they wait out the drawer (P2-R56, P2-R56a): a toast drawn before it stays,
 // its time held, and runs out once the sheet has closed. The page's clock is faked, so its 5 s are run at once
 test('the sheet holds the toasts as the drawer does: a toast drawn before it keeps its time until it closes', async ({ page }) => {
@@ -484,7 +570,7 @@ test('no key is a shortcut while the name prompt asks', async ({ page }) => {
 // focus to the Shortcuts button; its repeat lands there, and must not press it, which would open the sheet again
 test('a held Enter on the sheet\'s Close closes it once, and does not press the Shortcuts button the focus goes back to', async ({ page }) => {
   await openWithPlan(page, circuitLv());
-  const button = page.getByRole('button', { name: 'Shortcuts' });
+  const button = page.getByRole('button', { name: 'Shortcuts', exact: true });
   const sheet = sheetOf(page);
   await button.focus();
   await page.keyboard.press('Enter');

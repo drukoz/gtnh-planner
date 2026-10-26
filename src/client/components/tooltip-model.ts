@@ -162,12 +162,14 @@ export function describes(tip: string, name: string | null): boolean {
 
 /**
  * What a screen reader says of an element before its description, for `describes`, `repeatsName` and `describedLines` to read as its name: the
- * name, then each key of its `aria-keyshortcuts` (`keys`), which a screen reader says with it, a part each; null when it says neither. A name
- * with no key is said as it is. So the tip "Pause pipes · P" of the toolbar's Pause pipes, key P (Phase 2 spec §14.1), says nothing more and
- * describes nothing: neither the name nor the key is heard twice (P2-D36).
+ * name, then each key of its `aria-keyshortcuts` (`keys`), which a screen reader that speaks `aria-keyshortcuts` says with the name (the
+ * shortcuts' sheet lists every key), a part each, a one-letter key in either case; null when it says neither. A name with no key is said as it
+ * is. So the tip "Pause pipes · P" of the toolbar's Pause pipes, key P (Phase 2 spec §14.1), says nothing more and describes nothing: neither
+ * the name nor the key is heard twice (P2-D36, ledger ruling P2-R82).
  */
 export function spokenName(name: string | null, keys: string | null): string | null {
-  const said = [name ?? '', ...(keys ?? '').split(/\s+/)].filter((part) => part.trim() !== '');
+  const keyParts = (keys ?? '').split(/\s+/).flatMap((key) => (/^\p{L}$/u.test(key) ? [key.toUpperCase(), key.toLowerCase()] : [key]));
+  const said = [name ?? '', ...keyParts].filter((part) => part.trim() !== '');
   return said.length === 0 ? null : said.join('\n');
 }
 

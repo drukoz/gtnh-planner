@@ -652,6 +652,8 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 /* The keyboard shortcuts' sheet (Phase 2 spec §14.1): a modal whose list sets each key's caps beside what the key does, in two columns. A cap
    is a key in the button's look, Pixelify 14 px on a fixed 24 px line, so it is 28 px tall whichever font is in (spec §3.6); a digit cap's digit
    is a `span.fig` (spec §25), whose line of 0 moves nothing. What a key does is a sentence, in the modal's own Inter. */
+/* In a window too short for it, or a zoomed one, the sheet scrolls inside the dimmed page (fix round 1, M5). */
+.shortcuts-sheet { max-height: 100%; overflow: auto; }
 .shortcut-list { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin: 0; }
 .shortcut-list > div { display: contents; }
 .shortcut-list dt { display: flex; align-items: center; gap: 4px; }

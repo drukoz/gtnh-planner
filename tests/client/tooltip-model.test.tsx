@@ -173,15 +173,18 @@ describe('the shared tooltip: the mod line and the box', () => {
   // screen reader says with the name; their tips, "Fit · F" and "Pause pipes · P", say nothing more, so they describe nothing, and the name is not
   // heard twice. A name with no key is said as it was
   it('describes nothing on a button whose tip is its name and its key', () => {
-    expect(spokenName('Pause pipes', 'P')).toBe('Pause pipes\nP');
+    expect(spokenName('Pause pipes', 'P')).toBe('Pause pipes\nP\np');                // a one-letter key either case (fix round 1, M7)
     expect(describedLines(['Pause pipes · P'], null, spokenName('Pause pipes', 'P'))).toEqual([]);
     expect(describedLines(['Play pipes · P'], null, spokenName('Play pipes', 'P'))).toEqual([]);
-    expect(describedLines(['Fit · F'], null, spokenName('Fit', 'F'))).toEqual([]); expect(describes('Fit · F', spokenName('Fit', 'F'))).toBe(false);
+    expect(describedLines(['Fit · F'], null, spokenName('Fit', 'F'))).toEqual([]);
     // the name alone, the key unsaid, leaves the whole line to describe; and a key counts whole: F is not Flow
     expect(describedLines(['Fit · F'], null, spokenName('Fit', null))).toEqual(['Fit · F']);
     expect(describedLines(['Fit · Flow'], null, spokenName('Fit', 'F'))).toEqual(['Fit · Flow']);
-    expect([spokenName('Copper Wire', null), spokenName(null, null), spokenName(null, 'F'), spokenName('Fit', ' F  Shift+F ')]).toEqual(['Copper Wire', null, 'F', 'Fit\nF\nShift+F']);
-    expect(renderToStaticMarkup(<TipLines lines={['Pause pipes · P']} mod={null} name={spokenName('Pause pipes', 'P')} />)).toBe('<div aria-hidden="true">Pause pipes · P</div>');
+    expect([spokenName('Copper Wire', null), spokenName(null, null), spokenName(null, 'F'), spokenName('Fit', ' F  Shift+F ')])
+      .toEqual(['Copper Wire', null, 'F\nf', 'Fit\nF\nf\nShift+F']);
+    expect(describedLines(['Fit · f'], null, spokenName('Fit', 'F'))).toEqual([]);
+    // the host draws a tip that describes nothing with no name (`named` null): no line is hidden, for the tip is no element's description
+    expect(renderToStaticMarkup(<TipLines lines={['Pause pipes · P']} mod={null} name={null} />)).toBe('<div>Pause pipes · P</div>');
   });
 
   // ledger ruling P2-R24c: since P2-R32 a recipe slot's name says its chance and what a run takes of it, which its tip says on lines of their
