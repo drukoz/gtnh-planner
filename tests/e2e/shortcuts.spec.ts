@@ -8,7 +8,9 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { bodyFocusCount, createProject, login, LV_CIRCUITS, noDialogs, openConnections, openWithPlan, setName, SETTINGS_BUTTON, watchBodyFocus } from './helpers.ts';
+import {
+  bodyFocusCount, createProject, login, LV_CIRCUITS, markTips, noDialogs, openConnections, openWithPlan, setName, SETTINGS_BUTTON, watchBodyFocus,
+} from './helpers.ts';
 
 /** The sheet, by its role and its title. */
 const sheetOf = (page: Page): Locator => page.getByRole('dialog', { name: 'Keyboard shortcuts' });
@@ -16,6 +18,16 @@ const sheetOf = (page: Page): Locator => page.getByRole('dialog', { name: 'Keybo
 const fitOf = (page: Page): Locator => page.locator('.tab-panel').getByRole('button', { name: 'Fit', exact: true });
 /** The page's hash, which a digit sets as it is pressed: read at once, it says whether the key switched the tab. */
 const hashOf = (page: Page): Promise<string> => page.evaluate(() => location.hash);
+
+/**
+ * `bodyFocusCount` while the page's clock is paused (`page.clock.pauseAt`): the counter's frames are the faked clock's, so it runs the clock on
+ * by 100 ms, which no 5 s toast notices, as the count waits for them.
+ */
+async function bodyFocusCountPaused(page: Page): Promise<number> {
+  const counted = bodyFocusCount(page);
+  await page.clock.runFor(100);
+  return counted;
+}
 
 /** A finger's long press on `target`, held until its tip reads `tip`, then lifted (in a context with touch: the tip stays until the next tap). */
 async function longPressTip(page: Page, target: Locator, tip: string): Promise<void> {
@@ -319,6 +331,37 @@ test('Escape closes the sheet alone: the Flow highlight stays lit until the next
 test.describe('on a touch screen', () => {
   test.use({ hasTouch: true });
 
+  // Fix round 2, M5 (ledger ruling P2-R87): no tip shows for a trigger already inside an inert layer. A long press on Fit, whose tip comes
+  // LONG_PRESS_MS (500 ms) after the finger goes down, is still running when ? opens the sheet; the page's clock, paused, then runs past it:
+  // no tip is drawn, not even for a frame (`markTips` sees one drawn for a frame). The same press with no sheet shows the tip, first
+  test('a long press still running as the sheet opens shows no tip, not even for a frame (P2-R87)', async ({ page }) => {
+    await page.clock.install();
+    await openWithPlan(page, circuitLv());
+    await page.clock.pauseAt(Date.now() + 1000);
+    const box = (await fitOf(page).boundingBox())!;
+    const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const cdp = await page.context().newCDPSession(page);
+    // the control: the press shows Fit's tip once the clock has run past it, and a tap elsewhere takes it away
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+    await page.clock.runFor(1000);
+    await expect(page.getByRole('tooltip')).toHaveText('Fit · F');
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.locator('.flow-legend').tap();
+    await page.clock.runFor(1000);
+    await expect(page.locator('.nei-tooltip')).toHaveCount(0);
+    // under the sheet, opened while the press runs
+    await markTips(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+    await page.keyboard.press('?');
+    await expect(sheetOf(page)).toBeVisible();
+    await page.clock.runFor(1000);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+    await page.clock.runFor(1000);
+    await expect(page.locator('html')).not.toHaveAttribute('data-test-tip-seen');
+    await expect(page.getByRole('tooltip')).toHaveCount(0);
+  });
+
   test('a long-pressed tip goes as the sheet opens, and one Escape closes the sheet, Flow\'s highlight still lit (P2-R87)', async ({ page }) => {
     await openWithPlan(page, circuitLv());
     const canvas = page.locator('svg.flow-canvas');
@@ -405,15 +448,19 @@ test('the single-key shortcuts can be turned off in the sheet and on again, and 
 });
 
 // Fix round 1, I2 (ledger rulings P2-R85, P2-R88): at 900 px or less the head draws no Shortcuts button, so the drawer ends with a Keyboard
-// shortcuts button. It opens the sheet over the open drawer; Escape closes the sheet alone, the focus back on that button, and the next one
-// the drawer. Both layers hold the toasts, and the sheet letting go of its hold leaves the drawer's: a toast drawn before waits until the drawer
-// closes. The page's clock is faked, so its 5 s are run at once
+// shortcuts button. It opens the sheet over the open drawer; Escape closes the sheet alone, the focus back on that button, the drawer's own
+// layers still inert, and the next one the drawer. Both layers hold the toasts, and the sheet letting go of its hold leaves the drawer's: a
+// toast drawn before waits until the drawer closes. Fix round 2 (M4): a window that outgrows the drawer while the sheet is open over it closes
+// the drawer, the sheet staying and holding the toast, and the focus goes back by P2-R71's chain, the opener no longer drawn. The page's clock
+// is faked and paused before the toast shows (M6), so its 5 s run only when the test runs them
 test('at 800 px the drawer\'s Keyboard shortcuts button opens the sheet over it, and closing the sheet leaves the drawer and its hold (P2-R85, P2-R88)', async ({ page }) => {
   await page.clock.install();
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Sheet over the drawer', LV_CIRCUITS);                    // a target: the drawer stays shut until asked
   const field = page.getByRole('textbox', { name: 'Project name' });
+  await expect(field).toBeVisible();
+  await page.clock.pauseAt(Date.now() + 1000);
   await field.fill('Sheet over the drawer, renamed');
   await field.press('Enter');
   const toast = page.locator('section.toasts li', { hasText: 'Renamed to “Sheet over the drawer, renamed”' });
@@ -425,16 +472,64 @@ test('at 800 px the drawer\'s Keyboard shortcuts button opens the sheet over it,
   await opener.click();
   const sheet = sheetOf(page);
   await expect(sheet).toBeVisible();
+  await watchBodyFocus(page);
   await page.keyboard.press('Escape');
   await expect(sheet).toHaveCount(0);
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(opener).toBeFocused();
+  // the sheet's layer has gone and the drawer's stays (M3)
+  await expect(page.locator('#root')).not.toHaveAttribute('inert');
+  for (const behind of ['.project-views', '.project-head', '.top-nav']) await expect(page.locator(behind), behind).toHaveAttribute('inert', '');
+  expect(await bodyFocusCountPaused(page)).toBe(0);
   await page.clock.runFor(10_000);                                                     // twice a toast's time: the drawer still holds it
   await expect(toast).toHaveAttribute('data-state', 'open');
   await page.keyboard.press('Escape');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  // the window outgrows the drawer while the sheet is open over it (M4)
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await opener.click();
+  await expect(sheet).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.locator('.project-body')).not.toHaveClass(/\bsettings-open\b/);
+  await expect(sheet).toBeVisible();
+  await page.clock.runFor(10_000);                                                     // the sheet alone holds it now
+  await expect(toast).toHaveAttribute('data-state', 'open');
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Shortcuts', exact: true })).toBeFocused();   // P2-R71: the opener is no longer drawn
+  expect(await bodyFocusCountPaused(page)).toBe(0);
   await page.clock.runFor(6000);
   await expect(toast).toHaveCount(0);
+});
+
+// Fix round 2, M2: WebKit focuses no button on a click or a tap, so the sheet's opener is the button pressed, never only what has the focus.
+// A press that moves no focus, a script's click as WebKit's, opens the sheet, and Escape still gives the focus back to the button pressed: the
+// drawer's at 800 px (the focus was on Close settings), the head's at 1280 (the focus was on Fit)
+test('at 800 px the sheet gives the focus back to the drawer\'s button that opened it, though the press moved no focus', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await openWithPlan(page, circuitLv());
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeFocused();
+  const opener = page.locator('aside[aria-label="Project settings"]').getByRole('button', { name: 'Keyboard shortcuts' });
+  await opener.evaluate((button) => (button as HTMLElement).click());
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});
+
+test('at 1280 px the sheet gives the focus back to the head\'s Shortcuts button that opened it, though the press moved no focus', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  await fitOf(page).focus();
+  const button = page.getByRole('button', { name: 'Shortcuts', exact: true });
+  await button.evaluate((el) => (el as HTMLElement).click());
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(button).toBeFocused();
 });
 
 // Fix round 1, M1: a key held down repeats into whatever has the focus. A held `/` would type its repeats into the search its first press
@@ -509,6 +604,8 @@ test('the sheet holds the toasts as the drawer does: a toast drawn before it kee
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Sheet toasts', LV_CIRCUITS);
   const field = page.getByRole('textbox', { name: 'Project name' });
+  await expect(field).toBeVisible();
+  await page.clock.pauseAt(Date.now() + 1000);                                         // fix round 2, M6: the 5 s run only when run
   await field.fill('Sheet toasts renamed');
   await field.press('Enter');                                                          // the field lets the focus go
   const toast = page.getByRole('region', { name: 'Notifications' }).getByRole('listitem').filter({ hasText: 'Renamed to “Sheet toasts renamed”' });

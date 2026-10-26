@@ -7,7 +7,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { HOVER_DELAY_MS } from '../../src/client/map/hover.ts';
 import {
-  alongAxis, createRestTimer, describedLines, describes, frameThrottle, hoverFrom, inView, placeTip, spokenName, tapActs, TIP_DELAY_MS, tipLines, tipText,
+  alongAxis, createRestTimer, describedLines, frameThrottle, hoverFrom, inView, placeTip, spokenName, tapActs, TIP_DELAY_MS, tipLines, tipText,
   type TapNode,
 } from '../../src/client/components/tooltip-model.ts';
 import { MOD_NAMES, modName } from '../../src/client/components/mod-names.ts';
@@ -76,11 +76,6 @@ describe('the shared tooltip: its lines and when it shows', () => {
   });
 
   it('waits as long as the map', () => expect(TIP_DELAY_MS).toBe(HOVER_DELAY_MS));
-
-  it('describes an element only when the tip says more than its name', () => {
-    expect(describes('Copper Wire', 'Copper Wire')).toBe(false); expect(describes('Copper  Wire ', 'Copper Wire')).toBe(false);
-    expect(describes('Basic Wiremill\ntakes Copper Ingot', 'Basic Wiremill')).toBe(true); expect(describes('Fit · F', null)).toBe(true);
-  });
 
   it('lets a tap act on what acts, and show the tip on what does not', () => {
     const n = (tag: string, over: Partial<TapNode> = {}): TapNode => ({ tag, role: null, hasHref: false, inSvg: false, ...over });
@@ -165,8 +160,9 @@ describe('the shared tooltip: the mod line and the box', () => {
     expect(head).toMatch(/^<div aria-hidden="true">Wiremill<\/div><div aria-hidden="true">LV · /);
     // a part is said whole or not at all: a line that names something longer, or only the start of a part, says nothing of the name
     expect(describedLines(['Iron Ingot Block', 'Iron'], null, 'Iron Ingot')).toEqual(['Iron Ingot Block', 'Iron']);
-    // and a figure's comma is no separator: "1,440" is not "1 440"
-    expect(describes('1,440', '1 440')).toBe(true); expect(describes('Iron Ingot\n1/s', 'Iron Ingot · 1/s')).toBe(false);
+    // and a figure's comma is no separator: "1,440" is not "1 440"; a line break and " · " are the same boundary (ledger ruling P2-R89 moved
+    // these two from `describes`, which is gone, to the description the host builds)
+    expect(describedLines(['1,440'], null, '1 440')).toEqual(['1,440']); expect(describedLines(['Iron Ingot', '1/s'], null, 'Iron Ingot · 1/s')).toEqual([]);
   });
 
   // Task 11 (spec §14.1): the diagrams' Fit and Pause pipes buttons are named by their words and give their key in `aria-keyshortcuts`, which a
@@ -183,6 +179,8 @@ describe('the shared tooltip: the mod line and the box', () => {
     expect([spokenName('Copper Wire', null), spokenName(null, null), spokenName(null, 'F'), spokenName('Fit', ' F  Shift+F ')])
       .toEqual(['Copper Wire', null, 'F\nf', 'Fit\nF\nf\nShift+F']);
     expect(describedLines(['Fit · f'], null, spokenName('Fit', 'F'))).toEqual([]);
+    // a tip that says more than the name and the key describes what it adds (ledger ruling P2-R89)
+    expect(describedLines(['Fit · F', 'shows all of the diagram'], null, spokenName('Fit', 'F'))).toEqual(['shows all of the diagram']);
     // the host draws a tip that describes nothing with no name (`named` null): no line is hidden, for the tip is no element's description
     expect(renderToStaticMarkup(<TipLines lines={['Pause pipes · P']} mod={null} name={null} />)).toBe('<div>Pause pipes · P</div>');
   });

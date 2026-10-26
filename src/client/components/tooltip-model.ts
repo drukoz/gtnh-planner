@@ -148,24 +148,11 @@ export function createRestTimer<T>(show: (target: T | null) => void, delayMs: nu
 const parts = (text: string): string[] =>
   text.split(/\s+·\s+|[,:]\s+|\n/).map((part) => part.replace(/\s+/g, ' ').trim()).filter((part) => part !== '');
 
-/** Whether two texts' parts are the same, in the same order. */
-const same = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((part, i) => part === b[i]);
-
 /**
- * Whether a tip says more than `name`, the accessible name of the element it would describe: only then does that element get the tip as
- * its description (`aria-describedby`), so a screen reader never says a name twice (P2-D36). White space and the views' separators do
- * not count (P2-R24).
- */
-export function describes(tip: string, name: string | null): boolean {
-  return !same(parts(tip), parts(name ?? ''));
-}
-
-/**
- * What a screen reader says of an element before its description, for `describes`, `repeatsName` and `describedLines` to read as its name: the
- * name, then each key of its `aria-keyshortcuts` (`keys`), which a screen reader that speaks `aria-keyshortcuts` says with the name (the
- * shortcuts' sheet lists every key), a part each, a one-letter key in either case; null when it says neither. A name with no key is said as it
- * is. So the tip "Pause pipes · P" of the toolbar's Pause pipes, key P (Phase 2 spec §14.1), says nothing more and describes nothing: neither
- * the name nor the key is heard twice (P2-D36, ledger ruling P2-R82).
+ * The name `repeatsName` and `describedLines` fold a tip's lines against (ledger rulings P2-R82, P2-R89): the element's name, then each key of
+ * its `aria-keyshortcuts` (`keys`), a one-letter key in both cases, a part each; null when there are neither. A name with no key is as it is.
+ * So the tip "Pause pipes · P" of the toolbar's Pause pipes, key P (Phase 2 spec §14.1), adds nothing to its name and key, and describes
+ * nothing (P2-D36); a screen reader that speaks `aria-keyshortcuts` says the key with the name, and the shortcuts' sheet lists every key.
  */
 export function spokenName(name: string | null, keys: string | null): string | null {
   const keyParts = (keys ?? '').split(/\s+/).flatMap((key) => (/^\p{L}$/u.test(key) ? [key.toUpperCase(), key.toLowerCase()] : [key]));

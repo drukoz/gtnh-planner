@@ -492,15 +492,18 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // search are drawn before, and the drawer that opens by itself has not decided yet), and not while the drawer, the sheet or another modal
   // (the name prompt, the map's pin dialog) is open. A digit selects its tab, which then takes the focus; `/` is the banner hint's way to the
   // item search (`pickTarget`: below 900 px the drawer opens into it); F and P press the shown diagram's Fit and Pause pipes, and do nothing on
-  // a tab with no diagram, so no setting changes unseen; ? opens the sheet. The sheet (components/ShortcutsSheet.tsx), which the head's
-  // Shortcuts button opens too, gives the focus back as it closes: to what had it while that is still drawn, else to the Shortcuts button if
-  // it is drawn (not below 900 px), else to the selected tab, else to the page's main, never to the body (ledger ruling P2-R71: when nothing
-  // had the focus, there is no opener to go back to). Below 900 px the head draws no Shortcuts button, so the settings column, the drawer
-  // there, ends with a Keyboard shortcuts button, which opens the sheet over the open drawer and takes the focus back as it closes. The sheet
-  // turns the single-key shortcuts off for this browser (ledger ruling P2-R85, WCAG 2.1.4): off, no key acts and nothing says a key.
+  // a tab with no diagram, so no setting changes unseen; ? opens the sheet. Below 900 px the head draws no Shortcuts button, so the settings
+  // column, the drawer there, ends with a Keyboard shortcuts button, which opens the sheet over the open drawer. The sheet
+  // (components/ShortcutsSheet.tsx) gives the focus back as it closes: to its opener while that is still drawn (the button pressed, focused or
+  // not, or what had the focus for `?`), else to the head's Shortcuts button if it is drawn (not below 900 px), else to the drawer's Keyboard
+  // shortcuts button if it is drawn (the drawer open), else to the selected tab, else to the page's main, never to the body (ledger ruling
+  // P2-R71: when nothing had the focus, there is no opener to go back to). The sheet turns the single-key shortcuts off for this browser
+  // (ledger ruling P2-R85, WCAG 2.1.4): off, no key acts and nothing says a key.
   const keysOn = useSingleKeyShortcuts();
   const [sheetOpen, setSheetOpen] = useState(false);
   const shortcutsButton = useRef<HTMLButtonElement | null>(null);
+  /** The drawer's way to the sheet, where the head's button is not drawn. */
+  const settingsShortcuts = useRef<HTMLButtonElement | null>(null);
   /** What had the focus as the sheet opened (null: nothing, or the body), which takes it back as the sheet closes, while it is drawn. */
   const sheetOpener = useRef<Element | null>(null);
   /** The sheet is being closed: the focus goes back. */
@@ -525,8 +528,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
       document.removeEventListener('keyup', up, true);
     };
   }, []);
-  const openSheet = (): void => {
-    const at = document.activeElement;
+  /**
+   * Opens the sheet, its opener the button pressed (`from`: WebKit focuses no button on a click or a tap, fix round 2), else what has the focus
+   * (the `?` key's); `<body>` or nothing is none (P2-R71).
+   */
+  const openSheet = (from?: Element): void => {
+    const at = from ?? document.activeElement;
     sheetOpener.current = at === null || at === document.body ? null : at;
     setSheetOpen(true);
   };
@@ -541,7 +548,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
     sheetOpener.current = null;
     const drawn = (el: Element | null): boolean => el !== null && el.isConnected && el.getClientRects().length > 0;
     const selectedTab = document.querySelector('.tabs [aria-selected="true"]');
-    for (const el of [opener, shortcutsButton.current, selectedTab]) if (drawn(el) && focusOn(el)) return;
+    for (const el of [opener, shortcutsButton.current, settingsShortcuts.current, selectedTab]) if (drawn(el) && focusOn(el)) return;
     focusMain();
   }, [sheetOpen]);
   useLayoutEffect(() => {
@@ -620,9 +627,12 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         {/* The keys' sheet (Phase 2 spec §14.1, P2-D29). It comes before Delete project (ledger ruling P2-R83), so it stays on the first row
             when the type-the-name confirm takes Delete project's place on a row of its own, and the destructive control stays at the row's
-            end. Below 900 px the head's row is full and the stylesheet does not draw it (plan ruling shortcuts-button-wide): ? opens the
-            sheet at every width, and the diagrams' hints say so. */}
-        <button type="button" className="small shortcuts-open" aria-keyshortcuts={keysOn ? '?' : undefined} ref={shortcutsButton} onClick={openSheet}>
+            end. Below 900 px the head's row is full and the stylesheet does not draw it: the drawer's Keyboard shortcuts button opens the sheet
+            there, and `?` does too while the single-key shortcuts are on (P2-R85). */}
+        <button
+          type="button" className="small shortcuts-open" aria-keyshortcuts={keysOn ? '?' : undefined} ref={shortcutsButton}
+          onClick={(e) => openSheet(e.currentTarget)}
+        >
           Shortcuts
         </button>
         <DeleteProject
@@ -667,7 +677,9 @@ export function ProjectPage(props: { id: string }): ReactElement {
           <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} names={names} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}
           {/* The way to the keyboard shortcuts' sheet where the head's is not drawn: the stylesheet draws it in the drawer only (P2-R85). */}
-          <button type="button" className="settings-shortcuts" onClick={openSheet}>Keyboard shortcuts</button>
+          <button type="button" className="settings-shortcuts" ref={settingsShortcuts} onClick={(e) => openSheet(e.currentTarget)}>
+            Keyboard shortcuts
+          </button>
         </aside>
         <div className="project-views" inert={settingsOpen}>
           <div className="tabs" role="tablist" aria-label="Project views">
