@@ -425,7 +425,8 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
       e.preventDefault();                               // one layer per press; never stopPropagation (P2-D22)
       return;
     }
-    if ((e.key === 'Enter' || e.key === ' ') && focused !== null && e.target === focused) {
+    // a held Enter's repeat that landed on this trigger from where its press began is not a press on it (P2-R69a)
+    if ((e.key === 'Enter' || e.key === ' ') && focused !== null && e.target === focused && !e.defaultPrevented) {
       const trigger = triggerOf(focused);
       if (trigger === null) return;
       quiet.add(trigger);                               // until the focus moves

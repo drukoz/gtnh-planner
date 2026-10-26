@@ -4,10 +4,11 @@
 // and from the background) and zooms it with the wheel, keeps its middle or fits it again when the side panel opens,
 // and shows a box's faces in full, and the 3D tab lists the Item Conduits (plan 11, ruling R7's lines, back with Plan
 // 5's 3D tab as merge follow-up F3). A drag keeps the box it started on under the pointer while the page above the
-// tabs changes height, and a press the page moves under stays a click (ledger ruling P2-R16).
+// tabs changes height, and a press the page moves under stays a click (ledger ruling P2-R16). The panel's Close gives the focus back to the
+// diagram (ledger ruling P2-R77).
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { createProject, login, setName, shiftViews } from './helpers.ts';
+import { bodyFocusCount, createProject, login, openConnections, setName, shiftViews, watchBodyFocus } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
 /** Project `id`'s layout, from the layout route. */
@@ -211,4 +212,28 @@ test('a press that the page moves under stays a click: the box is picked and the
   await expect(page.getByTestId('conn-panel')).toContainText('Basic Bending Machine');
   expect((await viewOf(view)).slice(1)).toEqual([y0, k0]);
   await unshift();
+});
+
+// ledger ruling P2-R77: the panel's Close gives the focus back, as Flow's does (P2-R36), before the panel goes. A Connections box takes no focus
+// (the diagram is one focus stop, which the arrow keys pan, and a box is picked by the pointer), so the diagram takes it, from the keyboard's
+// Close and from the pointer's
+test('the panel\'s Close gives the focus to the diagram, from the keyboard and from the pointer', async ({ page }) => {
+  const view = await openConnections(page);
+  const diagram = view.getByRole('group', { name: 'Connections of the line' });
+  const machine = view.locator('.conn-machine rect').first();
+  const panel = page.getByTestId('conn-panel');
+  const close = page.getByRole('button', { name: 'Close the panel' });
+  await watchBodyFocus(page);
+  await machine.click();
+  await expect(panel).toBeVisible();
+  await close.focus();
+  await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(diagram).toBeFocused();
+  await machine.click();
+  await expect(panel).toBeVisible();
+  await close.click();
+  await expect(panel).toHaveCount(0);
+  await expect(diagram).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
 });

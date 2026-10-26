@@ -1,5 +1,5 @@
-// The client's sources, as files to read as text: the client tests run in node with no DOM, so a rule that every handler or call in the client
-// must keep is checked in its sources.
+// The client's sources, as files to read as text, and their code without its comments: the client tests run in node with no DOM, so a rule
+// that every handler or call in the client must keep is checked in its sources.
 
 import { readdirSync } from 'node:fs';
 
@@ -13,4 +13,15 @@ export function sources(dir = ''): string[] {
     if (entry.isDirectory()) return sources(`${rel}/`);
     return /\.tsx?$/.test(entry.name) ? [rel] : [];
   });
+}
+
+/**
+ * `code` without its comments, each kept as the line breaks it held, so a line keeps its number. Strings and template literals are passed
+ * over whole: a `//` in a URL is not a comment.
+ */
+export function withoutComments(code: string): string {
+  return code.replace(
+    /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+    (match: string, literal: string | undefined) => literal ?? match.replace(/[^\n]/g, ''),
+  );
 }

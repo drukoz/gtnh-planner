@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { InlineConfirm } from '../../src/client/components/InlineConfirm.tsx';
-import { ROOT, sources } from './client-sources.ts';
+import { ROOT, sources, withoutComments } from './client-sources.ts';
 
 type Props = Parameters<typeof InlineConfirm>[0];
 const confirmOf = (over: Partial<Props> = {}): string => renderToStaticMarkup(
@@ -52,17 +52,6 @@ describe('the in-app confirm', () => {
     for (const none of [null, undefined]) expect(confirmOf({ error: none })).not.toContain('role="alert"');
   });
 });
-
-/**
- * `code` without its comments, each kept as the line breaks it held, so a line keeps its number. Strings and template literals are passed
- * over whole: a `//` in a URL is not a comment.
- */
-function withoutComments(code: string): string {
-  return code.replace(
-    /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
-    (match: string, literal: string | undefined) => literal ?? match.replace(/[^\n]/g, ''),
-  );
-}
 
 describe('no browser dialog (Phase 2 spec §13.1)', () => {
   it('reads code, not comments, and passes over strings', () => {

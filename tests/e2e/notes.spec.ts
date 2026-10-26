@@ -265,11 +265,65 @@ test('a held Enter on the last note\'s Delete deletes it and leaves the field to
 
 // P2-R69a's control: a press held where it began repeats as before: Enter held in the field to add a note types a line break each time
 test('Enter held in the field to add a note types a line break each time', async ({ page }) => {
+  const dialogs = noDialogs(page);
   await withNotes(page, 'Notes held, typing', ['first']);
   const field = page.getByLabel('Add a note');
   await field.focus();
+  await watchBodyFocus(page);
   await page.keyboard.down('Enter');
   await page.keyboard.down('Enter');                                                      // a repeat, where the press began
   await page.keyboard.up('Enter');
   await expect(field).toHaveValue('\n\n');
+  await expect(field).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 4, M2: a held Enter on a note's Undo whose hand-off ends on the note it restored, its Delete (P2-R74): the repeats are not that
+// Delete's (P2-R69a), so the note stays. The focus comes into the toasts from nowhere, so P2-R57 leaves it on the page's main for P2-R74
+test('a held Enter on a note\'s Undo leaves the note it restored, its Delete focused', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes held undo', ['only']);
+  await noteOf(page, 'only').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note')).toHaveCount(0);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' }).focus();
+  await watchBodyFocus(page);
+  await page.keyboard.down('Enter');
+  const restored = noteOf(page, 'only').getByRole('button', { name: 'Delete' });
+  await expect(restored).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the restored Delete
+  await page.keyboard.up('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['only']);
+  await expect(restored).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 4, M3: an Undo run while another tab is shown finds no row of its note (P2-R74 moves nothing); the focus stays where P2-R57 put
+// it. From the Map tab, Tab goes through the tabs and the Map's own controls, the last its "Scan the world" link, then to the toasts: the
+// Undo gives the focus back to that link. The note is back on the Notes tab
+test('a note\'s Undo run from another tab leaves the focus where it came from, and the note is back on its tab', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await withNotes(page, 'Notes undone from the map', ['first', 'second']);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await page.getByRole('tab', { name: 'Map' }).click();
+  const scan = page.getByRole('link', { name: 'Scan the world' });
+  await expect(scan).toBeVisible();
+  const undo = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' });
+  for (let tabs = 0; tabs < 20 && !(await undo.evaluate((el) => el === document.activeElement)); tabs++) await page.keyboard.press('Tab');
+  await expect(undo).toBeFocused();
+  await watchBodyFocus(page);
+  await page.keyboard.press('Enter');
+  await expect(scan).toBeFocused();
+  await page.getByRole('tab', { name: 'Notes' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(noteOf(page, 'first').getByRole('button', { name: 'Delete' })).not.toBeFocused();
+  await expect(page.getByRole('tab', { name: 'Notes' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(errors).toEqual([]);
+  expect(dialogs).toEqual([]);
 });

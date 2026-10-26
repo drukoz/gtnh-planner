@@ -70,7 +70,7 @@ export function ItemSearch(props: { onPick(hit: SearchHit): void; placeholder?: 
       e.preventDefault();
       setOpen(true);
       if (hits.length > 0) setActive((i) => (e.key === 'ArrowDown' ? Math.min(i + 1, hits.length - 1) : Math.max(i - 1, 0)));
-    } else if (e.key === 'Enter') {
+    } else if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) {   // a held Enter's repeat that landed here is not a pick (P2-R69a)
       const hit = showList && fresh ? hits[Math.max(active, 0)] : undefined;
       if (hit !== undefined) {
         e.preventDefault();

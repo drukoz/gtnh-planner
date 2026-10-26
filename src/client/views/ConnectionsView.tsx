@@ -17,6 +17,7 @@ import type { DyeColor, Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
+import { focusMain, focusOn } from '../components/focus.ts';
 import { PipesButton } from '../components/PipesButton.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
@@ -382,14 +383,22 @@ function Legend(props: { edges: readonly ConnEdge[] }): ReactElement | null {
   );
 }
 
-/** The picked box, face row or link in full: its title and every line. */
+/**
+ * The picked box, face row or link in full: its title and every line. Its Close gives the focus back before the panel goes (ledger ruling
+ * P2-R77), as Flow's does (P2-R36): a box here takes no focus (the diagram is one focus stop, which the arrow keys pan, and a box is picked
+ * by the pointer), so the diagram takes it, else the page's main. A focus elsewhere is left where it is.
+ */
 function Panel(props: { details: Details; onClose(): void }): ReactElement {
   const { details, onClose } = props;
+  const close = (button: HTMLButtonElement): void => {
+    if (document.activeElement === button && !focusOn(button.closest('.conn-view')?.querySelector('.connections > svg'))) focusMain();
+    onClose();
+  };
   return (
     <aside className="conn-panel" data-testid="conn-panel" aria-label="Connection details">
       <header className="conn-panel-head">
         <h3><Figs text={details.title} /></h3>
-        <button type="button" className="small" aria-label="Close the panel" onClick={onClose}>Close</button>
+        <button type="button" className="small" aria-label="Close the panel" onClick={(e) => close(e.currentTarget)}>Close</button>
       </header>
       {details.lines.length > 0 && (
         <ul className="conn-panel-lines">

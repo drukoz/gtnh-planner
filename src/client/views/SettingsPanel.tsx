@@ -18,6 +18,7 @@ import { FERTILIZER_CHOICES, TOOL_MATERIALS, type CropStats, type FarmKind, type
 import type { SearchHit } from '../../shared/types/pack.ts';
 import { LogisticsMode, type Plan, type PlanSettings } from '../../shared/types/plan.ts';
 import { AvoidPicker } from '../components/AvoidPicker.tsx';
+import { focusMain, focusOn } from '../components/focus.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ItemSearch } from '../components/ItemSearch.tsx';
 import { OwnedMachinesEditor } from '../components/OwnedMachinesEditor.tsx';
@@ -147,7 +148,8 @@ function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElem
             if (draft !== null && commit(e.currentTarget.value)) setDraft(null);
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && draft !== null) commit(e.currentTarget.value);
+            // a held Enter's repeat that landed here is not a commit (P2-R69a)
+            if (e.key === 'Enter' && draft !== null && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);
             // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b)
             if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
               stopTimer();
@@ -175,6 +177,12 @@ function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: Name
     if (mode === 'makeN' && !Number.isInteger(amount)) patch({ mode, amount: Math.max(1, Math.round(amount)) });
     else patch({ mode });
   };
+  // Clear goes with the target it clears, so it hands the focus first to the item search, the next thing to do, drawn in both states (ledger
+  // ruling P2-R78); else to the page's main. A focus elsewhere is left where it is.
+  const clear = (button: HTMLButtonElement): void => {
+    if (document.activeElement === button && !focusOn(button.closest('.settings-section')?.querySelector('.item-search input'))) focusMain();
+    patch({ target: null });
+  };
   return (
     <section className="settings-section">
       <h3>Make</h3>
@@ -184,7 +192,7 @@ function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: Name
         <div className="settings-target">
           <ItemIcon itemKey={target} size={28} name={nameOf(target)} />
           <span className="settings-target-name">{nameOf(target)}</span>
-          <button type="button" onClick={() => patch({ target: null })}>Clear</button>
+          <button type="button" onClick={(e) => clear(e.currentTarget)}>Clear</button>
         </div>
       )}
       <ItemSearch
@@ -281,7 +289,7 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
           onChange={(e) => setDraft(e.currentTarget.value)}
           onBlur={(e) => commit(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') commit(e.currentTarget.value);
+            if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
             if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) setDraft(null);   // one layer per press
           }}
         />
@@ -774,7 +782,7 @@ export function StatInput(props: {
         onChange={(e) => onDraft(e.currentTarget.value)}
         onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') commit(e.currentTarget.value);
+          if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
           if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) onDraft(null);   // one layer per press
         }}
       />

@@ -95,7 +95,7 @@ function MaterialBox(props: { materials: readonly AvoidMaterial[]; onAdd(entry: 
       e.preventDefault();
       setOpen(true);
       if (hits.length > 0) setActive(e.key === 'ArrowDown' ? Math.min(current + 1, hits.length - 1) : Math.max(current - 1, 0));
-    } else if (e.key === 'Enter' && text.trim() !== '') {
+    } else if (e.key === 'Enter' && text.trim() !== '' && !e.nativeEvent.defaultPrevented) {   // not a held Enter's repeat (P2-R69a)
       e.preventDefault();
       // The highlighted material while the list shows, else the text as typed.
       commit((showList ? hits[current]?.name : undefined) ?? text);

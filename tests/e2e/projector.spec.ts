@@ -539,6 +539,31 @@ test('in the drawer a copy\'s "Copied" goes with its 2 s, and a revoke said with
   expect(dialogs).toEqual([]);
 });
 
+// F3 fix round 4, M6: a copy made after a revoke was said leaves that saying. On a wide window a copy says nothing on the polite line (its toast
+// says it), and a copy takes back only its own saying
+test('a copy made after a revoke leaves the revoke\'s saying on the polite line', async ({ page }) => {
+  await page.addInitScript(() => {                                                       // the old copy, with no clipboard API (as above)
+    Object.defineProperty(window, 'isSecureContext', { value: false });
+    Object.defineProperty(navigator, 'clipboard', { value: undefined });
+    document.execCommand = (command: string): boolean => command === 'copy';
+  });
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector copied after');
+  await steveToken(page, page);
+  const said = page.locator('.projector-panel ~ p[aria-live="polite"]');
+  await page.getByRole('button', { name: 'Revoke', exact: true }).click();
+  await page.getByRole('alertdialog', { name: /Revoke "Steve"/ }).getByRole('button', { name: 'Revoke token' }).click();
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await expect(said).toHaveText('Token revoked');
+  const urlLine = page.locator('.command-line', { has: page.locator('code', { hasText: '/planner url ' }) });
+  await urlLine.getByRole('button', { name: 'Copy' }).click();
+  await expect(page.locator('section.toasts li', { hasText: 'Command copied' })).toBeVisible();
+  await expect(urlLine.getByRole('button', { name: 'Copied' })).toBeVisible();
+  await expect(said).toHaveText('Token revoked');
+  expect(dialogs).toEqual([]);
+});
+
 // spec §3.3: the confirm rises in once (opacity and transform), and not at all under reduced motion
 test('under reduced motion the confirm appears with no entrance', async ({ page }) => {
   const dialogs = noDialogs(page);
