@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
+import net.minecraftforge.common.ForgeVersion;
+
 import com.google.gson.stream.JsonWriter;
 
 import cpw.mods.fml.common.Loader;
@@ -33,11 +35,11 @@ public final class Manifest {
             mods.put(mod.getModId(), mod.getVersion() != null ? mod.getVersion() : "unknown");
         }
         String gtVersion = mods.containsKey("gregtech") ? mods.get("gregtech") : "unknown";
-        // Forge's own values: the minecraft container of the mod list holds the MC version,
-        // Loader.getFMLVersionString() the Forge version; both are read on a dedicated server, where no client
-        // class is available
-        String mcVersion = mods.containsKey("minecraft") ? mods.get("minecraft") : "unknown";
-        String loader = "forge-" + Loader.instance().getFMLVersionString();
+        // Forge's own values, both readable on a dedicated server: the Minecraft dummy container of the mod list
+        // carries the running MC version, ForgeVersion the Forge version
+        ModContainer mcContainer = Loader.instance().getMinecraftModContainer();
+        String mcVersion = mcContainer != null && mcContainer.getVersion() != null ? mcContainer.getVersion() : "unknown";
+        String loader = "forge-" + ForgeVersion.getVersion();
         NameResolver names = ctx.names();
 
         Writer out = new BufferedWriter(
