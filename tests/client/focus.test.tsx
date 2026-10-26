@@ -61,12 +61,15 @@ describe('a held Enter acts once (ledger ruling P2-R69a)', () => {
     guardHeldEnter(doc);
     const [a, b] = [{ name: 'a' }, { name: 'b' }];
     send('keydown', 'Enter', a);
+    // each other key pressed on a, its repeat sent to b: a guard that took any key for a press of its own would prevent that repeat
     for (const key of [' ', 'Escape', 'a', 'ArrowDown']) {
-      expect(send('keydown', key, b), key).toBe(false);
-      expect(send('keydown', key, b, true), `${key} held`).toBe(false);
+      expect(send('keydown', key, a), key).toBe(false);
+      expect(send('keydown', key, b, true), `${key} held, its repeat on b`).toBe(false);
       send('keyup', key, b);
     }
-    expect(send('keydown', 'Enter', b, true), 'the Enter held since a still began there').toBe(true);
+    // the Enter held since a repeats on a, where it began: no other key's release forgot where that was
+    expect(send('keydown', 'Enter', a, true), 'the Enter held since a, repeating on a').toBe(false);
+    expect(send('keydown', 'Enter', b, true), 'and still prevented where it did not begin').toBe(true);
   });
 
   it('stops listening when asked: both listeners go', () => {

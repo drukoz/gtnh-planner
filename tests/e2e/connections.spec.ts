@@ -237,3 +237,50 @@ test('the panel\'s Close gives the focus to the diagram, from the keyboard and f
   await expect(diagram).toBeFocused();
   expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
 });
+
+// P2-R77: a focus elsewhere is left where it is. With the focus on the toolbar's Fit, a press on Close that moves no focus (a script's, or an
+// assistive technology's, click) closes the panel and leaves the focus on Fit
+test('the panel\'s Close leaves a focus that is elsewhere where it is', async ({ page }) => {
+  const view = await openConnections(page);
+  await view.locator('.conn-machine rect').first().click();
+  const panel = page.getByTestId('conn-panel');
+  await expect(panel).toBeVisible();
+  const fit = page.getByRole('button', { name: 'Fit', exact: true });
+  await fit.focus();
+  await page.getByRole('button', { name: 'Close the panel' }).evaluate((button) => (button as HTMLElement).click());
+  await expect(panel).toHaveCount(0);
+  await expect(fit).toBeFocused();
+});
+
+// P2-R77 where the panel stacks under the diagram (a window 1000 px wide): Close by the keyboard gives the focus to the diagram, which comes
+// into view with it. This small line's page fits the window, so a spacer after it lets the page scroll, and the page is scrolled to put the
+// diagram just above the window, Close still in it: the diagram is out of view as Close is pressed, which the check needs to mean anything
+test('at 1000 px, where the panel stacks under the diagram, Close by the keyboard gives the focus to the diagram, in view', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 900 });
+  const view = await openConnections(page);
+  const diagram = view.getByRole('group', { name: 'Connections of the line' });
+  await view.locator('.conn-machine rect').first().click();
+  const panel = page.getByTestId('conn-panel');
+  await expect(panel).toBeVisible();
+  const [above, below] = [(await diagram.boundingBox())!, (await panel.boundingBox())!];
+  expect(below.y, 'the panel is under the diagram').toBeGreaterThanOrEqual(above.y + above.height - 1);
+  const close = page.getByRole('button', { name: 'Close the panel' });
+  await close.focus();
+  await page.evaluate(() => {
+    const spacer = document.createElement('div');
+    spacer.setAttribute('data-test-spacer', '');
+    spacer.style.height = '2000px';
+    document.body.append(spacer);
+    const diagramBottom = document.querySelector('.connections > svg')!.getBoundingClientRect().bottom + scrollY;
+    scrollTo(0, Math.ceil(diagramBottom) + 1);
+  });
+  await expect(diagram).not.toBeInViewport();
+  await expect(close).toBeInViewport();
+  await expect(close).toBeFocused();
+  await watchBodyFocus(page);
+  await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(diagram).toBeFocused();
+  await expect(diagram).toBeInViewport();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+});

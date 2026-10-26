@@ -15,7 +15,9 @@ import './styles.css';
 
 // the look this browser chose, kept on the page from here on (the head script of index.html put a stored one there before this ran)
 startTheme();
-// a held Enter acts once, wherever its first press puts the focus (ledger ruling P2-R69a), for the page's life
+// a held Enter acts once, wherever its first press puts the focus (ledger ruling P2-R69a), for the page's life. It must see each key first:
+// installed here, before React mounts, it is the first capture listener on the document. A native key listener that reads `defaultPrevented`
+// goes after it (TooltipHost's, added as it mounts, does) or listens in the bubble phase (focus.ts says why)
 guardHeldEnter();
 const root = document.getElementById('root');
 if (root === null) throw new Error('index.html has no #root element');

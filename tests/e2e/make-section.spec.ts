@@ -96,3 +96,19 @@ test('Clear hands the focus to the item search in the open drawer too, which sta
   expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
   expect(dialogs).toEqual([]);
 });
+
+// P2-R78: a focus elsewhere is left where it is. With the focus on the Amount field, a press on Clear that moves no focus (a script's, or an
+// assistive technology's, click) clears the target and leaves the focus in the field
+test('Clear leaves a focus that is elsewhere where it is', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Make cleared, elsewhere', LV_CIRCUITS);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  await expect(settings.locator('.settings-target-name')).toHaveText('Basic Circuit');
+  const amount = settings.getByLabel('Amount', { exact: true });
+  await amount.focus();
+  await settings.getByRole('button', { name: 'Clear', exact: true }).evaluate((button) => (button as HTMLElement).click());
+  await expect(settings.getByText('Nothing picked yet')).toBeVisible();
+  await expect(amount).toBeFocused();
+  expect(dialogs).toEqual([]);
+});

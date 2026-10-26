@@ -327,3 +327,28 @@ test('a note\'s Undo run from another tab leaves the focus where it came from, a
   expect(errors).toEqual([]);
   expect(dialogs).toEqual([]);
 });
+
+// F3 fix round 5, item 4: the same with the focus lost, which opens P2-R74's gate (a focus on the body is one to give back) while the note's row
+// is not drawn: the Undo finds no row, moves nothing and throws nothing, and the note is back once the Notes tab is shown
+test('a note\'s Undo run from another tab with the focus lost moves nothing, and the note is back on its tab', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await withNotes(page, 'Notes undone from the map, lost', ['first', 'second']);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await page.getByRole('tab', { name: 'Map' }).click();
+  await expect(page.getByRole('link', { name: 'Scan the world' })).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body), 'the focus is lost').toBe(true);
+  const undo = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' });
+  await undo.evaluate((button) => (button as HTMLElement).click());                       // a press with no click count that moves no focus
+  await expect(page.locator('section.toasts li', { hasText: 'Note deleted' })).toHaveCount(0);
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));   // its frame has run
+  expect(await page.evaluate(() => document.activeElement === document.body), 'the Undo moved no focus').toBe(true);
+  expect(errors).toEqual([]);
+  await page.getByRole('tab', { name: 'Notes' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  expect(errors).toEqual([]);
+  expect(dialogs).toEqual([]);
+});

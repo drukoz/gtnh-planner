@@ -36,6 +36,12 @@ export function focusLost(): boolean {
  * trigger (Tooltip), the project name's blur (ProjectPage) and the three settings drafts' commit (SettingsPanel: the amount, a cost, a crop
  * stat). A press held where it began repeats as before (Enter held in a text area types line after line). It listens on `doc` in the capture
  * phase, so it sees each key before any element does; installed once for the page's life (main.tsx), it returns how to stop.
+ *
+ * Its order is a rule: it must see each key first. Capture listeners on one target run in the order they were added, so a native key listener
+ * on the document or the window that reads `defaultPrevented` must be added after the guard is installed, or listen in the bubble phase: one
+ * added before it, in the capture phase, would read a repeat before the guard prevents it. TooltipHost's capture listener on the document is
+ * added after it, as React mounts after main.tsx installs the guard (tooltips.spec.ts: a held Enter that hands the focus to a box head leaves
+ * the head's tip to show); React's own listeners sit on its root, under the document, so every handler written in React reads it.
  */
 export function guardHeldEnter(doc: Document = document): () => void {
   let began: EventTarget | null = null;                                                 // where the Enter being held was first pressed

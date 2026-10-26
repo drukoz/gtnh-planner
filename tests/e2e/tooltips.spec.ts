@@ -587,3 +587,26 @@ test.describe('on a touch screen', () => {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   });
 });
+
+// ledger ruling P2-R69a, its order (F3 fix round 5): the held-Enter guard is the first capture listener on the document (main.tsx installs it
+// before React mounts), so the tooltip's own key listener, added as its host mounts, reads what the guard prevented. A held Enter on a step
+// panel's Close hands the focus back to the box head that opened it (P2-R36), a tip's trigger: the repeat that lands there is no press on it, so
+// it does not quiet the head, and the head's tip shows from the keyboard's focus
+test('a held Enter whose first press hands the focus to a box head leaves the head\'s tip to show', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const head = page.locator('[data-step-id="circuit-lv"] .flow-node-head');
+  await keyboardFocus(page, head);
+  await page.keyboard.press('Enter');
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Assembler' });
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Close the panel' }).focus();
+  await page.keyboard.down('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(head).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the head
+  await page.keyboard.up('Enter');
+  const tip = page.getByRole('tooltip');
+  await expect(tip.locator(':scope > :first-child')).toHaveText('Basic Assembler');
+  await expect(head).toHaveAttribute('aria-describedby', (await tip.getAttribute('id'))!);
+  await expect(panel).toHaveCount(0);
+});
