@@ -101,7 +101,15 @@ describe('plan banner', () => {
     expect(getFlowFocus()).toEqual({ kind: 'item', key: 't:a2@0' });               // each chip shows its import in the flow
     expect(location.hash).toBe('#flow');
     const [plan] = findAll(tree, (e) => e.type === 'button' && e.props.children === 'Plan them as supporting lines');
+    // the final fix wave, FW-7(b): the button goes with the op it sends, and the chips beside it with the next plan, so the page's main takes
+    // the focus first, never the body (ledger ruling P2-R57); node has no DOM, so a stand-in main records it
+    const order: string[] = [];
+    class Main { hasAttribute(): boolean { return true; } focus(): void { order.push('focus main'); } }
+    vi.stubGlobal('HTMLElement', Main);
+    vi.stubGlobal('document', { querySelector: (selector: string) => (selector === 'main' ? new Main() : null) });
+    send.mockImplementationOnce(() => order.push('send'));
     (plan!.props.onClick as () => void)();
+    expect(order).toEqual(['focus main', 'send']);
     expect(send).toHaveBeenCalledWith([{ op: 'settings', patch: { routeDerived: true } }]);
   });
   it('leaves what a Make N batch comes out short of to its batch-short warning', () => {

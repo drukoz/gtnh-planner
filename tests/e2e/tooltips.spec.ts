@@ -310,6 +310,9 @@ test('a field keeps its draft through the Escape that hides a tip, and drops it 
   await createProject(page, 'Drafts', { ...LV_CIRCUITS, costOverrides: { 't:iron_ingot@0': 2 } });
   const settings = page.locator('aside[aria-label="Project settings"]');
   const tip = page.getByRole('tooltip');
+  // the target's name comes with the pack's answer, and the icon's tip with it: a tip whose words change under a still pointer waits for it to
+  // move, so the icon is pointed at once it names the target (on a cold server the name came during the hover)
+  await expect(settings.locator('.settings-target .item-icon')).toHaveAttribute('data-tip', 'Basic Circuit');
   for (const [field, stored] of [[settings.getByLabel('Amount', { exact: true }), '30'], [settings.getByLabel('Cost of Iron Ingot'), '2']] as const) {
     await field.fill('2x');                                                             // a draft the field refuses, so nothing sends it
     await page.mouse.move(5, 5);                                                        // off the target's icon, which an Escape keeps quiet
@@ -324,13 +327,16 @@ test('a field keeps its draft through the Escape that hides a tip, and drops it 
   }
 });
 
-// the same for the project's name: the first Escape hides the tip and leaves the edit; the second drops the edit and leaves the field
+// the same for the project's name: the first Escape hides the tip and leaves the edit; the second drops the edit, and the focus stays in the
+// field (ledger ruling P2-R132, which reverses the blur this case pinned: the focus never falls to the page's body)
 test('the project name keeps its edit through the Escape that hides a tip, and drops it on the next', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Named line', LV_CIRCUITS);
   const name = page.getByRole('textbox', { name: 'Project name' });
+  const icon = page.locator('aside[aria-label="Project settings"] .settings-target .item-icon');
+  await expect(icon).toHaveAttribute('data-tip', 'Basic Circuit');                      // named, as in the case above
   await name.fill('Renamed line');
-  await page.locator('aside[aria-label="Project settings"] .settings-target .item-icon').hover();
+  await icon.hover();
   const tip = page.getByRole('tooltip');
   await expect(tip).toBeVisible();
   await page.keyboard.press('Escape');
@@ -339,7 +345,7 @@ test('the project name keeps its edit through the Escape that hides a tip, and d
   await expect(name).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(name).toHaveValue('Named line');
-  await expect(name).not.toBeFocused();
+  await expect(name).toBeFocused();
 });
 
 // the same for the map's note dialog: a modal, so no pointer reaches a trigger under it; a focus tip in it shows how its Escape waits (a

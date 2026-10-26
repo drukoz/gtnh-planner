@@ -13,7 +13,7 @@
 
 import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { addNote, createProject, login, LV_CIRCUITS, noDialogs, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
+import { addNote, bodyFocusCount, createProject, login, LV_CIRCUITS, noDialogs, openWithPlan, setName, SETTINGS_BUTTON, watchBodyFocus } from './helpers.ts';
 
 /** The toast that says `text`, in the region of notifications. */
 const toastOf = (page: Page, text: string): Locator =>
@@ -49,6 +49,37 @@ test('renaming offers Undo', async ({ page }) => {
   await expect.poll(() => field.inputValue()).toBe('Toasts rename');
   await landed(page, id, 'Toasts rename');
   await expect(toast).toHaveCount(0);
+});
+
+// the final fix wave, FW-7(a) (ledger ruling P2-R132): Enter renames and leaves the focus in the name, and Escape takes a draft back there too,
+// so neither drops the focus on the page's body; the Escape it takes it takes (prevented), and one with no draft to take back goes on unprevented
+// to the layers below it (one layer per press, P2-R21b)
+test('a rename from the keyboard keeps the focus in the name, and Escape takes a draft back without leaving it', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Kept focus');
+  const field = page.getByRole('textbox', { name: 'Project name' });
+  await page.evaluate(() => {
+    const w = window as unknown as { escapes: boolean[] };
+    w.escapes = [];
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') w.escapes.push(e.defaultPrevented); });
+  });
+  await watchBodyFocus(page);
+  await field.fill('Kept focus, renamed');
+  await field.press('Enter');
+  await expect(toastOf(page, 'Renamed to “Kept focus, renamed”')).toBeVisible();
+  await expect(field).toBeFocused();
+  await landed(page, id, 'Kept focus, renamed');
+  await field.fill('Kept focus, a draft');
+  await page.keyboard.press('Escape');
+  await expect(field).toHaveValue('Kept focus, renamed');
+  await expect(field).toBeFocused();
+  await page.keyboard.press('Escape');                                                     // nothing to take back
+  await expect(field).toBeFocused();
+  expect(await page.evaluate(() => (window as unknown as { escapes: boolean[] }).escapes)).toEqual([true, false]);
+  expect(await bodyFocusCount(page)).toBe(0);
+  await field.blur();                                                                      // the draft taken back renames nothing
+  await landed(page, id, 'Kept focus, renamed');
+  await expect(field).toHaveValue('Kept focus, renamed');
 });
 
 test('under reduced motion a toast appears with no entrance', async ({ page }) => {
@@ -527,6 +558,31 @@ async function oneNote(page: Page, name: string, text: string): Promise<{ id: st
   await expect(page.locator('.note-text')).toHaveText(text);
   return { id, dialogs };
 }
+
+// the final fix wave, FW-7(d): on the list, a focus that came into the region from Recently deleted's Restore is not given back there by an Undo,
+// which restores that project and so takes its row away, the Restore with it (with the last row, the whole section): P2-R57's chain goes on, to
+// the next toast or, here, the page's main, never the body
+test('a keyboard Undo of a deleted project gives the focus on, not back to the Restore it takes away', async ({ page }) => {
+  await login(page); await setName(page, 'Cy');
+  const name = runName('Toasts restore focus');
+  await createProject(page, name);
+  await page.goto('/');
+  const row = page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
+  await row.getByRole('button', { name: 'Delete' }).click();
+  const form = row.getByRole('form', { name: 'Confirm delete' });
+  await form.getByLabel('Type the project name to confirm').fill(name);
+  await form.getByRole('button', { name: 'Delete', exact: true }).click();
+  const toast = toastOf(page, `Deleted “${name}”`);
+  await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
+  await deletedRow(page, name).getByRole('button', { name: 'Restore' }).focus();
+  await watchBodyFocus(page);
+  await toast.getByRole('button', { name: 'Undo' }).focus();                              // the focus comes into the region from the Restore
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
+  await expect(deletedRow(page, name)).toHaveCount(0);
+  await expect(page.locator('main')).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});
 
 test('deleting a note offers Undo, which keeps its author, time and place', async ({ page }) => {
   const dialogs = noDialogs(page);                                                        // the delete asks nothing (Task 10)

@@ -53,20 +53,21 @@ import { ProjectorPanel } from './ProjectorPanel.tsx';
 import { stepChargeLabel, stepChargeOf } from './settings-model.ts';
 import { SettingsPanel, usePickedNames } from './SettingsPanel.tsx';
 
+/**
+ * The project's name, which anyone can change: typed, it is sent on Enter or as the field is left. Enter renames and Escape takes back what was
+ * typed, each leaving the focus in the field (ledger ruling P2-R132: the focus never falls to the page's body). The field follows the name
+ * while nothing is typed in it (someone else renamed it, or a rename's Undo), and keeps a draft being typed.
+ */
 function ProjectName(props: { name: string; onRename(name: string): void }): ReactElement {
   const { name, onRename } = props;
   const [draft, setDraft] = useState(name);
+  /** Something is typed in the field that is neither sent nor taken back yet. */
   const [editing, setEditing] = useState(false);
-  const cancelled = useRef(false);
   useEffect(() => {
     if (!editing) setDraft(name);   // someone else renamed it, or an edit ended
   }, [name, editing]);
   const commit = (value: string): void => {
     setEditing(false);
-    if (cancelled.current) {
-      cancelled.current = false;
-      return;
-    }
     const next = value.trim();
     if (next !== name) onRename(next);   // the store checks the name and shows why one is refused
   };
@@ -75,15 +76,19 @@ function ProjectName(props: { name: string; onRename(name: string): void }): Rea
       className="project-name"
       aria-label="Project name"
       value={draft}
-      onFocus={() => setEditing(true)}
-      onChange={(e) => setDraft(e.currentTarget.value)}
+      onChange={(e) => {
+        setDraft(e.currentTarget.value);
+        setEditing(true);
+      }}
       onBlur={(e) => commit(e.currentTarget.value)}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) e.currentTarget.blur();   // not a held Enter's repeat that landed here (P2-R69a)
-        // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b)
-        if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
-          cancelled.current = true;
-          e.currentTarget.blur();
+        if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat that landed here (P2-R69a)
+        // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b), nor one with no
+        // draft to take back, which goes on to the layers below
+        if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== name) {
+          e.preventDefault();
+          setDraft(name);
+          setEditing(false);
         }
       }}
     />
@@ -249,7 +254,17 @@ export function PlanBanner(props: {
           </div>
           {!settings.routeDerived && (
             <div className="row">
-              <button type="button" onClick={() => send([{ op: 'settings', patch: { routeDerived: true } }])}>Plan them as supporting lines</button>
+              {/* it goes with the op it sends, and the chips beside it with the next plan: the page's main takes the focus first, never the body
+                  (ledger ruling P2-R57; the final fix wave, FW-7) */}
+              <button
+                type="button"
+                onClick={() => {
+                  focusMain();
+                  send([{ op: 'settings', patch: { routeDerived: true } }]);
+                }}
+              >
+                Plan them as supporting lines
+              </button>
             </div>
           )}
         </div>

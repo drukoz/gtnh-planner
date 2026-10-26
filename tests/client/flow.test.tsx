@@ -520,7 +520,13 @@ describe('flow diagram: what it renders (fix spec §6.2)', () => {
     (shows[0]!.props.onClick as () => void)();
     expect(onShow).toHaveBeenCalledWith('fluid:pva');
     const [keep] = findAll(box, (e) => e.type === 'button' && childText(e) === 'Keep only Fluid Solidifier');
-    (keep!.props.onClick as () => void)();
+    // the final fix wave, FW-7(c): the button goes as the pin is set, so the same line's Show, which stays while the line says "Updating…",
+    // takes the focus first, never the page's body (ledger ruling P2-R57)
+    const order: string[] = [];
+    const show = { focus: () => order.push('focus Show') };
+    send.mockImplementationOnce(() => order.push('send'));
+    (keep!.props.onClick as (e: unknown) => void)({ currentTarget: { closest: (s: string) => (s === 'li' ? { querySelector: (q: string) => (q === 'button' ? show : null) } : null) } });
+    expect(order).toEqual(['focus Show', 'send']);
     expect(send).toHaveBeenCalledWith([{ op: 'settings', patch: { recipeChoice: { [PLATE]: 'solid' } } }]);
     // A server text wins over the client's; amber without an input nothing supplies; nothing to say, no box.
     const served = { ...board, warnings: [{ code: 'multi-producer', key: PLATE, stepId: 'solid', text: 'Plates come two ways (server).' }] };

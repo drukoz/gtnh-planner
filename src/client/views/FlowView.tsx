@@ -567,6 +567,8 @@ export function FlowLegend(): ReactElement {
  * otherwise; one line per issue with **Show** (lights the good and centres its first producer) and, for a good made two
  * ways, **Keep only <the bigger maker>** (pins its recipe for the good) until `settings` pin it, with a note on what the
  * pin may leave or, once in place, leaves (`FlowIssueLine.stays`; "Updating…" until the plan of the pin is on screen).
+ * Keep only goes as it sets its pin, so it hands the focus to its own line's Show first, which stays while the line says
+ * "Updating…" (the final fix wave, FW-7; ledger ruling P2-R57); a replan that drops the line is FlowDiagram's to answer.
  * No hooks, so tests can call it.
  */
 export function FlowIssues(props: {
@@ -585,7 +587,13 @@ export function FlowIssues(props: {
             {stays !== undefined && <span className="muted">{` ${stays}`}</span>}
             <button type="button" className="small" onClick={() => onShow(issue.key)}>Show</button>
             {keepOnly !== undefined && (
-              <button type="button" className="small" onClick={() => send([{ op: 'settings', patch: useOnlyPatch(settings, issue.key, keepOnly.recipeId) }])}>
+              <button
+                type="button" className="small"
+                onClick={(e) => {
+                  e.currentTarget.closest('li')?.querySelector('button')?.focus();
+                  send([{ op: 'settings', patch: useOnlyPatch(settings, issue.key, keepOnly.recipeId) }]);
+                }}
+              >
                 {`Keep only ${keepOnly.machine}`}
               </button>
             )}
@@ -1127,18 +1135,22 @@ function FlowDiagram(props: {
   const refocusBox = useRef<string | null>(null);
   /** What in the side panel has the focus (its last `focusin`), until the focus leaves the panel (ledger ruling P2-R122). */
   const focusedInPanel = useRef<Element | null>(null);
+  /** What in the issues above the diagram has the focus (a Show, a Keep only), until the focus leaves them (the final fix wave, FW-7). */
+  const focusedInIssues = useRef<Element | null>(null);
 
   useEffect(() => {
-    // what in the side panel takes the focus; the focus leaving it, once it has really moved (a window that loses the focus keeps it there),
-    // leaves nothing to give on (as the canvas's own record, FlowCanvas)
+    // what in the side panel, or in the issues above the diagram, takes the focus; the focus leaving it, once it has really moved (a window that
+    // loses the focus keeps it there), leaves nothing to give on (as the canvas's own record, FlowCanvas)
     const into = (e: FocusEvent): void => {
       const target = e.target;
       focusedInPanel.current = target instanceof Element && sideRef.current?.contains(target) === true ? target : null;
+      focusedInIssues.current = target instanceof Element && target.closest('.flow-issues') !== null && mainRef.current?.contains(target) === true ? target : null;
     };
     const out = (e: FocusEvent): void => {
       const was = e.target;
       queueMicrotask(() => {
         if (focusedInPanel.current === was && document.activeElement !== was) focusedInPanel.current = null;
+        if (focusedInIssues.current === was && document.activeElement !== was) focusedInIssues.current = null;
       });
     };
     document.addEventListener('focusin', into);
@@ -1207,6 +1219,16 @@ function FlowDiagram(props: {
     const aside = sideRef.current?.querySelector('aside') ?? null;
     if (aside !== null) focusInWindow(aside);
     else focusOn(mainRef.current?.querySelector('svg.flow-canvas'), { preventScroll: true });
+  });
+  // An issue's line that had the focus and is gone with the plan that answered it (a Keep only's pin), the focus lost with it, gives it on, never
+  // to the body (the final fix wave, FW-7; ledger rulings P2-R57, P2-R112's order): to the first Show left, else to the canvas, where nothing
+  // moves the page
+  useLayoutEffect(() => {
+    const had = focusedInIssues.current;
+    if (had === null || had.isConnected || !focusLost()) return;
+    focusedInIssues.current = null;
+    const main = mainRef.current;
+    if (!focusOn(main?.querySelector('.flow-issues li button'), { preventScroll: true })) focusOn(main?.querySelector('svg.flow-canvas'), { preventScroll: true });
   });
 
   if (graph.nodes.length === 0) return <p className="muted">This plan has nothing to draw.</p>;

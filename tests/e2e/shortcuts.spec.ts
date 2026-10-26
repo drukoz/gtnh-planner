@@ -681,7 +681,8 @@ test('the sheet holds the toasts as the drawer does: a toast drawn before it kee
   await expect(field).toBeVisible();
   await page.clock.pauseAt(Date.now() + 1000);                                         // fix round 2, M6: the 5 s run only when run
   await field.fill('Sheet toasts renamed');
-  await field.press('Enter');                                                          // the field lets the focus go
+  await field.press('Enter');
+  await field.blur();                                                                  // Enter keeps the focus in the field (P2-R132), which would take `?`
   const toast = page.getByRole('region', { name: 'Notifications' }).getByRole('listitem').filter({ hasText: 'Renamed to “Sheet toasts renamed”' });
   await expect(toast).toBeVisible();
   await page.keyboard.press('?');
