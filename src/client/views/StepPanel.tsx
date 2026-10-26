@@ -681,7 +681,9 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
     const at = handOn.current;
     if (at === undefined) return;
     handOn.current = undefined;
-    if (!focusLost()) return;                                                    // the button had no focus to give (a pointer's, in Safari)
+    // a press made while another element had the focus leaves it there (a pointer's, in Safari or Firefox on macOS, focuses no button); one
+    // made with nothing focused hands it on all the same
+    if (!focusLost()) return;
     const field = fieldRef.current;
     const way = at === null ? null : field?.querySelectorAll(':scope > .swap-option')[at]?.querySelector('input') ?? null;
     if (!focusOn(way)) focusOn(field?.closest('aside'), { preventScroll: true });

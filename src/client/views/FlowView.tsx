@@ -602,6 +602,22 @@ interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
 /** The px height the canvas's style asks for a diagram `height` tall (in its units): the diagram and the room around it (75vh at most). */
 const canvasPx = (height: number): number => Math.ceil(height + 2 * PAD);
 
+/** A computed style's length in px (`'2px'`), 0 for none. */
+const stylePx = (value: string): number => Number.parseFloat(value) || 0;
+
+/**
+ * Where the Flow canvas `svg` stands once it is as tall as its own style makes it for a diagram `height` tall (in its units), 75vh at most and
+ * its min-height at least, from its top as it is now: its border box (`box`) and its inner height (`inner`, less its border). While a hold
+ * keeps the canvas taller (ledger ruling P2-R121), the canvas the hold ends at, which a view is made for (`canvas()`, fix round 2) and a
+ * panel's Close judges the box head against (P2-R36, fix round 3); at rest, the canvas as it is drawn.
+ */
+function settledCanvas(svg: SVGSVGElement, height: number): { box: DOMRect; inner: number } {
+  const style = getComputedStyle(svg);
+  const drawn = svg.getBoundingClientRect();
+  const tall = Math.max(stylePx(style.minHeight), Math.min(canvasPx(height), innerHeight * 0.75));
+  return { box: new DOMRect(drawn.left, drawn.top, drawn.width, tall), inner: tall - stylePx(style.borderTopWidth) - stylePx(style.borderBottomWidth) };
+}
+
 /**
  * The height (the diagram's, in its units) the canvas keeps once the layout `after` replaces `before`, `held` the one it keeps now, null for
  * none (ledger ruling P2-R121): a new layout that glides into place and draws the canvas shorter keeps it at the height it was drawn at, so
@@ -694,17 +710,13 @@ function FlowCanvas(props: {
 
   /**
    * The canvas's inner size in px, which Fit, the zoom buttons, a reveal and a new plan's view fit their view to. While a hold keeps it taller,
-   * the height it settles at once the hold ends, as the svg's own style computes it (the layout's own height, 75vh at most and its min-height at
-   * least, less its border), so the view is made for the canvas it will be shown in, never cropped or off-centre once the hold ends (fix round 2).
+   * the height it settles at once the hold ends, as the svg's own style computes it (`settledCanvas`), so the view is made for the canvas it will
+   * be shown in, never cropped or off-centre once the hold ends (fix round 2).
    */
   const canvas = (): { width: number; height: number } => {
     const svg = svgRef.current;
     if (svg === null) return { width: 0, height: 0 };
-    if (hold === null) return { width: svg.clientWidth, height: svg.clientHeight };
-    const style = getComputedStyle(svg);
-    const px = (value: string): number => Number.parseFloat(value) || 0;
-    const settled = Math.max(px(style.minHeight), Math.min(canvasPx(layout.height), innerHeight * 0.75));
-    return { width: svg.clientWidth, height: settled - px(style.borderTopWidth) - px(style.borderBottomWidth) };
+    return { width: svg.clientWidth, height: hold === null ? svg.clientHeight : settledCanvas(svg, layout.height).inner };
   };
   /** Pans to the box (or open line) `id`, centred (a reveal, a line opened or closed); false when this layout has none. */
   const centre = (id: string, minZoom = 0): boolean => {
@@ -1138,7 +1150,8 @@ function FlowDiagram(props: {
   // The new panel stands where the old one stood, so neither moves the page unless the window shows nothing of the panel's head or of the
   // box head (a plain focus would jump the page to show a panel's cut-off end): then that comes in by the least scroll (P2-R35, P2-R36).
   // While Fit, a zoom button or a reveal still pans the diagram, or a new layout glides the box, the box head is judged where it will rest
-  // (`boxAtRest`, Tasks 13a and 13b).
+  // (`boxAtRest`, Tasks 13a and 13b), and while a hold keeps the canvas taller, against the canvas the hold ends at (`settledCanvas`, fix
+  // round 3): a head in the band the hold gives up would take the focus and then be cut off.
   useLayoutEffect(() => {
     if (focusPanel.current) {
       focusPanel.current = false;
@@ -1152,7 +1165,8 @@ function FlowDiagram(props: {
       const node = [...(canvas?.querySelectorAll('[data-node-id]') ?? [])].find((el) => el.getAttribute('data-node-id') === box);
       const head = node?.querySelector<SVGGElement>('.flow-node-head[tabindex]') ?? null;
       // a head panned out of the canvas's own view would take the focus unseen, and scroll the page to it for nothing: the canvas takes it
-      const seen = head !== null && canvas !== null && !disjoint(boxAtRest(head), canvas.getBoundingClientRect());
+      const view = canvas === null || laid === null ? null : settledCanvas(canvas, laid.layout.height).box;
+      const seen = head !== null && view !== null && !disjoint(boxAtRest(head), view);
       const target = seen ? head : canvas;
       if (target !== null) focusInWindow(target);
     }

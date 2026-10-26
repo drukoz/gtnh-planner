@@ -1789,7 +1789,7 @@ test('a panel control that goes while its panel stays leaves the focus on the pa
   expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
 });
 
-/** circuitLv whose wiremill knows seven ways to make its wire and whose bending machine six, its last two out of reach (`unusable`). */
+/** circuitLv whose wiremill knows seven ways to make its wire and whose bending machine seven, its last two out of reach (`unusable`). */
 function moreWays(): Plan {
   const plan = circuitLv();
   const ways = (id: string, mapId: string, count: number, usable: number): PlanStep['alternatives'] => Array.from({ length: count }, (_, i) => ({
@@ -1940,9 +1940,17 @@ test('the canvas keeps its height until both the glides and the ghosts have ende
     await page.keyboard.press('Enter');
     await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
     await expect(ghosts, 'the premise: its boxes go as ghosts').not.toHaveCount(0);
+    const shown = await ghosts.count();
+    expect(shown, 'the premise: its boxes go as ghosts').toBeGreaterThan(0);
     await finish(first);
     await nextFrames(page, 3);
-    await expect(ghosts, first ? 'the ghosts gone' : 'the ghosts still there').toHaveCount(first ? 0 : await ghosts.count());
+    if (first) {
+      await expect(ghosts, 'the ghosts gone').toHaveCount(0);
+    } else {
+      // fix round 3: the ghosts drawn before the glides ended, every one, still there
+      await expect(ghosts, 'the ghosts still there').not.toHaveCount(0);
+      await expect(ghosts, 'every one of them').toHaveCount(shown);
+    }
     expect(await canvasHeight(page), `${first ? 'the ghosts' : 'the glides'} ended, the other not: held`).toBe(open);
     await finish(!first);
     await expect.poll(() => canvasHeight(page), { message: 'both ended: the closed line\'s own height' }).toBe(closed);
@@ -2016,4 +2024,61 @@ test('a box dropped while it fades in leaves its ghost at the opacity it is draw
   expect(Number(fade?.frames[0]?.opacity), 'its fade starts where the box is drawn').toBeCloseTo(drawn, 2);
   expect(fade?.frames[1]).toEqual({ opacity: 0 });
   expect(Number(await ghost.evaluate((g) => getComputedStyle(g).opacity)), 'and so does the ghost, held at its start').toBeCloseTo(drawn, 2);
+});
+
+// ---- Task 13b fix round 3 ----
+
+// Fix round 3 (ledger ruling P2-R36 under P2-R121's hold): the panel's Close gives the focus back to the box head only where the canvas will
+// show it, and while a hold keeps the canvas taller that is the canvas the hold ends at: a head drawn in the band below it would take the focus
+// and then be cut off as the hold ends, so the canvas takes it. The assembler's panel open, the wiremill's line closed from the keyboard with
+// every glide and ghost held (its centring pan, and the assembler's own glide, ended), the view dragged until the assembler's head sits in that
+// band, Close pressed from the keyboard
+test('Close while the canvas keeps its height gives the focus to the canvas when the head is in the band the hold gives up', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
+  await openWithPlan(page, lined());
+  const canvas = page.locator('svg.flow-canvas');
+  const head = page.locator('[data-step-id="circuit-lv"] .flow-node-head');
+  await head.click();
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Assembler' });
+  await expect(panel).toBeVisible();
+  await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
+  const open = await canvasHeight(page);
+  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
+  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
+  expect(await canvasHeight(page), 'the premise: the canvas keeps its height').toBe(open);
+  await page.locator('svg.flow-canvas [data-node-id="circuit-lv"]').evaluate((box) => {
+    for (const a of box.getAnimations()) if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.finish();
+  });
+  await page.locator(FLOW_PAN).evaluate((g) => {
+    for (const a of g.getAnimations()) a.finish();
+  });
+  // the head's top 50 px above the held canvas's bottom: below the height the canvas settles at (checked once the hold has ended)
+  const area = await canvas.boundingBox();
+  const at = await head.boundingBox();
+  if (area === null || at === null) throw new Error('no box');
+  const dy = area.y + open - 50 - at.y;
+  const from = dy > 0 ? area.y + 6 : area.y + area.height - 6;
+  await page.mouse.move(area.x + 6, from);
+  await page.mouse.down();
+  await page.mouse.move(area.x + 6, from + dy, { steps: 6 });
+  await page.mouse.up();
+  const dragged = await head.boundingBox();
+  if (dragged === null) throw new Error('no head');
+  expect(dragged.y, 'the premise: the head drawn inside the held canvas').toBeCloseTo(area.y + open - 50, 0);
+  await watchBodyFocus(page);
+  await panel.getByRole('button', { name: 'Close the panel' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(canvas).toBeFocused();
+  await expect(head).not.toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  // once the hold has ended, the canvas is too short to show the head: it was in the band the hold gave up
+  await finishMotion(page);
+  await expect.poll(() => canvasHeight(page), { message: 'the hold has ended' }).toBeLessThan(open);
+  const settled = await canvas.boundingBox();
+  if (settled === null) throw new Error('no canvas');
+  expect(dragged.y, 'the premise: the head below the canvas the hold ends at').toBeGreaterThanOrEqual(settled.y + settled.height);
 });
