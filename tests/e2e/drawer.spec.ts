@@ -221,9 +221,31 @@ test('Escape closes one layer per press: an open search list first, then the dra
   await expect(toggle).toBeFocused();
 });
 
+// ledger ruling P2-R139, P2-R133's mirror: a window that widens past 900 px no longer draws the Settings button nor the bar's Compare modes; one
+// that had the focus hands it on as it goes, the Settings button to the project's name and the bar's Compare modes to the head's, never to the
+// body
+test('widening past 900 px moves a focus on the Settings button to the name, and on the bar\'s Compare modes to the head\'s', async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Widened head', TARGET);
+  const name = page.getByRole('textbox', { name: 'Project name' });
+  await watchBodyFocus(page);
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).focus();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(name).toBeFocused();
+  await page.setViewportSize({ width: 700, height: 900 });                               // the name is drawn at both widths
+  await expect(name).toBeFocused();
+  await page.locator('.compare-bar').getByRole('button', { name: 'Compare modes' }).focus();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.locator('.project-head').getByRole('button', { name: 'Compare modes' })).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});
+
 // the final fix wave, FW-9: a draft in the drawer is a layer of its own, as an open list is: Escape in the Amount takes the draft back and leaves
-// the drawer open (the field takes the key, and the focus stays in it); with nothing to take back, the next Escape closes the drawer
-test('Escape takes back a draft in the drawer before it closes the drawer', async ({ page }) => {
+// the drawer open (the field takes the key, and the focus stays in it); with nothing to take back, the next Escape closes the drawer. So is an
+// item search that shows only that nothing matches (ledger ruling P2-R138): its list is closed, so the drawer looks for its note, which Escape
+// closes, the field cleared by the browser; the next Escape closes the drawer
+test('Escape takes back a draft in the drawer, or closes a search\'s note, before it closes the drawer', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Drafts in the drawer', TARGET);
@@ -241,6 +263,20 @@ test('Escape takes back a draft in the drawer before it closes the drawer', asyn
   await expect(amount).toHaveValue('30');
   await expect(amount).toBeFocused();
   await open();
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+  // the search that matches nothing (P2-R138)
+  await toggle.click();
+  await open();
+  const search = settings.getByPlaceholder('Search items and fluids');
+  await search.fill('nothing is called this');
+  const note = settings.getByText('No item or fluid matches');
+  await expect(note).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(note).toHaveCount(0);
+  await open();
+  await expect(search).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(toggle).toBeFocused();

@@ -26,6 +26,17 @@ const inWindow = (tip: Locator): Promise<boolean> => tip.evaluate((el) => {
 });
 
 /** The Settings button of a narrow window and its drawer, opened. */
+/**
+ * From now on, notes whether each Escape the document hears in the bubble phase, once every layer has had it, was taken (`defaultPrevented`):
+ * a tip that hides itself takes it, a list or a note that closes does not (ledger ruling P2-R138's cases). Read with `escapesTaken`.
+ */
+const recordEscapes = (page: Page): Promise<void> => page.evaluate(() => {
+  const w = window as unknown as { escapes: boolean[] };
+  w.escapes = [];
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') w.escapes.push(e.defaultPrevented); });
+});
+const escapesTaken = (page: Page): Promise<boolean[]> => page.evaluate(() => (window as unknown as { escapes: boolean[] }).escapes);
+
 async function openDrawer(page: Page): Promise<{ toggle: Locator; settings: Locator }> {
   const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
   await toggle.click();
@@ -248,13 +259,15 @@ test('in the drawer the first Escape hides a tip, the second closes the drawer',
 });
 
 // Review Focus 2: a list that empties under a still pointer fires no pointerout, so the host notices its trigger has gone itself; a tip
-// it missed would take the next Escape and keep the drawer open
+// it missed would take the next Escape. Since ledger ruling P2-R138 the note the emptied search shows ("No item or fluid matches") is a layer of
+// its own, as the list was: the next Escape is the note's, which goes, the drawer staying open and no layer having taken the key (a tip that
+// had stayed would have taken it, and the note would stay); the Escape after it closes the drawer
 test('a tip whose trigger goes away under a still pointer goes too, and never takes the next Escape', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Tip goes', LV_CIRCUITS);                                     // a target: the drawer does not open into the search
-  const { toggle } = await openDrawer(page);
-  const search = page.locator('aside[aria-label="Project settings"]').getByPlaceholder('Search items and fluids');
+  const { toggle, settings } = await openDrawer(page);
+  const search = settings.getByPlaceholder('Search items and fluids');
   await search.fill('Iron Ingot');
   await page.locator('[role=option] .item-icon').first().hover();
   const tip = page.getByRole('tooltip');
@@ -264,6 +277,13 @@ test('a tip whose trigger goes away under a still pointer goes too, and never ta
   // Escape would be the list's)
   await expect(page.getByRole('listbox', { name: 'Matches' })).toHaveCount(0);
   await expect(tip).toHaveCount(0);
+  const note = settings.getByText('No item or fluid matches');
+  await expect(note).toBeVisible();
+  await recordEscapes(page);
+  await page.keyboard.press('Escape');
+  await expect(note).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  expect(await escapesTaken(page), 'no layer took the note\'s Escape').toEqual([false]);
   await page.keyboard.press('Escape');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });
@@ -543,6 +563,14 @@ test.describe('on a touch screen', () => {
     await search.fill('zzqxv');                                                            // no match: the list unmounts
     await expect(settings.getByRole('listbox', { name: 'Matches' })).toHaveCount(0);      // the list first, as above
     await expect(tip).toHaveCount(0);
+    // the emptied search's note is a layer (ledger ruling P2-R138): its Escape first, taken by no layer, then the drawer's, as above
+    const note = settings.getByText('No item or fluid matches');
+    await expect(note).toBeVisible();
+    await recordEscapes(page);
+    await page.keyboard.press('Escape');
+    await expect(note).toHaveCount(0);
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(await escapesTaken(page), 'no layer took the note\'s Escape').toEqual([false]);
     await page.keyboard.press('Escape');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(toggle).toHaveText(/Make: Basic Circuit$/);                             // the long press picked nothing

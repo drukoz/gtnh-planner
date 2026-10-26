@@ -3,7 +3,8 @@
 // for 7 days, where anyone can restore them (§11.24). The list has no live channel: it loads on open and after its
 // own deletes and restores (ruling C17), and a row someone else deleted meanwhile counts as deleted when its Delete
 // finds it gone. A delete says so in a toast, whose Undo restores the project (Phase 2 spec §12.1): the list then loads
-// again too, and drops the notice that said it was deleted, if that notice is about it (Task 9b, M5).
+// again too, and drops the notice that said it was deleted, if that notice is about it (Task 9b, M5). A row whose delete
+// went hands the focus on before it goes (ledger ruling P2-R140).
 
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NAME_LENGTH, validateOp } from '../../shared/project/apply-op.ts';
@@ -12,6 +13,7 @@ import type { Project } from '../../shared/types/project.ts';
 import { apiGet, apiPost, messageOf } from '../api/client.ts';
 import { listDeletedProjects, restoreProject } from '../api/projects.ts';
 import { DeleteProject, showDeletedToast } from '../components/DeleteProject.tsx';
+import { focusLost, focusMain, focusOn } from '../components/focus.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { localTime } from '../format.ts';
@@ -92,6 +94,9 @@ export function ProjectList(): ReactElement {
   // it was deleted no longer holds.
   const changed = useProjectsChanged();
   const changedSeen = useRef(changed);
+  /** Each project's row, by its id, and the New project field: where a deleted row hands the focus on (`handFocusOn`). */
+  const rows = useRef(new Map<string, HTMLLIElement>());
+  const newName = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     // Taken in an effect, not during render: StrictMode renders twice, and the second render would find it gone.
@@ -127,6 +132,20 @@ export function ProjectList(): ReactElement {
     };
   }, [loads, changed]);
   const reload = (): void => setLoads((n) => n + 1);
+  /**
+   * A delete confirmed from a row went, or found the project gone: the row goes with the list's next load, so a focus in it (its confirm's
+   * field or Cancel), or one lost meanwhile, goes on first, never to the body (ledger ruling P2-R140, P2-R57's and P2-R68's pattern): to the
+   * nearest row left's link, the next, else the one before; else the New project field; else the page's main. A focus elsewhere stays.
+   */
+  const handFocusOn = (id: string): void => {
+    const row = rows.current.get(id);
+    if (row === undefined) return;
+    const at = document.activeElement;
+    if (!focusLost() && !(at !== null && row.contains(at))) return;
+    const near = [row.nextElementSibling, row.previousElementSibling].map((li) => li?.querySelector('a.project-link'));
+    if (near.some((link) => focusOn(link)) || focusOn(newName.current)) return;
+    focusMain();
+  };
 
   const restore = (p: DeletedProjectSummary): void => {
     dismissToast(`project:${p.id}`);   // its toast's Undo would restore it again
@@ -175,7 +194,16 @@ export function ProjectList(): ReactElement {
           {projects.map((p) => {
             const path = `/p/${encodeURIComponent(p.id)}`;
             return (
-              <li key={p.id} className="card project-card">
+              <li
+                key={p.id}
+                className="card project-card"
+                ref={(row) => {
+                  if (row !== null) rows.current.set(p.id, row);
+                  return () => {
+                    rows.current.delete(p.id);
+                  };
+                }}
+              >
                 <a href={path} onClick={(e) => followLink(e, path)} className="project-link">{p.name}</a>
                 <span className="project-target">
                   {p.target === null ? (
@@ -191,12 +219,14 @@ export function ProjectList(): ReactElement {
                 <DeleteProject
                   id={p.id} name={p.name} label="Delete"
                   onDeleted={() => {
+                    handFocusOn(p.id);
                     setNotice({ text: deletedNotice(p.name, me), about: p.id });
                     reload();
                     showDeletedToast(p.id, p.name);
                   }}
                   onGone={() => {
                     // The row was stale (no live channel, ruling C17): someone else deleted it; the reload catches up.
+                    handFocusOn(p.id);
                     setNotice({ text: alreadyDeletedNotice(p.name), about: p.id });
                     reload();
                   }}
@@ -209,7 +239,7 @@ export function ProjectList(): ReactElement {
       <form className="card new-project" onSubmit={(e) => void create(e)}>
         <label className="field">
           <span>New project</span>
-          <input value={name} maxLength={MAX_NAME_LENGTH} placeholder="e.g. Steel line" onChange={(e) => setName(e.currentTarget.value)} />
+          <input ref={newName} value={name} maxLength={MAX_NAME_LENGTH} placeholder="e.g. Steel line" onChange={(e) => setName(e.currentTarget.value)} />
         </label>
         <button type="submit" className="primary" disabled={busy || name.trim() === ''}>Create</button>
       </form>

@@ -156,3 +156,42 @@ test('on the list Escape cancels a row\'s confirm, and the keyboard\'s Cancel an
   expect(await bodyFocusCount(page)).toBe(0);
   await expect(page.getByRole('link', { name, exact: true })).toBeVisible();             // nothing was deleted
 });
+
+// ledger ruling P2-R140 (P2-R57's and P2-R68's pattern): a delete confirmed from a list row hands the focus on as the row goes, when it was in
+// the row: to the nearest row left's link, the next, else the one before; else the New project field; else the page's main; never the body. The
+// list is served with this test's three projects alone (newest first: C, B, A), so which row is next is known whatever other tests make
+test('a delete confirmed from a list row by the keyboard hands the focus to the next row, the one before, then New project', async ({ page }) => {
+  await login(page); await setName(page, 'Cy');
+  const run = test.info().repeatEachIndex + 1;                                         // one per run: the server is shared
+  const names = [`Focus row A ${run}`, `Focus row B ${run}`, `Focus row C ${run}`];
+  const ids: string[] = [];
+  for (const name of names) ids.push(await createProject(page, name));
+  await page.route('**/api/projects', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const res = await route.fetch();
+    const list = (await res.json()) as Array<{ id: string }>;
+    return route.fulfill({ response: res, json: list.filter((p) => ids.includes(p.id)) });
+  });
+  await page.goto('/');
+  await expect(page.locator('.project-card')).toHaveCount(3);
+  const rowOf = (name: string) => page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
+  const linkOf = (name: string) => page.getByRole('link', { name, exact: true });
+  await watchBodyFocus(page);
+  /** Deletes `name` from its row by the keyboard alone: Enter on Delete, its name typed into the field the form opens with, Enter. */
+  const deleteByKeyboard = async (name: string): Promise<void> => {
+    const row = rowOf(name);
+    await row.getByRole('button', { name: 'Delete' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(row.getByLabel('Type the project name to confirm')).toBeFocused();
+    await page.keyboard.type(name);
+    await page.keyboard.press('Enter');
+    await expect(row).toHaveCount(0);
+  };
+  await deleteByKeyboard(names[2]!);                                                     // C, the first row: the next row's link, B's
+  await expect(linkOf(names[1]!)).toBeFocused();
+  await deleteByKeyboard(names[0]!);                                                     // A, the last row: the one before, B's
+  await expect(linkOf(names[1]!)).toBeFocused();
+  await deleteByKeyboard(names[1]!);                                                     // B, the only row: New project's field
+  await expect(page.getByLabel('New project')).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});

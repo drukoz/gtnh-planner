@@ -17,7 +17,7 @@
 // Its keys (Phase 2 spec §14) switch the tabs, find the item search, fit the diagram and pause its pipes, and a sheet lists them, which ? opens,
 // as the head's Shortcuts button does above 900 px.
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type Ref } from 'react';
 import type { StuffKey } from '../../shared/keys.ts';
 import { indexPlan, issueText, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import { validateOp } from '../../shared/project/apply-op.ts';
@@ -58,8 +58,8 @@ import { SettingsPanel, usePickedNames } from './SettingsPanel.tsx';
  * typed, each leaving the focus in the field (ledger ruling P2-R132: the focus never falls to the page's body). The field follows the name
  * while nothing is typed in it (someone else renamed it, or a rename's Undo), and keeps a draft being typed.
  */
-function ProjectName(props: { name: string; onRename(name: string): void }): ReactElement {
-  const { name, onRename } = props;
+function ProjectName(props: { name: string; onRename(name: string): void; ref?: Ref<HTMLInputElement> }): ReactElement {
+  const { name, onRename, ref } = props;
   const [draft, setDraft] = useState(name);
   /** Something is typed in the field that is neither sent nor taken back yet. */
   const [editing, setEditing] = useState(false);
@@ -73,6 +73,7 @@ function ProjectName(props: { name: string; onRename(name: string): void }): Rea
   };
   return (
     <input
+      ref={ref}
       className="project-name"
       aria-label="Project name"
       value={draft}
@@ -366,6 +367,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
   const settingsToggle = useRef<HTMLButtonElement | null>(null);
   const settingsClose = useRef<HTMLButtonElement | null>(null);
   const settingsPanel = useRef<HTMLElement | null>(null);
+  /** The project's name in the head, which takes the focus from the Settings button when a window widens past the drawer's (P2-R139). */
+  const projectName = useRef<HTMLInputElement | null>(null);
   /** The drawer is being closed by a way out of it: the focus goes back to the Settings button. */
   const refocusToggle = useRef(false);
   /** Where the focus goes when the drawer opens: its Close button, or the item search of its Make section. */
@@ -425,14 +428,16 @@ export function ProjectPage(props: { id: string }): ReactElement {
   const names = usePickedNames(plan);
   // While it is open, Escape closes it, one layer per press: a key that something inside has already handled (`defaultPrevented`: a draft
   // taken back, FW-9) is not the drawer's, and neither is the key that closes a search list open in it (the item search and the avoid box close
-  // on Escape without preventing the default, which would stop the browser clearing a search field). React has drawn such a list closed by the
-  // time the key reaches the document, so `look` reads whether one is open on the way down, before the list's own handler runs, and
-  // `closeOnEscape` decides on the way up.
+  // on Escape without preventing the default, which would stop the browser clearing a search field), nor the key that closes the note a search
+  // shows when nothing matches, its list closed (ledger ruling P2-R138). React has drawn such a list or note closed by the time the key reaches
+  // the document, so `look` reads whether one is open on the way down, before the search's own handler runs, and `closeOnEscape` decides on
+  // the way up.
   useEffect(() => {
     if (!settingsOpen) return;
     let listOpen = false;
     const look = (e: KeyboardEvent): void => {
-      listOpen = e.target instanceof Element && e.target.closest('[role="combobox"][aria-expanded="true"]') !== null;
+      const at = e.target instanceof Element ? e.target : null;
+      listOpen = at !== null && (at.closest('[role="combobox"][aria-expanded="true"]') !== null || at.closest('.item-search')?.querySelector('.search-note') != null);
     };
     const closeOnEscape = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented || listOpen) return;
@@ -501,13 +506,14 @@ export function ProjectPage(props: { id: string }): ReactElement {
     if (compare.state.open) compare.close();
     else compare.open();
   };
-  // A window narrowed to the drawer's width (ledger ruling P2-R133; the final fix wave, FW-8; R46 answers a widening): the settings column becomes
-  // a closed drawer, hidden once it has slid out, and the head draws neither its Shortcuts nor its Compare modes button, so a focus held in the
-  // column or on one of those would fall to the page's body. It goes to the Settings button, which shows from that width, or for Compare modes to
-  // its twin in the bar under the banner. Chromium can let a hidden button's focus go before this hears the change (as P2-R80 found for a
-  // widening), so the element the focus was last in is kept until the focus moves on, or is let go while that is still drawn (a press on the
-  // page, which leaves nothing to give on). It listens once the page shows its project (before, there is no head or column), after the drawer
-  // that opens by itself has taken its look at the width (an effect declared above it).
+  // A window narrowed to the drawer's width (ledger ruling P2-R133; the final fix wave, FW-8; R46 answers a widening with the drawer open): the
+  // settings column becomes a closed drawer, hidden once it has slid out, and the head draws neither its Shortcuts nor its Compare modes button, so
+  // a focus held in the column or on one of those would fall to the page's body. It goes to the Settings button, which shows from that width, or
+  // for Compare modes to its twin in the bar under the banner. A window widened past it (P2-R139) draws neither the Settings button nor the bar's
+  // Compare modes: their focus goes to the project's name and to the head's Compare modes. Chromium can let a hidden button's focus go before
+  // this hears the change (as P2-R80 found for a widening), so the element the focus was last in is kept until the focus moves on, or is let go
+  // while that is still drawn (a press on the page, which leaves nothing to give on). It listens once the page shows its project (before, there is
+  // no head or column), after the drawer that opens by itself has taken its look at the width (an effect declared above it).
   useEffect(() => {
     if (!ready) return undefined;
     const narrow = matchMedia(NARROW);
@@ -519,9 +525,13 @@ export function ProjectPage(props: { id: string }): ReactElement {
       if (e.relatedTarget === null && e.target === last && last !== null && last.getClientRects().length > 0) last = null;
     };
     const onWidth = (): void => {
-      if (!narrow.matches) return;
       const at = focusLost() ? last : document.activeElement;
       if (at === null) return;
+      if (!narrow.matches) {
+        const to = at === settingsToggle.current ? projectName.current : at === compareBarToggle.current ? compareHeadToggle.current : undefined;
+        if (to !== undefined && !focusOn(to, { preventScroll: true })) focusMain();
+        return;
+      }
       if (at.matches('.project-head > .compare-toggle') && focusOn(compareBarToggle.current, { preventScroll: true })) return;
       const hidden = settingsPanel.current?.contains(at) === true || at.matches('.project-head > .shortcuts-open, .project-head > .compare-toggle');
       if (hidden && !focusOn(settingsToggle.current, { preventScroll: true })) focusMain();
@@ -684,7 +694,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
           open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : openSettings('close'))} ref={settingsToggle}
           targetName={project.settings.target === null ? null : names.nameOf(project.settings.target)}
         />
-        <ProjectName name={project.name} onRename={rename} />
+        <ProjectName name={project.name} onRename={rename} ref={projectName} />
         {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         {/* The keys' sheet (Phase 2 spec §14.1, P2-D29). It comes before Delete project (ledger ruling P2-R83), so it stays on the first row
