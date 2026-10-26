@@ -52,6 +52,12 @@ describe('the Pause pipes button', () => {
     expect(renderToStaticMarkup(<PipesButton paused />)).toBe('<button type="button" class="small" aria-keyshortcuts="P" data-tip="Play pipes · P">Play pipes</button>');
   });
 
+  // Task 11's fix round 1 (ledger ruling P2-R85): with the single-key shortcuts off it says no key and has no tip, as before Task 11
+  it('says no key, and has no tip, while the single-key shortcuts are off', () => {
+    expect(renderToStaticMarkup(<PipesButton paused={false} keys={false} />)).toBe('<button type="button" class="small">Pause pipes</button>');
+    expect(renderToStaticMarkup(<PipesButton paused keys={false} />)).toBe('<button type="button" class="small">Play pipes</button>');
+  });
+
   it('pauses the pipes when they move, and plays them when they are paused', () => {
     vi.stubGlobal('localStorage', keepIn(new Map()));
     (button(false).props.onClick as () => void)();

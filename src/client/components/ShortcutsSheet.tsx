@@ -10,22 +10,36 @@
 import { Fragment, useId, useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactElement, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { SHORTCUT_ROWS } from '../state/shortcuts.ts';
+import { setSingleKeyShortcuts, useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { setToastsInert } from '../state/toasts.ts';
 import { Figs } from './Figs.tsx';
 
-/** The sheet's dialog, named by its title: a row a key, its caps (an en dash between two stands for a range) and what it does; then Close. */
+/** The end of the diagram hints, Flow's and Connections', while the single-key shortcuts are on (spec §14.1): the sheet's key. */
+export const SHEET_KEY_HINT = ' ? shows the shortcuts.';
+
+/**
+ * The sheet's dialog, named by its title: a row a key, its caps (an en dash between two stands for a range) and what it does; then the tick that
+ * turns the single-key shortcuts on and off for this browser (ledger ruling P2-R85: WCAG 2.1.4); then Close.
+ */
 export function ShortcutsDialog(props: { onClose(): void; closeRef?: Ref<HTMLButtonElement> }): ReactElement {
   const { onClose, closeRef } = props;
   const titleId = useId();
+  const keysOn = useSingleKeyShortcuts();
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     // The modal top layer: no Escape gets past it (P2-D22), not even one a layer above took (a tip's, which it prevents and never stops); it
     // closes on one nobody took, one layer per press (P2-R21b)
     if (e.key === 'Escape') { e.stopPropagation(); if (!e.nativeEvent.defaultPrevented) { e.preventDefault(); onClose(); } return; }
     if (e.key === 'Tab') {
-      // Close is the sheet's one control, and Tab and Shift+Tab stay on it: the page behind is inert, and past it the focus would fall to
+      // Tab and Shift+Tab go round the sheet's controls, the tick and Close: the page behind is inert, and past them the focus would fall to
       // the page's body, where Escape is no longer the sheet's
+      const controls = [...e.currentTarget.querySelectorAll<HTMLElement>('input, button')];
+      const [first, last] = [controls[0], controls.at(-1)];
+      const at = document.activeElement;
+      if (first === undefined || last === undefined) return;
+      const inside = controls.some((control) => control === at);
+      if (e.shiftKey ? inside && at !== first : inside && at !== last) return;   // the browser's own step, to the next control
       e.preventDefault();
-      e.currentTarget.querySelector('button')?.focus();
+      (e.shiftKey ? last : first).focus();
     }
   };
   // a press on the sheet's words leaves the focus on Close, for the same reason (it would fall to the page's body)
@@ -43,23 +57,30 @@ export function ShortcutsDialog(props: { onClose(): void; closeRef?: Ref<HTMLBut
           </div>
         ))}
       </dl>
+      <label className="check">
+        <input type="checkbox" checked={keysOn} onChange={(e) => setSingleKeyShortcuts(e.currentTarget.checked)} />
+        Use single-key shortcuts
+      </label>
       <button type="button" ref={closeRef} onClick={onClose}>Close</button>
     </div>
   );
 }
 
-/** The sheet, in a portal on <body>: #root inert and the toasts held while it is open, its Close focused as it opens. */
+/**
+ * The sheet, in a portal on <body>: #root inert and the toasts held while it is open (a hold of its own, so a sheet over the open drawer leaves
+ * the drawer's when it closes: ledger ruling P2-R88), its Close focused as it opens.
+ */
 export function ShortcutsSheet(props: { onClose(): void }): ReactElement {
   const { onClose } = props;
   const close = useRef<HTMLButtonElement | null>(null);
   useLayoutEffect(() => {
     const root = document.getElementById('root');
     if (root !== null) root.inert = true;
-    setToastsInert(true);
+    setToastsInert(true, 'sheet');
     close.current?.focus();
     return () => {
       if (root !== null) root.inert = false;
-      setToastsInert(false);
+      setToastsInert(false, 'sheet');
     };
   }, []);
   return createPortal(

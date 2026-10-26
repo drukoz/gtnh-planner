@@ -2661,6 +2661,8 @@ const CONFIRM_RULES = [CONFIRM, '.inline-confirm p', CONFIRM_ROW, CONFIRM_IN_ROW
 const SHORTCUT_CAP = '.shortcut-list kbd';
 const SHORTCUT_RULES = ['.shortcut-list', '.shortcut-list > div', '.shortcut-list dt', '.shortcut-list dd', SHORTCUT_CAP];
 const SHORTCUTS_OPEN = '.project-head > .shortcuts-open';
+/** Fix round 1 (ledger ruling P2-R85): the settings column's way to the sheet, drawn at 900 px or less, where the head's button is not. */
+const SETTINGS_SHORTCUTS = '.settings-shortcuts';
 
 /** The selectors of every rule Phase 2 adds; each later task appends its own. */
 const PHASE2_RULES: string[] = [
@@ -2681,6 +2683,7 @@ const PHASE2_RULES: string[] = [
   ...TOAST_RULES,                                                                    // Task 9a: the toasts (spec §12.3)
   ...CONFIRM_RULES,                                                                  // Task 10: the in-app confirm (spec §13.2)
   ...SHORTCUT_RULES, SHORTCUTS_OPEN,                                                 // Task 11: the shortcuts sheet and the head's button (spec §14.1)
+  SETTINGS_SHORTCUTS,                                                                // Task 11, fix round 1: the drawer's way to the sheet (P2-R85)
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
@@ -3351,5 +3354,13 @@ describe('the Machine GUI Phase 2: keyboard shortcuts', () => {
   it('draws no Shortcuts button in the head below 900 px, where its one row is full', () => {
     expect(inQuery(NARROW, SHORTCUTS_OPEN)).toEqual([['display', 'none']]);
     expect(blocks.filter((b) => !b.nested && b.prelude.split(', ').includes(SHORTCUTS_OPEN))).toEqual([]);
+  });
+
+  // fix round 1 (ledger ruling P2-R85): there, the settings column, which is the drawer, ends with a Keyboard shortcuts button, the way to the
+  // sheet (and so to turning the single-key shortcuts off) at every width; a wider column has the head's button beside it, and draws none
+  it('draws the settings column\'s Keyboard shortcuts button at 900 px or less only, where the head draws none', () => {
+    expect(declarations(ruleBody(SETTINGS_SHORTCUTS))).toEqual([['display', 'none']]);
+    expect(inQuery(NARROW, SETTINGS_SHORTCUTS)).toEqual([['display', 'inline-flex'], ['align-items', 'center'], ['align-self', 'flex-start']]);
+    expect(position(SETTINGS_SHORTCUTS)).toBeGreaterThan(position('.settings-close'));
   });
 });

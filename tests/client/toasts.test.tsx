@@ -211,6 +211,19 @@ describe('the toast store', () => {
     vi.advanceTimersByTime(1); expect(find(id)!.leaving).toBe(true);
   });
 
+  // Task 11's fix round 1 (ledger ruling P2-R88): the shortcuts sheet opens over the open drawer, and both hold the region. A hold is a layer's:
+  // the sheet closing lets go of its own, so the toasts wait until the last layer has gone, one shown meanwhile undrawn until then too
+  it('holds the toasts while any layer holds them, and lets them go when the last one does (P2-R88)', () => {
+    const id = store.show('Renamed to “B”'); store.setInert(true, 'drawer'); store.setInert(true, 'sheet');
+    const waiting = store.show('Upload finished');
+    store.setInert(false, 'sheet'); expect(store.isInert()).toBe(true);
+    vi.advanceTimersByTime(60_000); expect(find(id)!.leaving).toBe(false); expect(store.getSnapshot().map((t) => t.text)).toEqual(['Renamed to “B”']);
+    store.setInert(true, 'sheet'); store.setInert(true, 'sheet'); store.setInert(false, 'sheet'); expect(store.isInert()).toBe(true);   // a layer's, not a count
+    store.setInert(false, 'drawer'); expect(store.isInert()).toBe(false);
+    expect(store.getSnapshot().map((t) => t.text)).toEqual(['Renamed to “B”', 'Upload finished']);
+    vi.advanceTimersByTime(TOAST_MS); expect([find(id)!.leaving, find(waiting)!.leaving]).toEqual([true, true]);
+  });
+
   it('restores a deleted project from its toast; a 409 counts as done, a 404 says it could not', async () => {
     const before = getProjectsChanged();
     showDeletedToast('p1', 'Steel', { restore: vi.fn(async () => ({})), toasts: store });

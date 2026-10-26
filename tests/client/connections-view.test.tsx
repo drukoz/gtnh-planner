@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CONN_NODE_WIDTH, connectionsElk, connectionsFromElk, connectionsGraph, type ConnNode } from '../../src/client/connections/model.ts';
 import { setPipesPaused } from '../../src/client/state/pipes-paused.ts';
+import { setSingleKeyShortcuts } from '../../src/client/state/single-key-shortcuts.ts';
 import { ConnectionsShell, ConnectionsView, type ConnectionsShellProps } from '../../src/client/views/ConnectionsView.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { DYE_HEX } from '../../src/shared/layout/enderio.ts';
@@ -278,5 +279,17 @@ describe('the Connections pipes', () => {
       setPipesPaused(false);
     }
     expect(shell()).toContain('aria-busy="false" data-pipes="all">');
+  });
+
+  // Task 11's fix round 1 (ledger ruling P2-R85): with the single-key shortcuts off, Fit and Pause pipes say no key and have no tip, as before
+  // Task 11, and the hint says nothing of the sheet's key
+  it('says no key, and has no tips, while the single-key shortcuts are off', () => {
+    setSingleKeyShortcuts(false);
+    try {
+      expect(shell()).toContain('<button type="button" class="small">Fit</button><button type="button" class="small">Pause pipes</button>'
+        + '<span class="muted small">Drag or use the arrow keys to move, scroll to zoom; click a box, a face row or a link for its full configuration.</span>');
+    } finally {
+      setSingleKeyShortcuts(true);
+    }
   });
 });

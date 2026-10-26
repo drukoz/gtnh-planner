@@ -24,12 +24,14 @@ import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { SHEET_KEY_HINT } from '../components/ShortcutsSheet.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
 import {
   endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
 } from '../state/flow-focus.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
+import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
   BUSY_BAND, BUSY_TRACK_HEIGHT, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
@@ -507,6 +509,8 @@ function FlowCanvas(props: {
   const seenReveal = useRef(reveal);
   /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
   const pipesPaused = usePipesPaused();
+  /** Whether the single-key shortcuts act, so Fit and Pause pipes say their keys, and the hint the sheet's (ledger ruling P2-R85). */
+  const keysOn = useSingleKeyShortcuts();
   const sets = useMemo(() => focusSets(layout, focus), [layout, focus]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
 
@@ -664,8 +668,13 @@ function FlowCanvas(props: {
       <div className="flow-toolbar row">
         <button type="button" className="small" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
         <button type="button" className="small" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
-        <button type="button" className="small" aria-keyshortcuts="F" data-tip="Fit · F" onClick={() => fit(MIN_ZOOM)}>Fit</button>
-        <PipesButton paused={pipesPaused} />
+        <button
+          type="button" className="small" aria-keyshortcuts={keysOn ? 'F' : undefined} data-tip={keysOn ? 'Fit · F' : undefined}
+          onClick={() => fit(MIN_ZOOM)}
+        >
+          Fit
+        </button>
+        <PipesButton paused={pipesPaused} keys={keysOn} />
         <select
           className="flow-find small" aria-label="Find item" value=""
           onChange={(e) => {
@@ -680,7 +689,9 @@ function FlowCanvas(props: {
           <input type="checkbox" checked={importsInOneColumn} onChange={(e) => onImportsInOneColumn(e.currentTarget.checked)} />
           Imports in one column
         </label>
-        <span className="muted small">Hover or click a good for its sources and uses, click a box for details, Esc clears. Drag moves, scroll zooms. ? shows the shortcuts.</span>
+        <span className="muted small">
+          Hover or click a good for its sources and uses, click a box for details, Esc clears. Drag moves, scroll zooms.{keysOn && SHEET_KEY_HINT}
+        </span>
       </div>
       <svg
         ref={svgRef}

@@ -24,6 +24,7 @@ import { ItemSearch } from '../components/ItemSearch.tsx';
 import { OwnedMachinesEditor } from '../components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../components/TierPicker.tsx';
 import { formatNumber } from '../format.ts';
+import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import {
@@ -171,6 +172,7 @@ function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElem
 function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: NameOf; remember(hit: SearchHit): void }): ReactElement {
   const { settings, patch, nameOf, remember } = props;
   const { target, amount } = settings;
+  const keysOn = useSingleKeyShortcuts();   // the `/` that focuses this search, while single keys act (ledger ruling P2-R85)
   const setMode = (mode: PlanSettings['mode']): void => {
     if (mode === settings.mode) return;
     // Make N takes whole crafts only, so a rate such as 2.5 becomes the nearest whole amount in the same op.
@@ -196,7 +198,7 @@ function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: Name
         </div>
       )}
       <ItemSearch
-        shortcut="/"
+        shortcut={keysOn ? '/' : undefined}
         onPick={(hit) => {
           remember(hit);
           if (hit.key !== target) patch({ target: hit.key });

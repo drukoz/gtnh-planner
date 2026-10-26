@@ -41,6 +41,7 @@ import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
 import { shortcutOf } from '../state/shortcuts.ts';
+import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { dismissToast, setToastsInert, showToast } from '../state/toasts.ts';
 import { CompareCard, CompareToggle, useCompare } from './CompareCard.tsx';
 import { ISSUE_ORDER, problemId } from './flow-model.ts';
@@ -439,7 +440,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
     if (!settingsOpen) return;
     const outside = ['.top-nav', '.toasts'].flatMap((selector) => document.querySelector<HTMLElement>(selector) ?? []);
     for (const layer of outside) layer.inert = true;
-    setToastsInert(true);
+    setToastsInert(true, 'drawer');
     const narrow = matchMedia(NARROW);
     const onWidth = (): void => {
       if (narrow.matches) return;
@@ -454,7 +455,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
     return () => {
       narrow.removeEventListener('change', onWidth);
       for (const layer of outside) layer.inert = false;
-      setToastsInert(false);
+      setToastsInert(false, 'drawer');
     };
   }, [settingsOpen]);
   // The Compare card (add-on 17), once the project makes something: its "Compare modes" button is in the head and the card it opens is
@@ -494,7 +495,10 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // a tab with no diagram, so no setting changes unseen; ? opens the sheet. The sheet (components/ShortcutsSheet.tsx), which the head's
   // Shortcuts button opens too, gives the focus back as it closes: to what had it while that is still drawn, else to the Shortcuts button if
   // it is drawn (not below 900 px), else to the selected tab, else to the page's main, never to the body (ledger ruling P2-R71: when nothing
-  // had the focus, there is no opener to go back to).
+  // had the focus, there is no opener to go back to). Below 900 px the head draws no Shortcuts button, so the settings column, the drawer
+  // there, ends with a Keyboard shortcuts button, which opens the sheet over the open drawer and takes the focus back as it closes. The sheet
+  // turns the single-key shortcuts off for this browser (ledger ruling P2-R85, WCAG 2.1.4): off, no key acts and nothing says a key.
+  const keysOn = useSingleKeyShortcuts();
   const [sheetOpen, setSheetOpen] = useState(false);
   const shortcutsButton = useRef<HTMLButtonElement | null>(null);
   /** What had the focus as the sheet opened (null: nothing, or the body), which takes it back as the sheet closes, while it is drawn. */
@@ -527,7 +531,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
     focusTab.current = false;
     if (!focusOn(document.getElementById(`tab-${tab}`))) focusMain();
   }, [tab]);
-  const listening = project !== null && !settingsOpen && !sheetOpen;
+  const listening = project !== null && !settingsOpen && !sheetOpen && keysOn;
   useEffect(() => {
     if (!listening) return undefined;
     const onKey = (e: KeyboardEvent): void => {
@@ -593,7 +597,9 @@ export function ProjectPage(props: { id: string }): ReactElement {
             when the type-the-name confirm takes Delete project's place on a row of its own, and the destructive control stays at the row's
             end. Below 900 px the head's row is full and the stylesheet does not draw it (plan ruling shortcuts-button-wide): ? opens the
             sheet at every width, and the diagrams' hints say so. */}
-        <button type="button" className="small shortcuts-open" aria-keyshortcuts="?" ref={shortcutsButton} onClick={openSheet}>Shortcuts</button>
+        <button type="button" className="small shortcuts-open" aria-keyshortcuts={keysOn ? '?' : undefined} ref={shortcutsButton} onClick={openSheet}>
+          Shortcuts
+        </button>
         <DeleteProject
           id={project.id} name={project.name} label="Delete project" beforeDelete={view.flushDeferred}
           onDeleted={() => {
@@ -635,6 +641,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
           <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} names={names} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}
+          {/* The way to the keyboard shortcuts' sheet where the head's is not drawn: the stylesheet draws it in the drawer only (P2-R85). */}
+          <button type="button" className="settings-shortcuts" onClick={openSheet}>Keyboard shortcuts</button>
         </aside>
         <div className="project-views" inert={settingsOpen}>
           <div className="tabs" role="tablist" aria-label="Project views">
@@ -646,7 +654,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
                 id={`tab-${t.id}`}
                 aria-selected={t.id === active.id}
                 aria-controls={`panel-${t.id}`}
-                aria-keyshortcuts={String(i + 1)}
+                aria-keyshortcuts={keysOn ? String(i + 1) : undefined}
                 onClick={() => {
                   location.hash = `#${t.id}`;
                 }}

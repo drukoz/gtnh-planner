@@ -85,12 +85,17 @@ test('? and the Shortcuts button open the sheet; Escape closes it and gives the 
   // its rows, and the page behind it out of reach
   await expect(sheet.locator('dt')).toHaveCount(6);
   await expect(page.locator('#root')).toHaveAttribute('inert', '');
-  // the keyboard stays with it: Tab and Shift+Tab keep the focus on Close, its one control, and so does a press on its words, so the Escape
-  // after them is still the sheet's
+  // the keyboard stays with it: Tab and Shift+Tab go round its two controls, the tick (fix round 1, P2-R85) and Close, and a press on its words
+  // keeps the focus in it, so the Escape after them is still the sheet's
+  const tick = sheet.getByRole('checkbox', { name: 'Use single-key shortcuts' });
+  await page.keyboard.press('Tab');
+  await expect(tick).toBeFocused();                                                    // from the last, round to the first
   await page.keyboard.press('Tab');
   await expect(close).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(close).toBeFocused();
+  await expect(tick).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(close).toBeFocused();                                                   // from the first, round to the last
   await sheet.getByText('Fit the diagram').click();
   await expect(close).toBeFocused();
   await page.keyboard.press('Escape');
@@ -329,6 +334,86 @@ test('an Escape a layer above has taken goes no further than the open sheet', as
   await page.keyboard.press('Escape');
   await expect(sheet).toHaveCount(0);
   await expect(canvas).toHaveClass(/\bfocusing\b/);
+});
+
+// Fix round 1, I2 (ledger ruling P2-R85, WCAG 2.1.4): the single-key shortcuts can be turned off, in the sheet, for this browser. Off, no key
+// acts, `?` included, and nothing says a key: no `aria-keyshortcuts`, no tips on Fit and Pause pipes, no ending on the hints. The Shortcuts
+// button still opens the sheet, where they can be turned on again; the choice outlives a reload
+test('the single-key shortcuts can be turned off in the sheet and on again, and this browser keeps the choice (P2-R85)', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const sheet = sheetOf(page);
+  const button = page.getByRole('button', { name: 'Shortcuts', exact: true });
+  const keys = sheet.getByRole('checkbox', { name: 'Use single-key shortcuts' });
+  const search = page.locator('aside[aria-label="Project settings"]').getByPlaceholder('Search items and fluids');
+  const view = page.locator('svg.flow-canvas > g');
+  const blur = (): Promise<void> => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await button.click();
+  await expect(keys).toBeChecked();
+  await keys.uncheck();
+  await sheet.getByRole('button', { name: 'Close' }).click();
+  await expect(sheet).toHaveCount(0);
+  // a view that Fit would change, and no key acts
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  const zoomed = await view.getAttribute('transform');
+  await blur();
+  for (const key of ['1', '/', 'f', 'p', '?']) await page.keyboard.press(key);
+  expect(await hashOf(page)).toBe('#flow');
+  await expect(search).not.toBeFocused();
+  await expect(search).toHaveValue('');
+  expect(await view.getAttribute('transform')).toBe(zoomed);
+  await expect(page.getByRole('button', { name: 'Pause pipes' })).toBeVisible();
+  await expect(sheet).toHaveCount(0);
+  // and nothing says a key
+  await expect(page.locator('[aria-keyshortcuts]')).toHaveCount(0);
+  for (const name of ['Fit', 'Pause pipes']) await expect(page.locator('.tab-panel').getByRole('button', { name, exact: true })).not.toHaveAttribute('data-tip');
+  await expect(page.locator('.flow-toolbar > span.muted.small')).toHaveText(/scroll zooms\.$/);
+  // the choice outlives a reload, and the Shortcuts button still opens the sheet, which turns them on again
+  await page.reload();
+  await expect(page.locator('svg.flow-canvas [data-step-id]').first()).toBeVisible();
+  await page.keyboard.press('5');
+  expect(await hashOf(page)).toBe('#flow');
+  await button.click();
+  await expect(keys).not.toBeChecked();
+  await keys.check();
+  await sheet.getByRole('button', { name: 'Close' }).click();
+  await expect(sheet).toHaveCount(0);
+  await blur();
+  await page.keyboard.press('5');
+  await expect(page.getByRole('tab', { name: 'Materials & steps' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: 'Materials & steps' })).toHaveAttribute('aria-keyshortcuts', '5');
+});
+
+// Fix round 1, I2 (ledger rulings P2-R85, P2-R88): at 900 px or less the head draws no Shortcuts button, so the drawer ends with a Keyboard
+// shortcuts button. It opens the sheet over the open drawer; Escape closes the sheet alone, the focus back on that button, and the next one
+// the drawer. Both layers hold the toasts, and the sheet letting go of its hold leaves the drawer's: a toast drawn before waits until the drawer
+// closes. The page's clock is faked, so its 5 s are run at once
+test('at 800 px the drawer\'s Keyboard shortcuts button opens the sheet over it, and closing the sheet leaves the drawer and its hold (P2-R85, P2-R88)', async ({ page }) => {
+  await page.clock.install();
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Sheet over the drawer', LV_CIRCUITS);                    // a target: the drawer stays shut until asked
+  const field = page.getByRole('textbox', { name: 'Project name' });
+  await field.fill('Sheet over the drawer, renamed');
+  await field.press('Enter');
+  const toast = page.locator('section.toasts li', { hasText: 'Renamed to “Sheet over the drawer, renamed”' });
+  await expect(toast).toBeVisible();
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
+  const toggle = page.locator('.settings-toggle');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const opener = page.locator('aside[aria-label="Project settings"]').getByRole('button', { name: 'Keyboard shortcuts' });
+  await opener.click();
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(opener).toBeFocused();
+  await page.clock.runFor(10_000);                                                     // twice a toast's time: the drawer still holds it
+  await expect(toast).toHaveAttribute('data-state', 'open');
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await page.clock.runFor(6000);
+  await expect(toast).toHaveCount(0);
 });
 
 // P2-R72: while the sheet is open the toasts behind it wait, as they wait out the drawer (P2-R56, P2-R56a): a toast drawn before it stays,

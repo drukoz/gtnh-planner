@@ -14,6 +14,9 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createBrowserChoice, type BrowserChoice } from '../../src/client/state/browser-choice.ts';
 import { MATERIALS_VIEW_KEY, getMaterialsView, setMaterialsView, subscribeMaterialsView, useMaterialsView } from '../../src/client/state/materials-view.ts';
 import { PIPES_PAUSED_KEY, getPipesPaused, setPipesPaused, subscribePipesPaused, usePipesPaused } from '../../src/client/state/pipes-paused.ts';
+import {
+  SINGLE_KEY_SHORTCUTS_KEY, getSingleKeyShortcuts, setSingleKeyShortcuts, subscribeSingleKeyShortcuts, useSingleKeyShortcuts,
+} from '../../src/client/state/single-key-shortcuts.ts';
 import { THEME_KEY, getThemeChoice, setThemeChoice, subscribeThemeChoice, useThemeChoice } from '../../src/client/state/theme.ts';
 import { keepIn, refuse } from './storage-stub.ts';
 
@@ -42,6 +45,12 @@ const CHOICES: Choice[] = [
   {
     name: 'how the build list is shown', store: { get: getMaterialsView, set: setMaterialsView, subscribe: subscribeMaterialsView, use: useMaterialsView },
     key: MATERIALS_VIEW_KEY, fallback: 'list', fallbackText: 'list', other: 'grid', otherText: 'grid',
+  },
+  // Task 11's fix round 1 (ledger ruling P2-R85): the single-key shortcuts, on unless this browser turned them off
+  {
+    name: 'the single-key shortcuts',
+    store: { get: getSingleKeyShortcuts, set: setSingleKeyShortcuts, subscribe: subscribeSingleKeyShortcuts, use: useSingleKeyShortcuts },
+    key: SINGLE_KEY_SHORTCUTS_KEY, fallback: true, fallbackText: 'on', other: false, otherText: 'off',
   },
 ];
 

@@ -8,7 +8,8 @@
 //   was taken leaves without saying so, for it leaves before its action runs (ledger ruling P2-R58). A toast already leaving is left as it is,
 //   so an `onExpire` that dismisses its own toast changes nothing.
 // - Its time runs only while nothing holds it (spec §12.1): a pointer that moves over it (P2-D28: one that rests where the toast appeared does
-//   not), the focus inside it, the page hidden, or the settings drawer open over the region (`inert`). Let go, it runs on with the time it had
+//   not), the focus inside it, the page hidden, or a layer open over the region (`inert`: the settings drawer, the shortcuts sheet, each a hold
+//   of its own, so the toasts wait for the last of them: ledger ruling P2-R88). Let go, it runs on with the time it had
 //   left. But a toast whose going commits a change (`runsHidden`: a deleted note's, whose delete is posted then) runs on while the page is
 //   hidden, whatever holds it, for no one points at or focuses a hidden page, which may be frozen and discarded meanwhile (ledger ruling P2-R63:
 //   spec §12.1's hidden pause no longer applies to it).
@@ -47,8 +48,10 @@ export interface ToastOptions {
   /** Called once when it goes without its action taken: its time is up, or it is dismissed or replaced. */
   onExpire?(): void;
 }
-/** What holds a toast's time: a pointer moving over it, the focus inside it, the page hidden, the drawer open over the region. */
+/** What holds a toast's time: a pointer moving over it, the focus inside it, the page hidden, a layer open over the region. */
 export type PauseReason = 'pointer' | 'focus' | 'hidden' | 'inert';
+/** A layer that holds the toasts while it is open over their region (ledger ruling P2-R88): the settings drawer, the shortcuts sheet. */
+export type InertLayer = 'drawer' | 'sheet';
 
 export interface ToastStore {
   /** Shows a toast, or keeps it waiting until it can be seen; returns its id. */
@@ -63,11 +66,12 @@ export interface ToastStore {
   /** Holds every toast's time while the page is hidden, the ones shown meanwhile too, but those that run on then (P2-R63). */
   setHidden(hidden: boolean): void;
   /**
-   * Holds every toast's time while the drawer is open over the region, the ones drawn staying drawn, and keeps the ones shown meanwhile
-   * waiting, undrawn, until it closes (P2-R56, P2-R56a).
+   * Holds every toast's time while `layer` (the drawer by default) is open over the region, the ones drawn staying drawn, and keeps the ones
+   * shown meanwhile waiting, undrawn, until it closes (P2-R56, P2-R56a). Each layer holds on its own, and the toasts are let go once the last
+   * of them has (P2-R88: the shortcuts sheet opens over the open drawer).
    */
-  setInert(inert: boolean): void;
-  /** Whether the drawer is open over the region, so a toast shown now would wait. */
+  setInert(inert: boolean, layer?: InertLayer): void;
+  /** Whether a layer is open over the region, so a toast shown now would wait. */
   isInert(): boolean;
   subscribe(fn: () => void): () => void;
   /** The toasts drawn, oldest first: the same array until one of them changes. */
@@ -109,6 +113,8 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
   let entries: Entry[] = [];
   let snapshot: readonly Toast[] = [];
   let hidden = false;
+  /** The layers open over the region; the toasts are inert while any is. */
+  const inertLayers = new Set<InertLayer>();
   let inert = false;
   let nextId = 1;
   const listeners = new Set<() => void>();
@@ -249,7 +255,10 @@ export function createToastStore(clock: ToastClock = LIVE_CLOCK): ToastStore {
         sync(entry);
       }
     },
-    setInert(next) {
+    setInert(holds, layer = 'drawer') {
+      if (holds) inertLayers.add(layer);
+      else inertLayers.delete(layer);
+      const next = inertLayers.size > 0;
       if (next === inert) return;
       inert = next;
       for (const entry of entries) {
@@ -299,12 +308,12 @@ export function resumeToast(id: number, why: PauseReason): void {
   toasts.resume(id, why);
 }
 
-/** The settings drawer is open over the App's region, or has closed (ProjectPage): see `ToastStore.setInert`. */
-export function setToastsInert(inert: boolean): void {
-  toasts.setInert(inert);
+/** A layer (the settings drawer by default, or the shortcuts sheet) is open over the App's region, or has closed: see `ToastStore.setInert`. */
+export function setToastsInert(inert: boolean, layer?: InertLayer): void {
+  toasts.setInert(inert, layer);
 }
 
-/** Whether the drawer is open over the App's region, so a toast shown now would wait behind it (ProjectorPanel's copy makes none then). */
+/** Whether a layer is open over the App's region, so a toast shown now would wait behind it (ProjectorPanel's copy makes none then). */
 export function toastsInert(): boolean {
   return toasts.isInert();
 }

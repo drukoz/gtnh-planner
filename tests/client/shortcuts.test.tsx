@@ -4,9 +4,11 @@
 // P2-R73). Shift is no reason to skip: some layouts type the digits and ? with it (Review Focus 5). shortcuts.spec.ts shows it in a browser.
 
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { ShortcutsDialog } from '../../src/client/components/ShortcutsSheet.tsx';
 import { isTypingTarget, shortcutOf, SHORTCUT_ROWS, type KeyLike, type TargetLike } from '../../src/client/state/shortcuts.ts';
+import { SINGLE_KEY_SHORTCUTS_KEY, getSingleKeyShortcuts, setSingleKeyShortcuts } from '../../src/client/state/single-key-shortcuts.ts';
+import { keepIn } from './storage-stub.ts';
 
 const key = (k: string, over: Partial<KeyLike> = {}): KeyLike => ({ key: k, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, defaultPrevented: false, isComposing: false, repeat: false, ...over });
 const el = (tagName: string, over: Partial<TargetLike> = {}): TargetLike => ({ tagName, closest: () => null, ...over });
@@ -53,4 +55,35 @@ describe('keyboard shortcuts', () => {
     expect(html).toMatch(/<div class="modal shortcuts-sheet" role="dialog" aria-modal="true" aria-labelledby="([^"]+)"><h2 id="\1">Keyboard shortcuts<\/h2>/);
     expect(html).toContain('<dt><kbd><span class="fig">1</span></kbd>–<kbd><span class="fig">6</span></kbd></dt>'); expect(html.match(/<dt>/g)).toHaveLength(6); expect(html).toContain('<button type="button">Close</button>');   // a digit cap's digit in VT323 (spec §25)
   });
+
+  // Task 11's fix round 1 (ledger ruling P2-R85, WCAG 2.1.4): single-key shortcuts can be turned off, per browser, in the sheet; they are on
+  // unless this browser stored 'off'. The store's storage cases are browser-choice.test.tsx's, asserted there for this choice
+  it('keeps the single-key shortcuts on unless this browser turned them off', () => {
+    expect(SINGLE_KEY_SHORTCUTS_KEY).toBe('gtnh-planner:shortcuts');
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', keepIn(store));
+    expect(getSingleKeyShortcuts()).toBe(true);
+    setSingleKeyShortcuts(false);
+    expect([store.get(SINGLE_KEY_SHORTCUTS_KEY), getSingleKeyShortcuts()]).toEqual(['off', false]);
+    setSingleKeyShortcuts(true);
+    expect([store.get(SINGLE_KEY_SHORTCUTS_KEY), getSingleKeyShortcuts()]).toEqual(['on', true]);
+    store.set(SINGLE_KEY_SHORTCUTS_KEY, 'no');
+    expect(getSingleKeyShortcuts()).toBe(true);                                       // anything but 'off' reads as on
+  });
+
+  it('turns them off and on in the sheet, a tick between the list and Close, ticked while they are on', () => {
+    expect(renderToStaticMarkup(<ShortcutsDialog onClose={() => {}} />))
+      .toContain('</dl><label class="check"><input type="checkbox" checked=""/>Use single-key shortcuts</label><button type="button">Close</button>');
+    setSingleKeyShortcuts(false);
+    try {
+      expect(renderToStaticMarkup(<ShortcutsDialog onClose={() => {}} />)).toContain('<label class="check"><input type="checkbox"/>Use single-key shortcuts</label>');
+    } finally {
+      setSingleKeyShortcuts(true);
+    }
+  });
 });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+

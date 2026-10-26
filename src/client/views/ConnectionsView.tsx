@@ -19,6 +19,7 @@ import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
 import { focusMain, focusOn } from '../components/focus.ts';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { SHEET_KEY_HINT } from '../components/ShortcutsSheet.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
 import {
@@ -26,6 +27,7 @@ import {
   type ConnEdge, type ConnFace, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
 } from '../connections/model.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
+import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import { DRAG_THRESHOLD, fitView, pointIn, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
@@ -47,7 +49,7 @@ const INFEASIBLE_TEXT = 'This line cannot be planned yet, so there is nothing to
 const LAYING_OUT_TEXT = 'Laying out the line…';
 const NOTHING_TEXT = 'Nothing to connect yet: the line places no new machines';
 const DRAWING_TEXT = 'Drawing the connections…';
-const HINT_TEXT = 'Drag or use the arrow keys to move, scroll to zoom; click a box, a face row or a link for its full configuration. ? shows the shortcuts.';
+const HINT_TEXT = 'Drag or use the arrow keys to move, scroll to zoom; click a box, a face row or a link for its full configuration.';
 const loadFailed = (error: string): string => `Could not load the layout: ${error}`;
 const drawFailed = (error: string): string => `Could not lay out the connections: ${error}`;
 
@@ -228,6 +230,8 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   const [dragging, setDragging] = useState(false);
   /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
   const pipesPaused = usePipesPaused();
+  /** Whether the single-key shortcuts act, so Fit and Pause pipes say their keys, and the hint the sheet's (ledger ruling P2-R85). */
+  const keysOn = useSingleKeyShortcuts();
   /**
    * The press that may become a drag: its pointer, where it went down on the page (`cx`, `cy`: client px) and in the area (`sx`, `sy`:
    * `pointIn`), and the view then.
@@ -335,9 +339,14 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   return (
     <>
       <div className="conn-toolbar row">
-        <button type="button" className="small" aria-keyshortcuts="F" data-tip="Fit · F" onClick={() => fit()}>Fit</button>
-        <PipesButton paused={pipesPaused} />
-        <span className="muted small">{HINT_TEXT}</span>
+        <button
+          type="button" className="small" aria-keyshortcuts={keysOn ? 'F' : undefined} data-tip={keysOn ? 'Fit · F' : undefined}
+          onClick={() => fit()}
+        >
+          Fit
+        </button>
+        <PipesButton paused={pipesPaused} keys={keysOn} />
+        <span className="muted small">{HINT_TEXT}{keysOn && SHEET_KEY_HINT}</span>
       </div>
       {/* above PIPE_ANIMATION_LIMIT links only the picked link's pipe moves, so a huge line still pans smoothly (pipe-motion.ts);
           while this browser has the pipes paused, none moves */}
