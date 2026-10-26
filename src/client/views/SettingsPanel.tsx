@@ -151,8 +151,10 @@ function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElem
           onKeyDown={(e) => {
             // a held Enter's repeat that landed here is not a commit (P2-R69a)
             if (e.key === 'Enter' && draft !== null && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);
-            // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b)
-            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
+            // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b); one
+            // that takes a draft back is taken, so the drawer stays open (FW-9), and one with no draft goes on to it
+            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {
+              e.preventDefault();
               stopTimer();
               setDraft(null);
             }
@@ -293,7 +295,10 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
           onBlur={(e) => commit(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
-            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) setDraft(null);   // one layer per press
+            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {   // one layer per press: a draft taken back takes the key (FW-9)
+              e.preventDefault();
+              setDraft(null);
+            }
           }}
         />
         {error !== null && <span className="field-error error" role="alert">{error}</span>}
@@ -786,7 +791,10 @@ export function StatInput(props: {
         onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
-          if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) onDraft(null);   // one layer per press
+          if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {   // one layer per press: a draft taken back takes the key (FW-9)
+            e.preventDefault();
+            onDraft(null);
+          }
         }}
       />
       {error !== null && <span className="field-error error" role="alert">{error}</span>}

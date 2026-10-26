@@ -58,12 +58,16 @@ export function shortcutOf(e: KeyLike, target: TargetLike | null): Shortcut | nu
   }
 }
 
-/** The sheet's rows (the mockup's, `Phase2Feedback.dc.html`): each key's caps, an en dash between two caps standing for a range, and what it does. */
+/**
+ * The sheet's rows (the mockup's, `Phase2Feedback.dc.html`): each key's caps, an en dash between two caps standing for a range, and what it does.
+ * The Esc row says what Escape does, a layer a press (spec §6.1, §14.1), in place of the mockup's words, which named a panel that no Escape
+ * closes (ledger ruling P2-R134).
+ */
 export const SHORTCUT_ROWS: ReadonlyArray<readonly [caps: readonly string[], what: string]> = [
   [['/'], 'Search items and fluids'],
   [['1', '–', '6'], 'Switch tabs: Map, 3D, Connections, Flow, Materials, Notes'],
   [['F'], 'Fit the diagram'],
   [['P'], 'Pause or play the pipes'],
-  [['Esc'], 'Close a panel, clear the highlight, close the drawer'],
+  [['Esc'], 'Hide a tip, close a list, a question or the drawer, clear the highlight'],
   [['?'], 'Show this sheet'],
 ];

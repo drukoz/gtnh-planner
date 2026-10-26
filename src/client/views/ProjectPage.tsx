@@ -143,7 +143,9 @@ function bannerItems(plan: Plan | null): BannerItems {
 
 /**
  * What the settings drawer's own status line says (Phase 2 spec §17 R43): while the drawer is open the banners behind it are inert, so their
- * status is not announced. The planner's error; else that the plan is updating, while a new plan is on its way and the views still show the
+ * status is not announced. Why a change the page sent failed or was refused (the store's error, which the banner says in its alert; the
+ * changed field in the drawer snaps back: the final fix wave, FW-10); else the planner's error; else that the plan is updating, while a new
+ * plan is on its way and the views still show the
  * old one, in other words than the banner's busy line, which drawer.spec.ts finds by its text while the drawer is open (plan ruling
  * drawer-status-words); else how many problems the banner lists, its problems and its other warnings, but the hint to pick something to make,
  * which the drawer, the item search in it focused, is there to answer (plan ruling drawer-status-count), and never their words, which other
@@ -151,7 +153,8 @@ function bannerItems(plan: Plan | null): BannerItems {
  * ruling P2-R52); else nothing (no plan yet, or one with nothing to make). What the plan uses beyond its line (a farm, another project's
  * surplus) is no problem.
  */
-export function drawerStatus(plan: Plan | null, planError: string | null, planLoading: boolean): string {
+export function drawerStatus(plan: Plan | null, storeError: string | null, planError: string | null, planLoading: boolean): string {
+  if (storeError !== null) return storeError;
   if (planError !== null) return planError;
   if (plan === null) return '';
   if (planLoading) return 'The plan is updating…';
@@ -420,10 +423,11 @@ export function ProjectPage(props: { id: string }): ReactElement {
   };
   // The settings panel and the Settings button name the target in the same words, and what was just picked before the plan names it.
   const names = usePickedNames(plan);
-  // While it is open, Escape closes it, one layer per press: a key that something inside has already handled (`defaultPrevented`) is not
-  // the drawer's, and neither is the key that closes a search list open in it (the item search and the avoid box close on Escape without
-  // preventing the default). React has drawn such a list closed by the time the key reaches the document, so `look` reads whether one is
-  // open on the way down, before the list's own handler runs, and `closeOnEscape` decides on the way up.
+  // While it is open, Escape closes it, one layer per press: a key that something inside has already handled (`defaultPrevented`: a draft
+  // taken back, FW-9) is not the drawer's, and neither is the key that closes a search list open in it (the item search and the avoid box close
+  // on Escape without preventing the default, which would stop the browser clearing a search field). React has drawn such a list closed by the
+  // time the key reaches the document, so `look` reads whether one is open on the way down, before the list's own handler runs, and
+  // `closeOnEscape` decides on the way up.
   useEffect(() => {
     if (!settingsOpen) return;
     let listOpen = false;
@@ -497,6 +501,40 @@ export function ProjectPage(props: { id: string }): ReactElement {
     if (compare.state.open) compare.close();
     else compare.open();
   };
+  // A window narrowed to the drawer's width (ledger ruling P2-R133; the final fix wave, FW-8; R46 answers a widening): the settings column becomes
+  // a closed drawer, hidden once it has slid out, and the head draws neither its Shortcuts nor its Compare modes button, so a focus held in the
+  // column or on one of those would fall to the page's body. It goes to the Settings button, which shows from that width, or for Compare modes to
+  // its twin in the bar under the banner. Chromium can let a hidden button's focus go before this hears the change (as P2-R80 found for a
+  // widening), so the element the focus was last in is kept until the focus moves on, or is let go while that is still drawn (a press on the
+  // page, which leaves nothing to give on). It listens once the page shows its project (before, there is no head or column), after the drawer
+  // that opens by itself has taken its look at the width (an effect declared above it).
+  useEffect(() => {
+    if (!ready) return undefined;
+    const narrow = matchMedia(NARROW);
+    let last: Element | null = null;
+    const into = (e: FocusEvent): void => {
+      last = e.target instanceof Element ? e.target : null;
+    };
+    const out = (e: FocusEvent): void => {
+      if (e.relatedTarget === null && e.target === last && last !== null && last.getClientRects().length > 0) last = null;
+    };
+    const onWidth = (): void => {
+      if (!narrow.matches) return;
+      const at = focusLost() ? last : document.activeElement;
+      if (at === null) return;
+      if (at.matches('.project-head > .compare-toggle') && focusOn(compareBarToggle.current, { preventScroll: true })) return;
+      const hidden = settingsPanel.current?.contains(at) === true || at.matches('.project-head > .shortcuts-open, .project-head > .compare-toggle');
+      if (hidden && !focusOn(settingsToggle.current, { preventScroll: true })) focusMain();
+    };
+    document.addEventListener('focusin', into);
+    document.addEventListener('focusout', out);
+    narrow.addEventListener('change', onWidth);
+    return () => {
+      document.removeEventListener('focusin', into);
+      document.removeEventListener('focusout', out);
+      narrow.removeEventListener('change', onWidth);
+    };
+  }, [ready]);
   const closeCompare = (): void => {
     compare.close();
     // a button the stylesheet does not show has no box
@@ -696,7 +734,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
           <button type="button" className="settings-close" onClick={closeSettings} ref={settingsClose}>Close settings</button>
           {/* The drawer's own status (R43): the banners behind it are inert while it is open, so their status is not announced. Always
               there, so a screen reader hears it change; empty while the drawer is closed. */}
-          <p className="visually-hidden" role="status">{settingsOpen ? drawerStatus(plan, view.planError, view.planLoading) : ''}</p>
+          <p className="visually-hidden" role="status">{settingsOpen ? drawerStatus(plan, view.error, view.planError, view.planLoading) : ''}</p>
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
           <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} names={names} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}

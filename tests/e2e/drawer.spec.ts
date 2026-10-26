@@ -15,7 +15,7 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { circuitLv, copperUnsourced } from './fixtures/plans.ts';
-import { login, setName, createProject, holdReplan, LV_CIRCUITS, openWithPlan } from './helpers.ts';
+import { bodyFocusCount, login, setName, createProject, holdReplan, LV_CIRCUITS, openWithPlan, watchBodyFocus } from './helpers.ts';
 
 /** What the page behind the drawer is made of: inert while the drawer is open. */
 const BEHIND = ['.top-nav', '.project-head', '.project-banners', '.project-views'];
@@ -163,8 +163,34 @@ test('a window that grows past 900 px closes the drawer, and leaves the page liv
   for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
   await expect(settings).toBeVisible();                                                // the column beside the views again
   // narrow once more, the drawer is closed: the state did not wait for a narrow window to show itself
+  await watchBodyFocus(page);
   await page.setViewportSize({ width: 800, height: 900 });
   await expect(settings).toBeHidden();
+  // the final fix wave, FW-8 (ledger ruling P2-R133): the column that had the focus is a closed drawer now, so the focus went to the Settings
+  // button, which shows again, and never to the page's body
+  await expect(page.getByRole('button', { name: SETTINGS_BUTTON })).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});
+
+// FW-8 (ledger ruling P2-R133): a window narrowed to 900 px or less no longer draws the head's Shortcuts and Compare modes buttons; one that had
+// the focus hands it on as it goes, Shortcuts to the Settings button and Compare modes to its twin in the bar under the banner, never to the
+// body. A laptop window snapped to half its screen (683 to 720 px) narrows so
+test('narrowing past 900 px moves a focus on the head\'s Shortcuts to the Settings button, and on Compare modes to the bar\'s', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Narrowed head', TARGET);
+  const head = page.locator('.project-head');
+  const name = page.getByRole('textbox', { name: 'Project name' });
+  await watchBodyFocus(page);
+  await head.getByRole('button', { name: 'Shortcuts', exact: true }).focus();
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect(page.getByRole('button', { name: SETTINGS_BUTTON })).toBeFocused();
+  await name.focus();                                                                     // drawn at both widths
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await head.getByRole('button', { name: 'Compare modes' }).focus();
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect(page.locator('.compare-bar').getByRole('button', { name: 'Compare modes' })).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
 });
 
 test('Escape closes one layer per press: an open search list first, then the drawer', async ({ page }) => {
@@ -191,6 +217,31 @@ test('Escape closes one layer per press: an open search list first, then the dra
   // nothing is open in it now, so the next Escape closes the drawer and the focus goes back to the button
   await page.keyboard.press('Escape');
   await expect(settings).toBeHidden();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+});
+
+// the final fix wave, FW-9: a draft in the drawer is a layer of its own, as an open list is: Escape in the Amount takes the draft back and leaves
+// the drawer open (the field takes the key, and the focus stays in it); with nothing to take back, the next Escape closes the drawer
+test('Escape takes back a draft in the drawer before it closes the drawer', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Drafts in the drawer', TARGET);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  const open = async (): Promise<void> => {
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('.drawer-backdrop')).toHaveCount(1);
+  };
+  await toggle.click();
+  await expect(settings).toBeVisible();
+  const amount = settings.getByLabel('Amount', { exact: true });
+  await amount.fill('2x');                                                                // a draft the field refuses, so nothing sends it
+  await page.keyboard.press('Escape');
+  await expect(amount).toHaveValue('30');
+  await expect(amount).toBeFocused();
+  await open();
+  await page.keyboard.press('Escape');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(toggle).toBeFocused();
 });
@@ -662,4 +713,23 @@ test('the drawer says when an update ends with no problems (R43)', async ({ page
   await expect(status).toHaveText('No problems');
   await page.keyboard.press('Escape');
   await expect(status).toHaveText('');
+});
+
+// the final fix wave, FW-10 (R43): a change the planner refuses snaps back in the drawer, and the banner that says why is inert behind it, so the
+// drawer's own status says it, first. It is read in the status line: the banner holds the same words, which a page-wide getByText would find
+// twice while the drawer is open (spec §3.8)
+test('the drawer\'s status says why a change was refused (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Refused in the drawer', TARGET);
+  await page.route(`**/api/projects/${id}/ops`, (route) => route.fulfill({ status: 400, json: { error: 'bad-op', message: 'The planner refused that change' } }));
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const status = settings.locator('p[role="status"]');
+  await expect(status).toHaveText(/problem/);                                               // the plan's count, before the change
+  const amount = settings.getByLabel('Amount', { exact: true });
+  await amount.fill('45');
+  await amount.press('Enter');
+  await expect(status).toHaveText('The planner refused that change');
+  await expect(page.locator('.project-banners .banner.error')).toHaveText('The planner refused that change');   // the inert banner's alert
 });

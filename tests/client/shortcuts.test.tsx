@@ -56,9 +56,11 @@ describe('keyboard shortcuts', () => {
     expect(shortcutOf(key('5'), el('BUTTON'))).toEqual({ kind: 'tab', index: 4 });
   });
 
+  // the final fix wave, ledger ruling P2-R134: the Esc row says what Escape does, layer by layer (spec §6.1, §14.1), in place of the mockup's
+  // words, which named a panel no Escape closes; the words hold no string an e2e spec looks for (spec §3.8)
   it('lists the mockup\'s rows, and draws them in a dialog named by its title', () => {
     expect(SHORTCUT_ROWS).toEqual([[['/'], 'Search items and fluids'], [['1', '–', '6'], 'Switch tabs: Map, 3D, Connections, Flow, Materials, Notes'], [['F'], 'Fit the diagram'],
-      [['P'], 'Pause or play the pipes'], [['Esc'], 'Close a panel, clear the highlight, close the drawer'], [['?'], 'Show this sheet']]);
+      [['P'], 'Pause or play the pipes'], [['Esc'], 'Hide a tip, close a list, a question or the drawer, clear the highlight'], [['?'], 'Show this sheet']]);
     const html = renderToStaticMarkup(<ShortcutsDialog onClose={() => {}} />);
     // fix round 1: the dialog holds the focus a press on its words gives it (ledger ruling P2-R81a), and a cap a screen reader would skip or
     // misread says its glyph as a word (P2-R86), the range's en dash too: authorized changes of the brief's two pins
