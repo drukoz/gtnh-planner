@@ -15,3 +15,6 @@ projector-mod/.gradle/
 projector-mod/run/
 *.tsbuildinfo
 .vitest/
+
+# Paperclip run data (agent home, OpenCode snapshots); never commit it
+.paperclip-runtime/
