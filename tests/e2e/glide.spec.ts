@@ -1430,7 +1430,7 @@ function without(plan: Plan, key: string): Plan {
 // column: without its first good, every stub after it moves up a place; without one half way down, half of them do, and that replan glides.
 // Fix round 1 (ledger ruling P2-R119): the limit counts every box a replan changes, so one that brings other goods (every stub goes and as
 // many come, nearly nothing moving) snaps too
-test('a replan that changes more than 200 boxes snaps into place, and one that changes fewer glides', async ({ page }) => {
+test('a replan that changes more than 200 boxes snaps into place, and one that changes fewer glides', async ({ page, browserName }) => {
   await page.addInitScript(recordAnimations);
   let served = manyEdges();
   const id = await openServing(page, () => served);
@@ -1476,7 +1476,7 @@ test('a replan that changes more than 200 boxes snaps into place, and one that c
   expect(await pansOn(page), 'no pan runs').toBe(0);
   const view = await viewDrawn(page);
   expect(view.at, 'the premise: a new view').not.toBe(dragged);
-  expectDrawnAtAttribute(view);
+  expectDrawnAtAttribute(view, browserName);
 });
 
 /** The Flow pan group's `transform` attribute and the transform the browser draws it with. */
@@ -1486,22 +1486,28 @@ const viewDrawn = (page: Page): Promise<{ at: string | null; drawn: string }> =>
 
 /**
  * Checks that the pan group is drawn at its attribute's view: no CSS transform (a pan's) draws it anywhere else. Chromium computes the
- * attribute's matrix for a group its attribute alone moves; WebKit computes `none` for it.
+ * attribute's matrix for a group its attribute alone moves, its numbers to six significant digits, so each is held to its attribute within a
+ * hundred-thousandth of its size (FW-14: three decimals would fail a view far out, as a big plan's is, past a few hundred px); WebKit computes
+ * `none` for it, which no other engine may.
  */
-function expectDrawnAtAttribute({ at, drawn }: { at: string | null; drawn: string }): void {
-  if (drawn === 'none') return;
+function expectDrawnAtAttribute({ at, drawn }: { at: string | null; drawn: string }, browserName: string): void {
+  if (drawn === 'none') {
+    expect(browserName, 'only WebKit draws a group its attribute moves with no computed transform').toBe('webkit');
+    return;
+  }
   const [view, picture] = [attributeView(at), matrixView(drawn)];
   if (picture === null) throw new Error(`no view in "${drawn}"`);
-  expect(picture.x, 'drawn at the attribute').toBeCloseTo(view.x, 3);
-  expect(picture.y).toBeCloseTo(view.y, 3);
-  expect(picture.scale).toBeCloseTo(view.scale, 6);
+  for (const part of ['x', 'y', 'scale'] as const) {
+    expect(Math.abs(picture[part] - view[part]), `drawn at the attribute: ${part} ${picture[part]} for ${view[part]}`)
+      .toBeLessThanOrEqual(1e-5 * Math.max(1, Math.abs(view[part])));
+  }
 }
 
 // Task F4 (ledger ruling P2-R126): a line opened or closed has its box centred (`centreNext`), panned to only when the new layout glides. In a
 // supporting line of its own, manyEdges' assembler and its 201 stubs are drawn inside the line's frame; closed from the keyboard, the line's box
 // takes their place and the stubs feed it (each a new box, `import:<good>@line:<key>`), past GLIDE_LIMIT: it snaps, and the box is centred at
 // once. The view is dragged first, so the centred one is somewhere else
-test('a line whose closing snaps centres its box at once', async ({ page }) => {
+test('a line whose closing snaps centres its box at once', async ({ page, browserName }) => {
   await page.addInitScript(recordAnimations);
   const big = manyEdges();
   await openWithPlan(page, { ...big, steps: big.steps.map((s) => ({ ...s, line: { key: 't:gline@0', name: 'Big line' } })) });
@@ -1518,7 +1524,7 @@ test('a line whose closing snaps centres its box at once', async ({ page }) => {
   expect(await pansOn(page), 'no pan runs').toBe(0);
   const view = await viewDrawn(page);
   expect(view.at, 'the premise: the line\'s box centred, somewhere else').not.toBe(dragged);
-  expectDrawnAtAttribute(view);
+  expectDrawnAtAttribute(view, browserName);
   await expect(toggle).toBeFocused();
 });
 

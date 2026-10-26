@@ -879,6 +879,17 @@ describe('flow diagram: a box outside the window', () => {
 // The diagrams glide (Phase 2 spec §16.3, Task 13b): what a new layout changed, which `glideLayout` animates — the boxes (and the open lines'
 // frames) that moved, came and went, and the arrows whose points changed or that are new. The same layout again (every SSE refetch) and a
 // first one change nothing, and a change that moves more than GLIDE_LIMIT boxes snaps (review focus 4).
+
+/** `n` ids, each `prefix` and its index. */
+const ids = (n: number, prefix: string): string[] => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+/**
+ * A layout's change of `moved` boxes moved, `entered` come, `left` gone and `rerouted` arrows, for the cases that count them against the glide's
+ * limit and the view's (Task F4's carry-over, FW-14: one builder where there were two copies).
+ */
+const change = (moved: number, entered: number, left: number, rerouted = 0): LayoutChange => ({
+  moved: ids(moved, 'm').map((id) => ({ id, from: [0, 0], to: [1, 0] })), entered: ids(entered, 'e'), left: ids(left, 'l'), rerouted: ids(rerouted, 'r'),
+});
+
 describe('what a new layout changed', () => {
   const at = (nodes: Array<[string, number, number]>, edges: Array<[string, Array<[number, number]>]> = [], groups: Array<[string, number, number]> = []): PlacedPicture =>
     ({ nodes: nodes.map(([id, x, y]) => ({ id, x, y })), edges: edges.map(([id, points]) => ({ id, points })), groups: groups.map(([id, x, y]) => ({ id, x, y })) });
@@ -898,10 +909,6 @@ describe('what a new layout changed', () => {
   // fix round 1 (ledger ruling P2-R119): the limit counts every box a layout changes, so a new target on a big line, which drops nearly every box
   // and brings as many (few or none moved), snaps too; the arrows it reroutes only fade, and do not count
   it('counts the boxes that come and go against the limit, with those that move', () => {
-    const ids = (n: number, prefix: string): string[] => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
-    const change = (moved: number, entered: number, left: number, rerouted = 0): LayoutChange => ({
-      moved: ids(moved, 'm').map((id) => ({ id, from: [0, 0], to: [1, 0] })), entered: ids(entered, 'e'), left: ids(left, 'l'), rerouted: ids(rerouted, 'r'),
-    });
     expect(glidable(change(100, 50, 50))).toBe(true);
     expect(glidable(change(100, 50, 51))).toBe(false);
     expect(glidable(change(0, 101, 100))).toBe(false);
@@ -960,10 +967,6 @@ describe('the height the canvas keeps while a new layout glides', () => {
 // Task F4 (ledger ruling P2-R126): the view a new layout brings is panned to only when the layout glides; one that snaps (more than GLIDE_LIMIT
 // boxes changed, the count its glide goes by) takes its view at once
 describe('how a new layout\'s view is taken', () => {
-  const ids = (n: number, prefix: string): string[] => Array.from({ length: n }, (_, i) => `${prefix}${i}`);
-  const change = (moved: number, entered: number, left: number): LayoutChange => ({
-    moved: ids(moved, 'm').map((id) => ({ id, from: [0, 0], to: [1, 0] })), entered: ids(entered, 'e'), left: ids(left, 'l'), rerouted: [],
-  });
   it('pans to it when the layout glides, and takes it at once when the layout snaps', () => {
     expect(viewPans(change(100, 50, 50)), 'glides: pans').toBe(true);
     expect(viewPans(change(0, 0, 0)), 'the same layout again').toBe(true);

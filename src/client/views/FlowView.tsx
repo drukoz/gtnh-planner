@@ -779,13 +779,25 @@ function FlowCanvas(props: {
   // still faded in, at that much of it (fix round 2). A new layout that changes anything takes the last one's ghosts away (M1); the ghosts are set
   // only when there are ghosts to add or take away, so a new layout that adds none draws the canvas once (M2). A layout whose render held the
   // canvas's height (`heldHeight`, ledger ruling P2-R121) releases it once its glides have run and its ghosts have gone, whichever is last (and
-  // at once when nothing glides after all: the browser cannot, `canGlide`); an older layout's glides then release nothing. The first layout,
-  // and StrictMode's second run of this effect, which finds the same one, change nothing.
+  // at once when nothing glides after all: the browser cannot, `canGlide`); an older layout's glides then release nothing. The first layout
+  // changes nothing (its change is empty). A second run of this effect for the same layout (StrictMode's, Fast Refresh's, an Activity shown
+  // again) finds that layout placed already and leaves its glides, ghosts and hold as they are: `change` is the render's, the change from the
+  // layout drawn before, which that first run glided (the final fix wave, FW-14).
   // What had the focus and is gone with the last layout gives it on, never to the body (ledger rulings P2-R36, P2-R57): to the same line's
   // open/collapse button where the new layout draws it again, else to the canvas, where nothing moves the page.
   useLayoutEffect(() => {
     const before = placedBefore.current;
     placedBefore.current = layout;
+    if (before !== layout) glideIn(before);
+    const had = focusedIn.current;
+    const svg = svgRef.current;
+    if (had === null || had.isConnected || svg === null || !focusLost()) return;
+    const line = had.getAttribute('data-line-toggle');
+    const again = line === null ? undefined : [...svg.querySelectorAll('[data-line-toggle]')].find((el) => el.getAttribute('data-line-toggle') === line);
+    if (!focusOn(again, { preventScroll: true })) focusOn(svg, { preventScroll: true });
+  }, [layout]);
+  /** The glide of a new layout from `before`, the layout placed last (null for none), its ghosts and its hold (the effect above). */
+  function glideIn(before: FlowLayout | null): void {
     const pan = panRef.current;
     const gone: Ghost[] = [];
     if (before !== null && change.left.length > 0 && layoutGlides(change)) {
@@ -815,13 +827,7 @@ function FlowCanvas(props: {
         if (shownGhosts.current.length === 0) setHold(null);
       });
     }
-    const had = focusedIn.current;
-    const svg = svgRef.current;
-    if (had === null || had.isConnected || svg === null || !focusLost()) return;
-    const line = had.getAttribute('data-line-toggle');
-    const again = line === null ? undefined : [...svg.querySelectorAll('[data-line-toggle]')].find((el) => el.getAttribute('data-line-toggle') === line);
-    if (!focusOn(again, { preventScroll: true })) focusOn(svg, { preventScroll: true });
-  }, [layout]);
+  }
   useEffect(() => {
     if (reveal === seenReveal.current) return;
     seenReveal.current = reveal;
