@@ -108,13 +108,21 @@ export async function openWithPlan(page: Page, plan: Plan, settings: Partial<Pla
   return id;
 }
 
-/** Opens a new project with an EnderIO line laid out on the sample world's base, on its Connections tab (connections.spec.ts). */
+/**
+ * Opens a new project with an EnderIO line laid out on the sample world's base, on its Connections tab (connections.spec.ts). The line reads no
+ * other project's surplus, as connections.spec.ts's own line does (ledger ruling P2-R16): the e2e server is shared, and a project that reads
+ * the group's offers hears a `plan` event whenever another test's project changes what it offers, at moments no test controls (the final fix
+ * wave, FW-15: its dozen callers heard them).
+ */
 export async function openConnections(page: Page): Promise<Locator> {
   await login(page);
   await setName(page, 'E2E');
   const scanId = await uploadSampleWorld(page);
   const id = await createProject(page, 'Pipes conduits');
-  const ops = [{ op: 'settings', patch: { target: 't:iron_plate@0', amount: 24, per: 'min', logistics: 'enderio' } }, { op: 'world', scanId, baseId: '0:0:0' }];
+  const ops = [
+    { op: 'settings', patch: { target: 't:iron_plate@0', amount: 24, per: 'min', logistics: 'enderio', useSurplus: false } },
+    { op: 'world', scanId, baseId: '0:0:0' },
+  ];
   expect((await page.request.post(`/api/projects/${id}/ops`, { data: { ops }, headers: { 'X-Planner-Name': 'E2E' } })).ok()).toBe(true);
   await expect.poll(async () => (await (await page.request.get(`/api/projects/${id}/layout`)).json()).status, { timeout: 30_000 }).toBe('ok');
   const view = page.getByTestId('connections');

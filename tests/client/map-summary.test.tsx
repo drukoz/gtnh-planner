@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { Figs } from '../../src/client/components/Figs.tsx';
 import { FoundPanel } from '../../src/client/map/FoundPanel.tsx';
 import { summarize, type FoundSummary } from '../../src/client/map/summary.ts';
 import type { Note } from '../../src/shared/types/project.ts';
@@ -153,7 +154,11 @@ describe('FoundPanel', () => {
     // N1, N2 as the map draws note pins: a plain number is a layout pin (a build step's "pin 1")
     expect(html).toMatch(/data-testid="note-1"[^]*?<span class="badge">N<span class="fig">1<\/span><\/span>/);
     expect(html).toMatch(/data-testid="note-2"[^]*?<span class="badge">N<span class="fig">2<\/span><\/span>/);
-    expect(html).not.toMatch(/<span class="badge">\d+<\/span>/);
+    // a badge's figures ride in a span.fig (spec §25), so a plain number is read with or without it: the check sees one as the panel would draw
+    // it (the final fix wave, FW-15: the bare pattern could not fail once the figures went into Figs)
+    const plainNumber = /<span class="badge">(?:<span class="fig">\d+<\/span>|\d+)<\/span>/;
+    expect(renderToStaticMarkup(<span className="badge"><Figs text="1" /></span>)).toMatch(plainNumber);
+    expect(html).not.toMatch(plainNumber);
     expect(html).toMatch(/id="found-note-2" data-testid="note-2" aria-current="true"/);   // the note whose marker was clicked
     expect(html).not.toContain('not pinned');
   });
