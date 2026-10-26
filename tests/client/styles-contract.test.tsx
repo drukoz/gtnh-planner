@@ -70,6 +70,8 @@ const TOKENS: [string, string][] = [
   ['--tab-face', '#8b8b8b'], ['--tab-face-hi', '#a8a8a8'], ['--tab-ink', '#1b1b1b'], ['--tab-face-hover', '#9a9a9a'],
   ['--rule', '#8b8b8b'], ['--veil', 'rgb(255 255 255 / 0.35)'], ['--press', 'rgb(0 0 0 / 0.15)'],
   ['--field-edge', '#a0a0a0'], ['--bevel-tick', 'var(--bevel-slot)'],
+  // the final fix wave (ledger rulings P2-R129, P2-R130): the selected tab's label and a slider's track, at the light look's own values
+  ['--tab-on-ink', 'var(--text)'], ['--bevel-track', 'var(--bevel-well)'],
   ['--panel-error', '#aa0000'], ['--panel-ok', '#1e5a1e'], ['--panel-warn', '#6a4000'], ['--panel-focus', '#1b1b1b'],
   ['--flow-sink-line', 'var(--flow-raw-line)'], ['--flow-group', '#cbbbe0'], ['--casing', '#1b1b1b'], ['--flow-focus', '#1b1b1b'],
   ['--flange', 'var(--slot)'], ['--dye-casing', '#c6c6c6'],
@@ -88,7 +90,8 @@ const TOKENS: [string, string][] = [
   ['--icon-moon', `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c8d4ff' d='M2 0h3v1H2zM1 1h2v1H1zM0 2h2v3H0zM1 5h2v1H1zM6 5h1v1H6zM2 6h4v1H2z'/%3E%3C/svg%3E")`],
   ['--icon-sun', `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffd84a' d='M3 0h1v7H3zM0 3h7v1H0zM2 2h3v3H2zM1 1h1v1H1zM5 1h1v1H5zM1 5h1v1H1zM5 5h1v1H5z'/%3E%3C/svg%3E")`],
   ['--gap', '12px'],
-  ['color-scheme', 'dark'], ['scrollbar-color', 'var(--btn) var(--screen)'],
+  // ledger ruling P2-R128: every scroll bar's thumb is the slider's (`var(--btn)` in light, so the light look draws what it drew)
+  ['color-scheme', 'dark'], ['scrollbar-color', 'var(--thumb) var(--screen)'],
   ['font-family', 'var(--font-ui)'], ['line-height', '1.45'], ['color', 'var(--ink)'], ['background', 'var(--page)'],
 ];
 
@@ -113,6 +116,8 @@ const DARK_TOKENS: [string, string][] = [
   ['--tab-face', '#1f1f1f'], ['--tab-face-hi', '#2f2f2f'], ['--tab-ink', '#c8c8c8'], ['--tab-face-hover', '#2a2a2a'],
   ['--rule', '#474747'], ['--veil', 'rgb(0 0 0 / 0.3)'], ['--press', 'rgb(255 255 255 / 0.08)'],
   ['--bevel-tick', 'inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b'], ['--thumb', '#7a7a7a'],
+  // the final fix wave: the selected tab's label in the accent (P2-R129), and a slider's track with the tick well's light lower edge (P2-R130)
+  ['--tab-on-ink', 'var(--accent)'], ['--bevel-track', 'inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b'],
   ['--panel-error', '#ff6b6b'], ['--panel-ok', '#55ff55'], ['--panel-warn', '#ffaa00'], ['--panel-focus', '#ffff55'],
   ['--flow-owned', '#22402a'], ['--flow-owned-line', '#55c06a'], ['--flow-new', '#303030'], ['--flow-raw', '#303030'],
   ['--flow-out', '#3b3313'], ['--flow-out-line', '#d9b43a'], ['--flow-import', '#34301e'], ['--flow-import-line', '#a89a5c'],
@@ -459,7 +464,8 @@ describe('the Machine GUI controls', () => {
     for (const track of ['::-webkit-slider-runnable-track', '::-moz-range-track']) {
       expectDeclared([
         [`:where(input[type=range])${track}`, 'height', '6px'], [`:where(input[type=range])${track}`, 'background', 'var(--screen)'],
-        [`:where(input[type=range])${track}`, 'box-shadow', 'var(--bevel-well)'],
+        // ledger ruling P2-R130: the well's bevel through a token of its own (TOKENS: `var(--bevel-well)`), whose dark lower edge shows
+        [`:where(input[type=range])${track}`, 'box-shadow', 'var(--bevel-track)'],
       ]);
     }
     for (const thumb of ['::-webkit-slider-thumb', '::-moz-range-thumb']) {
@@ -788,7 +794,8 @@ describe('the Machine GUI chrome', () => {
       [TAB, 'background', 'var(--tab-face)'], [TAB, 'box-shadow', 'inset 2px 2px 0 var(--tab-face-hi)'], [TAB, 'color', 'var(--tab-ink)'],
       [`${TAB}:hover:not([aria-selected='true'])`, 'background', 'var(--tab-face-hover)'],
       [SELECTED, 'background', 'var(--panel)'], [SELECTED, 'box-shadow', 'inset 2px 2px 0 var(--panel-hi)'],
-      [SELECTED, 'border-bottom-color', 'var(--panel)'], [SELECTED, 'color', 'var(--text)'],
+      // ledger ruling P2-R129: its label through a token (TOKENS: `var(--text)`), the accent in the dark look
+      [SELECTED, 'border-bottom-color', 'var(--panel)'], [SELECTED, 'color', 'var(--tab-on-ink)'],
     ]);
     // the plan's own words, and the order the selected look needs to beat the unselected one
     expect(ruleBody(TAB)).toContain('min-height: 38px');
@@ -1882,7 +1889,7 @@ describe('the Machine GUI Map tab', () => {
       ['.map-main', 'min-height', '420px'],
       ['.map-side', 'flex', '1 1 300px'], ['.map-side', 'max-width', '400px'], ['.map-side', 'max-height', 'min(72vh, 760px)'],
       ['.map-side', 'overflow-y', 'auto'], ['.map-side', 'padding-right', '4px'], ['.map-side', 'display', 'flex'],
-      ['.map-side', 'flex-direction', 'column'], ['.map-side', 'gap', '14px'], ['.map-side', 'scrollbar-color', 'var(--btn) var(--well)'],
+      ['.map-side', 'flex-direction', 'column'], ['.map-side', 'gap', '14px'], ['.map-side', 'scrollbar-color', 'var(--thumb) var(--well)'],
       ['.map-view', 'display', 'flex'], ['.map-view', 'flex-direction', 'column'], ['.map-view', 'gap', '8px'], ['.map-view', 'min-width', '0'],
       ['.map-view', 'height', '100%'],
     ]);

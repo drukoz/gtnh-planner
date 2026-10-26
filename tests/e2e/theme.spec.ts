@@ -113,6 +113,10 @@ const DARK_TOUR: DarkStop[] = [
       { what: 'a chip', selector: '[data-step-id="wire"] .flow-chip rect', property: 'fill', expected: 'rgb(11, 11, 11)' },
       // Task 7: a key-numbers tile, the dark screen's #0b0b0b (spec §10.2, §4.11)
       { what: 'a key-numbers tile', selector: '.key-number', property: 'background-color', expected: 'rgb(11, 11, 11)' },
+      // the final fix wave: the selected tab's label in the accent (ledger ruling P2-R129), and the page's scroll bars, which every scrolling
+      // box inherits, the slider's #7a7a7a thumb on the screen's #0b0b0b (P2-R128)
+      { what: 'the selected tab\'s label', selector: ".tabs [role='tab'][aria-selected='true']", property: 'color', expected: 'rgb(255, 255, 85)' },
+      { what: 'the scroll bars', selector: 'html', property: 'scrollbar-color', expected: 'rgb(122, 122, 122) rgb(11, 11, 11)' },
     ],
   },
   // the base's surfaces (plan ruling base-surfaces-dark): they read the tokens, so the dark blocks reach them with no rule of their own

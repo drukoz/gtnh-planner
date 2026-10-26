@@ -288,6 +288,15 @@ const PAIRS: Pair[] = [
   // the keyboard shortcuts' sheet (Phase 2 Task 11, spec §14.1): a key cap's white on the button face it is drawn with; the sheet is a modal,
   // whose ink is the panel's (above), and its Close is a button
   ['shortcut key cap', '#ffffff', '--btn', AA],
+
+  // the final fix wave. Every scroll bar the page colours, the page's and every scrolling box's, takes the slider's thumb on the screen's black
+  // (ledger ruling P2-R128; WCAG 1.4.11), in both looks; the map's side column's on its well, in dark (light's 2.23:1 predates Phase 2, and
+  // the light look is frozen). The selected tab's label, the panel ink in light and the accent in dark, so a low-vision reader tells it from
+  // the others there (P2-R129). A slider's track, the well's bevel in light, with the dark tick well's light lower edge in dark (P2-R130)
+  ['scroll bar thumb on its track', '--thumb', '--screen', GRAPHICS],
+  ['map side scroll bar thumb', '--thumb', '--well', GRAPHICS, ['dark']],
+  ['selected tab label', '--tab-on-ink', '--panel', AA],
+  ['slider track edge on the panel', { edge: '--bevel-track' }, '--panel', GRAPHICS, ['dark']],
 ];
 
 describe('contrast of the Machine GUI palette', () => {
@@ -442,6 +451,24 @@ describe('contrast of the dark look', () => {
   it('darkens a box under the pointer: an 8 % white veil would leave the muted text short on an owned box', () => {
     // 3.79:1; the dark --flow-hover, 30 % black, keeps it at 4.5:1 or more (the table's "under the pointer" rows)
     expect(ratio(colour('dark', '--text-muted'), colour('dark', { over: 'rgb(255 255 255 / 0.08)', on: '--flow-owned' }))).toBeLessThan(AA);
+  });
+
+  // the final fix wave (ledger rulings P2-R128 to P2-R130): what the dark look drew before, and why each changed
+  it('needs the slider\'s thumb for the scroll bars, the accent for the selected tab and a light edge for a slider\'s track', () => {
+    expect(ratio(colour('dark', '--btn'), colour('dark', '--screen'))).toBeLessThan(GRAPHICS);              // the old thumb: 1.78:1
+    expect(ratio(colour('dark', '--btn'), colour('dark', '--well'))).toBeLessThan(GRAPHICS);                // 1.58:1 in the map's side column
+    expect(ratio(colour('dark', '--panel'), colour('dark', '--tab-face'))).toBeLessThan(GRAPHICS);          // the selected face on the others': 1.15:1
+    expect(ratio(colour('dark', { edge: '--bevel-well' }), colour('dark', '--panel'))).toBeLessThan(GRAPHICS);   // the well's lower edge: 1.35:1
+  });
+
+  // ledger ruling P2-R136, beside §4.5's button faces on the panel: button faces and the unselected tabs on the stone (1.67:1, 1.12:1), a button
+  // on the top bar (1.78:1), named by their labels; and a modal's or the sheet's frame on the dimmed page (1.40:1), a container, as P2-R67's
+  // chat boxes are
+  it('accepts button faces and unselected tabs on the stone and the top bar, and a modal\'s frame on the dimmed page, below 3:1', () => {
+    expect(ratio(colour('dark', '--btn'), colour('dark', '--page'))).toBeLessThan(GRAPHICS);
+    expect(ratio(colour('dark', '--tab-face'), colour('dark', '--page'))).toBeLessThan(GRAPHICS);
+    expect(ratio(colour('dark', '--btn'), colour('dark', '--bar'))).toBeLessThan(GRAPHICS);
+    expect(ratio(colour('dark', '--panel'), colour('dark', { over: 'rgba(0, 0, 0, 0.6)', on: '--page' }))).toBeLessThan(GRAPHICS);
   });
 });
 

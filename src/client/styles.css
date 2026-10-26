@@ -46,6 +46,9 @@
   --bar-line: #3c3c3c; --grid: #404040; --btn-off: #4a4a4a; --btn-off-ink: #a0a0a0;
   --tab-face: #8b8b8b; --tab-face-hi: #a8a8a8; --tab-ink: #1b1b1b; --tab-face-hover: #9a9a9a;
   --rule: #8b8b8b; --veil: rgb(255 255 255 / 0.35); --press: rgb(0 0 0 / 0.15); --field-edge: #a0a0a0; --bevel-tick: var(--bevel-slot);
+  /* The selected tab's label and a slider's track (the final fix wave, ledger rulings P2-R129, P2-R130): the panel's ink and the well's bevel,
+     as they were, which the dark look gives the accent and a light lower edge, so the selected tab and a track's extent show there. */
+  --tab-on-ink: var(--text); --bevel-track: var(--bevel-well);
   --panel-error: #aa0000; --panel-ok: #1e5a1e; --panel-warn: #6a4000; --panel-focus: #1b1b1b;
   /* The features of Phase 2, at their light values (Phase 2 spec §4.3), so the dark look can give each its own now: a readout tile's
      lower bevel, the slider's thumb, the Flow chips and busy band, a stack's count and its shadow, the bevels of a recessed slot area and
@@ -61,7 +64,9 @@
   --icon-moon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c8d4ff' d='M2 0h3v1H2zM1 1h2v1H1zM0 2h2v3H0zM1 5h2v1H1zM6 5h1v1H6zM2 6h4v1H2z'/%3E%3C/svg%3E");
   --icon-sun: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffd84a' d='M3 0h1v7H3zM0 3h7v1H0zM2 2h3v3H2zM1 1h1v1H1zM5 1h1v1H5zM1 5h1v1H1zM5 5h1v1H5z'/%3E%3C/svg%3E");
   --gap: 12px;
-  color-scheme: dark; scrollbar-color: var(--btn) var(--screen);
+  /* Every scroll bar the page colours takes the slider's thumb (ledger ruling P2-R128): the button's face in light, as it was, and in dark a
+     grey that shows on the screen's black (4.59:1; the dark button's face was 1.78:1). The property is inherited, so every scrolling box has it. */
+  color-scheme: dark; scrollbar-color: var(--thumb) var(--screen);
   font-family: var(--font-ui); line-height: 1.45; color: var(--ink); background: var(--page);
 }
 
@@ -81,6 +86,7 @@
   --tab-face: #1f1f1f; --tab-face-hi: #2f2f2f; --tab-ink: #c8c8c8; --tab-face-hover: #2a2a2a;
   --rule: #474747; --veil: rgb(0 0 0 / 0.3); --press: rgb(255 255 255 / 0.08);
   --bevel-tick: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b; --thumb: #7a7a7a;
+  --tab-on-ink: var(--accent); --bevel-track: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b;
   --panel-error: #ff6b6b; --panel-ok: #55ff55; --panel-warn: #ffaa00; --panel-focus: #ffff55;
   --flow-owned: #22402a; --flow-owned-line: #55c06a; --flow-new: #303030; --flow-raw: #303030;
   --flow-out: #3b3313; --flow-out-line: #d9b43a; --flow-import: #34301e; --flow-import-line: #a89a5c;
@@ -104,6 +110,7 @@
     --tab-face: #1f1f1f; --tab-face-hi: #2f2f2f; --tab-ink: #c8c8c8; --tab-face-hover: #2a2a2a;
     --rule: #474747; --veil: rgb(0 0 0 / 0.3); --press: rgb(255 255 255 / 0.08);
     --bevel-tick: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b; --thumb: #7a7a7a;
+    --tab-on-ink: var(--accent); --bevel-track: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b;
     --panel-error: #ff6b6b; --panel-ok: #55ff55; --panel-warn: #ffaa00; --panel-focus: #ffff55;
     --flow-owned: #22402a; --flow-owned-line: #55c06a; --flow-new: #303030; --flow-raw: #303030;
     --flow-out: #3b3313; --flow-out-line: #d9b43a; --flow-import: #34301e; --flow-import-line: #a89a5c;
@@ -283,9 +290,9 @@ textarea { resize: vertical; width: 100%; }
    has a pseudo-element it does not know, so the WebKit and the Gecko rules cannot share a list. */
 :where(input[type=range]) { appearance: none; height: 20px; margin: 0; background: transparent; cursor: pointer; }
 :where(input[type=range])::-webkit-slider-runnable-track {
-  height: 6px; background: var(--screen); box-shadow: var(--bevel-well); border-radius: 0;
+  height: 6px; background: var(--screen); box-shadow: var(--bevel-track); border-radius: 0;
 }
-:where(input[type=range])::-moz-range-track { height: 6px; background: var(--screen); box-shadow: var(--bevel-well); border-radius: 0; }
+:where(input[type=range])::-moz-range-track { height: 6px; background: var(--screen); box-shadow: var(--bevel-track); border-radius: 0; }
 :where(input[type=range])::-webkit-slider-thumb {
   appearance: none; box-sizing: border-box; width: 12px; height: 20px; margin-top: -7px;
   background: var(--thumb); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
@@ -617,7 +624,8 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 .what-changed li { overflow-wrap: anywhere; }
 
 /* Creative-inventory tabs (design spec §6): grey tabs with dark text that sit 2px down over the top edge of the panel, the selected
-   one in the panel's own colour so that it joins it. The height is a minimum and the line-height 1, so the strip is 38px
+   one in the panel's own colour so that it joins it; in the dark look, whose faces differ too little to tell it by, its label is the
+   accent (--tab-on-ink, ledger ruling P2-R129). The height is a minimum and the line-height 1, so the strip is 38px
    whichever font is in. The six tabs wrap onto a second row on a narrow screen (as the mockup's do) rather than scroll the page. */
 .tabs { display: flex; flex-wrap: wrap; gap: 2px; padding-left: 6px; border: 0; margin: 0; }
 /* The z-index keeps a tab above the panel, whose fade-in makes it a stacking context for its 160ms, painted after a tab without one:
@@ -630,7 +638,7 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 /* The button rules that light a hovered button have no specificity, so they do not reach a tab: this is its own. */
 .tabs [role='tab']:hover:not([aria-selected='true']) { background: var(--tab-face-hover); }
 .tabs [role='tab'][aria-selected='true'] {
-  background: var(--panel); box-shadow: inset 2px 2px 0 var(--panel-hi); border-bottom-color: var(--panel); color: var(--text);
+  background: var(--panel); box-shadow: inset 2px 2px 0 var(--panel-hi); border-bottom-color: var(--panel); color: var(--tab-on-ink);
 }
 /* What a tab shows sits on a panel. The strip above has no margin and the padding stays at 8 px, so the chrome keeps its height:
    the e2e tests aim at canvas centres. The panel fades in on a tab switch (its section is keyed by the tab). */
@@ -1434,7 +1442,7 @@ details.mat-needed[open]::details-content { block-size: auto; }
 .map-main { flex: 3 1 420px; min-width: 0; height: min(72vh, 760px); min-height: 420px; }
 .map-side {
   flex: 1 1 300px; max-width: 400px; max-height: min(72vh, 760px); overflow-y: auto; padding-right: 4px;
-  display: flex; flex-direction: column; gap: 14px; scrollbar-color: var(--btn) var(--well);
+  display: flex; flex-direction: column; gap: 14px; scrollbar-color: var(--thumb) var(--well);
 }
 .map-view { display: flex; flex-direction: column; gap: 8px; min-width: 0; height: 100%; }
 /* The toolbar's buttons are 32px high whichever font is in (a minimum height and a line height of 1), and the readout of the Y level is a
