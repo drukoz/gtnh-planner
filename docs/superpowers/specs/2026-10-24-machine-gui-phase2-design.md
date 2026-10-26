@@ -1,6 +1,6 @@
 # Machine GUI restyle, Phase 2 — design
 
-Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R124, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
+Date: 2026-10-24 (drafted 2026-10-23). Status: approved and built. Approved by the user on 2026-10-24 (logo C, all Phase 2 mockups, dark mode with Auto as default); builder-check answers in §23. Built on branch `feat/machine-gui-phase2` (2026-10-24 to 2026-10-26): where a ruling of the build changed the design, an **As built** note at the end of the section says what was built and names the ruling (P2-R1 to P2-R127, kept in the SDD ledger, which is not committed), and the plan's "As built" section (`docs/superpowers/plans/2026-10-24-machine-gui-phase2.md`) lists every ruling. The base is `main` at `cfaa05b`, with
 Phase 1 merged. Every `file:line` below is at that commit. §24 and the plan were re-checked against `main` at `01da27d` (Phase 1, the
 Make-picker fix, add-on 23 and add-on 17 merged), and their cites are at `01da27d`. On 2026-10-24 the user also chose VT323 for
 figures, Pixelify Sans kept for words: §25 records it, adds its one dependency and overrides anything above that disagrees.
@@ -201,6 +201,9 @@ equals the element's `transform` attribute and it uses `fill: 'none'` (P2-D6). T
   The strip flash (700 ms) is a highlight nobody waits for.
 - No infinite transform animation runs on anything clickable. Riders take no pointer events, and skeletons and arrows are
   not clickable.
+
+> **As built.** The theme's cross-fade itself runs 260–268 ms, but the first switch of a page measures 297–314 ms from the
+> click to its end, as the browser captures the old look first. That is accepted against the 300 ms above (P2-R127).
 
 ### 3.4 Reduced motion
 
@@ -2555,7 +2558,10 @@ export function layoutChange(before: FlowLayout | null, after: FlowLayout): Layo
 - Under reduced motion there are no ghosts.
 
 > **As built.** A re-layout glides when its moved, entered and left boxes number 200 or fewer — not its moved boxes only
-> (P2-R119) — so a whole-plan swap snaps. A layout that lands mid-glide starts each box from where it is drawn (P2-R117).
+> (P2-R119) — so a whole-plan swap snaps. A layout that does not glide (past that limit, under reduced motion, or where the
+> browser cannot glide) takes the view it brings at once, a new plan's or a line's box centred: no pan runs over a picture
+> drawn anew, and one that glides keeps its 250 ms pan (P2-R126). A layout that lands mid-glide starts each box from where it
+> is drawn (P2-R117).
 > `glideLayout` returns at once when nothing moved, entered or rerouted (P2-R110). Ghosts appear only when the layout glides,
 > only for boxes (P2-R111), fade from the opacity their box was drawn at (P2-R109) and copy its edge (P2-R118); a lit arrow's
 > tag fades in with it (P2-R120). The Flow canvas keeps the taller of the old and new heights while a glide runs (P2-R121). The
@@ -2767,6 +2773,11 @@ All of these are under `src/client`. The test files are named in each section.
   - the strip read as its final values only
   - the grid checkboxes
   - the drawer's status (R43)
+
+> **As built.** Traced headless in Chromium: the pipes and the glides cause no long frame. The riders' first pan after a page
+> load, on a plan of about 200 arrows, costs a one-time 3–4 frames of 33 ms, none over 50 ms, while later pans and idle are
+> clean. That is accepted, as the remedies would take the riders off big plans (P2-R125). The 250 ms view pan that followed a
+> whole-plan swap, over a picture drawn anew, is gone: a layout that snaps takes its view at once (P2-R126).
 
 ## 21. Open decisions left to the builder
 

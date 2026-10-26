@@ -3065,6 +3065,12 @@ made; P2-R46 and P2-R61 were never issued. One line per ruling, in the ledger's 
 - **P2-R122** — The focus survives a re-layout across a window blur, and a replan that removes the selected panel hands it to the canvas.
 - **P2-R123** — When a replan removes a panel control but the panel stays, the focus goes to the panel, never the canvas or `<body>`.
 - **P2-R124** — StepPanel's "N more…" hands the focus to the first revealed item, else the panel, before it goes.
+
+**Task 14 (made from its traces; P2-R126 built in Task F4)**
+- **P2-R125** — Riders' first pan on ~200-arrow plans costs a one-time 3–4 frames of 33 ms per page load (none over 50 ms; later pans and idle clean); accepted against spec §20, as the remedies would take riders off big plans.
+- **P2-R126** — A layout that does not glide (past `GLIDE_LIMIT`, reduced motion, or no glide support) takes its new view at once: the `viewKey` reset and `centreNext` use the instant path; a layout that glides keeps its 250 ms pan.
+- **P2-R127** — The first theme switch of a page measures 297–314 ms from the click (the View Transition itself 260–268 ms; the browser captures the old look first); accepted against spec §3.3's 300 ms budget.
+
 **Plan rulings** (the plan's Conventions give each in full; signed off before Task 1a, the last six on 2026-10-24 with the VT323 choice)
 - **`baseline-shots`** — Task 1a diffs the light look against fresh shots of the base, not spec §19's older after-shots.
 - **`view-transition-split`** — The cross-fade's `::view-transition-old(root)` and `-new(root)` are two rules, not one list (R28).
