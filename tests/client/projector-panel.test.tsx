@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ProjectorPanelView, type ProjectorPanelViewProps } from '../../src/client/views/ProjectorPanel.tsx';
-import { loadCommand, urlCommand, lastUsedText, PROJECTOR_COMMANDS, COPY_HINT, revokeQuestion, copyCommand, type CopyTools } from '../../src/client/views/projector-model.ts';
+import { loadCommand, urlCommand, lastUsedText, PROJECTOR_COMMANDS, COPY_HINT, revokeQuestion, copyCommand, TOKEN_REVOKED, type CopyTools } from '../../src/client/views/projector-model.ts';
 import { createToken, listTokens, revokeToken } from '../../src/client/api/projector.ts';
 import type { TokenInfo } from '../../src/shared/types/projector.ts';
 
@@ -189,5 +189,23 @@ describe('revoking a token asks in its row', () => {
     const busy = renderToStaticMarkup(<ProjectorPanelView {...props({ asking: 'T1aaaaaaaa', tokens: two, busy: true })} />);
     expect(rowOf(busy, 'T1aaaaaaaa')).toContain('<button type="button" class="small danger" disabled="">Revoke token</button>');
     expect(rowOf(busy, 'T1aaaaaaaa')).toContain('<button type="button" class="small">Keep it</button>');
+  });
+});
+
+// Task F3 (ledger ruling P2-R68): what the panel did, said aloud on a polite line of its own after the panel, always drawn so that what is put
+// in it is heard: "Copied" inside the open drawer (P2-R56), and a revoke that went through, which has no toast (Phase 2 spec §12.1). Each saying
+// is a new span (its key), so the same words said twice are heard twice.
+describe('the panel\'s polite line', () => {
+  it('says a revoke that went through, and nothing until something is said', () => {
+    expect(TOKEN_REVOKED).toBe('Token revoked');
+    const said = renderToStaticMarkup(<ProjectorPanelView {...props({ tokens: [], said: { key: 2, text: TOKEN_REVOKED } })} />);
+    expect(said).toMatch(/<\/details><p class="visually-hidden" aria-live="polite"><span>Token revoked<\/span><\/p>$/);
+    expect(said.match(/aria-live=/g)).toHaveLength(1);
+    for (const nothing of [undefined, null]) {
+      expect(renderToStaticMarkup(<ProjectorPanelView {...props({ said: nothing })} />)).toMatch(/<\/details><p class="visually-hidden" aria-live="polite"><\/p>$/);
+    }
+    // the panel itself still starts the markup, with no inline style
+    expect(said).toMatch(/^<details class="settings-section projector-panel">/);
+    expect(said).not.toContain('style=');
   });
 });

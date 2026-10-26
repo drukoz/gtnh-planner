@@ -1,11 +1,16 @@
 // The project's notes (spec §3.7, §3.11): anyone can add, edit or delete one, and everyone sees who wrote it and when.
 // Notes with a map pin (added from Plan 4's map) show where they point. A note's Delete asks nothing first: its toast offers Undo instead
 // (Phase 2 spec §12.2, §13.1), and no browser dialog is left in the client.
+//
+// A button pressed here that goes, or is disabled, hands the keyboard's focus on, never leaving it on the page's body (ledger rulings P2-R57,
+// P2-R68): Delete before its note goes, to the next note's Delete, else the previous note's, else the field to add a note; Add note, which the
+// field it clears disables, to that field; Save and Cancel, whose form goes, back to the note's Edit.
 
-import { useState, type FormEvent, type ReactElement } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import type { Note, ProjectOp } from '../../shared/types/project.ts';
+import { focusLost, focusMain, focusOn } from '../components/focus.ts';
 import { localTime } from '../format.ts';
 import { dismissToast, showToast } from '../state/toasts.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -25,16 +30,42 @@ function pinText(pin: NonNullable<Note['pin']>, plan: Plan | null): string {
   return `Pin: ${pin.x} ${pin.y} ${pin.z} (${dim})`;
 }
 
+/** The Delete of note `li`, by its words; a note being edited has none. */
+const deleteOf = (li: Element): HTMLButtonElement | undefined =>
+  [...li.querySelectorAll<HTMLButtonElement>('.note-actions > button')].find((b) => b.textContent === 'Delete');
+
+/**
+ * Before note `row` goes, the focus inside it moves on: to the Delete of the nearest note after it that has one, else of the nearest before
+ * it, else to the field to add a note, else to the page's main. A focus elsewhere is left where it is.
+ */
+function handFocusOn(row: Element): void {
+  if (!row.contains(document.activeElement)) return;
+  const notes = [...(row.parentElement?.children ?? [])];
+  const at = notes.indexOf(row);
+  for (const li of [...notes.slice(at + 1), ...notes.slice(0, at).reverse()]) if (focusOn(deleteOf(li))) return;
+  if (!focusOn(row.closest('.notes')?.querySelector('.note-add textarea'))) focusMain();
+}
+
 function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps['send']; sendLater: ProjectViewProps['sendLater'] }): ReactElement {
   const { note, plan, send, sendLater } = props;
   const [draft, setDraft] = useState<string | null>(null);
+  const edit = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  // Save and Cancel take the form away with the button pressed: the focus that leaves on the body goes back to the note's Edit
+  useLayoutEffect(() => {
+    const was = wasEditing.current;
+    wasEditing.current = draft !== null;
+    if (was && draft === null && focusLost() && !focusOn(edit.current)) focusMain();
+  }, [draft]);
   const save = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
     const text = (draft ?? '').trim();
     if (text !== '' && text !== note.text) send([{ op: 'editNote', id: note.id, text }]);
     setDraft(null);
   };
-  const remove = (): void => {
+  const remove = (button: HTMLButtonElement): void => {
+    const row = button.closest('li');
+    if (row !== null) handFocusOn(row);
     const ops: ProjectOp[] = [{ op: 'deleteNote', id: note.id }];
     if (sendLater === undefined) {
       send(ops);
@@ -68,8 +99,8 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
       </p>
       {draft === null && (
         <div className="row note-actions">
-          <button type="button" onClick={() => setDraft(note.text)}>Edit</button>
-          <button type="button" onClick={remove}>Delete</button>
+          <button ref={edit} type="button" onClick={() => setDraft(note.text)}>Edit</button>
+          <button type="button" onClick={(e) => remove(e.currentTarget)}>Delete</button>
         </div>
       )}
     </li>
@@ -83,6 +114,9 @@ export function NotesView(props: ProjectViewProps): ReactElement {
     e.preventDefault();
     const note = text.trim();
     if (note === '') return;
+    // the field it clears disables Add note, and a disabled button drops the focus it has on the body at its next frame: the field takes it first
+    const form = e.currentTarget;
+    if (document.activeElement === form.querySelector('button[type="submit"]')) focusOn(form.querySelector('textarea'));
     send([{ op: 'addNote', note: { id: newNoteId(), text: note } }]);
     setText('');
     showToast('Note added');

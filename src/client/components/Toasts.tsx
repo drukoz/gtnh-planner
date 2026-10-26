@@ -12,6 +12,7 @@
 
 import { useEffect, type FocusEvent, type ReactElement } from 'react';
 import { actOnToast, dismissToast, pauseToast, resumeToast, toasts, useToasts, type Toast, type ToastStore } from '../state/toasts.ts';
+import { focusMain, focusOn } from './focus.ts';
 
 /** Where the focus came into the region from: the element a focus from outside it left, or null when it came from nowhere (P2-R57). */
 let cameFrom: Element | null = null;
@@ -27,30 +28,6 @@ function noteArrival(e: FocusEvent<HTMLElement>): void {
 const TYPED = new Set(['text', 'search', 'number', 'email', 'url', 'tel', 'password']);
 const takesTyping = (el: Element): boolean =>
   el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && TYPED.has(el.type)) || (el instanceof HTMLElement && el.isContentEditable);
-
-/**
- * Focuses `el`, an HTML or an SVG element (a Flow box's head), and says whether it took the focus (one hidden, disabled or gone does not). The
- * projector panel's confirm gives the focus back with it too (Task 10).
- */
-export function focusOn(el: Element | null | undefined, options?: FocusOptions): boolean {
-  if (!(el instanceof HTMLElement || el instanceof SVGElement)) return false;
-  el.focus(options);
-  return document.activeElement === el;
-}
-
-/**
- * The page's main, focused as a last resort, with a tabindex of -1 that it loses with the focus (it is no stop of the Tab order): never the
- * body (P2-R57; the projector panel's confirm's last resort too).
- */
-export function focusMain(): void {
-  const main = document.querySelector('main');
-  if (!(main instanceof HTMLElement)) return;
-  if (!main.hasAttribute('tabindex')) {
-    main.setAttribute('tabindex', '-1');
-    main.addEventListener('blur', () => main.removeAttribute('tabindex'), { once: true });
-  }
-  main.focus({ preventScroll: true });
-}
 
 /**
  * Before the toast of `button` goes from under the focus (its Undo, `acting`, or its Dismiss), the focus moves on (P2-R57): back to where it came

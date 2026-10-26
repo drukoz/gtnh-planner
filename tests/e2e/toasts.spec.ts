@@ -13,7 +13,7 @@
 
 import { test, expect, type Browser, type Locator, type Page, type Route } from '@playwright/test';
 import { circuitLv } from './fixtures/plans.ts';
-import { createProject, login, LV_CIRCUITS, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
+import { addNote, createProject, login, LV_CIRCUITS, noDialogs, openWithPlan, setName, SETTINGS_BUTTON } from './helpers.ts';
 
 /** The toast that says `text`, in the region of notifications. */
 const toastOf = (page: Page, text: string): Locator =>
@@ -438,12 +438,6 @@ test('a project deleted from its row offers Undo too, and the list\'s own Restor
   await expect(deletedRow(page, name)).toHaveCount(0);
 });
 
-/** Adds a note to project `id` through the API, as `by`, the way connections.spec.ts posts its ops. */
-async function addNote(page: Page, id: string, note: { id: string; text: string }, by: string): Promise<void> {
-  const res = await page.request.post(`/api/projects/${id}/ops`, { data: { ops: [{ op: 'addNote', note }] }, headers: { 'X-Planner-Name': by } });
-  expect(res.ok(), await res.text()).toBe(true);
-}
-
 /** Project `id`'s notes on the server. */
 async function notesOf(page: Page, id: string): Promise<Array<{ id: string; text: string; by: string; at: string }>> {
   return ((await (await page.request.get(`/api/projects/${id}`)).json()) as { notes: Array<{ id: string; text: string; by: string; at: string }> }).notes;
@@ -461,7 +455,7 @@ async function browserOf(browser: Browser, name: string): Promise<Page> {
  * page meets from then on, each dismissed: a note's delete asks nothing since Task 10 (its toast's Undo takes it back), so there are none.
  */
 async function oneNote(page: Page, name: string, text: string): Promise<{ id: string; dialogs: string[] }> {
-  const dialogs: string[] = []; page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
+  const dialogs = noDialogs(page);
   const id = await createProject(page, name);
   await addNote(page, id, { id: 'n1', text }, 'Bob');
   await page.goto(`/p/${id}#notes`);
@@ -470,7 +464,7 @@ async function oneNote(page: Page, name: string, text: string): Promise<{ id: st
 }
 
 test('deleting a note offers Undo, which keeps its author, time and place', async ({ page }) => {
-  const dialogs: string[] = []; page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });   // the delete asks nothing (Task 10)
+  const dialogs = noDialogs(page);                                                        // the delete asks nothing (Task 10)
   await login(page); await setName(page, 'Ann');
   const id = await createProject(page, 'Toasts note undone');
   await addNote(page, id, { id: 'first', text: 'Bob\'s note, first' }, 'Bob');

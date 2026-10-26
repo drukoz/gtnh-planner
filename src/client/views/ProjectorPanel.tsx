@@ -10,16 +10,20 @@
 // revoke that failed leaves the confirm asking, says why in it, and leaves the focus on Keep it. A row that goes while it is asked about
 // (someone revoked the token first) takes its question with it, and why the revoke failed is said under the form. The focus is never left on
 // the page's body: a row's Revoke that cannot take it (the panel is busy) passes it to the field, and the field to the page's main.
+//
+// Ledger ruling P2-R68: Create token, disabled while the token is made, hands the focus to the field first, and once the token is made to its
+// command's Copy. A revoke that went through, which has no toast, is said on the panel's polite line. Why a revoke failed is said once: in the
+// confirm while its row is still listed after the refresh, else under the form.
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { messageOf } from '../api/client.ts';
 import { createToken, listTokens, revokeToken } from '../api/projector.ts';
 import { InlineConfirm } from '../components/InlineConfirm.tsx';
-import { focusMain, focusOn } from '../components/Toasts.tsx';
+import { focusLost, focusMain, focusOn } from '../components/focus.ts';
 import { showToast, toastsInert } from '../state/toasts.ts';
 import { TOKEN_LABEL_MAX, type CreateTokenResult, type TokenInfo } from '../../shared/types/projector.ts';
 import {
-  COPY_HINT, PROJECTOR_COMMANDS, copyCommand, lastUsedText, loadCommand, revokeQuestion, urlCommand, type CopyOutcome, type CopyTools,
+  COPY_HINT, PROJECTOR_COMMANDS, TOKEN_REVOKED, copyCommand, lastUsedText, loadCommand, revokeQuestion, urlCommand, type CopyOutcome, type CopyTools,
 } from './projector-model.ts';
 
 export interface ProjectorPanelViewProps {
@@ -37,6 +41,8 @@ export interface ProjectorPanelViewProps {
   onCancelRevoke?(): void;
   /** Why the revoke that was asked for failed, said in its confirm. */
   revokeError?: string | null;
+  /** What the panel says aloud on its polite line ("Copied" inside the drawer, "Token revoked"): a new key each time, so each is heard. */
+  said?: { key: number; text: string } | null;
 }
 
 // The panel, the form, a command (a token never fits the panel's width on one line, and one click selects the whole command) and the list
@@ -94,7 +100,8 @@ export function ProjectorPanelView(props: ProjectorPanelViewProps): ReactElement
   const copied = props.copied ?? null;
   const asking = props.asking ?? null;
   const revokeError = props.revokeError ?? null;
-  return (
+  const said = props.said ?? null;
+  const panel = (
     <details className="settings-section projector-panel" onToggle={(e) => onToggle?.(e.currentTarget.open)}>
       <summary>In-game projector</summary>
       <div className="projector-body">
@@ -136,6 +143,13 @@ export function ProjectorPanelView(props: ProjectorPanelViewProps): ReactElement
         </div>
       </div>
     </details>
+  );
+  return (
+    <>
+      {panel}
+      {/* always there, so a screen reader hears what is put in it: a new span for each saying, so the same words twice are heard twice */}
+      <p className="visually-hidden" aria-live="polite">{said !== null && <span key={said.key}>{said.text}</span>}</p>
+    </>
   );
 }
 
@@ -182,7 +196,8 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
   const listRequest = useRef(0);        // number of the newest list request: an older answer that comes late is dropped
   const loadingOnOpen = useRef(false);  // the list asked for on opening is on its way
   const copyClick = useRef(0);          // number of the newest Copy click: only its outcome is shown
-  const [said, setSaid] = useState<number | null>(null);   // the Copy click the panel says "Copied" aloud for (inside the open drawer)
+  const [said, setSaid] = useState<{ key: number; text: string } | null>(null);   // what the panel says aloud on its polite line
+  const sayings = useRef(0);                                                          // the key of the last saying
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [asking, setAsking] = useState<string | null>(null);              // the token whose Revoke asks, in its row (Phase 2 spec §13)
   const [revokeError, setRevokeError] = useState<string | null>(null);    // why the revoke it asked for failed
@@ -198,35 +213,50 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
   }, [error]);
 
   const failed = (err: unknown): void => setError(messageOf(err));
+  /** Says `text` aloud on the panel's polite line, as a new saying. */
+  const say = (text: string): void => setSaid({ key: ++sayings.current, text });
   /** Asks in the row of token `tokenId`, or in none, with no reason from an earlier answer. */
   const ask = (tokenId: string | null): void => {
     askingNow.current = tokenId;
     setAsking(tokenId);
     setRevokeError(null);
   };
-  // Once the rows are drawn. A row that has gone takes its question with it: revoked here, or by someone else first, whose reason (the server
-  // has no such token) is said under the form, as it was before the confirm. And a question that has gone and taken the focus with it gives it
-  // back: to its row's Revoke (Keep it, Escape), else (the row gone, or its Revoke disabled while the panel is busy) to the "Who is it for?"
-  // field, else to the page's main, never to the body. A focus moved elsewhere meanwhile stays where it is.
+  // Once the rows are drawn. A row that has gone takes its question with it: revoked here, or by someone else first (`revoke` says why under
+  // the form). And a question that has gone and taken the focus with it gives it back: to its row's Revoke (Keep it, Escape), else (the row
+  // gone, or its Revoke disabled while the panel is busy) to the "Who is it for?" field, else to the page's main, never to the body. A focus
+  // moved elsewhere meanwhile stays where it is.
   useLayoutEffect(() => {
     const drawn = asking !== null && tokens?.some((t) => t.tokenId === asking) === true ? asking : null;
     const was = askedIn.current;
     askedIn.current = drawn;
-    if (asking !== null && drawn === null) {
-      if (revokeError !== null) setError(revokeError);
-      ask(null);
-    }
+    if (asking !== null && drawn === null) ask(null);
     if (was === null || drawn !== null) return;   // nothing was asked, or a question is still drawn (in another row: it took the focus)
-    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    if (!focusLost()) return;
     const back = panel.current?.querySelector(`li[data-token-id="${CSS.escape(was)}"] > button`);
     if (!focusOn(back) && !focusOn(panel.current?.querySelector('.projector-form input'))) focusMain();
   }, [asking, tokens]);
-  const refresh = (): Promise<void> => {
+  /** Loads the token list again; resolves with it, or with null when that failed (said under the form). */
+  const refresh = (): Promise<TokenInfo[] | null> => {
     const request = ++listRequest.current;
     return listTokens(projectId).then((list) => {
       if (request === listRequest.current) setTokens(list);
-    }, failed);
+      return list;
+    }, (err: unknown) => {
+      failed(err);
+      return null;
+    });
   };
+  // Once a made token's command is drawn, its Copy takes the focus, the next thing to do with the token, if the focus is still where the create
+  // left it (the form) or has been lost; else (no such button) the field does, else the page's main.
+  useLayoutEffect(() => {
+    if (created === null) return;
+    const form = panel.current?.querySelector('.projector-form');
+    if (!focusLost() && form?.contains(document.activeElement) !== true) return;
+    const text = loadCommand(projectId, created.token);
+    const command = [...(panel.current?.querySelectorAll('.command-line code') ?? [])].find((c) => c.textContent === text);
+    if (focusOn(command?.closest('.command-line')?.querySelector('button'))) return;
+    if (focusLost() && !focusOn(form?.querySelector('input'))) focusMain();
+  }, [created]);
   const toggled = (open: boolean): void => {
     // The first opening loads the list; a later one tries again only if that failed.
     if (!open || tokens !== null || loadingOnOpen.current) return;
@@ -237,6 +267,10 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
   };
   const create = (): void => {
     if (busy) return;
+    // Create token is disabled while the token is made, and a disabled button drops the focus it has on the body at its next frame: the field
+    // takes it first (the confirm's Revoke token hands its focus to Keep it the same way)
+    const form = panel.current?.querySelector('.projector-form');
+    if (document.activeElement === form?.querySelector('button[type="submit"]')) focusOn(form?.querySelector('input'));
     setBusy(true);
     setError(null);
     createToken(projectId, label)
@@ -257,16 +291,25 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
     setBusy(true);
     setError(null);
     setRevokeError(null);
+    let reason: string | null = null;                                                   // why it failed, said once the list is back
     revokeToken(projectId, t.tokenId)
       .then(() => {
         setCreated((c) => (c?.tokenId === t.tokenId ? null : c));                       // its command no longer works
         setTokens((list) => list?.filter((x) => x.tokenId !== t.tokenId) ?? list);       // its row goes at once, the list's answer or not
+        say(TOKEN_REVOKED);                                                             // no toast says it (spec §12.1)
       }, (err: unknown) => {
-        // said in its confirm while that still asks; a question closed while the revoke was on its way leaves it to the line under the form
-        if (askingNow.current === t.tokenId) setRevokeError(messageOf(err));
-        else failed(err);
+        reason = messageOf(err);
       })
       .then(refresh)                                                                    // also when someone revoked it first: its row goes
+      .then((list) => {
+        if (reason === null) return;
+        // Said once (P2-R68). The row still listed (the server refused it, a 503 say; a list that failed to come keeps the rows), its question
+        // still asks: in the confirm, where the focus is on Keep it. Its row gone (someone revoked it first), its question has gone with it,
+        // or a question closed while the revoke was on its way: under the form.
+        const listed = list?.some((x) => x.tokenId === t.tokenId) ?? true;
+        if (listed && askingNow.current === t.tokenId) setRevokeError(reason);
+        else setError(reason);
+      })
       .finally(() => setBusy(false));
   };
   const copy = (text: string): void => {
@@ -286,7 +329,7 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
         setCopied(null);
         setSaid(null);
       }, COPIED_MS);
-      if (toastsInert()) setSaid(click);
+      if (toastsInert()) say('Copied');
       else showToast('Command copied');
     });
   };
@@ -295,10 +338,8 @@ export function ProjectorPanel(props: { projectId: string }): ReactElement {
       <ProjectorPanelView
         projectId={projectId} origin={location.origin} now={new Date()} tokens={tokens} created={created} label={label} busy={busy}
         error={error} copied={copied} onLabel={setLabel} onCreate={create} onRevoke={revoke} onCopy={copy} onToggle={toggled}
-        asking={asking} revokeError={revokeError} onAskRevoke={askRevoke} onCancelRevoke={cancelRevoke}
+        asking={asking} revokeError={revokeError} onAskRevoke={askRevoke} onCancelRevoke={cancelRevoke} said={said}
       />
-      {/* always there, so a screen reader hears what is put in it: a new span for each copy, so a second one is heard too */}
-      <p className="visually-hidden" aria-live="polite">{said !== null && <span key={said}>Copied</span>}</p>
     </div>
   );
 }

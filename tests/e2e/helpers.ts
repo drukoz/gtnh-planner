@@ -1,7 +1,8 @@
 // The shared end-to-end harness (architecture §11.7; Plans 3–5 use it too): log a page's browser context in, give it a
 // display name and a look, open a new project (or one with an EnderIO line laid out on the sample world, on its Connections tab),
-// hold its plan on the way (a replan's busy line), and move the views under its banners (a spacer). All of it but the last two works before
-// the first navigation,
+// hold its plan on the way (a replan's busy line), and move the views under its banners (a spacer). Task F3 adds a note through the API, the
+// guard against browser dialogs, and the count of the focus left on the page's body. All of it but holding a plan, the spacer and the
+// focus count (which watch the page that is open) works before the first navigation,
 // because the request context of `page.context()` resolves relative URLs against `use.baseURL` and shares the browser context's
 // cookie jar, so the page and its EventSource send `gp_session` (web-stack §10).
 
@@ -203,3 +204,36 @@ export async function shiftViews(page: Page, px: number): Promise<() => Promise<
     await page.evaluate(() => document.querySelector('[data-test-shift]')?.remove());
   };
 }
+
+/** Adds a note to project `id` through the API, as `by` (a page that shows the project hears it from its event stream). */
+export async function addNote(page: Page, id: string, note: { id: string; text: string }, by: string): Promise<void> {
+  const res = await page.request.post(`/api/projects/${id}/ops`, { data: { ops: [{ op: 'addNote', note }] }, headers: { 'X-Planner-Name': by } });
+  expect(res.ok(), await res.text()).toBe(true);
+}
+
+/** The browser dialogs `page` meets from now on, each dismissed: a page that asks in the app (Phase 2 spec §13) meets none. */
+export function noDialogs(page: Page): string[] {
+  const dialogs: string[] = [];
+  page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
+  return dialogs;
+}
+
+/**
+ * Counts, in the page, every time the focus is left on the page's body: a focus that goes and is not given anywhere by the second frame after
+ * (a focus React moves on in the same task, as when a control is drawn again where the one that had the focus was, is not lost; a disabled
+ * button that had it loses it at its next frame). Read with `bodyFocusCount`; a reload starts again from nothing.
+ */
+export const watchBodyFocus = (page: Page): Promise<void> => page.evaluate(() => {
+  const w = window as unknown as { bodyFocus: number };
+  w.bodyFocus = 0;
+  document.addEventListener('focusout', () => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (document.activeElement === null || document.activeElement === document.body) w.bodyFocus += 1;
+    }));
+  }, true);
+});
+
+/** How many times the focus was left on the body since `watchBodyFocus`, once the checks of the last two frames have run. */
+export const bodyFocusCount = (page: Page): Promise<number> => page.evaluate(() => new Promise<number>((done) => {
+  requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => done((window as unknown as { bodyFocus: number }).bodyFocus))));
+}));

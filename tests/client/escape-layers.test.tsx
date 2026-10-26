@@ -3,19 +3,9 @@
 // tests have no DOM, so this reads the sources: every Escape test in src/client reads `defaultPrevented` on the same line. tooltips.spec.ts
 // shows each kind of handler in a browser.
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
-
-const ROOT = new URL('../../src/client/', import.meta.url);
-
-/** Every .ts and .tsx file under src/client, as paths relative to it. */
-function sources(dir = ''): string[] {
-  return readdirSync(new URL(dir, ROOT), { withFileTypes: true }).flatMap((entry) => {
-    const rel = `${dir}${entry.name}`;
-    if (entry.isDirectory()) return sources(`${rel}/`);
-    return /\.tsx?$/.test(entry.name) ? [rel] : [];
-  });
-}
+import { ROOT, sources } from './client-sources.ts';
 
 /**
  * The Escape tests that act whatever a layer above did, by design: Flow's own Escape clears its highlight on the same press as the tip's

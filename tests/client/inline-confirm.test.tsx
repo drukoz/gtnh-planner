@@ -3,10 +3,11 @@
 // it opens, Escape takes the safe answer and Tab stays inside it, which projector.spec.ts shows in a browser (these tests have no DOM). And no
 // browser dialog is left anywhere in the client: a guard reads the sources.
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { InlineConfirm } from '../../src/client/components/InlineConfirm.tsx';
+import { ROOT, sources } from './client-sources.ts';
 
 type Props = Parameters<typeof InlineConfirm>[0];
 const confirmOf = (over: Partial<Props> = {}): string => renderToStaticMarkup(
@@ -51,17 +52,6 @@ describe('the in-app confirm', () => {
     for (const none of [null, undefined]) expect(confirmOf({ error: none })).not.toContain('role="alert"');
   });
 });
-
-const ROOT = new URL('../../src/client/', import.meta.url);
-
-/** Every .ts and .tsx file under src/client, as paths relative to it. */
-function sources(dir = ''): string[] {
-  return readdirSync(new URL(dir, ROOT), { withFileTypes: true }).flatMap((entry) => {
-    const rel = `${dir}${entry.name}`;
-    if (entry.isDirectory()) return sources(`${rel}/`);
-    return /\.tsx?$/.test(entry.name) ? [rel] : [];
-  });
-}
 
 /**
  * `code` without its comments, each kept as the line breaks it held, so a line keeps its number. Strings and template literals are passed

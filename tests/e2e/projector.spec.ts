@@ -2,10 +2,12 @@
 // token's row, never in a browser dialog: each test that revokes counts the browser dialogs it meets, which must be none. The safe answer,
 // Keep it, takes the focus as the confirm opens; Keep it and Escape give it back to the row's Revoke, and a revoke that went through to the
 // "Who is it for?" field, the row being gone. The focus is never left on the page's body; Tab stays in the confirm while it asks; Escape is one
-// layer per press, after a tip and before the settings drawer it may be asked in.
+// layer per press, after a tip and before the settings drawer it may be asked in. Task F3 (ledger ruling P2-R68): Create token, disabled
+// while the token is made, hands the focus to the field first and then to the new command's Copy; a revoke that went through is said on the
+// panel's polite line; and a failed revoke's reason is said once, in one alert.
 
 import { test, expect, type Locator, type Page, type Route } from '@playwright/test';
-import { login, setName, createProject, LV_CIRCUITS, SETTINGS_BUTTON } from './helpers.ts';
+import { login, setName, createProject, LV_CIRCUITS, SETTINGS_BUTTON, noDialogs, watchBodyFocus, bodyFocusCount } from './helpers.ts';
 
 test('create, copy and revoke a projector token', async ({ page }) => {
   const dialogs: string[] = []; page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
@@ -75,29 +77,23 @@ test('copies a command over plain http, and says how to copy it by hand when the
 
 // ---- Task 10: the confirm's keyboard and focus, a revoke that fails or finds its token gone, its entrance, and forced colours ----
 
-/** The browser dialogs `page` meets from now on, each dismissed: a page that asks in the app meets none. */
-function noDialogs(page: Page): string[] {
-  const dialogs: string[] = [];
-  page.on('dialog', (d) => { dialogs.push(d.message()); void d.dismiss(); });
-  return dialogs;
-}
-
 /**
- * Counts, in the page, every time the focus is left on the page's body: a focus that goes and is not given anywhere by the second frame
- * after (a focus React moves on in the same task, as when a row's Revoke is drawn again where its confirm was, is not lost). Read with `lost`.
+ * Notes down, in the page, the words of every alert put in it from now on: an element with role="alert" inserted, or one inside an inserted
+ * element (each is announced as it comes). Read with `alertsSaid`.
  */
-const watchFocus = (page: Page): Promise<void> => page.evaluate(() => {
-  const w = window as unknown as { lost: number };
-  w.lost = 0;
-  document.addEventListener('focusout', () => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (document.activeElement === null || document.activeElement === document.body) w.lost += 1;
-    }));
-  }, true);
+const watchAlerts = (page: Page): Promise<void> => page.evaluate(() => {
+  const w = window as unknown as { alerts: string[] };
+  w.alerts = [];
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        for (const el of [node, ...node.querySelectorAll('[role="alert"]')]) if (el.matches('[role="alert"]')) w.alerts.push(el.textContent ?? '');
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
 });
-const lost = (page: Page): Promise<number> => page.evaluate(() => new Promise<number>((done) => {
-  requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => done((window as unknown as { lost: number }).lost))));
-}));
+const alertsSaid = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { alerts: string[] }).alerts);
 
 /** Opens the projector panel in `scope` (the page, or the settings drawer), makes Steve a token and waits for its row; resolves with its id. */
 async function steveToken(page: Page, scope: Page | Locator): Promise<string> {
@@ -119,7 +115,7 @@ test('the confirm keeps the keyboard: Tab stays in it, a tip takes the first Esc
   const settings = page.locator('aside[aria-label="Project settings"]');
   await expect(settings).toBeVisible();
   await steveToken(page, settings);
-  await watchFocus(page);
+  await watchBodyFocus(page);
   const revoke = settings.getByRole('button', { name: 'Revoke' });
   await revoke.click();
   const confirm = settings.getByRole('alertdialog', { name: /Revoke "Steve"/ });
@@ -167,7 +163,7 @@ test('the confirm keeps the keyboard: Tab stays in it, a tip takes the first Esc
   await expect(settings.getByText('No tokens yet.')).toBeVisible();
   await expect(settings.getByLabel('Who is it for?')).toBeFocused();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  expect(await lost(page), 'the focus is never left on the page').toBe(0);
+  expect(await bodyFocusCount(page), 'the focus is never left on the page').toBe(0);
   expect(dialogs).toEqual([]);
 });
 
@@ -183,7 +179,8 @@ test('a revoke that fails keeps asking, says why in the confirm, and keeps the f
     if (route.request().method() === 'DELETE') held.push(route);
     else void route.continue();
   });
-  await watchFocus(page);
+  await watchBodyFocus(page);
+  await watchAlerts(page);
   await page.getByRole('button', { name: 'Revoke' }).click();
   const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
   const yes = confirm.getByRole('button', { name: 'Revoke token' });
@@ -198,11 +195,12 @@ test('a revoke that fails keeps asking, says why in the confirm, and keeps the f
   await expect(keep).toBeFocused();
   await expect(page.getByText(/^Steve · gpt_/)).toBeVisible();
   await expect(page.locator('.projector-body > .error')).toHaveCount(0);                   // said in the confirm, and only there
+  expect(await alertsSaid(page), 'said once (Task F3)').toEqual(['The planner could not revoke it just now']);
   await page.unroute('**/api/projects/*/tokens/*');
   await yes.click();                                                                         // the next try goes through
   await expect(page.getByText('No tokens yet.')).toBeVisible();
   await expect(page.getByLabel('Who is it for?')).toBeFocused();
-  expect(await lost(page), 'the focus is never left on the page').toBe(0);
+  expect(await bodyFocusCount(page), 'the focus is never left on the page').toBe(0);
   expect(dialogs).toEqual([]);
 });
 
@@ -213,7 +211,8 @@ test('a token revoked elsewhere first takes its question with it, and the panel 
   await login(page); await setName(page, 'Ann');
   const id = await createProject(page, 'Projector revoked elsewhere');
   const tokenId = await steveToken(page, page);
-  await watchFocus(page);
+  await watchBodyFocus(page);
+  await watchAlerts(page);
   await page.getByRole('button', { name: 'Revoke' }).click();
   const confirm = page.getByRole('alertdialog', { name: /Revoke "Steve"/ });
   await expect(confirm.getByRole('button', { name: 'Keep it' })).toBeFocused();
@@ -224,7 +223,76 @@ test('a token revoked elsewhere first takes its question with it, and the panel 
   await expect(confirm).toHaveCount(0);
   await expect(page.locator('.projector-body > .error').getByRole('alert')).toHaveText(`No token ${tokenId} in project ${id}`);
   await expect(page.getByLabel('Who is it for?')).toBeFocused();
-  expect(await lost(page), 'the focus is never left on the page').toBe(0);
+  // said once, under the form, not first in the confirm too (Task F3): one alert put in the page
+  expect(await alertsSaid(page)).toEqual([`No token ${tokenId} in project ${id}`]);
+  expect(await bodyFocusCount(page), 'the focus is never left on the page').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// Task F3 (ledger ruling P2-R68): Create token is disabled while the token is made, and a disabled button that has the focus drops it on the
+// body at its next frame; so it hands the focus to the "Who is it for?" field first, and once the token is made, to its command's Copy, the
+// next thing to do with it. The field's Enter makes a token too, and ends the same way.
+test('Create token hands the focus to the field while the token is made, then to its command\'s Copy', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Projector created');
+  await page.getByText('In-game projector').click();
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  await watchBodyFocus(page);
+  const field = page.getByLabel('Who is it for?');
+  const create = page.getByRole('button', { name: 'Create token' });
+  const load = page.locator('code', { hasText: `/planner load ${id} gpt_` });
+  const copy = page.locator('.command-line', { has: load }).getByRole('button', { name: 'Copy' });
+  const held: Route[] = [];
+  await page.route('**/api/projects/*/tokens', (route) => {
+    if (route.request().method() === 'POST') held.push(route);
+    else void route.continue();
+  });
+  await field.fill('Steve');
+  await create.click();
+  await expect.poll(() => held.length, { message: 'the token is held on its way' }).toBe(1);
+  await expect(create).toBeDisabled();
+  await expect(field).toBeFocused();
+  await held[0]!.continue();
+  await expect(copy).toBeFocused();
+  const steve = await load.textContent();
+  await page.unroute('**/api/projects/*/tokens');
+  await field.fill('Alex');
+  await field.press('Enter');
+  await expect(load).not.toHaveText(steve!);                                               // Alex's command, shown in place of Steve's
+  await expect(copy).toBeFocused();
+  await expect(page.getByText(/^Alex · gpt_/)).toBeVisible();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// Task F3: a revoke that went through has no toast (Phase 2 spec §12.1: the confirm and the row's going are the feedback), so the panel's polite
+// line says it, as it says "Copied" inside the drawer: a new line each time, so a second revoke is heard too
+test('a revoke that went through is said on the panel\'s polite line, each time', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Projector said');
+  await steveToken(page, page);
+  await page.getByLabel('Who is it for?').fill('Alex');
+  await page.getByRole('button', { name: 'Create token' }).click();
+  await expect(page.getByText(/^Alex · gpt_/)).toBeVisible();
+  const said = page.locator('.projector-panel ~ p[aria-live="polite"]');
+  await expect(said).toHaveText('');
+  await said.evaluate((line) => {
+    const w = window as unknown as { saidLines: string[] };
+    w.saidLines = [];
+    new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) w.saidLines.push(node.textContent ?? '');
+    }).observe(line, { childList: true });
+  });
+  for (const who of ['Steve', 'Alex']) {
+    await page.locator('li[data-token-id]', { hasText: `${who} · ` }).getByRole('button', { name: 'Revoke', exact: true }).click();
+    await page.getByRole('alertdialog', { name: new RegExp(`Revoke "${who}"`) }).getByRole('button', { name: 'Revoke token' }).click();
+    await expect(page.locator('li[data-token-id]', { hasText: `${who} · ` })).toHaveCount(0);
+    await expect(said).toHaveText('Token revoked');
+  }
+  await expect(page.getByText('No tokens yet.')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { saidLines: string[] }).saidLines)).toEqual(['Token revoked', 'Token revoked']);
   expect(dialogs).toEqual([]);
 });
 
