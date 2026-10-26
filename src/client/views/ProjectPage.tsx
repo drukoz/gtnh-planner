@@ -589,6 +589,11 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <ProjectName name={project.name} onRename={rename} />
         {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
+        {/* The keys' sheet (Phase 2 spec §14.1, P2-D29). It comes before Delete project (ledger ruling P2-R83), so it stays on the first row
+            when the type-the-name confirm takes Delete project's place on a row of its own, and the destructive control stays at the row's
+            end. Below 900 px the head's row is full and the stylesheet does not draw it (plan ruling shortcuts-button-wide): ? opens the
+            sheet at every width, and the diagrams' hints say so. */}
+        <button type="button" className="small shortcuts-open" aria-keyshortcuts="?" ref={shortcutsButton} onClick={openSheet}>Shortcuts</button>
         <DeleteProject
           id={project.id} name={project.name} label="Delete project" beforeDelete={view.flushDeferred}
           onDeleted={() => {
@@ -596,9 +601,6 @@ export function ProjectPage(props: { id: string }): ReactElement {
             view.markDeleted(me);
           }}
         />
-        {/* The keys' sheet (Phase 2 spec §14.1, P2-D29), last in the head; below 900 px the head's row is full and the stylesheet does not draw it
-            (plan ruling shortcuts-button-wide): ? opens the sheet at every width, and the diagrams' hints say so. */}
-        <button type="button" className="small shortcuts-open" aria-keyshortcuts="?" ref={shortcutsButton} onClick={openSheet}>Shortcuts</button>
       </div>
       {/* The banners' own box, so the page behind an open drawer can be inert in three pieces (ruling R36); it adds no space.
           The key-numbers strip (Phase 2 spec §10) leads it, the plan's cost sentence beside it hidden from sight by a sibling rule and from a

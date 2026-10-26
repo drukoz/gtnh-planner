@@ -47,7 +47,7 @@ const INFEASIBLE_TEXT = 'This line cannot be planned yet, so there is nothing to
 const LAYING_OUT_TEXT = 'Laying out the line…';
 const NOTHING_TEXT = 'Nothing to connect yet: the line places no new machines';
 const DRAWING_TEXT = 'Drawing the connections…';
-const HINT_TEXT = 'Drag or use the arrow keys to move, scroll to zoom, and click a box, one of its face rows or a link for its full configuration. ? shows the shortcuts.';
+const HINT_TEXT = 'Drag or use the arrow keys to move, scroll to zoom; click a box, a face row or a link for its full configuration. ? shows the shortcuts.';
 const loadFailed = (error: string): string => `Could not load the layout: ${error}`;
 const drawFailed = (error: string): string => `Could not lay out the connections: ${error}`;
 

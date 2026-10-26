@@ -680,7 +680,7 @@ function FlowCanvas(props: {
           <input type="checkbox" checked={importsInOneColumn} onChange={(e) => onImportsInOneColumn(e.currentTarget.checked)} />
           Imports in one column
         </label>
-        <span className="muted small">Hover or click a good to see where it comes from and goes, click a box for details, Esc clears. Drag to move, scroll to zoom. ? shows the shortcuts.</span>
+        <span className="muted small">Hover or click a good for its sources and uses, click a box for details, Esc clears. Drag moves, scroll zooms. ? shows the shortcuts.</span>
       </div>
       <svg
         ref={svgRef}

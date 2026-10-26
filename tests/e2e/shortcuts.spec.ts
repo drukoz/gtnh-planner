@@ -216,6 +216,50 @@ test('at 800 px the head keeps its one row: no Shortcuts button there, and ? sti
   await expect(page.getByRole('button', { name: 'Shortcuts' })).toBeVisible();
 });
 
+// Ledger ruling P2-R83: the Shortcuts button sits before Delete project, so the type-the-name confirm that takes Delete project's place, a row
+// of its own, leaves it on the head's first row. A 28 px button is centred on the row of the 36 px name: its centre is the name's (its top 4 px
+// below the name's), and its top the Compare modes button's
+test('the Shortcuts button stays on the head\'s first row while Delete project asks (P2-R83)', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const head = page.locator('.project-head');
+  await head.getByRole('button', { name: 'Delete project' }).click();
+  const confirm = head.getByRole('form', { name: 'Confirm delete' });
+  await expect(confirm).toBeVisible();
+  const [name, compare, shortcuts, asks] = await Promise.all([
+    head.getByLabel('Project name', { exact: true }), head.getByRole('button', { name: 'Compare modes' }), head.getByRole('button', { name: 'Shortcuts' }),
+    confirm,
+  ].map(async (part) => (await part.boundingBox())!));
+  expect(Math.abs(shortcuts!.y + shortcuts!.height / 2 - (name!.y + name!.height / 2)), 'on the name\'s row').toBeLessThanOrEqual(0.5);
+  expect(shortcuts!.y, 'level with Compare modes').toBe(compare!.y);
+  expect(shortcuts!.y + shortcuts!.height, 'above the confirm\'s row').toBeLessThanOrEqual(asks!.y);
+});
+
+// Ledger ruling P2-R84: the diagram hints end with "? shows the shortcuts." (spec §14.1) and are no taller for it than they were at fc87ab8. A
+// line of the hint (`.small`, 13.6 px × 1.45 = 19.72 px) is laid out 19.703125 px tall. At fc87ab8, measured with the fonts in: the Flow hint
+// one line at 1280 x 720; the Connections hint, beside Fit and Pause pipes, two lines (39.40625 px) at 1280 x 720 and one at 1440 x 900
+const HINT_LINE = 19.703125;
+const hintHeight = (hint: Locator): Promise<number> => hint.evaluate(async (el) => {
+  await document.fonts.ready;
+  return el.getBoundingClientRect().height;
+});
+
+test('the Flow hint ends with the shortcuts and stays one line at 1280 x 720 (P2-R84)', async ({ page }) => {
+  await openWithPlan(page, circuitLv());
+  const hint = page.locator('.flow-toolbar > span.muted.small');
+  await expect(hint).toHaveText(/ \? shows the shortcuts\.$/);
+  expect(await hintHeight(hint)).toBe(HINT_LINE);
+});
+
+test('the Connections hint ends with the shortcuts and is as tall as at fc87ab8, at 1280 x 720 and 1440 x 900 (P2-R84)', async ({ page }) => {
+  const view = await openConnections(page);
+  const hint = page.locator('.conn-toolbar > span');
+  await expect(hint).toHaveText(/ \? shows the shortcuts\.$/);
+  expect(await hintHeight(hint), '1280 x 720').toBe(2 * HINT_LINE);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(view).toBeVisible();
+  expect(await hintHeight(hint), '1440 x 900').toBe(HINT_LINE);
+});
+
 // P2-D22: the sheet is the modal top layer, so the Escape that closes it stops there; Flow's own Escape, which clears the highlight whatever
 // a layer above did (P2-R21c), hears the next one (one layer per press, spec §6.1)
 test('Escape closes the sheet alone: the Flow highlight stays lit until the next one', async ({ page }) => {
