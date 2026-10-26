@@ -1,8 +1,8 @@
 // The LP solver (web-stack §6): HiGHS compiled to WebAssembly, behind one small dense-bounds, sparse-rows model shape.
 // This is the only module that imports `highs`. Rows are scaled before the solve because planner quantities range from
 // 0.05 dust to 20,000 L (prior-art §3.4); scaling a row changes neither the solution nor the objective. A model may also
-// be solved on a worker thread that loads this module with its own HiGHS runtime (`solveLpAside`, the bootstrap at the
-// end), while this thread solves others.
+// be solved on a worker thread that loads this module with its own HiGHS runtime (`solveLpAside`, and a build MIP's
+// solves together: `solveBuildRunsAside`; the bootstrap at the end), while this thread solves others.
 
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 import highsDefault from 'highs';
@@ -267,17 +267,62 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
   });
 }
 
+// ---- A build MIP's solves (solve.ts `pickBuild`: plan 12 fix wave 3 (F), add-on 12 x 17 F4) ----
+
+/**
+ * One build MIP as `pickBuild` solves it: `model` with its limits (`maxNodes`, `maxIterations`, `timeLimit`,
+ * `strongBranching`, `keepImproving`), from `start` where one is given; `retryTolerance` is the feasibility tolerance of
+ * its later solves, and a root LP relaxation whose bound is at most `tiny` (or has none) did not solve.
+ */
+export interface BuildRunsJob { model: LpModel; start?: number[]; retryTolerance: number; tiny: number }
+/** A build MIP's solves in order (`solveBuildRuns`), with `retried` and `bare` saying which ran after the first. */
+export interface BuildRuns { runs: LpResult[]; retried?: true; bare?: 'kept' | 'stalled' }
+
+/** Whether a build MIP's result is a plan: it has a whole solution and the time guard did not stop it. */
+export function wholeBuild(r: LpResult): boolean {
+  return r.status === 'optimal' || (r.status === 'feasible' && r.stop !== 'time');
+}
+
+/**
+ * The solves of `job` (`pickBuild`'s rules, solve.ts): one from the start that stops itself where its root LP relaxation
+ * does not solve (`stopOnRootLpFailure`), then, where it did not, one more at `retryTolerance` from the same start
+ * (`retried`). Where the last of those stopped on its limits at the root (`nodes` 0) after its root LP relaxation solved
+ * (its `bound` above `tiny`) with nothing better than the start, one more at `retryTolerance` without the start (`bare`:
+ * `kept` when it gave a whole solution, which joins `runs`; `stalled` when not). `solver` solves each model.
+ */
+export async function solveBuildRuns(job: BuildRunsJob, solver: (model: LpModel) => Promise<LpResult> = solveLp): Promise<BuildRuns> {
+  const { model, start, retryTolerance, tiny } = job;
+  const solve = (tolerance?: number, bare = false): Promise<LpResult> => solver({
+    ...model, ...(start === undefined || bare ? {} : { start }),
+    ...(tolerance === undefined ? { stopOnRootLpFailure: true } : { feasibilityTolerance: tolerance }),
+  });
+  const first = await solve();
+  const runs = [first];
+  if (first.rootLpFailed === true) runs.push(await solve(retryTolerance));
+  let bare: { bare?: 'kept' | 'stalled' } = {};
+  const stalled = runs[runs.length - 1] as LpResult;
+  if (start !== undefined && wholeBuild(stalled) && stalled.stop === 'limit' && (stalled.nodes ?? 0) === 0
+    && (stalled.bound ?? 0) > tiny && runs.every((r) => (r.improving?.length ?? 0) <= 1)) {
+    const again = await solve(retryTolerance, true);
+    if (wholeBuild(again)) runs.push(again);
+    bare = { bare: wholeBuild(again) ? 'kept' : 'stalled' };
+  }
+  return { runs, ...(first.rootLpFailed === true ? { retried: true as const } : {}), ...bare };
+}
+
 // ---- Solving on a worker thread (fix wave 3 Task 7 review, controller OQ1: the user's MV lines under 5 s warm) ----
 
 /** The `workerData` field that makes a worker thread loading this module a solver (`solveLpAside`). */
 const SOLVER_FLAG = 'lpSolver';
 const SOLVER_EXEC_ARGV = ['--disable-warning=ExperimentalWarning'];
 
-interface SolverJob { id: number; model: LpModel }
-type SolverReply = { id: number; result: LpResult } | { id: number; failed: true };
+/** A model to solve, or a build MIP's solves (`solveBuildRuns`), all run there before it answers. */
+type SolverTask = { model: LpModel } | { runs: BuildRunsJob };
+type SolverJob = { id: number } & SolverTask;
+type SolverReply = { id: number; result: LpResult } | { id: number; runs: BuildRuns } | { id: number; failed: true };
 
 /** The solver thread and the jobs it has not answered yet, each with the callback that settles its promise. */
-interface Solver { worker: Worker; pending: Map<number, (result: LpResult | undefined) => void> }
+interface Solver { worker: Worker; pending: Map<number, (reply: SolverReply | undefined) => void> }
 
 let solver: Solver | null = null;
 /** A solver thread that could not start or stopped is not started again: every later model solves on this thread. */
@@ -301,7 +346,7 @@ function solverThread(): Solver {
     if (settle === undefined) return;
     started.pending.delete(reply.id);
     if (started.pending.size === 0) worker.unref();
-    settle('result' in reply ? reply.result : undefined);
+    settle('failed' in reply ? undefined : reply);
   });
   worker.on('error', stopped);
   worker.on('exit', stopped);
@@ -309,8 +354,8 @@ function solverThread(): Solver {
   return started;
 }
 
-/** `model` solved on the solver thread; undefined when that thread cannot solve it (it did not start, stopped, or threw). */
-function solvedAside(model: LpModel): Promise<LpResult | undefined> {
+/** `task` done on the solver thread; undefined when that thread cannot do it (it did not start, stopped, or threw). */
+function solvedAside(task: SolverTask): Promise<SolverReply | undefined> {
   if (solverFailed) return Promise.resolve(undefined);
   let thread: Solver;
   try {
@@ -324,7 +369,7 @@ function solvedAside(model: LpModel): Promise<LpResult | undefined> {
     thread.pending.set(id, settle);
     thread.worker.ref();
     try {
-      thread.worker.postMessage({ id, model } satisfies SolverJob);
+      thread.worker.postMessage({ id, ...task } satisfies SolverJob);
     } catch {
       thread.pending.delete(id);
       if (thread.pending.size === 0) thread.worker.unref();
@@ -341,7 +386,19 @@ function solvedAside(model: LpModel): Promise<LpResult | undefined> {
  * errors as `solveLp`. One thread serves every caller, one job at a time, in the order asked.
  */
 export async function solveLpAside(model: LpModel): Promise<LpResult> {
-  return (await solvedAside(model)) ?? solveLp(model);
+  const reply = await solvedAside({ model });
+  return reply !== undefined && 'result' in reply ? reply.result : solveLp(model);
+}
+
+/**
+ * `solveBuildRuns` on the solver thread, as one job: every solve of it runs there one after another, so none waits for
+ * this thread to come back from a solve of its own (release gate round 2, G1: Duty plate's leanest line waited 1.7 s
+ * for plan 09's charge MIP before its retry), and the answer is `solveBuildRuns`'s here, bit for bit. Where the solver
+ * thread cannot answer, the job runs on this thread, as `solveLpAside`'s models do.
+ */
+export async function solveBuildRunsAside(job: BuildRunsJob): Promise<BuildRuns> {
+  const reply = await solvedAside({ runs: job });
+  return reply !== undefined && 'runs' in reply ? reply.runs : solveBuildRuns(job);
 }
 
 // ---- Worker bootstrap: only inside the solver thread `solverThread` starts (`workerData.lpSolver`) ----
@@ -349,6 +406,8 @@ export async function solveLpAside(model: LpModel): Promise<LpResult> {
 if (!isMainThread && (workerData as Record<string, unknown> | null)?.[SOLVER_FLAG] === true) {
   const reply = (r: SolverReply): void => parentPort?.postMessage(r);
   parentPort?.on('message', (job: SolverJob) => {
-    solveLp(job.model).then((result) => reply({ id: job.id, result }), () => reply({ id: job.id, failed: true }));
+    const failed = (): void => reply({ id: job.id, failed: true });
+    if ('runs' in job) solveBuildRuns(job.runs).then((runs) => reply({ id: job.id, runs }), failed);
+    else solveLp(job.model).then((result) => reply({ id: job.id, result }), failed);
   });
 }

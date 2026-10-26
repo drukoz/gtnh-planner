@@ -12,7 +12,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { opt, pressSpec, solvedWithBuild } from '../../helpers/build-fixtures.ts';
 import { BUILD_MIP_RETRY_TOLERANCE } from '../../../src/server/planner/build-mip.ts';
-import type { LpModel, LpResult } from '../../../src/server/planner/lp.ts';
+import { solveLp, type LpModel, type LpResult } from '../../../src/server/planner/lp.ts';
 import { pickBuild } from '../../../src/server/planner/solve.ts';
 
 /**
@@ -110,6 +110,24 @@ describe('pickBuild when the search ends at its start', () => {
       expect(picked.retried).toBe(true);
       expect(picked.bare).toBe(bare);
     }
+  });
+});
+
+describe('pickBuild on the solver thread', () => {
+  it("gives exactly what it gives on this thread (release gate round 2, G1: the leanest line's solves)", async () => {
+    // A cover whose start is its optimum: under a 1-iteration cap its solve ends at the root on the start, so the solve
+    // without the start runs too (12 x 17 F4); HiGHS's own solves, on the solver thread and on this one.
+    const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+    const cover: LpModel = {
+      sense: 'min', colCost: weights.map((w, i) => w + ((i * 104729) % 97)), colLower: new Array<number>(40).fill(0),
+      colUpper: new Array<number>(40).fill(1), integer: new Array<boolean>(40).fill(true),
+      rows: [{ lower: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), upper: Infinity, entries: weights.map((w, i): [number, number] => [i, w]) }],
+    };
+    const best = (await solveLp({ ...cover, maxNodes: 100_000 })).x;
+    const coverMip = { exactCost: (x: readonly number[]) => cover.colCost.reduce((sum, c, j) => sum + c * (x[j] ?? 0), 0) } as unknown as Parameters<typeof pickBuild>[0];
+    const here = await pickBuild(coverMip, best, { buildMaxIterations: 1 }, 30, cover);
+    expect(here.bare).toBe('kept');
+    expect(await pickBuild(coverMip, best, { buildMaxIterations: 1 }, 30, cover, 'aside')).toStrictEqual(here);
   });
 });
 

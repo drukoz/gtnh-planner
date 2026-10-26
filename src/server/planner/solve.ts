@@ -12,7 +12,9 @@ import {
   type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
-import { solveLp, solveLpAside, type LpModel, type LpResult, type LpRow } from './lp.ts';
+import {
+  solveBuildRuns, solveBuildRunsAside, solveLp, wholeBuild, type BuildRunsJob, type LpModel, type LpResult, type LpRow,
+} from './lp.ts';
 import { buildCounts, type BuildModel, type MachineOption } from './machine-options.ts';
 import { sourceWeight } from './objective.ts';
 import { sig9 } from './round.ts';
@@ -1465,10 +1467,6 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
   return bounded.filter((j) => (x[j] ?? 0) > TINY);
 }
 
-/** Whether a build MIP's result is a plan: it has a whole solution and the time guard did not stop it. */
-function wholeBuild(r: LpResult): boolean {
-  return r.status === 'optimal' || (r.status === 'feasible' && r.stop !== 'time');
-}
 
 /**
  * The build MIP's solve and its pick (fix wave 3 (F), ledger 248): robust and still decided by node and simplex-iteration
@@ -1484,39 +1482,25 @@ function wholeBuild(r: LpResult): boolean {
  * ranks them by the model, whose light steps are off by less than a machine each, and on 2 of 66 measured lines an
  * earlier one is cheaper; ties keep HiGHS's last. A solve the time guard stops gives nothing: when the last solve is no
  * plan, `buildStage` falls back as before. The result is the last solve's, with `x` the pick. `model` is the model
- * solved: `mip.model`, or one a caller derived from it for `start`; `solver` solves it (`solveLp`, or `solveLpAside` on
- * the solver thread, which gives the same result).
+ * solved: `mip.model`, or one a caller derived from it for `start`; `solver` solves it (`solveLp`), or `'aside'`: every
+ * solve of it on the solver thread, one after another, as one job (`solveBuildRunsAside`, which gives the same result).
  */
 export async function pickBuild(
   mip: ReturnType<typeof buildMip>, start: number[] | undefined, opts: SolveOptions, limit: number, model: LpModel = mip.model,
-  solver: (model: LpModel) => Promise<LpResult> = solveLp,
+  solver: ((model: LpModel) => Promise<LpResult>) | 'aside' = solveLp,
 ): Promise<{ result: LpResult; retried?: true; earlier?: true; bare?: 'kept' | 'stalled' }> {
-  const solve = (tolerance?: number, bare = false): Promise<LpResult> => solver({
-    ...model, ...(start === undefined || bare ? {} : { start }),
-    maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
-    strongBranching: false, keepImproving: true,
-    ...(tolerance === undefined ? { stopOnRootLpFailure: true } : { feasibilityTolerance: tolerance }),
-  });
-  const first = await solve();
-  const runs = [first];
-  if (first.rootLpFailed === true) runs.push(await solve(BUILD_MIP_RETRY_TOLERANCE));
-  // A solve its limits ended at the root after its LP relaxation solved, with nothing better than its start (a start
-  // costs HiGHS the heuristics it runs on that relaxation without an incumbent: Duty plate with farms, 436 against 149,
-  // bound 143.87): once more without it; the start stays a pick. Not where the iteration cap stopped it inside that
-  // relaxation, before those heuristics (its bound at most TINY, or none, as no objective coefficient is below 0): a solve
-  // without the start only spends the cap again at its root (the integration's final review: Electronic Circuit MV on
-  // Project Red, two of every machine owned, bound 5.8e-10, where it found a plan of 3.7e8 against its start's 8.81, so
-  // the same plan, the start's, in a build MIP of 22.8 s against 13.0 s).
-  let bare: { bare?: 'kept' | 'stalled' } = {};
-  const stalled = runs[runs.length - 1] as LpResult;
-  if (start !== undefined && wholeBuild(stalled) && stalled.stop === 'limit' && (stalled.nodes ?? 0) === 0
-    && (stalled.bound ?? 0) > TINY && runs.every((r) => (r.improving?.length ?? 0) <= 1)) {
-    const again = await solve(BUILD_MIP_RETRY_TOLERANCE, true);
-    if (wholeBuild(again)) runs.push(again);
-    bare = { bare: wholeBuild(again) ? 'kept' : 'stalled' };
-  }
+  // The solves (`solveBuildRuns`, lp.ts, whose rules are the ones above), then the pick among their whole solutions.
+  const job: BuildRunsJob = {
+    model: {
+      ...model, maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS,
+      timeLimit: limit, strongBranching: false, keepImproving: true,
+    },
+    ...(start === undefined ? {} : { start }), retryTolerance: BUILD_MIP_RETRY_TOLERANCE, tiny: TINY,
+  };
+  const { runs, retried: again, bare: stall } = solver === 'aside' ? await solveBuildRunsAside(job) : await solveBuildRuns(job, solver);
+  const bare = stall === undefined ? {} : { bare: stall };
   const result = runs[runs.length - 1] as LpResult;
-  const retried = first.rootLpFailed === true ? { retried: true as const } : {};
+  const retried = again === true ? { retried: true as const } : {};
   if (!wholeBuild(result)) return { result, ...retried, ...bare };
   let best = { x: result.x, cost: mip.exactCost(result.x) };
   for (const r of runs) {
@@ -1551,7 +1535,7 @@ export async function pickBuild(
  * locked at the base's, the latest that balances — the decision's own columns last, never S1 (which may run steps past
  * the machines it bought). A tie that needs a new machine (its build and the step charge on its block) is the build
  * MIP's to weigh. With a step charge the build MIP at step charge 0 runs first (the leanest line, `leanestLine`, on the
- * solver thread while plan 09's plan solves here: `solveLpAside`); its raw
+ * solver thread while plan 09's plan solves here: `solveBuildRunsAside`); its raw
  * material is the raw cap's measure (`SolveOptions.rawCap`) and, where it is more than LEAN_BASE_ABOVE × σ, the step
  * charge's base, and its plan is kept where it costs less than the MIP's (fix wave 3 (A), (B2)); at No limit it is not
  * solved where its start costs at most LEAN_BASE_ABOVE, as it could then change nothing (controller OQ1 (D)). Plan 09's
@@ -1597,7 +1581,7 @@ async function buildStage(
   // Good Electronic Circuit HV 736,585 against 685,884, Electronic Circuit LV on Project Red 439,305 against 438,825; at
   // No limit Electronic Circuit LV, two of every machine owned, 93,864 against 77,699). It is within STEP_CHARGE_CAP of
   // S1, so within any cap of +25 % or more. Neither reads the other, so the leanest line's MIP solves on the solver
-  // thread (`solveLpAside`) while plan 09's plan solves here: each is what it is alone, and the stage waits for the
+  // thread (`solveBuildRunsAside`) while plan 09's plan solves here: each is what it is alone, and the stage waits for the
   // longer of the two, not their sum (controller OQ1: the user's MV lines under 5 s warm; on them plan 09's plan took
   // 0.6-1.3 s beside the leanest line's 1.6-2.0 s).
   const cap = opts.rawCap;
@@ -1763,7 +1747,7 @@ function wholePlan(result: LpResult | undefined): result is LpResult {
  */
 async function runBuildMip(
   mip: ReturnType<typeof buildMip>, start: number[] | undefined, limit: number, opts: SolveOptions,
-  solver: (model: LpModel) => Promise<LpResult> = solveLp, model: LpModel = mip.model,
+  solver: ((model: LpModel) => Promise<LpResult>) | 'aside' = solveLp, model: LpModel = mip.model,
 ): Promise<{ result: LpResult | undefined; seconds: number; picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier' | 'bare'> }> {
   if (!(limit > 0)) return { result: undefined, seconds: 0, picked: {} };
   const began = performance.now();
@@ -1834,7 +1818,7 @@ function oneMakerEach(lp: MainLp, x: readonly number[]): boolean {
  * (its time guard, or `limit` ≤ 0), so the cap is then measured against the least raw material, never looser.
  * `uncapped` (No limit, controller OQ1 (D)): none, and no MIP solved, where that start costs at most LEAN_BASE_ABOVE in
  * the MIP's objective (σ units) — the line's raw material over the horizon is at most that, so it could not re-base the
- * step charge (`scaleOf`), and with no cap nothing else reads it. Its MIP solves on the solver thread (`solveLpAside`,
+ * step charge (`scaleOf`), and with no cap nothing else reads it. Its MIP solves on the solver thread (`solveBuildRunsAside`,
  * the same result as here), so `buildStage` solves plan 09's plan meanwhile.
  */
 async function leanestLine(
@@ -1843,7 +1827,7 @@ async function leanestLine(
   const mip = buildMip({ ...plain, stepCharge: 0, pseudoCharge: plain.stepCharge });
   const start = cheapestStart(lp, mip, undefined, plain.model.share, [sparse]);
   if (uncapped && start !== undefined && start.cost <= LEAN_BASE_ABOVE) return undefined;
-  const { result } = await runBuildMip(mip, start?.start, limit, opts, solveLpAside);
+  const { result } = await runBuildMip(mip, start?.start, limit, opts, 'aside');
   if (!wholePlan(result)) return { raw: s1.objective };
   const x = result.x.slice(0, lp.rawCost.length);
   return { raw: Math.max(rawOf(lp, x), s1.objective), x };

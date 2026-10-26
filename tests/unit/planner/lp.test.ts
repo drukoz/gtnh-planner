@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { highsOptions, MIP_FEASIBILITY_TOLERANCE, solveLp, solveLpAside, yieldToEventLoop, type LpModel } from '../../../src/server/planner/lp.ts';
+import { Worker } from 'node:worker_threads';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  highsOptions, MIP_FEASIBILITY_TOLERANCE, solveBuildRuns, solveBuildRunsAside, solveLp, solveLpAside, yieldToEventLoop, type BuildRunsJob, type LpModel,
+} from '../../../src/server/planner/lp.ts';
 
 describe('solveLp', () => {
   it('solves a small minimisation', async () => {
@@ -161,5 +164,44 @@ describe('solveLpAside (fix wave 3 Task 7 review, controller OQ1)', () => {
     await expect(solveLpAside({ sense: 'min', colCost: [1, 1], colLower: [0, 0], colUpper: [1, 1], rows: [], start: [1] })).rejects.toThrow(RangeError);
     await expect(solveLpAside({ sense: 'min', colCost: [1], colLower: [0], colUpper: [1], rows: [{ lower: 0, upper: 1, entries: [[1, 1]] }] }))
       .rejects.toThrow(RangeError);
+  });
+});
+
+describe('solveBuildRunsAside (release gate round 2, G1)', () => {
+  // The leanest line's build MIP solves on the solver thread while plan 09's plan solves on this one. Its solves after the
+  // first (fix wave 3 (F)'s retry, 12 x 17 F4's solve without the start) run there one after another, so none waits for
+  // this thread to finish a solve of its own (Duty plate: the leanest line's retry waited 1.7 s for plan 09's charge MIP).
+  // A cover whose start is its optimum: under a 1-iteration cap its solve ends at the root on the start after its LP
+  // relaxation solved, so the job solves once more without the start: two solves.
+  const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+  const cover: LpModel = {
+    sense: 'min', colCost: weights.map((w, i) => w + ((i * 104729) % 97)), colLower: new Array<number>(40).fill(0),
+    colUpper: new Array<number>(40).fill(1), integer: new Array<boolean>(40).fill(true),
+    rows: [{ lower: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), upper: Infinity, entries: weights.map((w, i): [number, number] => [i, w]) }],
+  };
+  const jobOf = async (): Promise<BuildRunsJob> => ({
+    model: { ...cover, maxNodes: 50, maxIterations: 1, timeLimit: 30, strongBranching: false, keepImproving: true },
+    start: (await solveLp({ ...cover, maxNodes: 100_000 })).x, retryTolerance: 1e-9, tiny: 1e-9,
+  });
+
+  it('gives exactly what solveBuildRuns gives on this thread', async () => {
+    const job = await jobOf();
+    const here = await solveBuildRuns(job);
+    expect(here.runs).toHaveLength(2);
+    expect(here.bare).toBe('kept');
+    expect(await solveBuildRunsAside(job)).toStrictEqual(here);
+  });
+
+  it('hands the solver thread all of its solves at once', async () => {
+    const job = await jobOf();
+    await solveLpAside(cover);   // the solver thread started
+    const posted = vi.spyOn(Worker.prototype, 'postMessage');
+    try {
+      const { runs } = await solveBuildRunsAside(job);
+      expect(runs).toHaveLength(2);
+      expect(posted).toHaveBeenCalledTimes(1);
+    } finally {
+      posted.mockRestore();
+    }
   });
 });
