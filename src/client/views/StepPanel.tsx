@@ -11,7 +11,7 @@
 // A step's panel opens on one run of its recipe as NEI draws it (Phase 2 spec §8: the slots, the progress arrow, the
 // power, the readouts and the overclock chips; hovering a slot lights its good as a row does).
 
-import { useId, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { tierName, V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
@@ -21,6 +21,7 @@ import {
   type StepTier,
 } from '../../shared/types/plan.ts';
 import { Figs } from '../components/Figs.tsx';
+import { focusLost, focusOn } from '../components/focus.ts';
 import { GtArrow } from '../components/GtArrow.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
@@ -663,11 +664,28 @@ export function shownWays<T extends { recipeId: string }>(ways: readonly T[], li
 /**
  * Every way the export knows to make the step's product (controller rulings of plan 09): those the group can use with a
  * radio each, the others greyed with why not; the first few, then pages of "more…"; last, importing the product instead.
+ * A "more…" that shows the rest goes with its own press: before it goes, it hands the focus it had to the first way it
+ * shows, else to the panel, never to the body (ledger ruling P2-R124, P2-R57's rule).
  */
 function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement {
   const { step, settings, nameOf, patch } = props;
   const group = useId();
   const [limit, setLimit] = useState(SWAP_SHOWN);
+  const fieldRef = useRef<HTMLFieldSetElement | null>(null);
+  /**
+   * A "more…" that shows the rest was pressed: where the first way it shows stands among the ways shown (null when that way takes no focus:
+   * one the group cannot use), for the focus its button had; undefined otherwise.
+   */
+  const handOn = useRef<number | null | undefined>(undefined);
+  useLayoutEffect(() => {
+    const at = handOn.current;
+    if (at === undefined) return;
+    handOn.current = undefined;
+    if (!focusLost()) return;                                                    // the button had no focus to give (a pointer's, in Safari)
+    const field = fieldRef.current;
+    const way = at === null ? null : field?.querySelectorAll(':scope > .swap-option')[at]?.querySelector('input') ?? null;
+    if (!focusOn(way)) focusOn(field?.closest('aside'), { preventScroll: true });
+  }, [limit]);
   const main = step.mainOutput;
   if (main === undefined) {
     return (
@@ -690,11 +708,20 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
   const pinUsable = pinned === undefined || usable.some((a) => a.recipeId === pinned);
   const shown = shownWays(alternatives, limit, step.recipeId, pinned);
   const hidden = alternatives.length - shown.length;
+  const more = (): void => {
+    if (hidden <= SWAP_PAGE) {
+      // the rest comes, and the button goes: the first way it brings takes the focus, a way the group can use (the server sorts those first)
+      const next = shownWays(alternatives, limit + SWAP_PAGE, step.recipeId, pinned);
+      const first = next.findIndex((a) => !shown.includes(a));
+      handOn.current = first >= 0 && next[first]?.unusable === undefined ? first : null;
+    }
+    setLimit((n) => n + SWAP_PAGE);
+  };
   // A product the line imports is counted at the cheapest way the group can make it (the stop item's price).
   const importCost = usable.reduce((least, a) => Math.min(least, a.rawCost), Number.POSITIVE_INFINITY);
   const ways = step.ways;
   return (
-    <fieldset className="flow-panel-section" data-swap="">
+    <fieldset ref={fieldRef} className="flow-panel-section" data-swap="">
       <legend className="flow-panel-title">Swap recipe</legend>
       {ways !== undefined && (
         <p className="muted small">{`${ways.total} ${ways.total === 1 ? 'way' : 'ways'} to make ${nameOf(main)}: ${ways.usable} you can use now`}</p>
@@ -716,7 +743,7 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
       )))}
       {hidden > 0 && (
         <div className="row">
-          <button type="button" className="small" onClick={() => setLimit((n) => n + SWAP_PAGE)}>
+          <button type="button" className="small" onClick={more}>
             <Figs text={hidden <= SWAP_PAGE ? `${hidden} more…` : `${SWAP_PAGE} more… (${hidden} not shown)`} />
           </button>
         </div>

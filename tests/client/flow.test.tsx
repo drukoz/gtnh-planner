@@ -13,7 +13,7 @@ import {
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
-import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, outsideWindow } from '../../src/client/views/FlowView.tsx';
+import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, heldHeight, outsideWindow } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import { settingsHash } from '../../src/shared/project/settings-hash.ts';
@@ -914,9 +914,47 @@ describe('what a new layout changed', () => {
   });
 });
 
+// Fix round 2 (item 3, ledger ruling P2-R121): while a new layout that shortens the canvas glides, the canvas keeps the height it was drawn at,
+// decided from the two layouts alone, as the new one is drawn, so holding costs no render of its own; one that leaves the canvas as tall, the
+// same layout again, and one that snaps (more than GLIDE_LIMIT boxes changed, or reduced motion) each have their own rule
+describe('the height the canvas keeps while a new layout glides', () => {
+  const laid = (height: number, boxes: Array<[string, number, number]>): FlowLayout =>
+    ({ width: 400, height, nodes: boxes.map(([id, x, y]) => ({ id, x, y })), edges: [], groups: [] }) as unknown as FlowLayout;
+  const room = 540;                                                                    // 75vh of a 720 px window
+  const tall = laid(300, [['a', 0, 0], ['b', 0, 200]]);
+  const short = laid(200, [['a', 0, 0], ['b', 200, 0]]);
+  it('keeps the height it was drawn at while a layout that shortens it glides, and none for one that does not', () => {
+    expect(heldHeight(tall, short, null, room)).toBe(300);
+    expect(heldHeight(short, tall, null, room), 'taller').toBeNull();
+    expect(heldHeight(short, laid(200, [['a', 0, 10], ['b', 200, 0]]), null, room), 'as tall').toBeNull();
+  });
+  it('keeps what it keeps for the same layout again, and the first height through a layout that shortens it again', () => {
+    expect(heldHeight(short, laid(200, [['a', 0, 0], ['b', 200, 0]]), 300, room), 'the same layout again (an SSE refetch)').toBe(300);
+    expect(heldHeight(short, laid(200, [['a', 0, 0], ['b', 200, 0]]), null, room)).toBeNull();
+    expect(heldHeight(short, laid(100, [['a', 0, 0], ['b', 100, 0]]), 300, room), 'still the height first drawn').toBe(300);
+    expect(heldHeight(short, laid(320, [['a', 0, 0], ['b', 0, 220]]), 300, room), 'a layout taller than the hold ends it').toBeNull();
+  });
+  it('keeps none where 75vh draws both layouts as tall', () => {
+    expect(heldHeight(laid(900, [['a', 0, 0], ['b', 0, 800]]), laid(700, [['a', 0, 0], ['b', 0, 600]]), null, room)).toBeNull();
+    expect(heldHeight(laid(900, [['a', 0, 0], ['b', 0, 800]]), laid(400, [['a', 0, 0], ['b', 0, 300]]), null, room), 'drawn shorter').toBe(900);
+  });
+  it('keeps none for a layout that snaps', () => {
+    const boxes = (n: number, x: number): Array<[string, number, number]> => Array.from({ length: n }, (_, i): [string, number, number] => [`n${i}`, x, i * 10]);
+    expect(heldHeight(laid(400, boxes(GLIDE_LIMIT + 1, 0)), laid(200, boxes(GLIDE_LIMIT + 1, 5)), null, room), 'more than GLIDE_LIMIT boxes moved').toBeNull();
+    expect(heldHeight(laid(400, boxes(GLIDE_LIMIT, 0)), laid(200, boxes(GLIDE_LIMIT, 5)), null, room), 'the premise: GLIDE_LIMIT glide').toBe(400);
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' }));
+    try {
+      expect(heldHeight(tall, short, null, room), 'reduced motion').toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 // A box a new layout dropped fades out where it was, as a ghost (Phase 2 spec §16.3, P2-D42; Task 13b): a plain copy of its box in its kind's
-// colours, `owned` for a step owned in whole or in part, `new` for a new one, else its stub's kind. It carries nothing a box carries for the
-// hit test, the focus, the tips or the tests (the `[data-step-id]` counts, the `.dim` count, `loosePipeEnds`), so none of them sees it.
+// colours, `owned` for a step the group owns in whole, `partly-owned` for one it owns in part (its box's half-and-half fill: ledger ruling
+// P2-R118), `new` for a new one, else its stub's kind, an import's with its kind of import. It carries nothing a box carries for the hit test,
+// the focus, the tips or the tests (the `[data-step-id]` counts, the `.dim` count, `loosePipeEnds`), so none of them sees it.
 describe('a removed box\'s ghost', () => {
   const ghost = (kind: FlowNode['kind'], owned: FlowNode['owned'] = 'none', leaf?: LeafClass): string => renderToStaticMarkup(
     <svg><FlowGhostShape ghost={{ id: 'wire', kind, owned, ...(leaf === undefined ? {} : { leaf }), x: 10, y: 20.5, width: 190, height: 80, opacity: 0.18 }} onGone={() => {}} /></svg>,

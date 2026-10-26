@@ -3,11 +3,11 @@
 // `transform` attribute already holds (React writes it at once), with no fill, so the pan hands the group back to its attribute where it ends
 // (spec §3.3's one exception to "no CSS transform on a <g>"). In SVG a CSS px is a user unit and the origin is 0 0, so the keyframes write the
 // attribute's view as it is. An instant move (the wheel, a drag) holds a pan under way where it is and starts from that picture; the view it
-// commits then ends the pan. A new layout glides into place the same way (`glideLayout`, Task 13b): each box that moved from where it stood to
-// where its own `transform` attribute already puts it, over GLIDE_MS, while what came fades in; the pan and the boxes' glides are on different
-// groups, so they compose. Where the browser cannot move a group so (`canGlide`, ledger ruling P2-D46) or the user asks for less motion, the
-// view and the boxes move at once, as before; there is no SMIL fallback. Flow's pan group is `g.flow-pan` and Connections' `g.conn-pan`, each
-// driven by `usePan`.
+// commits then ends the pan. A new layout glides into place the same way (`glideLayout`, Task 13b): each box that moved from where it is drawn
+// (where it stood, or part way along the last layout's glide: ledger ruling P2-R117) to where its own `transform` attribute already puts it,
+// over GLIDE_MS, while what came fades in; the pan and the boxes' glides are on different groups, so they compose. Where the browser cannot
+// move a group so (`canGlide`, ledger ruling P2-D46) or the user asks for less motion, the view and the boxes move at once, as before; there is
+// no SMIL fallback. Flow's pan group is `g.flow-pan` and Connections' `g.conn-pan`, each driven by `usePan`.
 
 import { useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { EASE_OUT, GLIDE_MS, PAN_MS, prefersReducedMotion } from '../state/motion.ts';
@@ -207,15 +207,17 @@ interface BoxGlide { animation: Animation; from: [number, number]; to: [number, 
 
 /** The boxes' glides under way, by pan group, then by box id. */
 const boxGlides = new WeakMap<Element, Map<string, BoxGlide>>();
+/** The fades in of the boxes that came (`glideLayout`), by pan group, then by box id (fix round 2). */
+const boxFades = new WeakMap<Element, Map<string, Animation>>();
 
-/** The glides under way in the pan group `root`. */
-function glidesIn(root: Element): Map<string, BoxGlide> {
-  let glides = boxGlides.get(root);
-  if (glides === undefined) {
-    glides = new Map();
-    boxGlides.set(root, glides);
+/** The map of `root` in `byRoot`, made empty the first time. */
+function mapOf<T>(byRoot: WeakMap<Element, Map<string, T>>, root: Element): Map<string, T> {
+  let map = byRoot.get(root);
+  if (map === undefined) {
+    map = new Map();
+    byRoot.set(root, map);
   }
-  return glides;
+  return map;
 }
 
 /**
@@ -237,15 +239,31 @@ export function glidingAt(root: Element, id: string): [number, number] | null {
 }
 
 /**
+ * How far the fade in of the box `id` of the pan group `root` has come (`glideLayout`), from 0 to 1: its eased progress, so the box is drawn at
+ * that much of its own opacity. Its fade goes on when the box is taken away, so the ghost of a box dropped while it still fades in starts from
+ * the opacity the box was drawn at, not from whole (fix round 2, ledger ruling P2-R109 widened), as `glidingAt` gives where it was drawn. Null
+ * when it does not fade (any more): it is drawn at its own opacity.
+ */
+export function fadedIn(root: Element, id: string): number | null {
+  const fades = boxFades.get(root);
+  const fade = fades?.get(id);
+  if (fade === undefined) return null;
+  const progress = fade.playState === 'idle' ? null : fade.effect?.getComputedTiming().progress ?? null;
+  if (progress === null) fades?.delete(id);         // ended, or cancelled: the box is at its own opacity
+  return progress;
+}
+
+/**
  * A fade in, from nothing to the element's own opacity: one keyframe, at offset 0, so its end is the element's own opacity, an implicit one (a
  * box that comes in under a focus ends at its `.dim` 0.18). A lone keyframe with no offset would be the end one, and fade the element out.
  */
 export const FADE_IN: Keyframe[] = [{ opacity: 0, offset: 0 }];
 
 /**
- * Whether a new layout glides into place (Phase 2 spec §16.3): never under reduced motion, nor when it moves more than GLIDE_LIMIT boxes (it snaps:
- * review focus 4), nor where the browser cannot move a group so (`canGlide`, ledger ruling P2-D46); asked in that order, so the probe never runs
- * for a layout that would not glide. The boxes a layout drops fade out (FlowView's ghosts) only when it glides.
+ * Whether a new layout glides into place (Phase 2 spec §16.3): never under reduced motion, nor when it changes more than GLIDE_LIMIT boxes, those
+ * it moves, brings and drops (it snaps: review focus 4, ledger ruling P2-R119), nor where the browser cannot move a group so (`canGlide`, ledger
+ * ruling P2-D46); asked in that order, so the probe never runs for a layout that would not glide. The boxes a layout drops fade out (FlowView's
+ * ghosts) only when it glides.
  */
 export function layoutGlides(change: LayoutChange): boolean {
   return !prefersReducedMotion() && glidable(change) && canGlide();
@@ -266,21 +284,28 @@ function named(root: Element, attrs: readonly string[]): Map<string, Element> {
 /**
  * Glides a diagram's new layout into place in its pan group `root` (Phase 2 spec §16.3), the layout drawn and not yet painted: each box that moved
  * from where it stood to where its `transform` attribute already puts it, absolute keyframes with no fill, so it hands the box back to its
- * attribute, over GLIDE_MS with `--ease-out`; each box that came in fades in (`FADE_IN`) over the same time; and each arrow whose points changed
- * or that came, with its tag (`targets.tags`) and `targets.extra` when any did, fades in over the second half (a backwards fill keeps it
- * invisible through the first), so a pipe is never seen hanging off a box on its way. A box the last layout still glides starts from where it
- * is drawn, its old glide ended, as a pan starts from the picture on screen (ledger ruling P2-R117); and the boxes this layout moves, brings or
- * drops end any glide they had, so where this layout snaps they stand on their attributes at once. Each element is found by its id in the
- * attributes `targets` names, all of them in one pass. Nothing moves for the same layout again (every SSE refetch's), and then the browser is
- * not even asked whether it can glide; nor where `layoutGlides` says no, so the new layout is drawn at once. Gives the animations it started.
+ * attribute, over GLIDE_MS with `--ease-out`; each box that came in fades in (`FADE_IN`) over the same time (`fadedIn` says how far); and each
+ * arrow whose points changed or that came, with its tag (`targets.tags`) and `targets.extra` when any did, fades in over the second half (a
+ * backwards fill keeps it invisible through the first), so a pipe is never seen hanging off a box on its way. A box the last layout still glides
+ * starts from where it is drawn, its old glide ended, as a pan starts from the picture on screen (ledger ruling P2-R117), and one still fading in
+ * fades in on as it glides; the boxes this layout moves, brings or drops end any glide they had, so where this layout snaps they stand on their
+ * attributes at once, and those it brings or drops end any fade in they had. Each element is found by its id in the attributes `targets` names,
+ * all of them in one pass. Nothing moves for the same layout again (every SSE refetch's), and then the browser is not even asked whether it can
+ * glide; nor where `layoutGlides` says no, so the new layout is drawn at once. Gives the animations it started.
  */
 export function glideLayout(root: SVGGElement, change: LayoutChange, targets: GlideTargets): Animation[] {
   const { moved, entered, left, rerouted } = change;
-  const glides = glidesIn(root);
+  const glides = mapOf(boxGlides, root);
+  const fades = mapOf(boxFades, root);
   const drawn = new Map(moved.map(({ id }) => [id, glidingAt(root, id)]));
   for (const id of [...moved.map((m) => m.id), ...entered, ...left]) {
     glides.get(id)?.animation.cancel();
     glides.delete(id);
+  }
+  // a box that moves fades in on as it glides; one that came anew, or went, is another element, or none
+  for (const id of [...entered, ...left]) {
+    fades.get(id)?.cancel();
+    fades.delete(id);
   }
   if (moved.length + entered.length + rerouted.length === 0 || !layoutGlides(change)) return [];
   const started: Animation[] = [];
@@ -298,7 +323,9 @@ export function glideLayout(root: SVGGElement, change: LayoutChange, targets: Gl
   }
   for (const id of entered) {
     const fade = boxes.get(id)?.animate(FADE_IN, { duration: GLIDE_MS, easing: EASE_OUT, fill: 'none' });
-    if (fade !== undefined) started.push(fade);
+    if (fade === undefined) continue;
+    fades.set(id, fade);
+    started.push(fade);
   }
   if (rerouted.length === 0) return started;
   const secondHalf: KeyframeAnimationOptions = { delay: GLIDE_MS / 2, duration: GLIDE_MS / 2, fill: 'backwards' };

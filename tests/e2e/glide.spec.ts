@@ -11,10 +11,10 @@
 // focus and its tip go with a box that moves, and on from one that goes; and a new Connections picture glides inside the view it lands in.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { EASE_IN, EASE_OUT } from '../../src/client/state/motion.ts';
+import { EASE_IN, EASE_OUT, GHOST_FALLBACK_MS } from '../../src/client/state/motion.ts';
 import { matrixView, panTransform, type PanView } from '../../src/client/views/glide.ts';
 import type { Layout } from '../../src/shared/types/layout.ts';
-import type { Plan } from '../../src/shared/types/plan.ts';
+import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
 import { circuitLv, copperUnsourced, manyEdges, platesTwoWays } from './fixtures/plans.ts';
 import {
   bodyFocusCount, createProject, finishMotion, login, loosePipeEnds, LV_CIRCUITS, openConnections, openWithPlan, setName, watchBodyFocus,
@@ -64,6 +64,42 @@ function recordAnimations(): void {
 const holdAnimationsOf = (page: Page, selector: string): Promise<void> => page.evaluate((s) => {
   (window as unknown as { __hold?: string }).__hold = s;
 }, selector);
+
+/**
+ * Runs in the page before its scripts, with GHOST_FALLBACK_MS (Task 13b fix round 2): a ghost the hold of `recordAnimations` keeps at its start
+ * stays however long the test looks at it. The fallback that takes a ghost away that long after it is drawn (M1, a timer of that delay) is put
+ * off by as long again each time it comes while `window.__hold` takes a ghost (a selector a lone `.flow-ghost` matches), and runs as asked
+ * once it does not; clearing it clears the timer armed then. Every other timer is the page's own.
+ */
+function holdGhostFallback(fallbackMs: number): void {
+  const w = window as unknown as { __hold?: string };
+  const lone = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  lone.setAttribute('class', 'flow-ghost');
+  const held = (): boolean => w.__hold !== undefined && lone.matches(w.__hold);
+  const set = window.setTimeout;
+  const clear = window.clearTimeout;
+  /** Each fallback by the id it was given under, and the timer armed for it now. */
+  const armed = new Map<number, number>();
+  window.setTimeout = function later(handler: TimerHandler, delay?: number, ...args: unknown[]): number {
+    if (delay !== fallbackMs || typeof handler !== 'function') return set(handler, delay, ...args);
+    const arm = (): number => set(() => {
+      if (held()) {
+        armed.set(id, arm());
+        return;
+      }
+      armed.delete(id);
+      (handler as (...a: unknown[]) => void)(...args);
+    }, delay);
+    const id = arm();
+    armed.set(id, id);
+    return id;
+  } as typeof window.setTimeout;
+  window.clearTimeout = function cleared(id?: number): void {
+    const now = id === undefined ? undefined : armed.get(id);
+    if (id !== undefined) armed.delete(id);
+    clear(now ?? id);
+  } as typeof window.clearTimeout;
+}
 
 /** Every `animate()` call the page has made, the probe's of `canGlide()` included. */
 const allRecords = (page: Page): Promise<AnimationRecord[]> => page.evaluate(() => (window as unknown as { __animations: AnimationRecord[] }).__animations);
@@ -873,6 +909,7 @@ test('under reduced motion a replan moves at once', async ({ page }) => {
 // (`forwards`) until they are taken away. Each ghost is held at its start here, so the test sees it
 test('a box a replan drops fades out where it stood, as a ghost no pointer, tip or count sees', async ({ page }) => {
   await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
   let served = platesTwoWays();
   const id = await openServing(page, () => served);
   const dropped = ['hammer-plate', 'import:t:iron_ingot@0@hammer-plate'];
@@ -937,6 +974,7 @@ test('a box a replan drops fades out where it stood, as a ghost no pointer, tip 
 // would flash a box the eye had let go of; a ghost still carries no `dim`, so no count of the dimmed sees it
 test('the ghost of a box a focus dims fades out from its dimmed opacity, not from whole', async ({ page }) => {
   await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
   let served = platesTwoWays();
   const id = await openServing(page, () => served);
   await page.getByLabel('Find item').selectOption({ label: '1x Copper Wire' });
@@ -1487,6 +1525,7 @@ test('a new layout that comes while boxes glide starts each from where it is dra
 // layout was taking it: the copper stub glides from platesTwoWays to circuitLv, held 100 ms in, and copperUnsourced drops it
 test('a box dropped while it glides leaves its ghost where it is drawn', async ({ page }) => {
   await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
   let served = platesTwoWays();
   const id = await openServing(page, () => served);
   await holdAnimationsOf(page, '[data-node-id], .flow-ghost');
@@ -1545,6 +1584,7 @@ const canvasHeight = (page: Page): Promise<number> => page.locator('svg.flow-can
 // while its boxes glide and its ghosts fade the canvas keeps the old height, and takes the new one once they have
 test('the canvas keeps its height while a new layout that shortens it glides, and takes the new one after', async ({ page }) => {
   await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
   await openWithPlan(page, lined());
   const open = await canvasHeight(page);
   await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
@@ -1634,27 +1674,39 @@ test('a ghost whose fade never runs goes all the same, and one whose fade cannot
   expect(errors).toEqual([]);
 });
 
+/** One React commit, as `countCommits` records it. */
+interface Commit { canvas: boolean; frames: string; height: string; boxes: string }
+
 /**
  * Runs in the page before its scripts: React's DevTools hook as React finds it, which React calls at the end of each commit. Each commit is
  * recorded in `window.__commits`: whether it drew the Flow canvas again (its svg's props object, which React gives anew each time it draws the
- * canvas: Task 12's M3), and the open lines' frames it leaves drawn.
+ * canvas: Task 12's M3), the open lines' frames it leaves drawn, and (Task 13b fix round 2) the canvas's height and where its boxes stand
+ * (each box's `transform`, in order).
  */
 function countCommits(): void {
-  const commits: Array<{ canvas: boolean; frames: string }> = [];
+  const commits: Commit[] = [];
   let last: unknown;
   (window as unknown as { __commits: typeof commits }).__commits = commits;
   (window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown }).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     supportsFiber: true, isDisabled: false, renderers: new Map(),
     inject: () => 1, checkDCE: () => {}, onScheduleFiberRoot: () => {}, onCommitFiberUnmount: () => {}, onPostCommitFiberRoot: () => {},
     onCommitFiberRoot: () => {
-      const svg = document.querySelector('svg.flow-canvas');
+      const svg = document.querySelector<SVGSVGElement>('svg.flow-canvas');
       const key = svg === null ? undefined : Object.keys(svg).find((k) => k.startsWith('__reactProps$'));
       const props = key === undefined ? undefined : (svg as unknown as Record<string, unknown>)[key];
-      commits.push({ canvas: props !== undefined && props !== last, frames: [...document.querySelectorAll('svg.flow-canvas [data-group-id]')].map((g) => g.getAttribute('data-group-id')).join(' ') });
+      commits.push({
+        canvas: props !== undefined && props !== last,
+        frames: [...document.querySelectorAll('svg.flow-canvas [data-group-id]')].map((g) => g.getAttribute('data-group-id')).join(' '),
+        height: svg?.style.height ?? '',
+        boxes: [...document.querySelectorAll('svg.flow-canvas [data-node-id]')].map((g) => g.getAttribute('transform')).join(' '),
+      });
       last = props;
     },
   };
 }
+
+/** The commits `countCommits` has recorded. */
+const commitsOf = (page: Page): Promise<Commit[]> => page.evaluate(() => (window as unknown as { __commits: Commit[] }).__commits);
 
 // Fix round 1 (M2): a new layout that adds no ghost draws the canvas once: the wiremill's line, open, served as another line (its frame goes,
 // another comes, the boxes stay where they are, at the same height), so the layout's commit is the canvas's last
@@ -1668,9 +1720,300 @@ test('a new layout that adds no ghost draws the canvas once', async ({ page }) =
   await expect(page.locator(`svg.flow-canvas [data-group-id="${next}"]`)).toHaveCount(1);
   await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
   await expect(page.locator('svg.flow-canvas .flow-ghost'), 'the premise: no ghost').toHaveCount(0);
-  const commits = await page.evaluate(() => (window as unknown as { __commits: Array<{ canvas: boolean; frames: string }> }).__commits);
+  const commits = await commitsOf(page);
   expect(commits.length, 'the premise: React reports its commits').toBeGreaterThan(0);
   const laid = commits.findIndex((c) => c.frames.split(' ').includes(next));
   expect(laid, 'the commit that draws the new layout').toBeGreaterThanOrEqual(0);
   expect(commits.slice(laid).filter((c) => c.canvas).length, 'the canvas drawn once from then on').toBe(1);
+});
+
+// ---- Task 13b fix round 2 ----
+
+/** Resolves once the page has drawn `n` more frames. */
+const nextFrames = (page: Page, n = 2): Promise<void> => page.evaluate((count) => new Promise<void>((done) => {
+  const step = (left: number): void => {
+    if (left === 0) done();
+    else requestAnimationFrame(() => step(left - 1));
+  };
+  step(count);
+}), n);
+
+const COBBLE = 'minecraft:cobblestone@0';
+
+/**
+ * circuitLv with a rock breaker that supplies the bending machine its Cobblestone, a free input the line takes: the breaker's panel offers "We
+ * already have a supply of Cobblestone".
+ */
+function cobbleSupplied(): Plan {
+  const plan = circuitLv();
+  const bend = plan.steps.find((s) => s.id === 'bend-plate');
+  if (bend === undefined) throw new Error('circuitLv bends no plate');
+  const breaker = {
+    ...bend, id: 'breaker', recipeId: 'breaker', mapId: 'gt.recipe.rockbreaker', machine: { mteId: 300, name: 'Basic Rock Breaker', tier: 1 },
+    supply: COBBLE, mainOutput: COBBLE, inputs: [], outputs: [{ key: COBBLE, amount: 1, chance: 1 }], alternatives: [],
+  };
+  return {
+    ...plan, names: { ...plan.names, [COBBLE]: 'Cobblestone' },
+    steps: [...plan.steps.map((s) => (s.id === 'bend-plate' ? { ...s, inputs: [...s.inputs, { key: COBBLE, amount: 1, chance: 1 }] } : s)), breaker],
+    flows: [...plan.flows, { from: 'breaker', to: 'bend-plate', key: COBBLE, perSecond: 0.5 }],
+  };
+}
+
+// Fix round 2 (ledger ruling P2-R123, which narrows P2-R122(b)): a control that goes while its panel stays leaves the focus in the panel, never on
+// the canvas or the body. "We already have a supply of Cobblestone" pressed from the keyboard, half way down the window with the panel's head
+// scrolled out of it above, gives way to its "marked supplied" line, the panel staying: the panel itself takes the focus, as a panel takes it
+// when it opens on a pick inside the last one (P2-R35), and nothing scrolls, so the line stays in sight where the button was
+test('a panel control that goes while its panel stays leaves the focus on the panel, where the press left it', async ({ page }) => {
+  await openWithPlan(page, cobbleSupplied());
+  await page.locator('[data-step-id="breaker"] .flow-node-head').click();
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Rock Breaker' });
+  await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
+  const supply = panel.getByRole('button', { name: 'We already have a supply of Cobblestone' });
+  await supply.evaluate((button) => {
+    button.scrollIntoView({ block: 'center' });
+    button.focus({ preventScroll: true });
+  });
+  const head = await panel.locator('.flow-panel-head').boundingBox();
+  expect((head?.y ?? 0) + (head?.height ?? 0), 'the premise: the panel\'s head is above the window').toBeLessThan(0);
+  /** The page's scroll and the panel's own. */
+  const scrolled = (): Promise<[number, number]> => panel.evaluate((aside) => [scrollY, aside.scrollTop]);
+  const before = await scrolled();
+  await watchBodyFocus(page);
+  await page.keyboard.press('Enter');
+  const line = panel.getByText('Cobblestone is marked supplied already; the plan is catching up.');
+  await expect(line, 'the button gave way').toBeVisible();
+  await expect(supply).toHaveCount(0);
+  await expect(panel).toBeFocused();
+  expect(await scrolled(), 'nothing scrolled').toEqual(before);
+  await expect(line).toBeInViewport();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+});
+
+/** circuitLv whose wiremill knows seven ways to make its wire and whose bending machine six, its last two out of reach (`unusable`). */
+function moreWays(): Plan {
+  const plan = circuitLv();
+  const ways = (id: string, mapId: string, count: number, usable: number): PlanStep['alternatives'] => Array.from({ length: count }, (_, i) => ({
+    recipeId: i === 0 ? id : `${id}-${i}`, rawCost: 1 + i, mapId, ...(i < usable ? {} : { unusable: ['needs MV'] }),
+  }));
+  return {
+    ...plan, steps: plan.steps.map((s) => (s.id === 'wire' ? { ...s, alternatives: ways('wire', s.mapId, 7, 7) }
+      : s.id === 'bend-plate' ? { ...s, alternatives: ways('bend-plate', s.mapId, 7, 5) } : s)),
+  };
+}
+
+// Fix round 2 (ledger ruling P2-R124, P2-R57's rule): a swap list's "N more…" that shows the rest goes with its own press; before it goes, it hands
+// the focus to the first way it shows, else to the panel. The wiremill's list shows five of its seven ways: "2 more…" pressed from the keyboard
+// shows the last two, and the first of them takes the focus; the bending machine's two hidden ways are out of reach (no control), so its panel
+// takes it
+test('"N more…" that shows the rest hands the focus to the first way it shows, else to the panel', async ({ page }) => {
+  await openWithPlan(page, moreWays());
+  await watchBodyFocus(page);
+  for (const { id, machine, first } of [
+    { id: 'wire', machine: 'Basic Wiremill', first: 'recipe wire-5' }, { id: 'bend-plate', machine: 'Basic Bending Machine', first: null },
+  ]) {
+    await page.locator(`[data-step-id="${id}"] .flow-node-head`).click();
+    const panel = page.getByRole('complementary', { name: `Step: ${machine}` });
+    const more = panel.getByRole('button', { name: '2 more…' });
+    await more.focus();
+    await page.keyboard.press('Enter');
+    await expect(more, 'the rest shown, the button goes').toHaveCount(0);
+    await expect(panel.locator('[title^="recipe "]'), `${machine}: every way shown`).toHaveCount(7);
+    if (first === null) await expect(panel, machine).toBeFocused();
+    else await expect(panel.locator(`label[title="${first}"] input[type="radio"]`), machine).toBeFocused();
+  }
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+});
+
+// Fix round 2 (item 2): while the canvas keeps its height (P2-R121), Fit fits the view to the height the canvas settles at, not to the held one,
+// so the picture is not left off-centre once the hold ends. The wiremill's line closed from the keyboard, its glides and ghosts held: Fit pressed
+// then makes the view a Fit pressed after the hold makes, which pans nowhere
+test('Fit pressed while the canvas keeps its height fits the view to the height it settles at', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
+  await openWithPlan(page, lined());
+  const open = await canvasHeight(page);
+  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
+  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
+  expect(await canvasHeight(page), 'the premise: the canvas keeps its height').toBe(open);
+  const pan = page.locator(FLOW_PAN);
+  const centred = await pan.getAttribute('transform');
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  const fitted = await pan.getAttribute('transform');
+  expect(fitted, 'the premise: Fit moves the view').not.toBe(centred);
+  await finishMotion(page);
+  await expect.poll(() => canvasHeight(page), { message: 'the hold has ended' }).toBeLessThan(open);
+  const pans = (await records(page)).filter((r) => r.cls === 'flow-pan').length;
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  expect(await pan.getAttribute('transform'), 'Fit after the hold: the same view').toBe(fitted);
+  expect((await records(page)).filter((r) => r.cls === 'flow-pan').length, 'and no pan').toBe(pans);
+});
+
+/** The wiremill alone, making 1x Copper Wire from mined Copper Ingot: a diagram of one row, shorter than the canvas's min-height (240 px). */
+function wireOnly(): Plan {
+  const plan = circuitLv();
+  return {
+    ...plan, target: 't:copper_wire@0', steps: plan.steps.filter((s) => s.id === 'wire'),
+    flows: [...plan.flows.filter((f) => f.to === 'wire'), { from: 'wire', to: 'out', key: 't:copper_wire@0', perSecond: 1 }],
+    rawInputs: plan.rawInputs.filter((r) => r.key === 't:copper_ingot@0'),
+  };
+}
+
+// Fix round 2 (item 2): the height the canvas settles at is what its own style gives it, its min-height included: a replan to the wiremill alone
+// (platesTwoWays, then wireOnly), its glides and ghosts held, leaves the canvas at its min-height once the hold ends, and Fit pressed while the
+// canvas keeps its height fits the view there
+test('Fit pressed while the canvas keeps its height fits the view to its min-height where the new layout is shorter', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
+  let served = platesTwoWays();
+  const id = await openServing(page, () => served);
+  const tall = await canvasHeight(page);
+  await holdAnimationsOf(page, '[data-node-id], .flow-ghost');
+  served = wireOnly();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(1);
+  expect(await canvasHeight(page), 'the premise: the canvas keeps its height').toBe(tall);
+  const pan = page.locator(FLOW_PAN);
+  const opened = await pan.getAttribute('transform');
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  const fitted = await pan.getAttribute('transform');
+  expect(fitted, 'the premise: Fit moves the view').not.toBe(opened);
+  await finishMotion(page);
+  await expect.poll(() => canvasHeight(page), { message: 'the hold has ended' }).toBeLessThan(tall);
+  const [styled, inner] = await page.locator('svg.flow-canvas').evaluate((svg) => [
+    Number(/^min\(([\d.]+)px/.exec((svg as SVGSVGElement).style.height)?.[1]), svg.clientHeight,
+  ]);
+  expect(inner, 'the premise: the min-height gives the canvas more than its diagram asks').toBeGreaterThan(styled - 4);
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  expect(await pan.getAttribute('transform'), 'Fit after the hold: the same view').toBe(fitted);
+});
+
+// Fix round 2 (item 3): the hold costs one render at most: it is decided as the new layout is drawn, and released straight from its glides' end
+// when no ghost is left. "Imports in one column" moves circuitLv's Redstone stub alone, to the first column, which shortens the diagram and drops
+// no box: from the commit that draws it, the canvas is drawn twice, held, then released
+test('a new layout that shortens the canvas and drops no box draws the canvas twice: held, then released', async ({ page }) => {
+  await page.addInitScript(countCommits);
+  await openWithPlan(page, circuitLv());
+  const tall = await canvasHeight(page);
+  const before = (await commitsOf(page)).at(-1)?.boxes;
+  await page.getByLabel('Imports in one column').check();
+  await expect.poll(() => canvasHeight(page), { message: 'the shorter height, once released' }).toBeLessThan(tall);
+  await nextFrames(page);
+  await expect(page.locator('svg.flow-canvas .flow-ghost'), 'the premise: no ghost').toHaveCount(0);
+  const commits = await commitsOf(page);
+  const laid = commits.findIndex((c) => c.boxes !== before && c.boxes !== '');
+  expect(laid, 'the commit that draws the new layout').toBeGreaterThanOrEqual(0);
+  const drawn = commits.slice(laid).filter((c) => c.canvas);
+  expect(drawn.map((c) => c.height), 'held, then released').toEqual([`min(${tall}px, 75vh)`, `min(${await canvasHeight(page)}px, 75vh)`]);
+});
+
+// Fix round 2 (item 4, ledger ruling P2-R121 in full): the canvas keeps its height until both the new layout's glides and its ghosts have ended,
+// whichever ends first, then takes the height of the layout it shows: the closed line's own, as a page that closes the line under reduced motion
+// (where nothing holds it) draws it. Closed with every glide and ghost held, then each kind finished in turn: the glides, then the ghosts; and,
+// the line opened and closed again, the ghosts, then the glides
+test('the canvas keeps its height until both the glides and the ghosts have ended, then takes the closed line\'s own', async ({ page, browser }) => {
+  const still = await browser.newPage();
+  await still.emulateMedia({ reducedMotion: 'reduce' });
+  await openWithPlan(still, lined());
+  await still.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').click();
+  await expect(still.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]')).toHaveCount(1);
+  const closed = await canvasHeight(still);
+  await still.close();
+  await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
+  await openWithPlan(page, lined());
+  const open = await canvasHeight(page);
+  expect(closed, 'the premise: closing the line shortens the canvas').toBeLessThan(open);
+  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
+  const toggle = page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]');
+  const ghosts = page.locator('svg.flow-canvas .flow-ghost');
+  /** Ends the held motion of the ghosts (`ofGhosts`), or every other motion of the canvas that ends (the glides, the fades in). */
+  const finish = (ofGhosts: boolean): Promise<void> => page.locator('svg.flow-canvas').evaluate((svg, g) => {
+    for (const a of svg.getAnimations({ subtree: true })) {
+      const target = (a.effect as KeyframeEffect | null)?.target;
+      if (target?.matches('.flow-ghost') === g && a.effect?.getComputedTiming().endTime !== Infinity) a.finish();
+    }
+  }, ofGhosts);
+  await toggle.focus();
+  for (const first of [false, true]) {
+    await page.keyboard.press('Enter');
+    await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
+    await expect(ghosts, 'the premise: its boxes go as ghosts').not.toHaveCount(0);
+    await finish(first);
+    await nextFrames(page, 3);
+    await expect(ghosts, first ? 'the ghosts gone' : 'the ghosts still there').toHaveCount(first ? 0 : await ghosts.count());
+    expect(await canvasHeight(page), `${first ? 'the ghosts' : 'the glides'} ended, the other not: held`).toBe(open);
+    await finish(!first);
+    await expect.poll(() => canvasHeight(page), { message: 'both ended: the closed line\'s own height' }).toBe(closed);
+    await expect(ghosts).toHaveCount(0);
+    await page.keyboard.press('Enter');                                                  // open again: a taller layout, held by nothing
+    await expect(page.locator('svg.flow-canvas [data-group-id="line:t:copper_wire@0"]'), 'the line open again').toHaveCount(1);
+    expect(await canvasHeight(page)).toBe(open);
+    await finishMotion(page);
+  }
+});
+
+// Fix round 2 (item 4, ledger ruling P2-R121): under reduced motion nothing glides, so nothing holds the canvas: a replan that shortens it
+// (platesTwoWays, then circuitLv, which drops the hand step) draws it at the new height from the first frame that shows the new layout, as
+// every frame from the replan on records it
+test('under reduced motion a replan that shortens the canvas draws the new height from its first frame', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  let served = platesTwoWays();
+  const id = await openServing(page, () => served);
+  const tall = await canvasHeight(page);
+  await page.evaluate(() => {
+    const w = window as unknown as { __frames: Array<{ height: string; laid: boolean }> };
+    w.__frames = [];
+    const each = (): void => {
+      const svg = document.querySelector<SVGSVGElement>('svg.flow-canvas');
+      w.__frames.push({ height: svg?.style.height ?? '', laid: svg?.querySelector('[data-node-id="hammer-plate"]') === null });
+      requestAnimationFrame(each);
+    };
+    requestAnimationFrame(each);
+  });
+  served = circuitLv();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  await nextFrames(page, 3);
+  const short = await canvasHeight(page);
+  expect(short, 'the premise: circuitLv is shorter').toBeLessThan(tall);
+  const frames = await page.evaluate(() => (window as unknown as { __frames: Array<{ height: string; laid: boolean }> }).__frames);
+  const first = frames.findIndex((f) => f.laid);
+  expect(first, 'the premise: frames of the old layout first').toBeGreaterThan(0);
+  expect(frames.slice(0, first).every((f) => f.height === `min(${tall}px, 75vh)`), 'the old layout at its height').toBe(true);
+  expect(frames.slice(first).map((f) => f.height), 'the new layout at its own height from its first frame')
+    .toEqual(frames.slice(first).map(() => `min(${short}px, 75vh)`));
+});
+
+// Fix round 2 (item 6, ledger ruling P2-R109 widened): a box a new layout drops while it still fades in leaves a ghost that fades out from the
+// opacity the box is drawn at, never from whole: the hand step comes in (platesTwoWays), its fade held half way in (33 ms of 260, where
+// --ease-out has drawn about half its opacity), and goes again (circuitLv)
+test('a box dropped while it fades in leaves its ghost at the opacity it is drawn at', async ({ page }) => {
+  await page.addInitScript(recordAnimations);
+  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
+  let served = circuitLv();
+  const id = await openServing(page, () => served);
+  await holdAnimationsOf(page, '[data-node-id], .flow-ghost');
+  served = platesTwoWays();
+  await replan(page, id, 31);
+  await expect(stepBoxes(page)).toHaveCount(4);
+  const drawn = await page.locator('svg.flow-canvas [data-node-id="hammer-plate"]').evaluate((box) => {
+    const fade = box.getAnimations().find((a) => !(a instanceof CSSAnimation) && !(a instanceof CSSTransition)
+      && (a.effect as KeyframeEffect | null)?.getKeyframes().some((k) => 'opacity' in k) === true);
+    if (fade === undefined) throw new Error('the premise: the hand step fades in');
+    fade.currentTime = 33;
+    return Number(getComputedStyle(box).opacity);
+  });
+  expect(drawn, 'the premise: half way in').toBeGreaterThan(0.3);
+  expect(drawn).toBeLessThan(0.7);
+  served = circuitLv();
+  await replan(page, id, 32);
+  await expect(stepBoxes(page)).toHaveCount(3);
+  const ghost = page.locator('svg.flow-canvas .flow-ghost.new');
+  await expect(ghost).toHaveCount(1);
+  const fade = (await records(page)).filter((r) => r.cls === 'flow-ghost new').at(-1);
+  expect(Number(fade?.frames[0]?.opacity), 'its fade starts where the box is drawn').toBeCloseTo(drawn, 2);
+  expect(fade?.frames[1]).toEqual({ opacity: 0 });
+  expect(Number(await ghost.evaluate((g) => getComputedStyle(g).opacity)), 'and so does the ghost, held at its start').toBeCloseTo(drawn, 2);
 });

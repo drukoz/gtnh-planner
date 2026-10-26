@@ -9,6 +9,11 @@ export const GLIDE_MS = 260;
 export const PAN_MS = 250;
 /** What goes out (Phase 2 spec §16.3's ghosts): the stylesheet's `--dur-exit`. */
 export const EXIT_MS = 180;
+/**
+ * A box's ghost whose fade never runs (no timeline moves it) is taken away all the same, this long after it was drawn: well past its fade
+ * (FlowView's ghosts, Task 13b's M1).
+ */
+export const GHOST_FALLBACK_MS = EXIT_MS + 2000;
 /** The stylesheet's `--ease-out`: what comes or moves in slows to its end. */
 export const EASE_OUT = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
 /** The stylesheet's `--ease-in`: what goes out speeds up as it goes. */
