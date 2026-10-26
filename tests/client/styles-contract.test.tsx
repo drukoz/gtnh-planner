@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { EASE_IN, EASE_OUT, EXIT_MS, GLIDE_MS, PAN_MS } from '../../src/client/state/motion.ts';
 import { DIM_OPACITY } from '../../src/client/views/flow-model.ts';
+import { ROOT, sources, withoutComments } from './client-sources.ts';
 import { cssBlocks, declarations, scan, themeTokens, type Block } from './css-blocks.ts';
 
 const read = (file: string): string => readFileSync(new URL(`../../src/client/${file}`, import.meta.url), 'utf8');
@@ -2460,10 +2461,15 @@ describe('the Machine GUI pause of the pipes', () => {
   });
 
   it('lets nothing but the pipes move for ever, and the button stops those', () => {
-    const endless = blocks.filter((b) => !b.prelude.startsWith('@') && /(^|; )animation: [^;]*\binfinite\b/.test(b.inner)).map((b) => b.prelude);
+    // the shorthand or the longhand, however it is spaced (FW-3: the longhand once passed unseen)
+    const endless = blocks.filter((b) => !b.prelude.startsWith('@') && declarations(b.inner).some(([name, value]) =>
+      (name === 'animation' || name === 'animation-iteration-count') && /\binfinite\b/i.test(value))).map((b) => b.prelude);
     // Phase 2 spec §3.9 (deliberate; P2-D18, ratified as P2-D45): the goods riding the Flow pipes are pipe contents too, the fourth rule,
     // which Pause pipes stops with the other three
     expect(endless.sort()).toEqual([CONTENTS, LIT_CONTENTS, CONN_CONTENTS, RIDER].sort());
+    // and no script runs an animation for ever: a WAAPI animation's `iterations` is never Infinity (the glides and the pan are bounded)
+    const forever = sources().filter((file) => /\biterations\s*:\s*(?:Infinity|Number\.POSITIVE_INFINITY)\b/.test(withoutComments(readFileSync(new URL(file, ROOT), 'utf8'))));
+    expect(forever).toEqual([]);
   });
 
   it('stops the dot of the connection by itself within 5 s, on the dot\'s full opacity', () => {
@@ -2711,6 +2717,28 @@ const PHASE2_RULES: string[] = [
 ];
 /** The colour literals a Phase 2 rule may write: each is the same in both looks (spec §4.4). */
 const SAME_IN_BOTH = ['#ffffff', '#000000', '#aaaaaa', '#100010', '#ffff55', 'rgb(0 0 0 / 0.4)'];
+/**
+ * The CSS named colours (CSS Color 4's 148), which are colour literals too (FW-3): a Phase 2 rule writes none, as SAME_IN_BOTH holds the hex
+ * form of each colour it allows. `transparent` and `currentcolor` are no palette colour and are not listed.
+ */
+const NAMED_COLOURS: ReadonlySet<string> = new Set(`aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue
+  blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray
+  darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray
+  darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro
+  ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen
+  lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen
+  lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue
+  mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose
+  moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip
+  peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver
+  skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow
+  yellowgreen`.split(/\s+/));
+/**
+ * The named colours a declaration's value writes: each whole word of it outside quotes that is one, but a function's name (`tan(…)`); a
+ * property's name (`white-space`) is never read, nor a part of a longer name (`--flow-red`, `white-space`).
+ */
+const namedColoursIn = (value: string): string[] =>
+  (value.replace(/"[^"]*"|'[^']*'/g, '').match(/(?<![\w-])[a-z][\w-]*(?![\w(-])/gi) ?? []).filter((word) => NAMED_COLOURS.has(word.toLowerCase()));
 /** What a Phase 2 transition may animate (spec §3.3): the compositor's two, a hover's face, and the height of what folds. */
 const MAY_MOVE = /^(transform|opacity|background-color|block-size|content-visibility)$/;
 
@@ -2754,10 +2782,15 @@ describe('the Machine GUI Phase 2: the dark look and the Theme button', () => {
       const body = ruleBody(selector);
       for (const literal of body.match(/#[0-9a-f]+\b|rgba?\([^)]*\)|hsla?\([^)]*\)/gi) ?? []) expect(SAME_IN_BOTH, `${selector}: ${literal}`).toContain(literal);
       for (const [name, value] of declarations(body)) {
+        for (const literal of namedColoursIn(value)) expect(SAME_IN_BOTH, `${selector} { ${name}: ${value} }: ${literal}`).toContain(literal);
         if (name !== 'transition') continue;
         for (const part of selectorList(value)) expect(part.split(' ')[0], `${selector} { transition: ${part} }`).toMatch(MAY_MOVE);
       }
     }
+    // the named colours are read in values alone, as whole words, in any case, and never in a name, a quoted family or a function's name
+    expect(namedColoursIn('2px solid White')).toEqual(['White']);
+    expect(namedColoursIn('red, linear-gradient(90deg, transparent, navy)')).toEqual(['red', 'navy']);
+    expect(namedColoursIn("nowrap white-space var(--flow-red) 'Gold Sans', calc(tan(1rad) * 2px) ease-in")).toEqual([]);
   });
 });
 

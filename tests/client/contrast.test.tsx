@@ -46,10 +46,12 @@ const blocks = cssBlocks(readFileSync(new URL('../../src/client/styles.css', imp
 const LOOK_TOKENS: Readonly<Record<Look, ReadonlyMap<string, string>>> = { light: themeTokens(blocks, 'light'), dark: themeTokens(blocks, 'dark') };
 
 /**
- * What a pair measures: a token `--x`; a literal `#rrggbb`, which the stylesheet draws the same in both looks; or `over`, a translucent
- * colour, alpha-composited on `on`.
+ * What a pair measures: a token `--x`; a literal `#rrggbb`, which the stylesheet draws the same in both looks; `over`, a translucent
+ * colour, alpha-composited on `on`; `edge`, the colour of a bevel token's last shadow (its lower and right edge); or `fill`, the colour of
+ * the first path of an icon token's data URI (`fill='%23rrggbb'`). The last two are read from the token's text in each look, so a token
+ * that changes is measured again (final fix wave, FW-3: Phase 1's F4 closed for the bevels and the icons too).
  */
-type Paint = string | { over: Paint; on: Paint };
+type Paint = string | { over: Paint; on: Paint } | { edge: string } | { fill: string };
 /** [what it is, the text or graphic, what it sits on, the least ratio it needs, the looks it holds in (both when absent)] */
 type Pair = [what: string, fg: Paint, bg: Paint, min: number, looks?: readonly Look[]];
 
@@ -65,9 +67,28 @@ function parse(css: string): [number, number, number, number] {
   throw new Error(`"${css}" is not a colour this test can read`);
 }
 
-/** A paint's channels and alpha in a look: a token through that look's tokens, a composite channel by channel (and so opaque). */
+/** The colour of the last shadow of a bevel's value (`inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b` → `#8b8b8b`). */
+function lastColour(value: string, token: string): string {
+  const found = value.match(/#[0-9a-f]{6}\b|#[0-9a-f]{3}\b|rgba?\([^)]*\)/gi)?.at(-1);
+  if (found === undefined) throw new Error(`${token} ("${value}") holds no colour`);
+  return found;
+}
+
+/** The colour of the first path of an icon's data URI (`fill='%23ffd84a'` → `#ffd84a`). */
+function firstFill(value: string, token: string): string {
+  const found = /fill='(#[0-9a-f]{6}|#[0-9a-f]{3})'/i.exec(decodeURIComponent(value))?.[1];
+  if (found === undefined) throw new Error(`${token} draws no fill`);
+  return found;
+}
+
+/**
+ * A paint's channels and alpha in a look: a token through that look's tokens, a bevel's edge or an icon's fill read from its token's text, a
+ * composite channel by channel (and so opaque).
+ */
 function channels(look: Look, paint: Paint): [number, number, number, number] {
   if (typeof paint === 'string') return parse(resolveToken(LOOK_TOKENS[look], paint.startsWith('--') ? `var(${paint})` : paint));
+  if ('edge' in paint) return parse(lastColour(resolveToken(LOOK_TOKENS[look], `var(${paint.edge})`), paint.edge));
+  if ('fill' in paint) return parse(firstFill(resolveToken(LOOK_TOKENS[look], `var(${paint.fill})`), paint.fill));
   const [r, g, b, a] = channels(look, paint.over);
   const under = channels(look, paint.on);
   if (under[3] !== 1) throw new Error(`${JSON.stringify(paint.on)} is translucent: composite it on what it lies over`);
@@ -82,8 +103,13 @@ function colour(look: Look, paint: Paint): string {
   return `#${[r, g, b].map((c) => Math.round(c).toString(16).padStart(2, '0')).join('')}`;
 }
 
-/** A paint for a failure message: `--chat over --panel`. */
-const named = (paint: Paint): string => (typeof paint === 'string' ? paint : `${named(paint.over)} over ${named(paint.on)}`);
+/** A paint for a failure message: `--chat over --panel`, `the edge of --bevel-tick`, `the fill of --icon-sun`. */
+function named(paint: Paint): string {
+  if (typeof paint === 'string') return paint;
+  if ('edge' in paint) return `the edge of ${paint.edge}`;
+  if ('fill' in paint) return `the fill of ${paint.fill}`;
+  return `${named(paint.over)} over ${named(paint.on)}`;
+}
 
 // ---- the pairs ----
 
@@ -198,12 +224,15 @@ const PAIRS: Pair[] = [
   // the dark look and its switch (Phase 2 Task 1b, spec §4.5), as graphics: the slider's thumb on the dark panel (P2-D24: the button's
   // face would be 1.30:1 there), the Theme button's sun and moon on its face, the light edge of the dark tick well (4.21:1, D2), the yellow
   // ring that carries the mode in use on the dark panel (plan ruling compare-frame-dark), and add-on 17's farm fields' line, which the light
-  // look keeps at 3:1 (in dark it is a groove: plan ruling farm-line-dark, the reason case below)
+  // look keeps at 3:1 (in dark it is a groove: plan ruling farm-line-dark, the reason case below). The icons' colours and the well's edge
+  // are read from their tokens' text (FW-3); so is a field's edge on the dark panel, the reason --field-edge is a token (the black field
+  // alone is 1.46:1 there; 5.49:1 with it), which the light look draws as Phase 1 did
   ['slider thumb', '--thumb', '--panel', GRAPHICS, ['dark']],
-  ['sun icon', '#ffd84a', '--btn', GRAPHICS], ['moon icon', '#c8d4ff', '--btn', GRAPHICS],
-  ['tick-well edge', '#8b8b8b', '--panel', GRAPHICS, ['dark']],
+  ['sun icon', { fill: '--icon-sun' }, '--btn', GRAPHICS], ['moon icon', { fill: '--icon-moon' }, '--btn', GRAPHICS],
+  ['tick-well edge', { edge: '--bevel-tick' }, '--panel', GRAPHICS, ['dark']],
   ['mode-in-use ring on the panel', '--accent', '--panel', GRAPHICS, ['dark']],
   ['farm fields line on the panel', '--panel-lo', '--panel', GRAPHICS, ['light']],
+  ['field edge on the panel', '--field-edge', '--panel', GRAPHICS, ['dark']],
   // and a Flow box under the pointer, whose veil (--flow-hover) lightens it in light and darkens it in dark: its text and its lines
   ...FLOW_FILLS.map(([box, fill]): Pair => [`${box} box text under the pointer`, '--text', { over: '--flow-hover', on: fill }, AA]),
   ...ISSUE_FILLS.map(([box, fill]): Pair => [`${box} box lines under the pointer`, '--text-muted', { over: '--flow-hover', on: fill }, AA]),
@@ -291,6 +320,16 @@ it('reads the light tokens as the literals Phase 1 measured', () => {
   expect(colour('light', { over: '--veil', on: '--panel' })).toBe('#dadada');
 });
 
+// FW-3: a bevel's edge and an icon's colour are read from their tokens' text in each look, where the table once held copies of them
+it('reads a bevel\'s lower edge and an icon\'s colour from their tokens, in each look', () => {
+  expect(colour('dark', { edge: '--bevel-tick' })).toBe('#8b8b8b');                    // D2's light edge of the dark tick well
+  expect(colour('light', { edge: '--bevel-tick' })).toBe('#ffffff');                   // the light look's: a slot's bevel, through its tokens
+  for (const look of LOOKS) {
+    expect(colour(look, { fill: '--icon-sun' }), look).toBe('#ffd84a');
+    expect(colour(look, { fill: '--icon-moon' }), look).toBe('#c8d4ff');
+  }
+});
+
 /**
  * The 155 light pairs measured before Phase 2 (Phase 1's 142, the Make-picker fix's 1, add-on 17's 12), each with the least ratio the
  * base held it to: 4.5 for text, 3 for a graphic (ruling P2-R7).
@@ -338,7 +377,7 @@ describe('contrast of a Flow pipe from a missing source', () => {
   });
 
   it('needs a head of another colour than the casing: one in the casing\'s own red would not show on it', () => {
-    // ruling R20 gave the head the casing's red, before R34 made the casing that red
+    // ruling R20 drew the head in #ff5555 on the old #aa0000 casing; R34 gave the casing that red, so the head became white
     expect(ratio('#ff5555', '#ff5555')).toBeLessThan(GRAPHICS);
   });
 });
