@@ -166,6 +166,18 @@ export interface BuildMipInput {
    * at step charge 0, the user's "crafting always automated"); absent: 0.
    */
   byHandFloor?: number;
+  // optional addition (release gate round 2, G1: the build stage's lite start)
+  /**
+   * The lite relaxation (rate mode without sharing; ignored elsewhere): every step with machine options priced as a light
+   * step (`Light`) — its first new block on a binary, more runs at the least build per run a second of its options — and
+   * its owned machines whole per step, within each type's count, at OWNED_STEP_SHARE of a block's charge each, a binary
+   * for its first new block beside them. Each step's machines cost the MIP at least that (a new machine of any option is
+   * at least the least block and at least its runs at the least build per run; the owned ones are the MIP's own columns),
+   * and the lite has no machine pools or caps, so its optimum is never above the MIP's and any of its plans is a plan of
+   * the MIP's rows over the runs. It has a few columns a step where the MIP has several an option, and solve.ts solves it
+   * for a start (`liteLine`): on Duty plate its plan rounded up is within 0.003 % of the leanest line's answer.
+   */
+  lite?: boolean;
 }
 
 function byString(a: string, b: string): number {
@@ -788,7 +800,14 @@ interface Pool { key: string; option: MachineOption; members: Member[]; n?: numb
  * a rival it is not; giving every step whose S1 runs pass one machine of its least-build option per-option columns
  * instead left the root node a harder model and worse plans (Microprocessor HV avoiding Diamond 16 % dearer).
  */
-interface Light { first: number; perRun: number; e: number; step: Step }
+interface Light {
+  first: number; perRun: number; e: number; step: Step;
+  // optional additions (the lite relaxation, `BuildMipInput.lite`)
+  /** Its owned options: the column of their whole machines (`q`), their runs a second each and the option's index. */
+  owned?: Array<{ q: number; rho: number; index: number }>;
+  /** With owned options, the binary of its first new block (`first` is then 0 on its step binary) and that block's build. */
+  v?: number; fresh?: number;
+}
 
 /** The MIP's columns and rows, and where each part of the model sits. */
 interface Layout {
@@ -973,12 +992,16 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   const light = new Map<number, Light>();
   const pools = new Map<string, Pool>();
   /** Without sharing, a step none of whose options is owned and whose S1 runs fit one machine of its fastest option. */
-  const isLight = (step: Step): boolean => {
+  const lightStep = (step: Step): boolean => {
     if (model.share || step.usable.some((u) => u.o.owned > 0)) return false;
     let fastest = 0;
     for (const u of step.usable) if (adds(u.o)) fastest = Math.max(fastest, u.o.perMachine);
     return fastest > 0 && (input.x1[step.j] ?? 0) * D <= fastest * (1 + WHOLE);
   };
+  // The lite relaxation (`BuildMipInput.lite`): every step with machine options light, its owned machines per type.
+  const lite = input.lite === true && rate && !model.share;
+  const isLight = (step: Step): boolean => (lite ? step.usable.length > 0 : lightStep(step));
+  const liteOwned = new Map<number, { total: number; cols: number[] }>();
   if (rate) {
     const byPool = new Map<string, Member[]>();
     const outdone = model.share ? outdonePools(steps, charge) : new Set<string>();
@@ -991,9 +1014,27 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
           first = Math.min(first, blockCost(u.o, charge));
           perRun = Math.min(perRun, blockCost(u.o, charge) / u.o.perMachine);
         }
-        const atS1 = (input.x1[step.j] ?? 0) > TINY ? cheapestAdd(step, (input.x1[step.j] ?? 0) * D, charge) : undefined;
+        // The lite: a step the MIP prices by its pools first pays the least block, never more than any of its machines.
+        const atS1 = (!lite || lightStep(step)) && (input.x1[step.j] ?? 0) > TINY ? cheapestAdd(step, (input.x1[step.j] ?? 0) * D, charge) : undefined;
         if (atS1 !== undefined) first = blockCost(atS1.u.o, charge) * atS1.added;
-        light.set(step.j, { first, perRun, e: column(1 / sigma, Infinity, false), step });
+        const owned: NonNullable<Light['owned']> = [];
+        if (lite) {
+          for (const u of step.usable) {
+            if (!(u.o.owned > 0)) continue;
+            const q = column(ownedBlock, u.o.owned, true);
+            owned.push({ q, rho: u.o.perMachine, index: u.index });
+            const type = liteOwned.get(u.o.mteId) ?? { total: ownedOf(model, u.o), cols: [] };
+            type.cols.push(q);
+            liteOwned.set(u.o.mteId, type);
+          }
+        }
+        if (!Number.isFinite(first)) {
+          first = 0;   // only owned machines (the lite): its runs within them
+          perRun = 0;
+        }
+        const e = column(1 / sigma, Infinity, false);
+        if (owned.length === 0) light.set(step.j, { first, perRun, e, step });
+        else light.set(step.j, { first: 0, perRun, e, step, owned, ...(first > 0 ? { v: column(first / sigma, 1, true), fresh: first } : {}) });
         continue;
       }
       const list: Member[] = [];
@@ -1029,6 +1070,11 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
         rows.push({ lower: -Infinity, upper: 0, entries: [...adders.map((m): [number, number] => [m.a as number, 1]), [pool.n, -1]] });
       }
       pools.set(key, pool);
+    }
+    // The lite: a type's owned machines, whole per step, within the count the group owns.
+    for (const mteId of [...liteOwned.keys()].sort((a, b) => a - b)) {
+      const type = liteOwned.get(mteId) as { total: number; cols: number[] };
+      rows.push({ lower: -Infinity, upper: type.total, entries: type.cols.map((c): [number, number] => [c, 1]) });
     }
     // Owned machines: per type, whole machines per step without sharing; with it, per pool of the type the owned
     // machines it holds (a column when two or more pools of the type have steps, or when owned machines pay their
@@ -1099,8 +1145,17 @@ function layoutOf(input: BuildMipInput, withDerived: boolean): Layout {
   }
   // A light step's build: its first machine on its binary, and `e` ≥ the build of its runs at the least build per run a
   // second, less that first machine.
+  // The lite's step with owned machines: `e` ≥ the build of its runs beyond them at the least build per run, less its first
+  // new block (on `v`, which any runs beyond them need), and with no option that can add machines its runs within them.
   for (const [j, l] of light) {
-    if (l.perRun > 0) rows.push({ lower: -Infinity, upper: 0, entries: [[j, l.perRun * D], [y.get(j) as number, -l.first], [l.e, -1]] });
+    const owned = l.owned ?? [];
+    const beyond = owned.map((o): [number, number] => [o.q, -l.perRun * o.rho]);
+    const fresh: Array<[number, number]> = l.v === undefined ? [] : [[l.v, -(l.fresh as number)]];
+    if (l.perRun > 0) rows.push({ lower: -Infinity, upper: 0, entries: [[j, l.perRun * D], [y.get(j) as number, -l.first], [l.e, -1], ...beyond, ...fresh] });
+    if (owned.length > 0 && (l.v !== undefined || !(l.perRun > 0))) {
+      const within = owned.map((o): [number, number] => [o.q, -o.rho]);
+      rows.push({ lower: -Infinity, upper: 0, entries: [[j, D], ...within, ...(l.v === undefined ? [] : [[l.v, -X * D] as [number, number]])] });
+    }
   }
 
   // Make N: one binary per type a step without an owned option could add, shared by every step that can use it, at its
@@ -1209,7 +1264,23 @@ function startOf(layout: Layout, width: number, x: readonly number[], alloc: All
   }
   for (const [mteId, col] of layout.z) start[col] = alloc.types.has(mteId) ? 1 : 0;
   for (const [j, col] of layout.y) start[col] = (x[j] ?? 0) > 0 ? 1 : 0;
-  for (const [j, l] of layout.light) start[l.e] = Math.max(0, l.perRun * D * Math.max(0, x[j] ?? 0) - l.first * (start[layout.y.get(j) as number] ?? 0));
+  for (const [j, l] of layout.light) {
+    if (l.owned === undefined) {
+      start[l.e] = Math.max(0, l.perRun * D * Math.max(0, x[j] ?? 0) - l.first * (start[layout.y.get(j) as number] ?? 0));
+      continue;
+    }
+    // The lite: its owned machines as `alloc` gives them, a first new block where its runs go beyond them.
+    let free = 0;
+    for (const o of l.owned) {
+      const n = alloc.owned.get(j)?.get(o.index) ?? 0;
+      start[o.q] = n;
+      free += n * o.rho;
+    }
+    const beyond = Math.max(0, D * Math.max(0, x[j] ?? 0) - free);
+    if (l.v !== undefined) start[l.v] = beyond > TINY * D ? 1 : 0;
+    const paid = l.first * (start[layout.y.get(j) as number] ?? 0) + (l.fresh ?? 0) * (l.v === undefined ? 0 : (start[l.v] as number));
+    start[l.e] = Math.max(0, l.perRun * beyond - paid);
+  }
   if (layout.c !== undefined) start[layout.c] = layout.steps.some((s) => s.r.needsCleanroom && (x[s.j] ?? 0) > 0) ? 1 : 0;
   for (const d of layout.derived) start[d.col] = (x[d.j] ?? 0) > 0 ? 1 : 0;
   for (const s of layout.sources) start[s.col] = (x[s.j] ?? 0) > 0 ? 1 : 0;

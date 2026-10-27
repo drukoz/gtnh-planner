@@ -169,3 +169,60 @@ describe('the build stage when the search without the start finds nothing', () =
     }
   });
 });
+
+describe('pickBuild with a cutoff (release gate round 2, G1: the lite start)', () => {
+  // The lite start's solves get the start's objective as their cutoff, not the start: the start is then the plan where
+  // they find none below it, as a start nothing beat would be, and a pick candidate beside what they find.
+  const cutoffOf = async (answer: LpResult): Promise<{ calls: LpModel[]; picked: Awaited<ReturnType<typeof pickBuild>> }> => {
+    const calls: LpModel[] = [];
+    const solver = async (m: LpModel): Promise<LpResult> => {
+      calls.push(m);
+      return answer;
+    };
+    return { calls, picked: await pickBuild(mip, START, {}, 30, model, solver, true) };
+  };
+
+  it("hands its solves the start's objective as their cutoff and not the start", async () => {
+    const { calls, picked } = await cutoffOf(SEARCHED);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.objectiveBound).toBe(40);
+    expect(calls[0]?.start).toBeUndefined();
+    expect(picked.result.x).toEqual(BETTER);
+    expect(picked.bare).toBeUndefined();
+  });
+
+  it('keeps the start where its solves find nothing below it: none is (infeasible) or their limits stopped them', async () => {
+    for (const answer of [{ status: 'infeasible', objective: NaN, x: [], nodes: 1 }, { status: 'error', objective: NaN, x: [], nodes: 50, stop: 'limit' }] as LpResult[]) {
+      const { calls, picked } = await cutoffOf(answer);
+      expect(calls, answer.status).toHaveLength(1);
+      expect(picked.result).toMatchObject({ status: 'feasible', stop: 'limit', objective: 40, x: START, nodes: answer.nodes });
+      expect(picked.earlier).toBeUndefined();
+    }
+  });
+
+  it('gives no plan where the time guard stopped its solves before one, or HiGHS failed', async () => {
+    for (const answer of [{ status: 'error', objective: NaN, x: [], stop: 'time' }, { status: 'error', objective: NaN, x: [] }] as LpResult[]) {
+      const { picked } = await cutoffOf(answer);
+      expect(picked.result.x).toEqual([]);
+      expect(picked.result.status).toBe('error');
+    }
+  });
+
+  it('keeps the start where HiGHS reports a whole solution no better than it, which stays a pick candidate', async () => {
+    // HiGHS's LP solves stop at the cutoff, but a heuristic may report a solution above it (here 45 against 40).
+    const worse: LpResult = { status: 'optimal', objective: 45, x: [4.5, 0], nodes: 3, improving: [[4.5, 0]] };
+    const { picked } = await cutoffOf(worse);
+    expect(picked.result).toMatchObject({ status: 'feasible', stop: 'limit', objective: 40, x: START });
+    // one no better in the model's objective but cheaper by exactCost is picked, as an earlier incumbent would be
+    const { picked: cheaper } = await cutoffOf({ status: 'feasible', stop: 'limit', objective: 41, x: BETTER, nodes: 50, improving: [BETTER] });
+    expect(cheaper.result.x).toEqual(BETTER);
+    expect(cheaper.earlier).toBe(true);
+  });
+
+  it('picks the start where it costs less by exactCost than what its solves found', async () => {
+    // [5, 0] beat the start in the model's objective (the cutoff) but costs 50 against its 40 by exactCost.
+    const { picked } = await cutoffOf({ status: 'feasible', stop: 'limit', nodes: 50, objective: 30, x: [5, 0], improving: [[5, 0]] });
+    expect(picked.result.x).toEqual(START);
+    expect(picked.earlier).toBe(true);
+  });
+});

@@ -242,3 +242,58 @@ describe('solveBuildRunsAside (release gate round 2, G1)', () => {
     }
   });
 });
+
+describe('a MIP with a cutoff (release gate round 2, G1: the lite start)', () => {
+  // The build stage's lite start hands HiGHS a plan's objective as the cutoff (`objectiveBound`, HiGHS `objective_bound`)
+  // in place of that plan as a start: with no incumbent HiGHS runs the root heuristics its LP relaxation leads, and its
+  // LP solves stop at the cutoff, so it prunes every node no better than the plan (Duty plate's build MIP 4.3-5.1 s
+  // against 10.6 s from plan 09's start). A knapsack cover of 40 binaries, and the same weights to an exact total.
+  const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+  const half = Math.floor(weights.reduce((a, b) => a + b, 0) / 2);
+  const base = {
+    sense: 'min' as const, colCost: weights.map((w, i) => w + ((i * 104729) % 97)), colLower: new Array<number>(40).fill(0),
+    colUpper: new Array<number>(40).fill(1), integer: new Array<boolean>(40).fill(true),
+  };
+  const cover: LpModel = { ...base, rows: [{ lower: half, upper: Infinity, entries: weights.map((w, i): [number, number] => [i, w]) }] };
+  const exact: LpModel = { ...base, rows: [{ lower: half + 1, upper: half + 1, entries: weights.map((w, i): [number, number] => [i, w]) }] };
+  const limits = { maxNodes: 50, timeLimit: 30, strongBranching: false, keepImproving: true } as const;
+
+  it('passes the cutoff to HiGHS, and prunes nothing below it: the optimum where that is below it', async () => {
+    expect(highsOptions({ ...cover, objectiveBound: 7 })).toMatchObject({ objective_bound: 7 });
+    expect(highsOptions(cover)).not.toHaveProperty('objective_bound');
+    const best = await solveLp({ ...cover, maxNodes: 100_000 });
+    expect(best.status).toBe('optimal');
+    const below = await solveLp({ ...cover, ...limits, objectiveBound: best.objective + 1 });
+    expect(below.objective).toBeCloseTo(best.objective, 9);
+    // Below its LP relaxation nothing is: whatever HiGHS reports is no better than the cutoff.
+    const relaxed = await solveLp({ sense: cover.sense, colCost: cover.colCost, colLower: cover.colLower, colUpper: cover.colUpper, rows: cover.rows });
+    const none = await solveLp({ ...cover, ...limits, objectiveBound: relaxed.objective - 1 });
+    expect(none.x.length === 0 || none.objective >= relaxed.objective - 1).toBe(true);
+  });
+
+  it('says its limits stopped it where it found no whole solution, and only with a cutoff', async () => {
+    const capped = { ...exact, ...limits, maxIterations: 1 };
+    expect(await solveLp({ ...capped, objectiveBound: 1e9 })).toMatchObject({ status: 'error', stop: 'limit', x: [] });
+    const plain = await solveLp(capped);
+    expect(plain.status).toBe('error');
+    expect(plain.stop).toBeUndefined();
+  });
+
+  it('hands every solve of a build MIP job its cutoff, no start, and runs none without it', async () => {
+    const calls: LpModel[] = [];
+    const solver = async (m: LpModel) => {
+      calls.push(m);
+      return m.stopOnRootLpFailure === true
+        ? { status: 'error' as const, objective: NaN, x: [], nodes: 0, rootLpFailed: true as const }
+        : { status: 'error' as const, objective: NaN, x: [], nodes: 0, stop: 'limit' as const };
+    };
+    const runs = await solveBuildRuns({ model: { ...cover, ...limits }, cutoff: 1234, retryTolerance: 1e-9, tiny: 1e-9 }, solver);
+    expect(calls).toHaveLength(2);   // the first, then fix wave 3 (F)'s retry; no solve without the cutoff
+    for (const m of calls) {
+      expect(m.objectiveBound).toBe(1234);
+      expect(m.start).toBeUndefined();
+    }
+    expect(runs.retried).toBe(true);
+    expect(runs.bare).toBeUndefined();
+  });
+});
