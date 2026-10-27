@@ -367,7 +367,8 @@ test('the note dialog stays open through the Escape that hides a tip, and closes
   await createProject(page, 'Note dialog');                                              // no line on the map, so the click is the note's
   await page.getByText('Map', { exact: true }).first().click();
   await page.getByLabel('World scan', { exact: true }).selectOption(scanId);
-  await page.getByLabel('Base').selectOption({ label: 'Overworld base (4, 5)' });
+  // exact, as in world.spec.ts: the settings panel's "Only these come in" search is labelled "Add a base material"
+  await page.getByLabel('Base', { exact: true }).selectOption({ label: 'Overworld base (4, 5)' });
   await page.getByRole('button', { name: 'Use this base' }).click();
   await expect(page.getByTestId('found-panel').getByTestId('machine-count')).toHaveText('6');
   const canvas = page.locator('canvas[role=img]');
