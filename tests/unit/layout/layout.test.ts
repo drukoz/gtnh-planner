@@ -453,7 +453,7 @@ describe('layoutLine: mixed-tier lines', () => {
     // mostly mixed-tier lines (the seed fixes these counts)
     expect(fedAt).toEqual([55, 124, 21]);
     expect({ failed: failed.length, first: failed.slice(0, 5) }).toEqual({ failed: 0, first: [] });
-  });
+  }, 20_000); // 600 layouts, each searching the power hookup's landing cell: seconds under a full-suite load
 
   // Review of the fix above: a higher tier's tree that serves both rows crosses the spine one block up, which walled in a
   // fluid pipe kept to the units' height (and the logistics fill the spine below). Such a pipe climbs over the cable.
