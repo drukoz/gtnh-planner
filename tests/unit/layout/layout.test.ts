@@ -61,6 +61,16 @@ describe('layoutLine', () => {
     expect(JSON.stringify(again)).toBe(JSON.stringify(layout));
   });
 
+  it('prices the parallel power-hookup runs the amps need in the build list', async () => {
+    // the line draws 4 A at MV and no MV cable carries it (2x Annealed Copper is the best at 2 A): the warning says 2 parallel
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ logistics: 'direct' }), ground());
+    const amps = layout.warnings.find((w) => w.code === 'cable_amps')!;
+    expect(amps.text).toBe('No cable carries 4 A at MV: run 2 parallel 2x Annealed Copper Cable lines');
+    // the build list's MV cable line carries the hookup's parallel runs, so the two numbers cannot disagree
+    const mvCable = layout.bom.find((l) => l.key === 'gregtech:gt.blockmachines@1387')!;
+    expect(mvCable.why).toContain('power hookup (2 parallel)');
+  });
+
   it('lays out without a scan so the 3D view and parts still work', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), emptyScan(), makeProject({ scanId: null, baseId: null }));
     expect([layout.status, layout.origin, layout.hookups, layout.pins]).toEqual(['no-world', [0, 64, 0], [], []]);

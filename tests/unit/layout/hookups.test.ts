@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { choosePowerNetwork, chooseLogisticsNetwork, nearestTap, choosePowerTap, powerHookup, logisticsHookup, ghostBlocks, hookupPath, tapCableAmps } from '../../../src/server/layout/hookups.ts';
+import { choosePowerNetwork, chooseLogisticsNetwork, nearestTap, choosePowerTap, powerHookup, parallelHookupParts, logisticsHookup, ghostBlocks, hookupPath, tapCableAmps } from '../../../src/server/layout/hookups.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makeScan, flatVoxels, IDS, STONE } from '../../helpers/layout-fixtures.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
@@ -61,6 +61,15 @@ describe('hookups', () => {
       world: { vox: vox(), line: lineAt(11, 14, 0, 3) }, supplyTier: 1, amps: 9 });
     expect(r.hookup.parts).toEqual([{ key: 'gregtech:gt.blockmachines@1248', amount: 30, why: 'power hookup (3 parallel)', group: 'power' }]);
     expect(r.warnings).toContainEqual({ code: 'cable_amps', text: 'No cable carries 9 A at LV: run 3 parallel 4x Tin Cable lines' });
+    // the build list prices the 20 extra runs (20 + the 10 bomFromBlocks lays = the 30 the panel and the warning claim)
+    expect(r.runs).toBe(3);
+    expect(parallelHookupParts(r)).toEqual([{ key: 'gregtech:gt.blockmachines@1248', amount: 20, why: 'power hookup (3 parallel)', group: 'power' }]);
+  });
+
+  it('adds no parallel hookup parts when one cable carries the amps', () => {
+    const r = power();
+    expect(r.runs).toBe(1);
+    expect(parallelHookupParts(r)).toEqual([]);
   });
 
   it('walks around a wall', () => {

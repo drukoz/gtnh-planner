@@ -59,6 +59,8 @@ export interface PowerHookupBuild extends HookupBuild {
   cable: Machine | null; lossEUt: number; arrivingVolts: number;
   /** Set when the tap's own cable cannot carry the line: nothing is laid and Task 10 writes the upgrade step. */
   blocked: { cable: string; amps: number } | null;
+  /** Parallel runs of `cable` the amps need (1 unless the cable is short of amps); the build list prices `(runs − 1) × blocks.length` on top of the laid run. */
+  runs: number;
 }
 
 /** The search box of a hookup reaches this far past the tap and the ports. */
@@ -444,8 +446,20 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
   if (!route.found) warnings.push(noPathWarning('power'));
   return {
     hookup: { kind: 'power', from: copyTap(tap), path: route.path, parts, found: route.found },
-    blocks, warnings, found: route.found, cable: pick?.cable ?? null, lossEUt, arrivingVolts, blocked,
+    blocks, warnings, found: route.found, cable: pick?.cable ?? null, lossEUt, arrivingVolts, blocked, runs: pick?.runs ?? 1,
   };
+}
+
+/**
+ * The build-list line for the parallel hookup runs the amps need beyond the one the hookup lays: `(runs − 1) ×` the
+ * laid cable cells, the `why` naming the parallel runs. Empty when one run carries the amps (`bomFromBlocks` prices
+ * the laid run from the hookup's blocks).
+ */
+export function parallelHookupParts(build: PowerHookupBuild): BomLine[] {
+  if (build.cable === null || build.runs <= 1) return [];
+  const cells = build.blocks.filter((b) => b.role === 'cable').length;
+  if (cells === 0) return [];
+  return [{ key: build.cable.itemKey, amount: (build.runs - 1) * cells, why: `power hookup (${fmtInt(build.runs)} parallel)`, group: 'power' }];
 }
 
 // ---- Logistics hookup ----
