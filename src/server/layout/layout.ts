@@ -460,6 +460,10 @@ interface Hookups {
   noPathAt: Map<string, Vec3>;
 }
 
+/** The landing cells the power hookup is searched to: the ones with the least loss inside the line. Bounded because
+ * each candidate costs one A* search in `bestPowerHookup`, so a long line's hookup costs at most this many plus one. */
+const POWER_LANDING_CANDIDATES = 3;
+
 /**
  * The world posKeys a hookup of item conduits that ends on a conduit face routes around: every cell face-adjacent to
  * a line block holding an Item Conduit (plan 11, ruling R14: EnderIO joins touching item conduits into one network, so
@@ -482,8 +486,45 @@ export function hookupKeepOff(lineBlocks: readonly LayoutBlock[], port: Vec3): S
 }
 
 /**
+ * The power hookup that loses least in total: the route to all the landing cells (as the line laid it until the
+ * landing-cell choice task), and one route to each of the `POWER_LANDING_CANDIDATES` cells with the least loss inside
+ * the line, each priced by its own loss plus the line's loss from where it lands (`supplyRunLoss`). A found route
+ * always beats a dashed guide; of equal totals the cheapest-inside-the-line candidate wins, and the all-cells route
+ * is last in the tie order, so the result is never worse than the plain route to all the cells. The search stops at the
+ * first shortlist cell whose loss alone reaches the best found total, as no farther cell can beat it.
+ */
+function bestPowerHookup(input: {
+  pack: Pack; tap: LayoutTap; world: RouteWorld; supplyTier: number; amps: number; maxNodes: number | undefined; line: LocalLine; frame: Frame;
+}): PowerHookupBuild {
+  const { pack, tap, world, supplyTier, amps, maxNodes, line, frame } = input;
+  const ports = line.internal.supplyRun.map((c) => worldPos(c, frame));
+  const price = (build: PowerHookupBuild, order: number) => ({
+    build, order, total: build.lossEUt + supplyRunLoss(line.internal.supply, landingIndex(line, frame, build.hookup)).lossEUt,
+  });
+  // the landing cells the hookup is searched to, the ones that lose least inside the line first (ties by position)
+  const shortlist = ports
+    .map((_, i) => ({ i, loss: supplyRunLoss(line.internal.supply, i).lossEUt }))
+    .sort((a, b) => a.loss - b.loss || a.i - b.i)
+    .slice(0, POWER_LANDING_CANDIDATES);
+  // the plain route to all the cells is searched first, so the candidates are priced against a found total from the
+  // start; a route's own loss is positive, so a candidate whose run loss alone reaches the best found total loses, and
+  // so does every cell after it in the shortlist — a found route's total bounds the rest of the searches
+  const ranked = [price(powerHookup({ pack, tap, ports, world, supplyTier, amps, maxNodes }), shortlist.length)];
+  let best = ranked[0]!.build.found ? ranked[0]!.total : Number.POSITIVE_INFINITY;
+  for (const [order, c] of shortlist.entries()) {
+    if (c.loss >= best) break;
+    const cand = price(powerHookup({ pack, tap, ports: [ports[c.i]!], world, supplyTier, amps, maxNodes }), order);
+    ranked.push(cand);
+    if (cand.build.found) best = Math.min(best, cand.total);
+  }
+  ranked.sort((a, b) => (a.build.found === b.build.found ? 0 : a.build.found ? -1 : 1) || a.total - b.total || a.order - b.order);
+  return ranked[0]!.build;
+}
+
+/**
  * Spec §3.5, §3.6, §3.8: the power hookup from the supply-tier tap whose cable can carry the line and that a route can
- * leave (`powerTapFor`) to the supply run, and the logistics hookup from the network's tap nearest the logistics port.
+ * leave (`powerTapFor`) to the supply run's best landing cell (`bestPowerHookup`), and the logistics hookup from the
+ * network's tap nearest the logistics port.
  * Each goes round the line's box (never through it, so it ends beside its port), the multiblocks' air cells, the areas
  * kept for the line's farms (`areas`, add-on 17: a hookup never reaches them) and the hookups laid before it; the power
  * hookup also keeps off everything of another tier, in the line and in the base, and a logistics hookup that ends on a
@@ -527,9 +568,7 @@ function buildHookups(input: {
       if (tap !== null) {
         const keepAway = new Set([...lineKeepAway, ...baseKeepAway(pack, scan, dim, supplyTier, tap.pos)]);
         const world: RouteWorld = { vox, line: routeLine, box, keepAway, areas };
-        const build = powerHookup({
-          pack, tap, ports: line.internal.supplyRun.map((c) => worldPos(c, frame)), world, supplyTier, amps: stages.supplyAmps, maxNodes,
-        });
+        const build = bestPowerHookup({ pack, tap, world, supplyTier, amps: stages.supplyAmps, maxNodes, line, frame });
         add(build, tap);
         out.power = { build, tap };
       }
