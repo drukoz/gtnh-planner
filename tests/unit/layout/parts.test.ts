@@ -1,10 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { resolveParts, PART_DEFS, pickCable, pickItemPipe, pickFluidPipe, pickTransformer, pickHatch, machineRef,
+import { resolveParts, PART_DEFS, pickCable, lowerLossCable, pickItemPipe, pickFluidPipe, pickTransformer, pickHatch, machineRef,
   pickConveyor, pickPump, coverRateWarning, ae2IdleEUt } from '../../../src/server/layout/parts.ts';
 import { fmtRate, joinNames } from '../../../src/shared/layout/format.ts';
 import { layoutPack, IDS, emptyPack, addLineParts } from '../../helpers/layout-fixtures.ts';
 import type { LayoutBlock } from '../../../src/shared/types/layout.ts';
+import type { Machine } from '../../../src/shared/types/pack.ts';
 import { machineByMteId } from '../../../src/server/pack/lookup.ts';
+
+const SUPERCONDUCTOR_1X = 1252;
+
+/** A superconductor cable: the pack's one cable that loses nothing, added to a pack by the loss-remedy test. */
+function addLosslessCable(pack: ReturnType<typeof layoutPack>): void {
+  const m: Machine = { id: `gt:${SUPERCONDUCTOR_1X}`, mteId: SUPERCONDUCTOR_1X, metaName: 'cable.superconductor.01',
+    name: '1x Superconductor Cable', cls: 'gregtech.api.metatileentity.implementations.MTECable',
+    itemKey: `gregtech:gt.blockmachines@${SUPERCONDUCTOR_1X}`, kind: 'cable', maps: [],
+    cable: { voltage: 32, amps: 4, lossPerBlock: 0, insulated: true, material: 'Naquadria' } };
+  pack.machines.set(m.id, m);
+  pack.machineByMteId.set(m.mteId, m);
+}
 
 describe('parts', () => {
   it('resolves parts by key, then by English name, else marks them missing', () => {
@@ -52,11 +65,27 @@ describe('parts', () => {
 
   it('chooses the insulated cable with the least loss that carries the volts and amps', () => {
     const pack = layoutPack();
-    expect(pickCable(pack, { volts: 32, amps: 2 })).toMatchObject({ cable: { mteId: IDS.TIN_2X }, ampsShort: false });
-    expect(pickCable(pack, { volts: 128, amps: 1 })).toMatchObject({ cable: { mteId: IDS.ANNEALED_1X }, ampsShort: false });
-    expect(pickCable(pack, { volts: 512, amps: 5 })).toMatchObject({ cable: { mteId: IDS.SILVER_2X }, ampsShort: true });
+    expect(pickCable(pack, { volts: 32, amps: 2 })).toMatchObject({ cable: { mteId: IDS.TIN_2X }, ampsShort: false, runs: 1 });
+    expect(pickCable(pack, { volts: 128, amps: 1 })).toMatchObject({ cable: { mteId: IDS.ANNEALED_1X }, ampsShort: false, runs: 1 });
+    expect(pickCable(pack, { volts: 512, amps: 5 })).toMatchObject({ cable: { mteId: IDS.SILVER_2X }, ampsShort: true, runs: 3 });
+    expect(pickCable(pack, { volts: 32, amps: 9 })).toMatchObject({ cable: { mteId: IDS.TIN_4X }, ampsShort: true, runs: 3 });
     expect(pickCable(pack, { volts: 2048, amps: 1 })).toBeNull();
     expect(machineRef(machineByMteId(pack, IDS.TIN_1X)!)).toEqual({ id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.TIN_1X });
+  });
+
+  it('names the cable that loses less at the run\'s volts and amps, and nothing when there is none', () => {
+    const pack = layoutPack();
+    const tin4x = machineByMteId(pack, IDS.TIN_4X)!;
+    // no pack cable of 32 V loses less than 4x Tin Cable's 1 V per block
+    expect(lowerLossCable(pack, { volts: 32, amps: 4 }, tin4x)).toBeNull();
+    // 1x Copper loses 2 V per block; the annealed ones lose 1, and the least of what carries 1 A comes first
+    expect(lowerLossCable(pack, { volts: 128, amps: 1 }, machineByMteId(pack, IDS.COPPER_1X)!)).toMatchObject({ mteId: IDS.ANNEALED_1X });
+    // nothing of the pack carries 3 A at 128 V, so the copper stays: the cable has to carry the run's amps too
+    expect(lowerLossCable(pack, { volts: 128, amps: 3 }, machineByMteId(pack, IDS.COPPER_1X)!)).toBeNull();
+    expect(lowerLossCable(pack, { volts: 32, amps: 4 }, { ...tin4x, cable: undefined })).toBeNull();     // not a cable
+    const withSuper = layoutPack();
+    addLosslessCable(withSuper);
+    expect(lowerLossCable(withSuper, { volts: 32, amps: 4 }, machineByMteId(withSuper, IDS.TIN_4X)!)).toMatchObject({ mteId: SUPERCONDUCTOR_1X });
   });
 
   it('chooses pipes, transformers and hatches', () => {

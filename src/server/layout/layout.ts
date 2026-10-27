@@ -17,7 +17,8 @@ import {
 import { FACES } from '../../shared/types/assets.ts';
 import type { FeedSpec } from '../../shared/types/feed.ts';
 import type {
-  ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutPowerContext, LayoutStatus, LayoutTap, Pin, ReservedArea,
+  ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutLoss, LayoutPowerContext, LayoutStatus, LayoutTap, Pin, ReservedArea,
+  TierLoss,
 } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, Plan, PlanContext, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
@@ -32,10 +33,10 @@ import { addedBlocks, attachCovers, placeUnits, replacedCasings, unitsFromPlan, 
 import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
 import { feedingWarnings } from './feed-rules.ts';
 import {
-  carryingTaps, chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup, reachableTap,
+  carryingTaps, chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, parallelHookupParts, powerHookup, reachableTap,
   tapCableAmps, type HookupBuild, type PowerHookupBuild, type RouteWorld,
 } from './hookups.ts';
-import { fluidNets, headWidthFor, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
+import { fluidNets, headWidthFor, parallelRunParts, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
 import { buildMode, PORT_SPACING, type ModeResult } from './modes/mode.ts';
 import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } from './parts.ts';
 import type { PathBounds } from './path.ts';
@@ -581,6 +582,11 @@ function idleDetail(power: PowerSummary, idle: number): PowerSummary {
   return idle > 0 ? { ...power, detail: `${power.detail ?? ''}; AE2 parts idle: ${fmtRate(idle)} EU/t` } : power;
 }
 
+/** What the line's cables and hookup lose (RUK-116, design G2), in the power card's detail. */
+function lossDetail(power: PowerSummary, lossEUt: number): PowerSummary {
+  return lossEUt > 0 ? { ...power, detail: `${power.detail ?? ''}; cables and hookup lose ${fmtInt(lossEUt)} EU/t` } : power;
+}
+
 // ---- Parts (stage 10) ----
 
 const COVER_NAMES: ReadonlyMap<StuffKey, string> = new Map([...COVER_RATES.conveyor, ...COVER_RATES.pump].map((r) => [r.key, r.name]));
@@ -728,6 +734,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: [], hookups: [], pins, buildSteps,
       bom: bomFromBlocks([], fit?.optional ?? []), warnings, status,
       power: fit?.power ?? { ...plan.power },
+      // nothing of its own to wire, so nothing to lose
+      loss: { tiers: [], hookupEUt: 0, banksEUt: 0, totalEUt: 0 },
       ...(reserved.length === 0 ? {} : { reserved }),
     };
   }
@@ -768,11 +776,18 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
   // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
   const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
+  // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
+  // highest tier, so the list stays tier descending
+  const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
+  const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
+  const banksEUt = stages?.lossEUt ?? 0;
+  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt };
   const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
 
   // stages 10–11 (parts and warnings first: the warning pins come from them)
   // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
-  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...addedBlocks(units), ...(fit?.optional ?? [])]);
+  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...parallelRunParts(line.internal.cables),
+    ...(hooked?.power == null ? [] : parallelHookupParts(hooked.power.build)), ...addedBlocks(units), ...(fit?.optional ?? [])]);
   // without a base the warning that says to pick one comes first (Review Focus 1)
   // the static feeding rules read the line as laid out (architecture §11 entry 51)
   const warnings = dedupeWarnings([
@@ -831,7 +846,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   return {
     dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: assignBuildSteps(blocks, buildSteps, stepsInput, hookups),
     hookups, pins, buildSteps, bom, warnings, status: finish.status,
-    power: fit === null ? need : idleDetail(fit.power, idle),
+    power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
+    loss,
     ...(replaced.length === 0 ? {} : { replaced }),
     ...(reserved.length === 0 ? {} : { reserved }),
   };

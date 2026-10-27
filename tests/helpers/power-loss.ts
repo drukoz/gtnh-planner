@@ -6,7 +6,7 @@
 // The loss figure comes from `Layout.power.detail` because this branch has no structured loss on the layout.
 // TODO(RUK-112): read Layout.loss.totalEUt once it lands.
 
-import { DIRS, posKey, step, type Vec3 } from '../../src/shared/layout/geometry.ts';
+import { DIRS, posKey, step } from '../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { LogisticsMode, Plan } from '../../src/shared/types/plan.ts';
 import type { Pack, Machine } from '../../src/shared/types/pack.ts';

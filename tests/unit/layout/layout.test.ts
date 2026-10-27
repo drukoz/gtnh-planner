@@ -61,6 +61,16 @@ describe('layoutLine', () => {
     expect(JSON.stringify(again)).toBe(JSON.stringify(layout));
   });
 
+  it('prices the parallel power-hookup runs the amps need in the build list', async () => {
+    // the line draws 4 A at MV and no MV cable carries it (2x Annealed Copper is the best at 2 A): the warning says 2 parallel
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ logistics: 'direct' }), ground());
+    const amps = layout.warnings.find((w) => w.code === 'cable_amps')!;
+    expect(amps.text).toBe('No cable carries 4 A at MV: run 2 parallel 2x Annealed Copper Cable lines');
+    // the build list's MV cable line carries the hookup's parallel runs, so the two numbers cannot disagree
+    const mvCable = layout.bom.find((l) => l.key === 'gregtech:gt.blockmachines@1387')!;
+    expect(mvCable.why).toContain('power hookup (2 parallel)');
+  });
+
   it('lays out without a scan so the 3D view and parts still work', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), emptyScan(), makeProject({ scanId: null, baseId: null }));
     expect([layout.status, layout.origin, layout.hookups, layout.pins]).toEqual(['no-world', [0, 64, 0], [], []]);
@@ -113,9 +123,29 @@ describe('layoutLine', () => {
     // banks 4 A out × 1 EU; LV: 2 macerators × 2 A × 4 V; MV from the hookup's landing cell (z 4): assembler 2 A × 14,
     // bank 2 A × 3; hookup 6 cables × 4 A × 1 V
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
-    expect(layout.power!.detail).toBe('Needs 258 EU/t on average (180 + 78 loss); 900 EU/t spare');
+    expect(layout.power!.detail).toBe('Needs 258 EU/t on average (180 + 78 loss); 900 EU/t spare; cables and hookup lose 78 EU/t');
     expect(layout.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
       .toBe('Run 6× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 122 V');
+  });
+
+  it("says what the line's cables lose, tier by tier, and in the power card", async () => {
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
+    // MV from the hookup's landing cell (z 4): assembler 2 A × 14 cables, bank 2 A × 3; LV: 2 macerators × 2 A × 4
+    expect(layout.loss).toEqual({ tiers: [
+      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 14, worstVolts: 114, lossEUt: 34 },
+      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 16 },
+    ], hookupEUt: 24, banksEUt: 4, totalEUt: 78 });       // the tiers' 50, the bank's emitter 4 and the hookup's 24
+    const parts = layout.loss!;
+    expect(parts.totalEUt).toBe(parts.tiers.reduce((sum, t) => sum + t.lossEUt, 0) + parts.hookupEUt + parts.banksEUt);
+    expect(layout.power!.detail).toContain('cables and hookup lose 78 EU/t');
+  });
+
+  it('prices the supply run from each consumer\'s far end when the line has no base to wire to', async () => {
+    const layout = await layoutLine(layoutPack(), twoStep(), emptyScan(), makeProject({ scanId: null, baseId: null }));
+    expect([layout.status, layout.loss]).toEqual(['no-world', { tiers: [
+      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 14, worstVolts: 114, lossEUt: 2 * 14 + 2 * 12 },
+      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 16 },
+    ], hookupEUt: 0, banksEUt: 4, totalEUt: 4 + 16 + 52 }]); // no hookup to price in, so each consumer pays at its own farthest cell
   });
 });
 
@@ -209,7 +239,7 @@ describe('layoutLine: the final review', () => {
       { voltageTier: 2, average: 6000, loadEUt: 0, storedEU: 0, taps: [] }]);
     const layout = await layoutLine(layoutPack(), hvLine(), two, makeProject(), ground());
     expect(layout.power!.fits).toBe('no');
-    expect(layout.power!.detail).toMatch(/; 0 EU\/t spare$/);
+    expect(layout.power!.detail).toContain('; 0 EU/t spare');
   });
 
   it('I-placement: checks a placement far from the base against what is really there, and never uses one from too far away', async () => {
