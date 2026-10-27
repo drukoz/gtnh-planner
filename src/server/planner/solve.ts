@@ -1474,12 +1474,13 @@ interface SolvedMip {
  */
 async function solvedMip(
   lp: MainLp, input: BuildMipInput, others: ReadonlyArray<readonly number[] | null | undefined>, limit: number, opts: SolveOptions,
-  cutoff = false,
+  restarts = true /* false: the lite start's build MIP, which never restarts its root (`liteStaged`) */,
 ): Promise<SolvedMip> {
   const mip = buildMip(input);
   const chosen = cheapestStart(lp, mip, input.rawBound, input.model.share, others);
-  const model = mip.modelAt(chosen?.cost ?? Infinity);
-  const { result, seconds, picked } = await runBuildMip(mip, chosen?.start, limit, opts, solveLp, model, cutoff);
+  const at = mip.modelAt(chosen?.cost ?? Infinity);
+  const model = restarts ? at : { ...at, allowRestart: false };
+  const { result, seconds, picked } = await runBuildMip(mip, chosen?.start, limit, opts, solveLp, model);
   return { mip, model, ...(result === undefined ? {} : { result }), seconds, picked };
 }
 
@@ -1605,12 +1606,12 @@ export async function pickBuild(
  * Release gate round 2, G1 (the user's Duty plate in about main's time): under the raw cap, in rate mode without
  * sharing, where the leanest line's MIP has at least LITE_MIN_INTEGERS whole columns, the build stage first solves the
  * lite relaxation of the leanest line (`liteLine`) beside plan 09's plan, whose plan rounded up is one more start of the
- * leanest line and of the build MIP, and each MIP takes its cheapest start as its cutoff; the build MIP then solves beside
+ * leanest line (its cheapest start its cutoff) and of the build MIP (which then never restarts); the build MIP solves beside
  * the leanest line at the lite plan's raw material to 9 digits and is kept where the leanest line's is the same, the plan
  * the same as solving it after the leanest line (`liteStaged`). The leanest line is still the build MIP at step charge 0
  * with its pseudo steps at the project's charge (U1, U2), fix wave 3 (F)'s solves and pick and plan 09's plan as a start
- * and a pick candidate (ruling 187) stand, and F4's solve without the start, which a start's lost root heuristics call
- * for, has no cause where the start is a cutoff.
+ * and a pick candidate (ruling 187) stand, the build MIP's F4 too; F4's solve without the start, which a start's lost
+ * root heuristics call for, has no cause in the leanest line's, whose start is its cutoff.
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
@@ -1901,12 +1902,14 @@ async function liteLine(lp: MainLp, plain: BuildMipInput, limit: number, opts: S
  * leanest line from the cheapest of S1, the sparse plan and the lite plan rounded up (`leanestLine`, on the solver thread)
  * beside the build MIP at the lite plan's raw material, both to 9 significant digits (`sig9`, the figure the plan reports
  * as `leanRawCost`): its cap (1 + cap) × that and the step charge's base (`leanRaw`), from the cheapest of S1, the sparse
- * plan, plan 09's plan and the lite plan rounded up (`solvedMip`, here). Each MIP takes its cheapest start as its cutoff,
- * not as its incumbent (`pickBuild`'s `cutoff`): measured on Duty plate, from the lite plan as an incumbent the leanest
- * line took 5-7 s, from it as the cutoff 4.3 s alone and 6.0 s on the board (10.6 s and 11.1 s from S1 today), the
- * build MIP 4.3-5.1 s (10.6 s and 11.6 s), and as an incumbent the build MIP's 50 nodes ended at a plan the surplus
- * board's five supply columns moved (144.64 on the board against 143.81 alone: the board did not settle), where without
- * an incumbent HiGHS runs the root heuristics its LP relaxation leads, as from plan 09's start. Where the leanest line's raw material to 9 digits
+ * plan, plan 09's plan and the lite plan rounded up (`solvedMip`, here). The leanest line, whose answer bounds the cap,
+ * takes its cheapest start as its cutoff, not as its incumbent (`pickBuild`'s `cutoff`): on Duty plate from the lite
+ * plan as an incumbent it took 5-7 s, as the cutoff 4.3 s alone and 6.0 s on the board (10.6 s and 11.1 s from S1).
+ * The build MIP keeps its start as its incumbent, fix wave 3 (F)'s solve, but never restarts its root (`allowRestart`):
+ * measured on the user's live board, from the lite plan with restarts its 50 nodes ended where the board's supply
+ * columns moved them and the board fell into a 2-cycle (Duty plate 41 steps at 11.58 raw a minute, then 38 at 10.36);
+ * with the lite plan as its cutoff instead the board settled but real-board's A3 (b) did not hold (10.36 against 11.11 on
+ * the board x 0.999); without restarts both held. Where the leanest line's raw material to 9 digits
  * is the lite plan's, that MIP is the build MIP of the true cap, from the same starts, so it is kept (`beside`: `kept`):
  * the plan is the one `sequentialLean` solves after the leanest line; else it is solved again at the leanest line's
  * (`re-solved`). The 9 digits make the two match where the leanest line keeps the lite plan's recipes but moves its
@@ -1931,12 +1934,12 @@ async function liteStaged(
   const others = [sparse, ignoredPlan.x, liteX];
   const guess = sig9(Math.max(rawOf(lp, liteX), s1.objective));
   const leaning = leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false, liteX);
-  const early = opts.sequentialLean === true ? undefined : await solvedMip(lp, at(guess), others, limit, opts, true);
+  const early = opts.sequentialLean === true ? undefined : await solvedMip(lp, at(guess), others, limit, opts, false);
   const lean = await leaning ?? { raw: s1.objective };
   const raw = sig9(lean.raw);
   const input = at(raw);
   if (early !== undefined && raw === guess) return { lean, ignoredPlan, input, others, cheapest: early, beside: 'kept' };
-  const cheapest = await solvedMip(lp, input, others, limit, opts, true);
+  const cheapest = await solvedMip(lp, input, others, limit, opts, false);
   return { lean, ignoredPlan, input, others, cheapest, ...(early === undefined ? {} : { beside: 're-solved' as const }) };
 }
 

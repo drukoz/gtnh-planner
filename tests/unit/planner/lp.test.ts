@@ -261,6 +261,9 @@ describe('a MIP with a cutoff (release gate round 2, G1: the lite start)', () =>
   it('passes the cutoff to HiGHS, and prunes nothing below it: the optimum where that is below it', async () => {
     expect(highsOptions({ ...cover, objectiveBound: 7 })).toMatchObject({ objective_bound: 7 });
     expect(highsOptions(cover)).not.toHaveProperty('objective_bound');
+    // and a MIP that may not restart its root (the lite start's build MIP)
+    expect(highsOptions({ ...cover, allowRestart: false })).toMatchObject({ mip_allow_restart: false });
+    expect(highsOptions(cover)).not.toHaveProperty('mip_allow_restart');
     const best = await solveLp({ ...cover, maxNodes: 100_000 });
     expect(best.status).toBe('optimal');
     const below = await solveLp({ ...cover, ...limits, objectiveBound: best.objective + 1 });

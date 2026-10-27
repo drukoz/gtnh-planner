@@ -62,6 +62,8 @@ export interface LpModel {
    * ended it first.
    */
   objectiveBound?: number;
+  /** False: a MIP never restarts its root after it fixes columns (HiGHS `mip_allow_restart`); absent: HiGHS's default (it may). */
+  allowRestart?: boolean;
 }
 /** The integrality and feasibility tolerance of every MIP with `maxNodes` unless the model sets one (523d6be: a binary at 1e-7 is not 0). */
 export const MIP_FEASIBILITY_TOLERANCE = 1e-10;
@@ -190,6 +192,7 @@ export function highsOptions(model: LpModel): Record<string, number | boolean> {
     }),
     ...(model.strongBranching === false ? { mip_pscost_minreliable: 0 } : {}),
     ...(model.objectiveBound === undefined ? {} : { objective_bound: model.objectiveBound }),
+    ...(model.allowRestart === false ? { mip_allow_restart: false } : {}),
   };
 }
 

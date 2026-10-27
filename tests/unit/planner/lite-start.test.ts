@@ -11,6 +11,22 @@ vi.mock('../../../src/server/planner/build-mip.ts', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../../src/server/planner/build-mip.ts')>();
   return { ...mod, buildMip: vi.fn(mod.buildMip) };
 });
+// The solves' cases read the build MIP's models solved here and the jobs handed the solver thread; every solve is HiGHS's.
+const seen = vi.hoisted(() => ({ here: [] as Array<import('../../../src/server/planner/lp.ts').LpModel>, aside: [] as Array<import('../../../src/server/planner/lp.ts').BuildRunsJob> }));
+vi.mock('../../../src/server/planner/lp.ts', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../../src/server/planner/lp.ts')>();
+  return {
+    ...mod,
+    solveLp: async (m: import('../../../src/server/planner/lp.ts').LpModel) => {
+      if (m.keepImproving === true) seen.here.push(m);
+      return mod.solveLp(m);
+    },
+    solveBuildRunsAside: async (job: import('../../../src/server/planner/lp.ts').BuildRunsJob) => {
+      seen.aside.push(job);
+      return mod.solveBuildRunsAside(job);
+    },
+  };
+});
 
 import { fastSlowSpec, opt, solderSpec, solvedWithBuild } from '../../helpers/build-fixtures.ts';
 import type { PackSpec } from '../../helpers/pack-spec.ts';
@@ -120,6 +136,29 @@ describe('the build MIP beside the leanest line (the lite start)', () => {
     expect(timeless(beside.sol)).toEqual(timeless(after.sol));
     // twice the same
     expect(timeless((await week(LITE)).sol)).toEqual(timeless(beside.sol));
+  });
+
+  it('starts the build MIP from its cheapest start, which it never restarts from, and gives the leanest line that start as its cutoff', async () => {
+    // Measured on the user's live board and real-board's A3 (b) (release gate round 2, G1): with the lite plan as its
+    // cutoff the build MIP's answer moved with the board's x 0.999 offers (raw 10.36 against 11.11 a minute); as its
+    // incumbent with restarts the board fell into a 2-cycle; as its incumbent without them both held.
+    seen.here.length = 0;
+    seen.aside.length = 0;
+    await week(LITE);
+    expect(seen.here.length).toBeGreaterThan(0);
+    for (const m of seen.here) {
+      expect(m.start).toBeDefined();
+      expect(m.allowRestart).toBe(false);
+      expect(m.objectiveBound).toBeUndefined();
+    }
+    // on the solver thread: the lite (no start, no cutoff), then the leanest line (its cheapest start as its cutoff)
+    expect(seen.aside.map((j) => [j.start === undefined, j.cutoff === undefined])).toEqual([[true, true], [true, false]]);
+    // off the lite path, the build MIP as before: its start an incumbent, restarts HiGHS's own
+    seen.here.length = 0;
+    seen.aside.length = 0;
+    await week();
+    for (const m of seen.here) expect(m.allowRestart).toBeUndefined();
+    expect(seen.aside.every((j) => j.cutoff === undefined)).toBe(true);
   });
 
   it('solves the build MIP again at the leanest line\'s raw material where the lite plan\'s differs', async () => {
