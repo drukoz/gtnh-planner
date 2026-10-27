@@ -791,11 +791,6 @@ function pumpCovers(input: InternalInput, plans: readonly FluidPlan[], pipeAt: R
 }
 
 /**
- * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
- * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
- * `stages` (no electric unit) nothing is wired.
- */
-/**
  * The build-list lines for the parallel cable runs a tier's amps need beyond the one the layout lays: for each entry of
  * `cables` with `runs > 1`, `(runs − 1) × cells` of the tier's cable, the `why` naming the parallel runs. Tier order as
  * `cables`; the layed run is priced by `bomFromBlocks`, so these are only the extra runs.
@@ -806,6 +801,11 @@ export function parallelRunParts(cables: InternalResult['cables']): BomLine[] {
   }));
 }
 
+/**
+ * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
+ * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
+ * `stages` (no electric unit) nothing is wired.
+ */
 export function routeInternal(input: InternalInput): InternalResult {
   const { placement, stages } = input;
   const grid = new Grid(input);
