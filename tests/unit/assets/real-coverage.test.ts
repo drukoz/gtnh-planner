@@ -47,8 +47,9 @@ const TARGETS: ReadonlyArray<readonly [StuffKey, LogisticsMode]> = [['IC2:itemPa
  * test the 3D blocks' coverage, not the planner's choices (the controller's ruling G2 at the integration's release gate,
  * round 2): with farms on (add-on 17), the ethylene line runs wholly on the base's owned machines and an owned Basic Crop
  * Manager, so with nothing new to build its layout is empty and lays out no GT pipe. Planned new, it builds GT pipes again.
+ * The IC2 circuit line likewise reuses the owned machines its ProjectRed pipes fed, so it lays out no RC5 block.
  */
-const NO_REUSE: ReadonlySet<StuffKey> = new Set<StuffKey>(['fluid:ethylene']);
+const NO_REUSE: ReadonlySet<StuffKey> = new Set<StuffKey>(['IC2:itemPartCircuit@0', 'fluid:ethylene']);
 // Reviewed: none. The plan's 11 block items whose registry name names their item icon in items/ (vanilla's
 // items/hopper.png, etfuturum's modern lanterns, chain, brewing stand, ...) are all block ids, which never take an
 // items/ file by name (architecture §11.43 (a)), so they keep their block face like every other block item.
@@ -339,9 +340,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
     // rc5(t): the ProjectRed pipes, AE2 cables and ForgeMultipart ghosts, each drawn from its model sheet's crops (39 and 0 at 340dad8)
     expect(TARGETS.map(([t]) => withPipe(rc5(t)).length)).toEqual(TARGETS.map(([t]) => rc5(t).length));
     expect(rc5('IC2:itemPartCircuit@0').length).toBeGreaterThan(0);
-    // vertical(t): the blocks other than cables and pipes whose front faces up or down (18 and 37 at 340dad8), each keeping its hull
+    // vertical(t): the blocks other than cables and pipes whose front faces up or down (18 and 37 at 340dad8; 5 and 0 planned
+    // new, G2), each keeping its hull
     expect(TARGETS.map(([t]) => vertical(t).filter(hullKept).length)).toEqual(TARGETS.map(([t]) => vertical(t).length));
-    expect(vertical('fluid:ethylene').length).toBeGreaterThan(0);
+    expect(vertical('IC2:itemPartCircuit@0').length).toBeGreaterThan(0);
   });
 
   it("the user's reports and the named rules", () => {
