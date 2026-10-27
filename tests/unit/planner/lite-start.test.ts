@@ -28,7 +28,7 @@ vi.mock('../../../src/server/planner/lp.ts', async (importOriginal) => {
   };
 });
 
-import { fastSlowSpec, opt, solderSpec, solvedWithBuild } from '../../helpers/build-fixtures.ts';
+import { fastSlowSpec, opt, solderSpec, solvedWithBuild, woodSpec } from '../../helpers/build-fixtures.ts';
 import type { PackSpec } from '../../helpers/pack-spec.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { buildMip, type BuildMipInput } from '../../../src/server/planner/build-mip.ts';
@@ -118,7 +118,7 @@ describe('the lite relaxation of the build MIP', () => {
 
 describe('the build MIP beside the leanest line (the lite start)', () => {
   it('solves the lite start only on a leanest line of at least LITE_MIN_INTEGERS whole columns', async () => {
-    expect(LITE_MIN_INTEGERS).toBe(2000);
+    expect(LITE_MIN_INTEGERS).toBe(3000);
     const small = await week();
     expect(small.runs).toEqual(['alloy-solder', 'board-solder', 'x-solder']);
     expect(small.sol.buildStats?.beside).toBeUndefined();
@@ -138,27 +138,46 @@ describe('the build MIP beside the leanest line (the lite start)', () => {
     expect(timeless((await week(LITE)).sol)).toEqual(timeless(beside.sol));
   });
 
-  it('starts the build MIP from its cheapest start, which it never restarts from, and gives the leanest line that start as its cutoff', async () => {
+  it('gives the leanest line the lite plan as its cutoff and the build MIP as its incumbent, never restarted, where it is their cheapest start', async () => {
     // Measured on the user's live board and real-board's A3 (b) (release gate round 2, G1): with the lite plan as its
     // cutoff the build MIP's answer moved with the board's x 0.999 offers (raw 10.36 against 11.11 a minute); as its
-    // incumbent with restarts the board fell into a 2-cycle; as its incumbent without them both held.
+    // incumbent with restarts the board fell into a 2-cycle; as its incumbent without them both held. Poly in small (a
+    // tank an hour, build-mip.test.ts): S1 and the sparse plan take the long way (three machines of 100), the lite plan
+    // the log (one of 10), the cheapest start of both MIPs.
+    const options = { 'w-tank': [opt(121, 1, 0.2, 10)], 's-grit': [opt(481, 1, 0.2, 100)], 's-paste': [opt(351, 1, 0.2, 100)], 's-tank': [opt(101, 1, 0.2, 100)] };
     seen.here.length = 0;
     seen.aside.length = 0;
-    await week(LITE);
+    const { runs } = await solvedWithBuild(woodSpec(), { 't:log@0': 1, 't:ore@0': 1 }, [['t:tank@0', 1 / 3600]], { options }, { stepCharge: 0.5, rawCap: 0.25, ...LITE });
+    expect(runs).toEqual(['w-tank']);
     expect(seen.here.length).toBeGreaterThan(0);
     for (const m of seen.here) {
       expect(m.start).toBeDefined();
       expect(m.allowRestart).toBe(false);
       expect(m.objectiveBound).toBeUndefined();
     }
-    // on the solver thread: the lite (no start, no cutoff), then the leanest line (its cheapest start as its cutoff)
+    // on the solver thread: the lite (no start, no cutoff), then the leanest line (the lite plan as its cutoff)
     expect(seen.aside.map((j) => [j.start === undefined, j.cutoff === undefined])).toEqual([[true, true], [true, false]]);
-    // off the lite path, the build MIP as before: its start an incumbent, restarts HiGHS's own
-    seen.here.length = 0;
-    seen.aside.length = 0;
-    await week();
-    for (const m of seen.here) expect(m.allowRestart).toBeUndefined();
-    expect(seen.aside.every((j) => j.cutoff === undefined)).toBe(true);
+  });
+
+  it('solves the leanest line and the build MIP as before where another start costs no more than the lite plan', async () => {
+    // The fast press line below: the lite plan is S1's (the fast press), so S1 rounded up stays both MIPs' start, an
+    // incumbent restarts may leave (Electronic Circuit MV on Project Red, two of every machine owned: from the sparse
+    // plan as its cutoff its leanest line found nothing below it, 1.032 against 0.884 as the incumbent). And off the lite
+    // path (the default gate) both solve as before too.
+    const options = { fast: [opt(301, 1, 0.2, 100)], slow: [opt(302, 1, 10, 160)] };
+    for (const opts of [LITE, {}] as SolveOptions[]) {
+      seen.here.length = 0;
+      seen.aside.length = 0;
+      await solvedWithBuild(fastSlowSpec(), { 't:a@0': 1 }, [['t:t@0', 0.3]], { options, horizonSeconds: 100 }, { stepCharge: 0.5, rawCap: 0.25, ...opts });
+      for (const m of seen.here) expect(m.allowRestart).toBeUndefined();
+      expect(seen.aside.some((j) => j.start !== undefined)).toBe(true);   // the leanest line from its start, an incumbent
+      expect(seen.aside.every((j) => j.cutoff === undefined)).toBe(true);
+    }
+    for (const opts of [{}] as SolveOptions[]) {
+      seen.here.length = 0;
+      await week(opts);
+      for (const m of seen.here) expect(m.allowRestart).toBeUndefined();
+    }
   });
 
   it('solves the build MIP again at the leanest line\'s raw material where the lite plan\'s differs', async () => {
