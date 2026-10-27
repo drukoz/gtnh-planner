@@ -1532,9 +1532,10 @@ export async function pickBuild(
   const last = runs[runs.length - 1] as LpResult;
   const retried = again === true ? { retried: true as const } : {};
   const given = job.cutoff !== undefined && start !== undefined ? start : undefined;
-  // With a cutoff and no whole solution below it — none is (`infeasible`), its limits stopped it first, or it reports one
-  // no better (HiGHS's LP solves stop at the cutoff, but its heuristics may still report such a solution, which stays a
-  // pick candidate below) — the start, but where the time guard stopped it or HiGHS failed (no plan, as from a start).
+  // With a cutoff and no whole solution below it, the start: none is (`infeasible`), its limits stopped it first, or it
+  // reports one no better as its answer (`optimal` or `feasible`: HiGHS's LP solves stop at the cutoff, but its
+  // heuristics may still find such a solution), which HiGHS never counts among `improving`, so that one is no pick
+  // candidate below. Not where the time guard stopped it or HiGHS failed: no plan, as from a start.
   const beaten = wholeBuild(last) && last.objective < objective;
   const kept = given !== undefined && !beaten
     && (wholeBuild(last) || last.status === 'infeasible' || (last.status === 'error' && last.stop === 'limit'));
