@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { routeInternal, fluidNets, headWidthFor, runX, supplyRunLoss } from '../../../src/server/layout/internal.ts';
 import { unitsFromPlan, placeUnits, type LocalBlock, type Placement, type Unit } from '../../../src/server/layout/arrange.ts';
-import { hookupAllowanceVolts, tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
+import { hookupAllowanceVolts, tierGroups, transformerStages, deliveredVolts } from '../../../src/server/layout/power.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makePlan, IDS } from '../../helpers/layout-fixtures.ts';
+import { V } from '../../../src/shared/gt/tiers.ts';
 import { machineIdOfLegacy } from '../../../src/shared/ids.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { Machine } from '../../../src/shared/types/pack.ts';
@@ -13,6 +14,13 @@ const twoStep = () => makePlan([
   { id: 's2', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
 ]);
 const groupsOf = (units: Unit[]) => tierGroups(units.filter((u) => u.electric).map((u) => ({ tier: u.tier, euPerTick: u.euPerTick })));
+
+/**
+ * The remedy a high LV loss inside `twoStep()`'s line gets: the run carries the LV bank's 4 A, and no pack cable of
+ * 32 V that carries 4 A loses less than 4x Tin Cable's 1 V per block.
+ */
+const LV_REMEDY = 'Nothing in this export loses less at LV: feed the line from a higher-voltage tap and step down beside '
+  + 'the machines, or build a shorter line.';
 
 function reachesRun(blocks: LocalBlock[], from: Vec3, x: number): boolean {
   const cables = new Map(blocks.filter((b) => b.role === 'cable').map((b) => [posKey(b.pos), b]));
@@ -74,8 +82,7 @@ describe('internal routing', () => {
     expect(r.stages).toMatchObject({ supplyAmps: 4, stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 2, ampsOut: 4 }] });
     expect(r.warnings).toEqual([
       { code: 'cable_amps', text: 'No cable carries 4 A at MV: run 2 parallel 2x Annealed Copper Cable lines' },
-      { code: 'cable_loss_high', text: 'The LV wiring inside the line loses up to 13% over 4 blocks of 4x Tin Cable: it is sized for that, '
-        + 'but a cable with less loss or a shorter line wastes less power' },
+      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 4 of 32 V over 4 blocks of 4x Tin Cable — about 16 EU/t. ${LV_REMEDY}` },
     ]);
     expect(tierContacts(r.blocks, r.cables, placement)).toEqual([]);
     expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(2, u.tier)))).toEqual([true, true, true]);
@@ -171,8 +178,7 @@ describe('internal routing edge cases', () => {
     expect(r.warnings).toEqual([
       { code: 'cable_amps', text: 'No cable carries 3 A at MV: run 2 parallel 2x Annealed Copper Cable lines' },
       { code: 'route_failed', stepId: 's2', text: 'Could not wire Advanced Assembler inside the line — connect it by hand' },
-      { code: 'cable_loss_high', text: 'The LV wiring inside the line loses up to 13% over 4 blocks of 4x Tin Cable: it is sized for that, '
-        + 'but a cable with less loss or a shorter line wastes less power' },
+      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 4 of 32 V over 4 blocks of 4x Tin Cable — about 16 EU/t. ${LV_REMEDY}` },
     ]);
     expect(blockAt(r, [4, 0, 0])).toBeUndefined();
     expect(placement.units.filter((u) => u.tier === 1).map((u) => reachesRun(r.blocks, u.ports.power!, 2))).toEqual([true, true]);
@@ -303,8 +309,7 @@ describe('internal routing edge cases', () => {
       { code: 'cable_amps', text: 'No cable carries 7 A at MV: run 4 parallel 2x Annealed Copper Cable lines' },
       { code: 'cable_amps', text: 'No cable carries 25 A at LV: run 7 parallel 4x Tin Cable lines' },
       { code: 'transformer_bank', text: 'Put 3 more Low Voltage Transformer beside the bank' },
-      { code: 'cable_loss_high', text: 'The LV wiring inside the line loses up to 16% over 5 blocks of 4x Tin Cable: it is sized for that, '
-        + 'but a cable with less loss or a shorter line wastes less power' },
+      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 5 of 32 V over 5 blocks of 4x Tin Cable — about 125 EU/t. ${LV_REMEDY}` },
     ]);
     expect(reachesRun(r.blocks, placement.units[0]!.ports.power!, 2)).toBe(true);
     // a deep multiblock in row N only: the bank centred on the spine would leave the line, so it moves back inside
@@ -362,6 +367,20 @@ describe('internal routing edge cases', () => {
     const c = route(noPipe, fluidPlan, null).r;
     expect(c.warnings).toEqual([{ code: 'no_pipe', text: 'No GT fluid pipe in this export: connect Molten Iron by hand' }]);
     expect([c.blocks, c.fluidPipes, c.covers.length]).toEqual([[], [], 1]);
+  });
+
+  it('names the lossless cable when the export has one that carries the run', () => {
+    const pack = layoutPack();
+    // bare, so `pickCable` still prefers the insulated 4x Tin Cable for the run and the loss stays high
+    const superconductor: Machine = { id: 'gt:1252', mteId: 1252, metaName: 'cable.superconductor.01', name: '1x Superconductor Cable',
+      cls: 'gregtech.api.metatileentity.implementations.MTECable', itemKey: 'gregtech:gt.blockmachines@1252', kind: 'cable', maps: [],
+      cable: { voltage: 32, amps: 4, lossPerBlock: 0, insulated: false, material: 'Naquadria' } };
+    pack.machines.set(superconductor.id, superconductor);
+    const { r } = route(pack, twoStep(), 2);
+    expect(r.warnings[1]).toEqual({ code: 'cable_loss_high',
+      text: 'The LV wiring inside the line loses 4 of 32 V over 4 blocks of 4x Tin Cable — about 16 EU/t. '
+        + 'Lay 1x Superconductor Cable instead: it loses nothing.' });
+    expect(r.cables.map((c) => c.cable.mteId)).toEqual([IDS.ANNEALED_2X, IDS.TIN_4X]);      // laid as before: the loss is advice
   });
 });
 
@@ -434,12 +453,32 @@ describe('internal routing: tiers apart, sized for the loss', () => {
     const { r } = route(twoStep(), 2);
     // the assembler (2 A) is 10 to 14 cables from the supply-run cells z 0…4, the bank (2 A in) 3, 2, 1, 2, 3
     expect(r.supply).toEqual({ tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1,
-      consumers: [{ amps: 2, blocks: [10, 11, 12, 13, 14] }, { amps: 2, blocks: [3, 2, 1, 2, 3] }] });
-    expect(supplyRunLoss(r.supply, 0)).toEqual({ lossEUt: 2 * 10 + 2 * 3, warning: null });
-    expect(supplyRunLoss(r.supply, 4).warning).toEqual({ code: 'cable_loss_high', text: 'The MV wiring inside the line loses up to 11% over 14 blocks of '
-      + '2x Annealed Copper Cable: it is sized for that, but a cable with less loss or a shorter line wastes less power' });
+      consumers: [{ amps: 2, blocks: [10, 11, 12, 13, 14] }, { amps: 2, blocks: [3, 2, 1, 2, 3] }],
+      remedy: 'Nothing in this export loses less at MV: build a shorter line, or split the line in two.' });
+    expect(supplyRunLoss(r.supply, 0)).toEqual({ lossEUt: 2 * 10 + 2 * 3, warning: null,
+      tier: { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 10, worstVolts: 118, lossEUt: 2 * 10 + 2 * 3 } });
+    expect(supplyRunLoss(r.supply, 4).warning).toEqual({ code: 'cable_loss_high',
+      text: 'The MV wiring inside the line loses 14 of 128 V over 14 blocks of 2x Annealed Copper Cable — about 34 EU/t. '
+        + 'Nothing in this export loses less at MV: build a shorter line, or split the line in two.' });
     expect(supplyRunLoss(r.supply, null)).toEqual(supplyRunLoss(r.supply, 4));            // unknown landing: the worst cell
     expect(r.lossEUt).toBe(2 * 4 + 2 * 4);                                                  // the LV run: two macerators, 2 A over 4 cables
-    expect(supplyRunLoss(null, 2)).toEqual({ lossEUt: 0, warning: null });
+    expect(r.tiers).toEqual([
+      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 2 * 4 + 2 * 4 },
+    ]);                                                                                     // the supply run's tier comes with the hookup
+    expect(supplyRunLoss(null, 2)).toEqual({ lossEUt: 0, warning: null, tier: null });
+  });
+
+  it('reports what every wired tier loses, highest first, summing to the loss inside the line', () => {
+    const plan = makePlan([
+      { id: 'h', mteId: IDS.CHEM_HV, count: 2, tier: 3, euPerTick: 256 },
+      { id: 'm', mteId: IDS.ASSEMBLER, count: 2, tier: 2, euPerTick: 64 },
+      { id: 'l', mteId: IDS.MACERATOR, count: 2, euPerTick: 16 },
+    ]);
+    const { r } = route(plan, 3);
+    expect(r.tiers.map((t) => t.tier)).toEqual([2, 1]);                       // the supply run's comes with the hookup
+    for (const t of r.tiers) {
+      expect([t.lossEUt > 0, t.worstBlocks > 0, t.worstVolts]).toEqual([true, true, deliveredVolts(V[t.tier]!, t.lossPerBlock * t.worstBlocks)]);
+    }
+    expect(r.tiers.reduce((sum, t) => sum + t.lossEUt, 0)).toBe(r.lossEUt);
   });
 });

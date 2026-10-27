@@ -143,6 +143,33 @@ export interface ReservedArea {
  */
 export type LayoutStatus = 'ok' | 'empty' | 'no-world';
 
+/**
+ * One voltage tier's cable loss inside the line (RUK-116, design G2). GregTech charges loss per amp per cable block
+ * along the path a packet takes (gt-mechanics §3.3), so a tier's EU/t is every amp drawn on it times the volts those
+ * packets lose on their way, and the tier's worst path is what under-volts its farthest machine.
+ */
+export interface TierLoss {
+  tier: number;
+  /** The cable laid for the tier. */
+  cable: string;
+  /** Volts a packet loses per cable block it crosses. */
+  lossPerBlock: number;
+  /** The most cable blocks between where the tier's power enters and its farthest consumer. */
+  worstBlocks: number;
+  /** The volts the farthest consumer's packets reach it with. */
+  worstVolts: number;
+  /** EU/t this tier's cables lose, counted from where the tier's power enters (the hookup's own loss is not in it). */
+  lossEUt: number;
+}
+
+/** What the line's cables lose: tier by tier, and in total as the power fit counts it (RUK-116, design G2). */
+export interface LayoutLoss {
+  /** Tier descending; the tiers of the line's own wiring, plus the supply run's tier once the hookup's landing cell is known. */
+  tiers: TierLoss[];
+  /** EU/t the power need counts: the banks' emitter loss, the line's own cables, the supply run and the power hookup. */
+  totalEUt: number;
+}
+
 export interface Layout {
   dim: number; origin: [number, number, number]; size: [number, number, number]; rotation: 0 | 90 | 180 | 270; mode: LogisticsMode;
   blocks: LayoutBlock[]; hookups: Hookup[]; pins: Pin[]; buildSteps: BuildStep[]; bom: BomLine[]; warnings: PlanWarning[];
@@ -150,6 +177,8 @@ export interface Layout {
   status?: LayoutStatus;
   /** The plan's power summary with the line's losses, AE2 idle draw and the power fit. */
   power?: PowerSummary;
+  /** What the line's cables lose, tier by tier, and the total that counts into `power` (RUK-116). */
+  loss?: LayoutLoss;
   /** Structure casings that hatches replace. */
   replaced?: BomLine[];
   // optional addition
