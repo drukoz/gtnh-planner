@@ -564,8 +564,8 @@ function buildHookups(input: {
   return out;
 }
 
-/** The supply-run cell (its index z) the power hookup's last cell touches; null without a power hookup. */
-function landingZ(line: LocalLine, frame: Frame, hookup: Hookup | undefined): number | null {
+/** The index in `internal.supplyRun` of the cell the power hookup's last cell touches; null without a power hookup. */
+function landingIndex(line: LocalLine, frame: Frame, hookup: Hookup | undefined): number | null {
   const last = hookup?.path.at(-1);
   if (last === undefined) return null;
   const z = line.internal.supplyRun.findIndex((c) => sideToward(last, worldPos(c, frame)) !== -1);
@@ -765,7 +765,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const idle = ae2IdleEUt(blocks, parts);
   const need = withIdleDraw(plan.power, idle);
   // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
-  const supplyRun = supplyRunLoss(line.internal.supply, landingZ(line, frame, hooked?.power?.build.hookup));
+  const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
   // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
   const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
   const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
