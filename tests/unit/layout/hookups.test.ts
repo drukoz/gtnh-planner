@@ -55,6 +55,14 @@ describe('hookups', () => {
     expect(r.warnings).toEqual([{ code: 'cable_loss_high', text: 'The power run loses 31% over 10 blocks of 2x Tin Cable — move the line closer to the tap or use a better cable' }]);
   });
 
+  it('prices the parallel runs the amps need, matching the warning', () => {
+    // no LV cable carries 9 A: 4x Tin Cable (4 A) needs 3 parallel runs over the 10-block route
+    const r = powerHookup({ pack: layoutPack(), tap: tap([0, 64, 0], { freeAmps: 12, cableAmps: 9 }), ports: [[11, 64, 0]],
+      world: { vox: vox(), line: lineAt(11, 14, 0, 3) }, supplyTier: 1, amps: 9 });
+    expect(r.hookup.parts).toEqual([{ key: 'gregtech:gt.blockmachines@1248', amount: 30, why: 'power hookup (3 parallel)', group: 'power' }]);
+    expect(r.warnings).toContainEqual({ code: 'cable_amps', text: 'No cable carries 9 A at LV: run 3 parallel 4x Tin Cable lines' });
+  });
+
   it('walks around a wall', () => {
     const r = power(vox([{ from: [5, 60, -4], to: [5, 71, 3], block: STONE }]));
     expect(r.found).toBe(true);

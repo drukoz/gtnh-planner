@@ -413,7 +413,7 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
   if (pick === null) {
     warnings.push({ code: 'no_cable', text: `No cable for ${tierName(supplyTier)} in this export` });
   } else {
-    const { cable } = pick;
+    const { cable, runs } = pick;
     const lossPerBlock = cable.cable!.lossPerBlock;
     lossEUt = lineLossEUt(amps, run.length, lossPerBlock);
     arrivingVolts = volts - run.length * lossPerBlock;
@@ -427,7 +427,7 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
         const connections = bits.get(posKey(pos));
         return { pos: [...pos], block: machineRef(cable), role: 'cable', label: cable.name, item: cable.itemKey, ...(connections === undefined ? {} : { connections }) };
       });
-      parts = [{ key: cable.itemKey, amount: blocks.length, why: 'power hookup', group: 'power' }];
+      parts = [{ key: cable.itemKey, amount: runs * blocks.length, why: runs > 1 ? `power hookup (${fmtInt(runs)} parallel)` : 'power hookup', group: 'power' }];
     }
   }
   if (blocked !== null) {
@@ -439,7 +439,7 @@ export function powerHookup(input: { pack: Pack; tap: LayoutTap; ports: readonly
   if (pick?.ampsShort) {
     const cable = pick.cable;
     warnings.push({ code: 'cable_amps',
-      text: `No cable carries ${fmtInt(amps)} A at ${tierName(supplyTier)}: run ${Math.ceil(amps / cable.cable!.amps)} parallel ${cable.name} lines` });
+      text: `No cable carries ${fmtInt(amps)} A at ${tierName(supplyTier)}: run ${fmtInt(pick.runs)} parallel ${cable.name} lines` });
   }
   if (!route.found) warnings.push(noPathWarning('power'));
   return {
