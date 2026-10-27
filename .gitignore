@@ -18,3 +18,6 @@ projector-mod/run/
 
 # Paperclip run data (agent home, OpenCode snapshots); never commit it
 .paperclip-runtime/
+
+# Per-machine Claude Code settings (absolute worktree paths); never commit it
+.claude/settings.local.json
