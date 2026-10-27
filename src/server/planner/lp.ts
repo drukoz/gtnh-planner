@@ -53,6 +53,17 @@ export interface LpModel {
   stopOnRootLpFailure?: boolean;
   /** Keep every improving whole solution HiGHS reports, in order (`LpResult.improving`). */
   keepImproving?: boolean;
+  // optional addition (release gate round 2, G1: the lite start)
+  /**
+   * A MIP's cutoff (HiGHS `objective_bound`): its LP solves stop where their objective reaches this, so its search prunes
+   * every node no better than it — the objective of a plan known beside the solve, which then needs no start
+   * (`BuildRunsJob.cutoff`). Its heuristics may still report a whole solution no better than it; with none it is
+   * `infeasible` where its root LP relaxation is no better, and `error` with `stop` where its limits (or the time guard)
+   * ended it first.
+   */
+  objectiveBound?: number;
+  /** False: a MIP never restarts its root after it fixes columns (HiGHS `mip_allow_restart`); absent: HiGHS's default (it may). */
+  allowRestart?: boolean;
 }
 /** The integrality and feasibility tolerance of every MIP with `maxNodes` unless the model sets one (523d6be: a binary at 1e-7 is not 0). */
 export const MIP_FEASIBILITY_TOLERANCE = 1e-10;
@@ -180,6 +191,8 @@ export function highsOptions(model: LpModel): Record<string, number | boolean> {
       mip_max_nodes: model.maxNodes, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: model.feasibilityTolerance ?? MIP_FEASIBILITY_TOLERANCE,
     }),
     ...(model.strongBranching === false ? { mip_pscost_minreliable: 0 } : {}),
+    ...(model.objectiveBound === undefined ? {} : { objective_bound: model.objectiveBound }),
+    ...(model.allowRestart === false ? { mip_allow_restart: false } : {}),
   };
 }
 
@@ -262,7 +275,8 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
             stop: status === statuses.timeLimit ? 'time' : 'limit',
           });
         }
-        return withRun(notOptimal('error'));
+        // With a cutoff: its limits (or the time guard) ended it before a whole solution below it.
+        return withRun(model.objectiveBound === undefined ? notOptimal('error') : { ...notOptimal('error'), stop: status === statuses.timeLimit ? 'time' : 'limit' });
     }
   });
 }
@@ -274,7 +288,12 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
  * `strongBranching`, `keepImproving`), from `start` where one is given; `retryTolerance` is the feasibility tolerance of
  * its later solves, and a root LP relaxation whose bound is at most `tiny` (or has none) did not solve.
  */
-export interface BuildRunsJob { model: LpModel; start?: number[]; retryTolerance: number; tiny: number }
+export interface BuildRunsJob {
+  model: LpModel; start?: number[]; retryTolerance: number; tiny: number;
+  // optional addition (release gate round 2, G1)
+  /** In place of `start`: the objective of the plan the solve must beat, its cutoff (`LpModel.objectiveBound`) in every solve. */
+  cutoff?: number;
+}
 /** A build MIP's solves in order (`solveBuildRuns`), with `retried` and `bare` saying which ran after the first. */
 export interface BuildRuns { runs: LpResult[]; retried?: true; bare?: 'kept' | 'stalled' }
 
@@ -288,12 +307,14 @@ export function wholeBuild(r: LpResult): boolean {
  * does not solve (`stopOnRootLpFailure`), then, where it did not, one more at `retryTolerance` from the same start
  * (`retried`). Where the last of those stopped on its limits at the root (`nodes` 0) after its root LP relaxation solved
  * (its `bound` above `tiny`) with nothing better than the start, one more at `retryTolerance` without the start (`bare`:
- * `kept` when it gave a whole solution, which joins `runs`; `stalled` when not). `solver` solves each model.
+ * `kept` when it gave a whole solution, which joins `runs`; `stalled` when not). With `cutoff` in place of the start,
+ * every solve looks below it (`objectiveBound`) and none runs bare: without an incumbent HiGHS already runs the root
+ * heuristics a bare solve is for. `solver` solves each model.
  */
 export async function solveBuildRuns(job: BuildRunsJob, solver: (model: LpModel) => Promise<LpResult> = solveLp): Promise<BuildRuns> {
-  const { model, start, retryTolerance, tiny } = job;
+  const { model, start, retryTolerance, tiny, cutoff } = job;
   const solve = (tolerance?: number, bare = false): Promise<LpResult> => solver({
-    ...model, ...(start === undefined || bare ? {} : { start }),
+    ...model, ...(start === undefined || bare ? {} : { start }), ...(cutoff === undefined ? {} : { objectiveBound: cutoff }),
     ...(tolerance === undefined ? { stopOnRootLpFailure: true } : { feasibilityTolerance: tolerance }),
   });
   const first = await solve();
