@@ -173,15 +173,16 @@ function cablesRated(pack: Pack, volts: number): CableMachine[] {
 /**
  * The cable for packets of `need.volts` carrying `need.amps`: among cables rated for the volts, the first in
  * `cableOrder` that carries the amps; when none does, the first of the highest-amp ones with `ampsShort` (the caller
- * lays parallel runs). Null when no cable takes the volts.
+ * lays parallel runs). Null when no cable takes the volts. `runs`: how many parallel runs of `cable` the amps need
+ * (1 unless `ampsShort`).
  */
-export function pickCable(pack: Pack, need: { volts: number; amps: number }): { cable: Machine; ampsShort: boolean } | null {
+export function pickCable(pack: Pack, need: { volts: number; amps: number }): { cable: Machine; ampsShort: boolean; runs: number } | null {
   const rated = cablesRated(pack, need.volts);
   if (rated.length === 0) return null;
   const enough = rated.filter((m) => m.cable.amps >= need.amps);
-  if (enough.length > 0) return { cable: enough[0]!, ampsShort: false };
-  const most = Math.max(...rated.map((m) => m.cable.amps));
-  return { cable: rated.filter((m) => m.cable.amps === most)[0]!, ampsShort: true };
+  if (enough.length > 0) return { cable: enough[0]!, ampsShort: false, runs: 1 };
+  const best = rated.filter((m) => m.cable.amps === Math.max(...rated.map((m) => m.cable.amps)))[0]!;
+  return { cable: best, ampsShort: true, runs: Math.max(1, Math.ceil(need.amps / best.cable.amps)) };
 }
 
 /**

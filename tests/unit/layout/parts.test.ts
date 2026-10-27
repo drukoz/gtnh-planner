@@ -65,9 +65,10 @@ describe('parts', () => {
 
   it('chooses the insulated cable with the least loss that carries the volts and amps', () => {
     const pack = layoutPack();
-    expect(pickCable(pack, { volts: 32, amps: 2 })).toMatchObject({ cable: { mteId: IDS.TIN_2X }, ampsShort: false });
-    expect(pickCable(pack, { volts: 128, amps: 1 })).toMatchObject({ cable: { mteId: IDS.ANNEALED_1X }, ampsShort: false });
-    expect(pickCable(pack, { volts: 512, amps: 5 })).toMatchObject({ cable: { mteId: IDS.SILVER_2X }, ampsShort: true });
+    expect(pickCable(pack, { volts: 32, amps: 2 })).toMatchObject({ cable: { mteId: IDS.TIN_2X }, ampsShort: false, runs: 1 });
+    expect(pickCable(pack, { volts: 128, amps: 1 })).toMatchObject({ cable: { mteId: IDS.ANNEALED_1X }, ampsShort: false, runs: 1 });
+    expect(pickCable(pack, { volts: 512, amps: 5 })).toMatchObject({ cable: { mteId: IDS.SILVER_2X }, ampsShort: true, runs: 3 });
+    expect(pickCable(pack, { volts: 32, amps: 9 })).toMatchObject({ cable: { mteId: IDS.TIN_4X }, ampsShort: true, runs: 3 });
     expect(pickCable(pack, { volts: 2048, amps: 1 })).toBeNull();
     expect(machineRef(machineByMteId(pack, IDS.TIN_1X)!)).toEqual({ id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.TIN_1X });
   });

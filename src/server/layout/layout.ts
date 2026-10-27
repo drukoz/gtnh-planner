@@ -33,10 +33,10 @@ import { addedBlocks, attachCovers, placeUnits, replacedCasings, unitsFromPlan, 
 import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
 import { feedingWarnings } from './feed-rules.ts';
 import {
-  carryingTaps, chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup, reachableTap,
+  carryingTaps, chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, parallelHookupParts, powerHookup, reachableTap,
   tapCableAmps, type HookupBuild, type PowerHookupBuild, type RouteWorld,
 } from './hookups.ts';
-import { fluidNets, headWidthFor, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
+import { fluidNets, headWidthFor, parallelRunParts, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
 import { buildMode, PORT_SPACING, type ModeResult } from './modes/mode.ts';
 import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } from './parts.ts';
 import type { PathBounds } from './path.ts';
@@ -565,8 +565,8 @@ function buildHookups(input: {
   return out;
 }
 
-/** The supply-run cell (its index z) the power hookup's last cell touches; null without a power hookup. */
-function landingZ(line: LocalLine, frame: Frame, hookup: Hookup | undefined): number | null {
+/** The index in `internal.supplyRun` of the cell the power hookup's last cell touches; null without a power hookup. */
+function landingIndex(line: LocalLine, frame: Frame, hookup: Hookup | undefined): number | null {
   const last = hookup?.path.at(-1);
   if (last === undefined) return null;
   const z = line.internal.supplyRun.findIndex((c) => sideToward(last, worldPos(c, frame)) !== -1);
@@ -773,7 +773,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const idle = ae2IdleEUt(blocks, parts);
   const need = withIdleDraw(plan.power, idle);
   // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
-  const supplyRun = supplyRunLoss(line.internal.supply, landingZ(line, frame, hooked?.power?.build.hookup));
+  const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
   // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
   const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
   // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
@@ -786,7 +786,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
 
   // stages 10–11 (parts and warnings first: the warning pins come from them)
   // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
-  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...addedBlocks(units), ...(fit?.optional ?? [])]);
+  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...parallelRunParts(line.internal.cables),
+    ...(hooked?.power == null ? [] : parallelHookupParts(hooked.power.build)), ...addedBlocks(units), ...(fit?.optional ?? [])]);
   // without a base the warning that says to pick one comes first (Review Focus 1)
   // the static feeding rules read the line as laid out (architecture §11 entry 51)
   const warnings = dedupeWarnings([
