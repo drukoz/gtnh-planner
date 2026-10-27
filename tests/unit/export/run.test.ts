@@ -22,6 +22,9 @@ async function setup(mode: string, extra: Partial<RunOptions> = {}) {
   return { dir, opts, pids, argsFile };
 }
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// Polled, not instantaneous: `kill(pid, 0)` cannot tell a zombie from a live process, and `stopGroup` only promises a
+// best-effort stop, so a killed group member can still read as alive for a moment after `runExport` resolves. The
+// property worth asserting is that the group is gone shortly after, not at that exact instant.
 const allDead = async (pids: string) => (await readFile(pids, 'utf8')).trim().split('\n').map(Number).every((p) => !alive(p));
 
 describe('runExport', () => {
@@ -48,14 +51,14 @@ describe('runExport', () => {
     const { opts, pids } = await setup('hang');
     const r = await runExport(opts);
     expect(r).toMatchObject({ ok: false, timedOut: true, marker: null });
-    expect(await allDead(pids)).toBe(true);
+    await expect.poll(() => allDead(pids), { timeout: 5_000, message: 'the JVM process group is gone' }).toBe(true);
   });
 
   it('kills a JVM that lingers after EXPORT_OK and still succeeds', async () => {
     const { opts, pids } = await setup('linger');
     const r = await runExport(opts);
     expect(r).toMatchObject({ ok: true, marker: 'EXPORT_OK', killedAfterMarker: true });
-    expect(await allDead(pids)).toBe(true);
+    await expect.poll(() => allDead(pids), { timeout: 5_000, message: 'the JVM process group is gone' }).toBe(true);
   });
 
   it('stops the JVM when aborted', async () => {
@@ -64,7 +67,7 @@ describe('runExport', () => {
     setTimeout(() => ac.abort(), 300);
     const r = await runExport({ ...opts, signal: ac.signal });
     expect(r).toMatchObject({ ok: false, aborted: true });
-    expect(await allDead(pids)).toBe(true);
+    await expect.poll(() => allDead(pids), { timeout: 5_000, message: 'the JVM process group is gone' }).toBe(true);
   });
 });
 
