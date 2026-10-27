@@ -1915,12 +1915,17 @@ async function liteLine(lp: MainLp, plain: BuildMipInput, limit: number, opts: S
  * measured on the user's live board, from the lite plan with restarts its 50 nodes ended where the board's supply
  * columns moved them and the board fell into a 2-cycle (Duty plate 41 steps at 11.58 raw a minute, then 38 at 10.36);
  * with the lite plan as its cutoff instead the board settled but real-board's A3 (b) did not hold (10.36 against 11.11 on
- * the board x 0.999); without restarts both held. Where another start costs no more, each MIP solves from it as without
- * the lite start: from the sparse plan as its cutoff the leanest line of Electronic Circuit MV on Project Red with two of
- * every machine owned found nothing below it (1.032 against 0.884 as the incumbent, its root LP relaxation unsolved
- * within the iteration cap), its raw material 13 % above. Where the leanest line's raw material to 9 digits
- * is the lite plan's, that MIP is the build MIP of the true cap, from the same starts, so it is kept (`beside`: `kept`):
- * the plan is the one `sequentialLean` solves after the leanest line; else it is solved again at the leanest line's
+ * the board x 0.999); without restarts both held. Where another start costs no more, each MIP takes it as without the
+ * lite start, as its incumbent with restarts allowed: from the sparse plan as its cutoff the leanest line of Electronic
+ * Circuit MV on Project Red with two of every machine owned found nothing below it (1.032 against 0.884 as the
+ * incumbent, its root LP relaxation unsolved within the iteration cap), its raw material 13 % above. The build MIP is
+ * still not exactly the one off the lite path there: wherever the lite gives a plan, its cap and step charge's base come
+ * from a raw material to 9 significant digits (`sig9`), where off the lite path they come from the leanest line's
+ * unrounded figure, which differs from about the 10th digit on (well within BIG_M_SLACK and S3_TOLERANCE); only off the
+ * lite path (below LITE_MIN_INTEGERS, say) and where the lite gives no plan do both MIPs solve exactly as before. Where
+ * the leanest line's raw material to 9 digits is the lite plan's, that MIP is the build MIP of the true cap, from the
+ * same starts, so it is kept (`beside`: `kept`): the plan is the one `sequentialLean` solves after the leanest line;
+ * else it is solved again at the leanest line's
  * (`re-solved`). The 9 digits make the two match where the leanest line keeps the lite plan's recipes but moves its
  * machines (Duty plate: 9.64027777777862 against 9.640277777777778). Where the lite gives no plan, or fails (its model
  * or its solve throws), the leanest line and the build MIP run as without it. Every decision reads the solves' results

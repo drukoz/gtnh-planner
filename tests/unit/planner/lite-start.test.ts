@@ -167,11 +167,12 @@ describe('the build MIP beside the leanest line (the lite start)', () => {
     expect(seen.aside.map((j) => [j.start === undefined, j.cutoff === undefined])).toEqual([[true, true], [true, false]]);
   });
 
-  it('solves the leanest line and the build MIP as before where another start costs no more than the lite plan', async () => {
+  it('gives each MIP its start as before, an incumbent restarts may leave, where another start costs no more than the lite plan', async () => {
     // The fast press line below: the lite plan is S1's (the fast press), so S1 rounded up stays both MIPs' start, an
     // incumbent restarts may leave (Electronic Circuit MV on Project Red, two of every machine owned: from the sparse
-    // plan as its cutoff its leanest line found nothing below it, 1.032 against 0.884 as the incumbent). And off the lite
-    // path (the default gate) both solve as before too.
+    // plan as its cutoff its leanest line found nothing below it, 1.032 against 0.884 as the incumbent). On the lite path
+    // the build MIP's cap and step charge's base are still a raw material to 9 significant digits (`liteStaged`), so only
+    // the start's treatment is as before there; off the lite path (the default gate) both MIPs solve as before.
     const options = { fast: [opt(301, 1, 0.2, 100)], slow: [opt(302, 1, 10, 160)] };
     for (const opts of [LITE, {}] as SolveOptions[]) {
       seen.here.length = 0;
