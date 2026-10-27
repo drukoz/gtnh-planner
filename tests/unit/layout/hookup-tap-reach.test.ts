@@ -68,11 +68,11 @@ describe('the power hookup starts from a tap its route can leave', () => {
   });
 
   it('keeps the nearest tap that carries the line whenever a route leaves it, even when another one routes shorter', async () => {
-    // the nearest tap reaches the line only round a wall (20 cells); the other one would run 12 cells straight to it
+    // the nearest tap reaches the line only round a wall (14 cells); the other one would run 18 cells
     const scan = mvNetwork([[16, 64, 30], [4, 64, 20]]);
     const layout = await layoutLine(layoutPack(), twoStep(), scan, project(), ground([at([16, 64, 30]), at([4, 64, 20]), { from: [10, 64, 26], to: [22, 70, 26], block: STONE }]));
     const hookup = powerHookup(layout);
-    expect([hookup.found, hookup.from.pos, hookup.path.length]).toEqual([true, [16, 64, 30], 20]);
+    expect([hookup.found, hookup.from.pos, hookup.path.length]).toEqual([true, [16, 64, 30], 14]);
   });
 
   const decoys: Array<[string, Partial<PlacedPipe>]> = [

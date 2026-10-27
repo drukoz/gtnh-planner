@@ -37,7 +37,7 @@ describe('Connections of laid-out lines', () => {
       .map((f) => [f.title.replace(/^.*, (\w+) side · (.*)$/, '$1 $2'), f.mode]);
     expect([rows('x'), rows('y')]).toEqual([
       [['south Item Conduit', { mode: 'insert', insert: 'red' }], ['south Ender Fluid Conduit', { mode: 'extract', extract: 'red' }]],
-      [['north Item Conduit', { mode: 'extract', extract: 'red' }], ['north Ender Fluid Conduit', { mode: 'insert', insert: 'red' }]]]);
+      [['south Item Conduit', { mode: 'extract', extract: 'red' }], ['south Ender Fluid Conduit', { mode: 'insert', insert: 'red' }]]]);
     // the connectors' arrows, tinted with their sides' channels as EnderIO draws them
     const texture = (id: string): [string, BlockFaces] => [blockKey({ id, meta: 0 }), { block: { id, meta: 0 }, resolved: true, fallbackColor: [1, 2, 3],
       faces: Object.fromEntries(FACES.map((f) => [f, [{ path: `${id}.png` }]])) as BlockFaces['faces'] }];

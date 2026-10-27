@@ -34,13 +34,13 @@ describe('an EnderIO line in the layout', () => {
   it('puts every conduit and filter in the parts list and gives every configured face its own configure step', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), lineScan(), placed(0), lineGround());
     expect([layout.status, layout.mode, layout.rotation]).toEqual(['ok', 'enderio', 0]);
-    expect(layout.bom).toContainEqual({ key: ITEM, amount: 4, why: 'conduits', group: 'logistics' });
+    expect(layout.bom).toContainEqual({ key: ITEM, amount: 8, why: 'conduits', group: 'logistics' });
     expect(layout.bom).toContainEqual({ key: BASIC, amount: 8, why: 'conduit filters', group: 'logistics' });
     const steps = layout.buildSteps.filter((s) => s.id.startsWith('layout:conduit:'));
-    // plan 11, ruling R12: the line's power head is 3 columns wide, so its spine starts at local x 3; Plan 5's tier
-    // spacing leaves x 4 empty between the LV macerators (x 3) and the MV assembler (x 5), and the tail is x 6
-    expect(steps.map((s) => s.id)).toEqual(['layout:conduit:3,0,2:item:north', 'layout:conduit:3,0,2:item:south', 'layout:conduit:5,0,2:item:north',
-      'layout:conduit:6,0,2:item:north', 'layout:conduit:6,0,2:item:south']);
+    // RUK-121: the power head sits in the middle, so the spine runs x 0..7; the LV macerators sit at x 0 and x 5 and the
+    // MV assembler at x 6, and the tail chests are at x 7
+    expect(steps.map((s) => s.id)).toEqual(['layout:conduit:0,0,2:item:north', 'layout:conduit:5,0,2:item:north',
+      'layout:conduit:6,0,2:item:south', 'layout:conduit:7,0,2:item:north', 'layout:conduit:7,0,2:item:south']);
     expect(steps.every((s) => s.kind === 'configure' && s.pin === layout.pins.find((p) => p.kind === 'site')!.n)).toBe(true);
     expect(steps[3]!.text).toBe('Item Conduit, north face to Chest (input): Extract (1 filter); extract on Red with a Basic Item Filter '
       + '(whitelist, 1 of 5 slots: Raw Input; match meta, ignore NBT), round robin on, self feed off, redstone Always active');
@@ -221,7 +221,7 @@ describe('EnderIO conduits in the steps, the parts list and the hookup', () => {
     const layout = await run();
     const hookup = layout.hookups.find((h) => h.kind === 'logistics')!;
     const lineConduits = layout.blocks.filter((b) => b.hookup === undefined && b.conduits?.some((c) => c.kind === 'item') === true);
-    expect([hookup.found, lineConduits.length]).toEqual([true, 4]);
+    expect([hookup.found, lineConduits.length]).toEqual([true, 8]);
     expect(hookup.path.filter((p) => lineConduits.some((b) => manhattan(b.pos, p) === 1))).toEqual([]);
     expect(JSON.stringify(await run())).toBe(JSON.stringify(layout));
   });

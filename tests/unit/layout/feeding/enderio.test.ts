@@ -158,7 +158,7 @@ describe('EnderIO item conduits', () => {
     expect(Object.keys(ok.out)).toEqual(['t:y@0']);
     // the assembler's insert filter emptied
     const model = readLine({ pack, plan, layout });
-    const assembler = model.nodes.find((n) => n.id === '5,0,1')!;
+    const assembler = model.nodes.find((n) => n.id === '6,0,3')!;
     model.networks.find((n): n is EioNet => n.kind === 'enderio')!.faces.find((f) => f.target?.node === assembler.id)!.insert!.filter!.keys = [];
     const run = same(model, { ticks: 2_000, restartAt: 2_000 });
     expect(run.findings.filter((f) => f.code === 'feed_starved').map((f) => [f.key, f.text]))

@@ -111,11 +111,11 @@ describe('layoutLine', () => {
 
   it('counts the banks, the line\'s own cables and the hookup in the power need', async () => {
     // banks 4 A out × 1 EU; LV: 2 macerators × 2 A × 4 V; MV from the hookup's landing cell (z 4): assembler 2 A × 14,
-    // bank 2 A × 3; hookup 6 cables × 4 A × 1 V
+    // bank 2 A × 3; hookup 7 cables × 4 A × 1 V
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
-    expect(layout.power!.detail).toBe('Needs 258 EU/t on average (180 + 78 loss); 900 EU/t spare');
+    expect(layout.power!.detail).toBe('Needs 268 EU/t on average (180 + 88 loss); 900 EU/t spare');
     expect(layout.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
-      .toBe('Run 6× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 122 V');
+      .toBe('Run 7× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 121 V');
   });
 });
 
@@ -186,10 +186,10 @@ describe('layoutLine: the final review', () => {
     const fed = await layoutLine(layoutPack(), hvLine(), lvOnly, makeProject(), ground());
     expect(fed.warnings).toContainEqual({ code: 'power_tap_tier', text: 'The HV network has no HV cable to tap: the line is fed at LV from a cable behind one of its transformers' });
     expect(fed.warnings.map((w) => w.code)).toContain('power_tier_low');
-    // the HV machine fed at LV: 300 EU/t at 23.8 V (the hookup's 3.2 V and 5 cables lost) is 13 A, more than the 1x cable carries
+    // the HV machine fed at LV: 300 EU/t at 21.8 V (the hookup's 3.2 V and 7 cables lost) is 14 A, more than the 1x cable carries
     expect(fed.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
-      .toBe('Upgrade the 1x Annealed Copper Cable from the tap at pin 2 to carry 13 A, then connect the line');
-    expect(fed.warnings).toContainEqual({ code: 'power_amps_low', text: "The tap's 1x Annealed Copper Cable carries 1 A at LV; the line draws up to 13 A" });
+      .toBe('Upgrade the 1x Annealed Copper Cable from the tap at pin 2 to carry 14 A, then connect the line');
+    expect(fed.warnings).toContainEqual({ code: 'power_amps_low', text: "The tap's 1x Annealed Copper Cable carries 1 A at LV; the line draws up to 14 A" });
   });
 
   it('I-tap: reads the tap cable\'s own rating, so a cable that carries the line is wired whatever the spare power', async () => {
@@ -216,11 +216,11 @@ describe('layoutLine: the final review', () => {
     const hill = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [55, 64, 20], rotation: 0 } }),
       ground([{ from: [50, 64, 15], to: [65, 70, 30], block: STONE }]));
     expect([hill.origin, hill.warnings.filter((w) => w.code.startsWith('placement'))]).toEqual([[55, 64, 20],
-      [{ code: 'placement_blocked', text: '105 blocks are in the way at the chosen spot' }]]);
+      [{ code: 'placement_blocked', text: '120 blocks are in the way at the chosen spot' }]]);
     const edge = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [66, 64, 20], rotation: 0 } }), ground());
     expect(edge.warnings).toContainEqual({ code: 'placement_unchecked',
-      text: '60 blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building' });
-    expect(edge.pins.some((p) => p.kind === 'warning' && p.text.startsWith('60 blocks at the chosen spot'))).toBe(true);
+      text: '80 blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building' });
+    expect(edge.pins.some((p) => p.kind === 'warning' && p.text.startsWith('80 blocks at the chosen spot'))).toBe(true);
     // a placement kept from another base (or dragged off the map) is not used
     const far = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [600, 64, 20], rotation: 0 } }), ground());
     const auto = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
@@ -234,14 +234,15 @@ describe('layoutLine: the final review', () => {
   it('gives a singleblock its front and output side apart, turned with the line', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [30, 64, 30], rotation: 90 } }), ground());
     const machines = layout.blocks.filter((b) => b.role === 'machine');
-    // the front toward the power head (local west, GT allows no front up or down): the output side keeps the spine face
-    expect(machines.every((b) => b.mainFacing === rotateFacing(4, 90))).toBe(true);
+    // the front toward the power head, which stands mid-line: west-side units face north at 90°, east-side units face
+    // south (GT allows no front up or down); the output side keeps the spine face
+    expect(new Set(machines.map((b) => b.mainFacing))).toEqual(new Set([rotateFacing(4, 90), rotateFacing(5, 90)]));
     expect(new Set(machines.map((b) => b.facing))).toEqual(new Set([4, 5]));         // the two rows face the spine, turned 90°
     expect(machines.every((b) => b.config?.inputFromOutputSide === true)).toBe(true);
-    // the place steps name that front by the compass, turned with the line (local west → north at 90°)
+    // the place steps name that front by the compass, turned with the line (toward the middle head: south or north at 90°)
     const place = layout.buildSteps.filter((s) => s.id.startsWith('layout:place:'));
     expect(place.length).toBeGreaterThan(0);
-    expect(place.every((s) => s.text.includes('its front facing north: with a Wrench, sneak-right-click its north side'))).toBe(true);
+    expect(place.every((s) => /its front facing (north|south): with a Wrench, sneak-right-click its (north|south) side/.test(s.text))).toBe(true);
   });
 });
 

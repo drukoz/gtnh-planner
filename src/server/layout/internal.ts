@@ -129,9 +129,9 @@ export function headWidthFor(stages: Stages | null): number {
   return stages === null ? 1 : 1 + 2 * stages.stages.length;
 }
 
-/** The x of the cable run of `tier`: the supply run at x = 0, each lower tier two columns further on. */
-export function runX(supplyTier: number, tier: number): number {
-  return 2 * (supplyTier - tier);
+/** The x of the cable run of `tier`: the supply run at the head's first column `headX`, each lower tier two columns further on. */
+export function runX(headX: number, supplyTier: number, tier: number): number {
+  return headX + 2 * (supplyTier - tier);
 }
 
 // ---- Fluid nets ----
@@ -183,8 +183,8 @@ export function fluidNets(pack: Pack, plan: Plan, placement: Placement): FluidNe
 
 // ---- Routing ----
 
-/** A cable run of the head; `rated`: the pack has a cable for its volts (else it is never laid). */
-interface Run { tier: number; cells: Vec3[]; rated: boolean }
+/** A cable run of the head, at column `x`; `rated`: the pack has a cable for its volts (else it is never laid). */
+interface Run { tier: number; x: number; cells: Vec3[]; rated: boolean }
 /** The column of the step-down bank of `stage`, between the runs of its two tiers. */
 interface Bank { stage: number; fromTier: number; toTier: number; x: number }
 interface Port { pos: Vec3; unit: PlacedUnit }
@@ -232,19 +232,29 @@ class Grid {
   }
 }
 
-/** The runs (supply first, then each stage's lower tier, each across the whole length) and the bank columns between them. */
-function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run[]; banks: Bank[] } {
+/**
+ * The runs (supply first, then each stage's lower tier, each across the whole length) and the bank columns between
+ * them, on the head's columns at `placement.headX`, in the middle of the line (`placeUnits`). The head stands in the
+ * middle of the line's spine, so each run skips the spine's row on the floor and bridges it with three cells one
+ * above (below the spine row, above it, and above the spine cell): a tier's cable runs unbroken along z, while the
+ * spine's row stays free for the logistics spine (`placeUnits`'s rows and the modes' spines).
+ */
+function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run[]; banks: Bank[]; headX: number } {
   const { pack, placement } = input;
-  const length = placement.size[2];
+  const length = placement.size[2], spineZ = placement.spineZ;
   const supply = stages.supplyTier;
+  const headX = placement.headX;
   const runs = [supply, ...stages.stages.map((s) => s.toTier)].map((tier): Run => {
-    const x = runX(supply, tier);
-    const cells = Array.from({ length }, (_, z): Vec3 => [x, 0, z]);
+    const x = runX(headX, supply, tier);
+    const cells: Vec3[] = [];
+    for (let z = 0; z < spineZ; z++) cells.push([x, 0, z]);
+    cells.push([x, 1, spineZ - 1], [x, 1, spineZ], [x, 1, spineZ + 1]);
+    for (let z = spineZ + 1; z < length; z++) cells.push([x, 0, z]);
     for (const c of cells) grid.take(c);
-    return { tier, cells, rated: pickCable(pack, { volts: voltsOf(tier), amps: 1 }) !== null };
+    return { tier, x, cells, rated: pickCable(pack, { volts: voltsOf(tier), amps: 1 }) !== null };
   });
-  const banks = stages.stages.map((s, stage): Bank => ({ stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(supply, s.toTier) - 1 }));
-  return { runs, banks };
+  const banks = stages.stages.map((s, stage): Bank => ({ stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(headX, supply, s.toTier) - 1 }));
+  return { runs, banks, headX };
 }
 
 /** The cell a unit's power reaches it through: the machine (singleblock) or its energy hatch, behind the power port. */
@@ -270,8 +280,9 @@ function warnUnderVoltage(units: readonly PlacedUnit[], supply: number, warnings
  * the supply tier), and each higher tier's tree, grown after the trees below it, goes over them to its machines further
  * along. Its cells keep off `keepOff`, the bank columns, the ports of other feed tiers and the cells on top of a bank
  * that sends another tier, and never touch another tier's run, tree or port or a machine of a lower tier; the box
- * reaches H + 1 high, so a tree crosses a lower run two blocks up, and two blocks higher for every run past the second,
- * so it can also pass over the lower tiers' crossings. The cells are taken but not yet laid: the cables are chosen once
+ * reaches H + 1 high, so a tree crosses a lower run two blocks up, and two blocks higher for every run past the first,
+ * so each tier gets its own lane and can also pass over the lower tiers' crossings. The cells are taken but not yet
+ * laid: the cables are chosen once
  * the trees give the lengths. Units that cannot be reached (or whose tier has no run) get `route_failed`.
  */
 function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, keepOff: ReadonlySet<string>,
@@ -298,26 +309,49 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
       onBank.set(posKey([b.x, 1, z]), b.toTier);
     }
   }
-  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - 2), l - 1] };
-  const unwired = (unit: PlacedUnit) =>
+  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - 1), l - 1] };
+  const unwired = (unit: PlacedUnit) => {
     warnings.add({ code: 'route_failed', stepId: unit.stepId, text: `Could not wire ${unit.name} inside the line — connect it by hand` });
+  };
   const trees: Tree[] = [];
   // lowest first (the runs are listed supply first): a higher tier's tree grown first could wall a lower tier's machines off
-  for (const run of [...head.runs].sort((a, b) => a.tier - b.tier)) {
+  for (const [lane, run] of [...head.runs].sort((a, b) => a.tier - b.tier).entries()) {
     if (!run.rated) continue;                                                          // its machines are reported below
     const ports = (portsByTier.get(run.tier) ?? []).sort((a, b) => comparePos(a.pos, b.pos));
     portsByTier.delete(run.tier);
     // the cells this tier's cables must not touch
     const avoid = new Set<string>();
+    // a grown tree's cells: a cable must not touch another tier's cable, and the trees keep to their own y-plane
+    // (each tier one plane higher, with a free plane between) so they stack over each other without touching
     for (const r of head.runs) if (r.rated && r.tier !== run.tier) for (const c of r.cells) avoid.add(posKey(c));
     for (const t of trees) for (const c of t.cells) avoid.add(posKey(c));
-    for (const [key, tier] of portTier) if (tier !== run.tier) avoid.add(key);
+    const portKeys = new Set(portTier.keys());
+    for (const [key, tier] of portTier) {
+      if (tier === run.tier) continue;
+      avoid.add(key);
+      if (tier > run.tier) {
+        // a cable beside a higher tier's port rims it in for the tree that must feed it later: keep off the rim,
+        // except cells that touch a port (a cable beside those cannot wall the port in any further)
+        const [px, py, pz] = key.split(',').map(Number) as [number, number, number];
+        for (let side = 0; side < 6; side++) {
+          const r = step([px, py, pz], side);
+          if (DIRS.some((_, s2) => { const nk = posKey(step(r, s2)); return nk !== key && portKeys.has(nk); })) continue;
+          avoid.add(posKey(r));
+        }
+      }
+    }
     for (const u of electric) {
       const cell = u.tier < run.tier ? powerCell(u) : null;
       if (cell !== null) avoid.add(posKey(cell));
     }
     const opts: PathOptions = {
       bounds,
+      // a z leg running along the lanes (y >= 2) walls the lane above off from the taller trees to come, so price it
+      // above a climb to the lane's own height: 2x the vertical move it replaces; z legs below this tier's own plane
+      // (2 + 2 per tier below it, with a free plane between) cost more still, so each tier lanes on its own plane
+      laneWallCost: 4,
+      laneFloorY: 2 + 2 * lane,
+      midPlaneCost: 16,
       passable: (p) => {
         const key = posKey(p);
         const tier = portTier.get(key);
@@ -339,10 +373,17 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
   return trees;
 }
 
-/** The rows a bank of `count` transformers takes: centred on the spine, moved back inside the line when uneven. */
+/**
+ * The rows a bank of `count` transformers takes, the spine's row left free for the line's spine (the head stands in
+ * the middle of it): the side with more room, from the row next to the spine outward, the west side on a tie; as many
+ * rows as fit on it.
+ */
 function bankRows(count: number, length: number, spineZ: number): { first: number; placed: number } {
-  const placed = Math.min(count, length);
-  return { first: Math.min(Math.max(spineZ - Math.floor(placed / 2), 0), length - placed), placed };
+  const below = spineZ, above = length - 1 - spineZ;
+  const placed = Math.min(count, Math.max(below, above));
+  if (placed <= 0) return { first: 0, placed: 0 };
+  const east = placed > below || (above > below && placed <= above);
+  return east ? { first: spineZ + 1, placed } : { first: spineZ - placed, placed };
 }
 
 /** Breadth-first edge counts over one tier's linked cable cells from `source`. */
@@ -438,7 +479,7 @@ function lossWarning(tier: number, lostVolts: number, blocks: number, cable: str
  * transformers (whose rows move the entry) and bigger cables (whose loss differs): repeated until nothing changes,
  * never lowering an amp or a count. A unit whose port is not wired counts the worst wired distance of its tier.
  */
-function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, trees: readonly Tree[],
+function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[]; headX: number }, trees: readonly Tree[],
   candidates: readonly Vec3[]): Sizing {
   const { pack, placement } = input;
   const length = placement.size[2];
@@ -448,7 +489,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
   const treeOf = new Map(trees.map((t) => [t.tier, t]));
   const runOf = new Map(head.runs.map((r) => [r.tier, r]));
   const graphs = new Map(head.runs.map((r) => [r.tier, tierGraph(r, treeOf.get(r.tier))]));
-  const runCell = (tier: number, z: number): Vec3 => [runX(supply, tier), 0, z];
+  const runCell = (tier: number, z: number): Vec3 => [runX(head.headX, supply, tier), 0, z];
 
   let current: Stages = { ...stages, stages: stages.stages.map((s) => ({ ...s })) };
   const pick = (s: Stages): Sizing['cables'] => {
@@ -556,7 +597,7 @@ function supplyConsumers(sizing: Sizing, supply: number, units: readonly PlacedU
   const top = sizing.stages.stages.findIndex((s) => s.fromTier === supply);
   if (top !== -1) {
     const { first, placed } = sizing.rows[top]!;
-    const rows = Array.from({ length: placed }, (_, j) => blocksAt(run.cells[first + j]!)).filter((b): b is number[] => b !== undefined);
+    const rows = Array.from({ length: placed }, (_, j) => blocksAt([run.x, 0, first + j])).filter((b): b is number[] => b !== undefined);
     if (rows.length > 0) consumers.push({ amps: sizing.stages.stages[top]!.ampsIn, blocks: candidates.map((_, i) => Math.max(...rows.map((b) => b[i]!))) });
   }
   return { tier: supply, cable: chosen.cable.name, lossPerBlock: chosen.cable.cable?.lossPerBlock ?? 0, consumers };
@@ -571,7 +612,6 @@ function supplyConsumers(sizing: Sizing, supply: number, units: readonly PlacedU
 function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: readonly Bank[] }, trees: readonly Tree[], sizing: Sizing, grid: Grid,
   headWarnings: WarningList, lossWarnings: WarningList): { cells: Map<number, number>; lossEUt: number } {
   const { pack, placement } = input;
-  const length = placement.size[2];
   const { stages, cables } = sizing;
   const supply = stages.supplyTier;
   const treeOf = new Map(trees.map((t) => [t.tier, t]));
@@ -587,7 +627,7 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
         text: `No cable carries ${fmtInt(amps)} A at ${tierName(run.tier)}: run ${Math.ceil(amps / cable.cable!.amps)} parallel ${cable.name} lines` });
     }
     for (const c of run.cells) grid.lay(c, cable, 'cable', cable.name);
-    for (let z = 0; z + 1 < length; z++) grid.links.push([run.cells[z]!, run.cells[z + 1]!]);
+    for (let z = 0; z + 1 < run.cells.length; z++) grid.links.push([run.cells[z]!, run.cells[z + 1]!]);
   }
   for (const bank of head.banks) {
     const stage = stages.stages[bank.stage]!;

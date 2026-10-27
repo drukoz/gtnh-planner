@@ -99,7 +99,7 @@ describe('EnderIO mode — fluids', () => {
     const layout = await layoutLine(layoutPack(), fluidPlan(), lineScan(), makeProject({ logistics: 'enderio' }), lineGround());
     expect(layout.blocks.some((b) => b.block.mteId === IDS.SMALL_BRONZE_PIPE || b.block.mteId === IDS.BRONZE_PIPE)).toBe(false);
     expect(layout.blocks.flatMap((b) => b.covers ?? []).some((c) => c.item === 'gregtech:gt.metaitem.01@32610')).toBe(false);
-    expect(layout.blocks.filter((b) => b.conduits?.some((c) => c.kind === 'liquid_ender'))).toHaveLength(1);   // the spine cell both machines face
+    expect(layout.blocks.filter((b) => b.conduits?.some((c) => c.kind === 'liquid_ender'))).toHaveLength(6);   // the liquid runs the spine from the extractor to the solidifier
   });
 });
 

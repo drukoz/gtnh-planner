@@ -88,29 +88,29 @@ describe('checkFeeding', () => {
     expect([...new Set(report.findings.filter((f) => f.certainty === 'certain').map((f) => f.code))].sort()).toEqual(['feed_no_route', 'feed_starved']);
     // the static findings exactly as precheckFeeding's first case
     expect(report.findings.filter((f) => f.phase === 'static').map(brief)).toEqual([
-      'feed_no_route certain t:x@0 Basic Macerator at 3 64 1', 'feed_starved certain t:a@0 Basic Macerator at 3 64 1',
-      'feed_no_route certain t:x@0 Basic Macerator at 4 64 3', 'feed_starved certain t:a@0 Basic Macerator at 4 64 3',
-      'feed_no_route certain t:y@0 Advanced Assembler at 5 64 1',
+      'feed_no_route certain t:x@0 Basic Macerator at 0 64 1', 'feed_starved certain t:a@0 Basic Macerator at 0 64 1',
+      'feed_no_route certain t:x@0 Basic Macerator at 5 64 1', 'feed_starved certain t:a@0 Basic Macerator at 5 64 1',
+      'feed_no_route certain t:y@0 Advanced Assembler at 6 64 3',
     ]);
     // the input chest's new extractor lets no Alpha out, the macerators' let no Ex out
     expect(inScenario(report, 'steady').map((f) => [brief(f), f.text])).toEqual([
-      ['feed_starved certain t:a@0 Basic Macerator at 3 64 1',
-        'Basic Macerator at 3 64 1 never gets Alpha: the Item Extractor Chip on Chest (input) at 6 64 1 has an empty whitelist (a new chip extracts nothing)'],
-      ['feed_starved certain t:a@0 Basic Macerator at 4 64 3',
-        'Basic Macerator at 4 64 3 never gets Alpha: the Item Extractor Chip on Chest (input) at 6 64 1 has an empty whitelist (a new chip extracts nothing)'],
-      ['feed_starved certain t:x@0 Advanced Assembler at 5 64 1',
-        'Advanced Assembler at 5 64 1 never gets Ex: the Item Extractor Chip on Basic Macerator at 3 64 1 has an empty whitelist (a new chip extracts nothing)'],
+      ['feed_starved certain t:a@0 Basic Macerator at 0 64 1',
+        'Basic Macerator at 0 64 1 never gets Alpha: the Item Extractor Chip on Chest (input) at 7 64 1 has an empty whitelist (a new chip extracts nothing)'],
+      ['feed_starved certain t:a@0 Basic Macerator at 5 64 1',
+        'Basic Macerator at 5 64 1 never gets Alpha: the Item Extractor Chip on Chest (input) at 7 64 1 has an empty whitelist (a new chip extracts nothing)'],
+      ['feed_starved certain t:x@0 Advanced Assembler at 6 64 3',
+        'Advanced Assembler at 6 64 3 never gets Ex: the Item Extractor Chip on Basic Macerator at 0 64 1 has an empty whitelist (a new chip extracts nothing)'],
     ]);
     // every other scenario finds what steady finds, and so reports nothing (rule 4)
     expect(report.findings.filter((f) => f.phase === 'sim' && f.scenario !== 'steady')).toEqual([]);
     expect(report.inputs.map((i) => [i.machine, i.stepId, i.key, i.plannedPerSecond, i.deliveredPerSecond.steady])).toEqual([
-      ['Basic Macerator at 3 64 1', 's1', 't:a@0', 0.5, 0], ['Basic Macerator at 4 64 3', 's1', 't:a@0', 0.5, 0],
-      ['Advanced Assembler at 5 64 1', 's2', 't:x@0', 1, 0],
+      ['Basic Macerator at 0 64 1', 's1', 't:a@0', 0.5, 0], ['Basic Macerator at 5 64 1', 's1', 't:a@0', 0.5, 0],
+      ['Advanced Assembler at 6 64 3', 's2', 't:x@0', 1, 0],
     ]);
     // the model's unknowns (each chip pipe read from its text), then the scenarios': the stack sizes once for all five (rule 6)
     expect(report.unknowns.map((u) => [u.code, u.pos?.join(' ')])).toEqual([
-      ['routed_text', '3 64 2'], ['extractor_new', '3 64 2'], ['routed_text', '4 64 2'], ['extractor_new', '4 64 2'], ['routed_text', '5 64 2'],
-      ['extractor_new', '5 64 2'], ['routed_text', '6 65 1'], ['extractor_new', '6 65 1'], ['routed_text', '6 65 3'], ['stack_sizes', undefined],
+      ['routed_text', '0 64 2'], ['extractor_new', '0 64 2'], ['routed_text', '5 64 2'], ['extractor_new', '5 64 2'], ['routed_text', '6 64 2'],
+      ['extractor_new', '6 64 2'], ['routed_text', '7 65 1'], ['extractor_new', '7 65 1'], ['routed_text', '7 65 3'], ['stack_sizes', undefined],
     ]);
     // no scenario: the static rules alone, which gate it too (rule 1)
     const statics = checkFeeding({ pack, plan, layout, options: { scenarios: [] } });
@@ -128,7 +128,7 @@ describe('checkFeeding', () => {
     const slow = (r: FeedingReport) => r.findings.filter((f) => f.code === 'feed_slow').map((f) => [f.scenario, f.machine]);
     const asked = checkFeeding({ pack, plan, layout, options: { scenarios: ['restart', 'steady', 'restart'] } });
     expect(asked.scenarios.map((s) => [s.name, s.ticks])).toEqual([['steady', 24_000], ['restart', 24_000]]);
-    expect(slow(asked)).toEqual([['steady', 'Basic Macerator at 3 64 3']]);
+    expect(slow(asked)).toEqual([['steady', 'Basic Macerator at 0 64 1']]);
     // a tolerance of 60 % lets 0.21/s of 0.5/s pass
     expect(slow(checkFeeding({ pack, plan, layout, options: { scenarios: ['steady'], slowTolerance: 0.6 } }))).toEqual([]);
     expect(checkFeeding({ pack, plan, layout, options: { ticks: 3_000, scenarios: ['steady'] } }).scenarios.map((s) => s.ticks)).toEqual([3_000]);
@@ -348,7 +348,7 @@ describe('checkFeeding', () => {
       const restartAt = ticks / 2;
       const report = checkFeeding({ pack, plan, layout, options: { ticks } });
       const macerators = report.inputs.filter((i) => i.stepId === 's1');
-      expect(macerators.map((i) => i.machine)).toEqual(['Basic Macerator at 3 64 1', layout.mode === 'enderio' ? 'Basic Macerator at 3 64 3' : 'Basic Macerator at 4 64 3']);
+      expect(macerators.map((i) => i.machine)).toEqual(['Basic Macerator at 0 64 1', layout.mode === 'enderio' ? 'Basic Macerator at 5 64 1' : 'Basic Macerator at 5 64 1']);
       // what the restart run handed each macerator in the 1,200 ticks before the restart and in those from it, and over the
       // run's second half, per second
       const restart = runScenario(readLine({ pack, plan, layout }), 'restart', { ticks, restartAt });
