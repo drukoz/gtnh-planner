@@ -25,6 +25,8 @@ import {
 export interface LossReport {
   machines: number;
   mode: LogisticsMode;
+  /** The line's footprint `[x, height, z]`, straight off `Layout.size`. */
+  size: [number, number, number];
   /** EU/t the placed electric machines draw (the plan's average). */
   drawEUt: number;
   /** EU/t the line's cables and transformers lose, read out of `Layout.power.detail`. */
@@ -140,8 +142,9 @@ function parseLoss(detail: string): number | null {
 const round2 = (x: number): number => Math.round(x * 100) / 100;
 
 /**
- * Lay `n` machines in `mode` end to end and measure what the cables lose: the plan's draw, the loss out of
- * `Layout.power.detail` (TODO(RUK-112): `Layout.loss`), their ratio to two decimals, the cable cells and the codes.
+ * Lay `n` machines in `mode` end to end and measure what the cables lose: the line's footprint, the plan's draw,
+ * the loss out of `Layout.power.detail` (TODO(RUK-112): `Layout.loss`), their ratio to two decimals, the cable
+ * cells and the codes.
  * Throws when the layout does not report a loss figure.
  */
 export async function measureLoss(n: number, mode: LogisticsMode): Promise<LossReport> {
@@ -150,7 +153,7 @@ export async function measureLoss(n: number, mode: LogisticsMode): Promise<LossR
   if (lossEUt === null) throw new Error(`no loss figure in power detail: ${layout.power?.detail ?? '(none)'}`);
   const drawEUt = plan.power.averageEUt;
   return {
-    machines: n, mode, drawEUt, lossEUt, share: round2(lossEUt / drawEUt),
+    machines: n, mode, size: layout.size, drawEUt, lossEUt, share: round2(lossEUt / drawEUt),
     cableCells: layout.blocks.filter((b) => b.role === 'cable').length,
     codes: [...new Set(layout.warnings.map((w) => w.code))].sort(),
   };
