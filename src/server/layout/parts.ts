@@ -186,8 +186,9 @@ export function pickCable(pack: Pack, need: { volts: number; amps: number }): { 
 
 /**
  * The cable to lay instead of `current` to lose less at `need.volts` and `need.amps` (RUK-116, design G2): among the
- * cables rated for both, the one that loses the least per block. Null when the pack has nothing rated for both that
- * loses less than `current`, which is the caller's "nothing in this export loses less" case.
+ * cables rated for both that lose less per block than `current`, the first in `cableOrder` — so insulated before a bare
+ * cable that loses even less, the same preference `pickCable` applies. Null when the pack has nothing rated for both
+ * that loses less than `current`, which is the caller's "nothing in this export loses less" case.
  */
 export function lowerLossCable(pack: Pack, need: { volts: number; amps: number }, current: Machine): Machine | null {
   const loss = current.cable?.lossPerBlock;

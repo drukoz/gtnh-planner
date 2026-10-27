@@ -845,7 +845,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   return {
     dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: assignBuildSteps(blocks, buildSteps, stepsInput, hookups),
     hookups, pins, buildSteps, bom, warnings, status: finish.status,
-    power: fit === null ? need : lossDetail(idleDetail(fit.power, idle), loss.totalEUt),
+    power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
     loss,
     ...(replaced.length === 0 ? {} : { replaced }),
     ...(reserved.length === 0 ? {} : { reserved }),
