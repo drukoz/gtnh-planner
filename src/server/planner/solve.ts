@@ -1941,9 +1941,12 @@ async function liteStaged(
   const at = (raw: number): BuildMipInput => ({ ...plain, leanRaw: raw, rawBound: (1 + cap) * raw });
   const others = [sparse, ignoredPlan.x, liteX];
   const guess = sig9(Math.max(rawOf(lp, liteX), s1.objective));
-  const leaning = leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false, liteX);
-  const early = opts.sequentialLean === true ? undefined : await solvedMip(lp, at(guess), others, limit, opts, liteX);
-  const lean = await leaning ?? { raw: s1.objective };
+  // Both awaited together: a failure of either fails this plan only, and the other's later failure has a handler too.
+  const [leaning, early] = await Promise.all([
+    leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false, liteX),
+    opts.sequentialLean === true ? undefined : solvedMip(lp, at(guess), others, limit, opts, liteX),
+  ]);
+  const lean = leaning ?? { raw: s1.objective };
   const raw = sig9(lean.raw);
   const input = at(raw);
   if (early !== undefined && raw === guess) return { lean, ignoredPlan, input, others, cheapest: early, beside: 'kept' };

@@ -11,19 +11,27 @@ vi.mock('../../../src/server/planner/build-mip.ts', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../../src/server/planner/build-mip.ts')>();
   return { ...mod, buildMip: vi.fn(mod.buildMip) };
 });
-// The solves' cases read the build MIP's models solved here and the jobs handed the solver thread; every solve is HiGHS's.
-const seen = vi.hoisted(() => ({ here: [] as Array<import('../../../src/server/planner/lp.ts').LpModel>, aside: [] as Array<import('../../../src/server/planner/lp.ts').BuildRunsJob> }));
+// The solves' cases read the build MIP's models solved here and the jobs handed the solver thread; every solve is HiGHS's,
+// but where a failure case answers one in its place (`fail`: given the model, or the job and its index since `aside` was
+// last emptied).
+const seen = vi.hoisted(() => ({
+  here: [] as Array<import('../../../src/server/planner/lp.ts').LpModel>, aside: [] as Array<import('../../../src/server/planner/lp.ts').BuildRunsJob>,
+  fail: {} as {
+    here?: (m: import('../../../src/server/planner/lp.ts').LpModel) => Promise<import('../../../src/server/planner/lp.ts').LpResult> | undefined;
+    aside?: (job: import('../../../src/server/planner/lp.ts').BuildRunsJob, index: number) => Promise<import('../../../src/server/planner/lp.ts').BuildRuns> | undefined;
+  },
+}));
 vi.mock('../../../src/server/planner/lp.ts', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../../src/server/planner/lp.ts')>();
   return {
     ...mod,
     solveLp: async (m: import('../../../src/server/planner/lp.ts').LpModel) => {
       if (m.keepImproving === true) seen.here.push(m);
-      return mod.solveLp(m);
+      return (m.keepImproving === true ? seen.fail.here?.(m) : undefined) ?? mod.solveLp(m);
     },
     solveBuildRunsAside: async (job: import('../../../src/server/planner/lp.ts').BuildRunsJob) => {
       seen.aside.push(job);
-      return mod.solveBuildRunsAside(job);
+      return seen.fail.aside?.(job, seen.aside.length - 1) ?? mod.solveBuildRunsAside(job);
     },
   };
 });
@@ -192,5 +200,62 @@ describe('the build MIP beside the leanest line (the lite start)', () => {
     expect(beside.runs).toEqual(['slow']);
     const after = await line({ ...LITE, sequentialLean: true });
     expect(timeless(beside.sol)).toEqual(timeless(after.sol));
+  });
+});
+
+describe('the lite start when a solve fails', () => {
+  /**
+   * The reasons of the promise rejections no handler took while `run` ran and a little after (Node's 'unhandledRejection',
+   * which crashes the server: src/server/main.ts registers no handler), with `seen.fail` set for `run` only.
+   */
+  async function unhandledOf(fail: typeof seen.fail, run: () => Promise<void>): Promise<unknown[]> {
+    const reasons: unknown[] = [];
+    const note = (reason: unknown): void => {
+      reasons.push(reason);
+    };
+    process.on('unhandledRejection', note);
+    seen.aside.length = 0;
+    seen.fail = fail;
+    try {
+      await run();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      seen.fail = {};
+      process.off('unhandledRejection', note);
+    }
+    return reasons;
+  }
+
+  it('fails only the plan where the leanest line fails while the build MIP solves beside it', async () => {
+    // The leanest line's job (the second on the solver thread, after the lite's) fails as the build MIP beside it starts.
+    let failLean: ((error: Error) => void) | undefined;
+    const unhandled = await unhandledOf({
+      aside: (_job, index) => (index === 1 ? new Promise((_resolve, reject) => {
+        failLean = reject;
+      }) : undefined),
+      here: () => {
+        failLean?.(new Error('the leanest line failed'));
+        failLean = undefined;
+        return undefined;
+      },
+    }, async () => {
+      await expect(week(LITE)).rejects.toThrow('the leanest line failed');
+    });
+    expect(unhandled).toEqual([]);
+  });
+
+  it('fails only the plan where the build MIP beside the leanest line fails, and the leanest line after it', async () => {
+    let failLean: ((error: Error) => void) | undefined;
+    const unhandled = await unhandledOf({
+      aside: (_job, index) => (index === 1 ? new Promise((_resolve, reject) => {
+        failLean = reject;
+      }) : undefined),
+      here: () => Promise.reject(new Error('the build MIP failed')),
+    }, async () => {
+      await expect(week(LITE)).rejects.toThrow('the build MIP failed');
+      expect(failLean).toBeDefined();
+      failLean?.(new Error('the leanest line failed after'));
+    });
+    expect(unhandled).toEqual([]);
   });
 });
