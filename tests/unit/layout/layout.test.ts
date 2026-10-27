@@ -218,11 +218,12 @@ describe('layoutLine: the power landing cell', () => {
 
   it("says what the line's cables lose, tier by tier, and in the power card", async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
-    // MV from the hookup's landing cell (z 4): assembler 2 A × 14 cables, bank 2 A × 3; LV: 2 macerators × 2 A × 4
+    // MV from the hookup's landing cell (RUK-120 lands it at z 2): assembler 2 A × 12 cables, bank 2 A × 1;
+    // LV: 2 macerators × 2 A × 4. The longer hookup costs exactly what the shorter run saves, so the total is the same.
     expect(layout.loss).toEqual({ tiers: [
-      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 14, worstVolts: 114, lossEUt: 34 },
+      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 12, worstVolts: 116, lossEUt: 26 },
       { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 16 },
-    ], hookupEUt: 24, banksEUt: 4, totalEUt: 78 });       // the tiers' 50, the bank's emitter 4 and the hookup's 24
+    ], hookupEUt: 32, banksEUt: 4, totalEUt: 78 });       // the tiers' 42, the bank's emitter 4 and the hookup's 32
     const parts = layout.loss!;
     expect(parts.totalEUt).toBe(parts.tiers.reduce((sum, t) => sum + t.lossEUt, 0) + parts.hookupEUt + parts.banksEUt);
     expect(layout.power!.detail).toContain('cables and hookup lose 78 EU/t');
