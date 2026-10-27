@@ -3,6 +3,7 @@
 // heat and power, plus the world-wide visited dimensions and prospected veins. Plan 2's planner reads it through the
 // `app.services.planContext` hook; Plan 5 calls it with three arguments (mode `direct`).
 
+import { machineByMteId } from '../pack/lookup.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { LogisticsMode, MachineWhere, PlanContext } from '../../shared/types/plan.ts';
 import { findBase, type PlacedMachine, type PowerNetwork, type WorldScan } from '../../shared/types/world.ts';
@@ -21,7 +22,7 @@ function machineFacts(machines: readonly PlacedMachine[], pack: Pack): Pick<Plan
   let topTier: number | null = null, coilHeat: number | null = null;
   for (const placed of machines) {
     if (placed.coilHeat !== undefined && (coilHeat === null || placed.coilHeat > coilHeat)) coilHeat = placed.coilHeat;
-    const m = pack.machines.get(placed.mteId);
+    const m = machineByMteId(pack, placed.mteId);
     if (m === undefined) continue;
     counts.set(m.mteId, (counts.get(m.mteId) ?? 0) + 1);
     const where: MachineWhere = { dim: placed.dim, pos: [placed.pos[0], placed.pos[1], placed.pos[2]] };

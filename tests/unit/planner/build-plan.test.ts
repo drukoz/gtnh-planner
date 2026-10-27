@@ -804,11 +804,11 @@ describe("more of the plan's build cost (the controller's ruling after Task 5)",
 });
 
 describe('assignOwned', () => {
-  const units = (n: number): Map<number, null[]> => new Map([[1, new Array<null>(n).fill(null)]]);
+  const units = (n: number): Map<import('../../../src/shared/ids.ts').MachineId, null[]> => new Map([['gt:1', new Array<null>(n).fill(null)]]);
 
   it('assigns owned units deterministically', () => {
-    const a = { id: 'a', mteId: 1, load: 0.5 };
-    const b = { id: 'b', mteId: 1, load: 1.5 };
+    const a = { stepId: 'a', id: 'gt:1', load: 0.5 };
+    const b = { stepId: 'b', id: 'gt:1', load: 1.5 };
     // Direct: the larger load first, whole units (ceil(1.5) = 2).
     const direct = assignOwned([a, b], units(2), false);
     expect(direct.get('b')).toEqual({ units: [0, 1], added: 0 });
@@ -822,24 +822,24 @@ describe('assignOwned', () => {
     expect(keyed.get('b')).toEqual({ units: [0, 1], added: 0 });
     expect(keyed.get('a')).toEqual({ units: [], added: 1 });
     // 0.6 fits one unit; unit 1 stays free.
-    const light = assignOwned([{ id: 'a', mteId: 1, load: 0.3, key: 'k' }, { id: 'b', mteId: 1, load: 0.3, key: 'k' }], units(2), true);
+    const light = assignOwned([{ stepId: 'a', id: 'gt:1', load: 0.3, key: 'k' }, { stepId: 'b', id: 'gt:1', load: 0.3, key: 'k' }], units(2), true);
     expect(light.get('a')).toEqual({ units: [0], added: 0, pool: 'pool:a' });
     expect(light.get('b')).toEqual({ units: [0], added: 0, pool: 'pool:a' });
     // A running step needs a machine, however small its load.
-    const tiny = { id: 'a', mteId: 1, load: 1e-12 };
+    const tiny = { stepId: 'a', id: 'gt:1', load: 1e-12 };
     for (const shared of [false, true]) {
       expect(assignOwned([tiny], new Map(), shared).get('a')).toEqual({ units: [], added: 1 });
       expect(assignOwned([tiny], units(1), shared).get('a')).toEqual({ units: [0], added: 0 });
     }
     // The owned machines of another option a step also runs on (`also`) take their share first.
-    const beside = assignOwned([{ id: 'c', mteId: 1, load: 1, share: 1, also: true }, b], units(2), false);
-    expect(beside.get('c')).toEqual({ units: [], added: 0, others: [{ mteId: 1, units: [0] }] });
+    const beside = assignOwned([{ stepId: 'c', id: 'gt:1', load: 1, share: 1, also: true }, b], units(2), false);
+    expect(beside.get('c')).toEqual({ units: [], added: 0, others: [{ id: 'gt:1', units: [0] }] });
     expect(beside.get('b')).toEqual({ units: [1], added: 1 });
-    const room = assignOwned([{ id: 'c', mteId: 1, load: 0.4, share: 0.4, also: true, key: 'k' }, { id: 'd', mteId: 1, load: 0.5, key: 'k' }], units(1), true);
-    expect(room.get('c')?.others).toEqual([{ mteId: 1, units: [0] }]);
+    const room = assignOwned([{ stepId: 'c', id: 'gt:1', load: 0.4, share: 0.4, also: true, key: 'k' }, { stepId: 'd', id: 'gt:1', load: 0.5, key: 'k' }], units(1), true);
+    expect(room.get('c')?.others).toEqual([{ id: 'gt:1', units: [0] }]);
     expect(room.get('d')).toEqual({ units: [0], added: 0 });   // 0.4 and 0.5 fit the one unit
     // A step that can only use owned machines goes first.
-    const onlyOwned = assignOwned([{ id: 'a', mteId: 1, load: 1, ownedOnly: true }, b], units(2), false);
+    const onlyOwned = assignOwned([{ stepId: 'a', id: 'gt:1', load: 1, ownedOnly: true }, b], units(2), false);
     expect(onlyOwned.get('a')).toEqual({ units: [0], added: 0 });
     expect(onlyOwned.get('b')).toEqual({ units: [1], added: 1 });
   });

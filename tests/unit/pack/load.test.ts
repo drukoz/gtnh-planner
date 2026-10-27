@@ -147,3 +147,31 @@ describe('export directories', () => {
     await expect(loadPack(dir)).rejects.toMatchObject({ file: 'oredict.jsonl.gz', line: 1, message: expect.stringContaining('unknown item index 999') });
   });
 });
+
+describe('export format versions', () => {
+  it('loads a /1 manifest unchanged, with a synthesised mcVersion and loader', async () => {
+    const pack = await loadPack(await makeExport(join(await tmp(), 'v1'), { ...sampleExportSpec(), manifest: { format: 'gtnh-planner-export/1' } }));
+    expect(pack.manifest).toMatchObject({ format: 'gtnh-planner-export/1', mcVersion: '1.7.10', loader: 'unknown' });
+    expect(pack.machines.get('gt:1000')?.kind).toBe('multiblock');
+    expect(pack.machineByMteId.has(1000)).toBe(true);
+  });
+
+  it('reads a /2 machine line with ns as a machine of that namespace', async () => {
+    const pack = await loadPack(await makeExport(join(await tmp(), 'v2'), {
+      ...sampleExportSpec(),
+      machines: [...sampleExportSpec().machines!, { id: 9000, name: 'macerator', cls: 'ic2.classics.machine.MachineMacerator', dn: 'Macerator', item: null, kind: 'basic', ns: 'ic2' }],
+    }));
+    expect(pack.manifest.format).toBe('gtnh-planner-export/2');
+    expect(pack.machines.get('ic2:macerator')).toMatchObject({ mteId: 9000, kind: 'basic', name: 'Macerator' });
+    expect(pack.machines.get('gt:50')?.name).toBe('Basic Macerator');
+    expect(pack.machineByMteId.has(9000)).toBe(false);
+  });
+
+  it('still rejects an unknown format with the existing error', async () => {
+    await expect(loadPack(await makeExport(join(await tmp(), 'v3'), { ...sampleExportSpec(), manifest: { format: 'gtnh-planner-export/3' as never } })))
+      .rejects.toMatchObject({
+        name: 'ExportFormatError', file: 'manifest.json', line: 0,
+        message: 'manifest.json:0: format is "gtnh-planner-export/3", this loader reads gtnh-planner-export/1 and gtnh-planner-export/2',
+      });
+  });
+});

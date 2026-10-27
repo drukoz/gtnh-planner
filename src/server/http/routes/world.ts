@@ -7,6 +7,7 @@
 
 import { STATUS_CODES, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AppContext } from '../../app.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { emptyContext } from '../../planner/plan.ts';
 import { contextFromScan } from '../../world/context.ts';
 import { emptyFacts, packFacts } from '../../world/facts.ts';
@@ -82,7 +83,7 @@ function blockName(pack: Pack, ref: BlockRef): string {
   if (ref.id === 'minecraft:air') return 'Air';
   if (ref.id === UNKNOWN_BLOCK.id) return 'Unknown block';
   if (ref.id === GT_MACHINE_BLOCK) {
-    return ref.mteId === undefined ? ref.id : pack.machines.get(ref.mteId)?.name ?? `Unknown machine #${ref.mteId}`;
+    return ref.mteId === undefined ? ref.id : machineByMteId(pack, ref.mteId)?.name ?? `Unknown machine #${ref.mteId}`;
   }
   return pack.items.get(`${ref.id}@${ref.meta}`)?.name ?? pack.items.get(`${ref.id}@0`)?.name ?? ref.id;
 }

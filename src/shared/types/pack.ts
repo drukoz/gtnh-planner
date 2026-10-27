@@ -4,13 +4,17 @@
 
 import type { ExportHatchKind } from '../gt/hatch-kinds.ts';
 import type { FluidKey, ItemKey, StuffKey } from '../keys.ts';
+import type { MachineId } from '../ids.ts';
 import type { FarmRecipeMeta, TgsMode } from './farm.ts';
 
 /** The ore-processing forms an ore material can list in `GtMaterial.parts`. */
 export type OrePart = 'ore' | 'rawOre' | 'crushed' | 'dust' | 'ingot' | 'gem';
 
 export interface PackManifest {
-  format: 'gtnh-planner-export/1'; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string; mods: Record<string, string>; counts: Record<string, number>;
+  format: 'gtnh-planner-export/1' | 'gtnh-planner-export/2'; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string; mods: Record<string, string>; counts: Record<string, number>;
+  // optional addition (/2): the Minecraft version and loader the export came from; a /1 manifest loads with the
+  // loader's synthesis, mcVersion '1.7.10' and loader 'unknown'
+  mcVersion?: string; loader?: string;
   // optional additions: the exporter's own report
   nameFailures?: number; nameFailureSamples?: string[]; sectionMillis?: Record<string, number>;
   failedSections?: string[]; skippedSections?: string[]; warnings?: string[];
@@ -93,6 +97,8 @@ export interface StructureInfo {
 }
 /** A singleblock's `amps` is its mAmperage (thermal centrifuge 2, arc furnace 3, mass fabricator 8). */
 export interface Machine {
+  /** This machine's identity: `gt:<mteId>` for a GT machine, `mc:*` for a pseudo one (ids.ts). */
+  id: MachineId;
   mteId: number; metaName: string; name: string; cls: string; itemKey: ItemKey; kind: MachineKind;
   tier?: number; voltage?: number; amps?: number; maps: string[];
   cable?: { voltage: number; amps: number; lossPerBlock: number; insulated: boolean; material: string };
@@ -151,15 +157,17 @@ export interface CropCard {
   likedBiomes: string[]; soils: StuffKey[]; requirements: string[] /* empty = none */; seed: StuffKey | null; minSeedBedTier: number;
 }
 /**
- * `machines` also holds the pseudo machines -1 (crafting table, map 'crafting') and -2 (furnace, map 'furnace'), not
- * -3 (hand); `machinesByMap` includes them and the 'assemblyline' pseudo map.
+ * `machines` also holds the pseudo machines `mc:crafting_table` (map 'crafting') and `mc:furnace` (map 'furnace'), not
+ * `mc:hand`; `machinesByMap` includes them and the 'assemblyline' pseudo map.
  */
 export interface Pack {
   manifest: PackManifest;
   items: Map<ItemKey, Item>; fluids: Map<FluidKey, Fluid>; oreDict: Map<string, ItemKey[]>;
   maps: Map<string, RecipeMapInfo>; recipes: Recipe[]; recipeById: Map<string, Recipe>;
   producers: Map<StuffKey, number[]>; consumers: Map<StuffKey, number[]>;   // indices into recipes
-  machines: Map<number, Machine>; machinesByMap: Map<string, number[]>;
+  machines: Map<MachineId, Machine>; machinesByMap: Map<string, MachineId[]>;
+  /** Only GT machines and the pseudo ones: what a world scan's `mID` and a structure's `BlockRef.mteId` resolve through. */
+  machineByMteId: Map<number, Machine>;
   materials: Map<string, GtMaterial>; worldgen: Worldgen;
   nameOf(key: StuffKey): string;
   // optional additions

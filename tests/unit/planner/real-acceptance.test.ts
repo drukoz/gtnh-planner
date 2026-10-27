@@ -17,6 +17,7 @@ import { moltenMaterial } from '../../../src/server/planner/costs.ts';
 import { emptyContainers } from '../../../src/server/planner/machines.ts';
 import { emptyContext, obtainableIn, planLine } from '../../../src/server/planner/plan.ts';
 import { tierName } from '../../../src/shared/gt/tiers.ts';
+import { type MachineId } from '../../../src/shared/ids.ts';
 import { indexPlan } from '../../../src/shared/plan/balance.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
@@ -350,8 +351,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('planner acceptance on the real 
   }, 60_000);
 
   it('builds only the multiblocks the tier can make: EBF from LV, Large Chemical Reactor from HV, never the Eye of Harmony', () => {
-    const built = (tier: number): ReadonlySet<number> => planBasis(pack, { ...defaultSettings(), tier }, emptyContext()).env.multiblocks ?? new Set();
-    const [ebf, lcr, eoh] = [1000, 1169, 15410];
+    const built = (tier: number): ReadonlySet<MachineId> => planBasis(pack, { ...defaultSettings(), tier }, emptyContext()).env.multiblocks ?? new Set();
+    const [ebf, lcr, eoh] = ['gt:1000', 'gt:1169', 'gt:15410'];
     expect(built(1).has(ebf)).toBe(true);
     expect(built(2).has(lcr)).toBe(false);
     expect(built(3).has(lcr)).toBe(true);

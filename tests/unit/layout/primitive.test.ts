@@ -17,7 +17,9 @@ import { projectorPayload } from '../../../src/server/projector/payload.ts';
 import { OPPOSITE, step, type Rotation, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { LogisticsMode, Plan } from '../../../src/shared/types/plan.ts';
+import type { Machine } from '../../../src/shared/types/pack.ts';
 import { lineGround, lineScan } from '../../helpers/enderio-fixtures.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { IDS, makePlan, makeProject } from '../../helpers/layout-fixtures.ts';
 import { BRICKED, COKE, primitivePack, STEAM, steelLine } from '../../helpers/primitive-fixtures.ts';
 
@@ -268,7 +270,9 @@ describe('primitive machines, mode by mode', () => {
 
   it('enderio: lays no conduit on a steam machine\'s vent for fluids its step lists, and says so', async () => {
     const pack = primitivePack();
-    pack.machines.set(IDS.SOLIDIFIER, { ...pack.machines.get(IDS.SOLIDIFIER)!, name: 'Steam Solidifier', kind: 'steam' });
+    const steamSolidifier: Machine = { ...machineByMteId(pack, IDS.SOLIDIFIER)!, name: 'Steam Solidifier', kind: 'steam' };
+    pack.machines.set(steamSolidifier.id, steamSolidifier);
+    pack.machineByMteId.set(IDS.SOLIDIFIER, steamSolidifier);
     const plan = makePlan([{ id: 'y', mteId: IDS.SOLIDIFIER, count: 1, name: 'Steam Solidifier', inputs: [['fluid:molten.iron', 144], ['t:in@0', 1]] }],
       { flows: [{ from: 'raw', to: 'y', key: 'fluid:molten.iron', perSecond: 1 }, { from: 'raw', to: 'y', key: 't:in@0', perSecond: 1 },
         { from: 'y', to: 'out', key: 't:out_y@0', perSecond: 1 }] });
@@ -385,7 +389,9 @@ describe('primitive machines beside what the line lays', () => {
   it("keeps the EnderIO fluid conduit's risers off the cells around a furnace", () => {
     const { pack, placement, touching } = corner();
     // the macerator turned into a machine that takes Molten Iron through a port on its top, moved to the back corner
-    pack.machines.set(IDS.MACERATOR, { ...pack.machines.get(IDS.MACERATOR)!, kind: 'other' });
+    const other: Machine = { ...machineByMteId(pack, IDS.MACERATOR)!, kind: 'other' };
+    pack.machines.set(other.id, other);
+    pack.machineByMteId.set(IDS.MACERATOR, other);
     const m = placement.units.find((u) => u.stepId === 'm')!;
     m.io = { ...m.io, fluidIn: ['fluid:molten.iron'] };
     m.ports.fluidIn = [[5, 0, 7]];

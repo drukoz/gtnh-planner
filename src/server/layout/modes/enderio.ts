@@ -46,6 +46,7 @@ import type {
 import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { handRunSurroundings, type HatchKind, type HostConfig, type LocalBlock, type PlacedUnit, type Placement } from '../arrange.ts';
 import { enderioStock } from '../bench.ts';
 import {
@@ -672,7 +673,7 @@ function unitFluidPorts(pack: Pack, u: PlacedUnit): FluidPortPlan[] {
     ];
   }
   const spine = u.ports.items[0];
-  if (pack.machines.get(u.mteId)?.kind === 'basic' && spine !== undefined) {
+  if (machineByMteId(pack, u.mteId)?.kind === 'basic' && spine !== undefined) {
     return [{ pos: spine, side: OPPOSITE[u.facing]!, port: 'spine', makes: u.io.fluidOut, takes: u.io.fluidIn }];
   }
   const top = u.ports.fluidIn[0] ?? u.ports.fluidOut[0];

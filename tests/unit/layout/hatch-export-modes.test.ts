@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { hatchRuleFor, hatchRulesOf } from '../../../src/server/layout/hatch-rules.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { simpleClassName } from '../../../src/server/world/facts.ts';
 import { OPPOSITE, posKey, step } from '../../../src/shared/layout/geometry.ts';
 import { FACES } from '../../../src/shared/types/assets.ts';
@@ -51,10 +52,10 @@ describe('export-ruled multiblocks in every logistics mode', () => {
   it.each(MODES)('lays the EBF out the same from export rules as from the table when they agree (%s)', async (mode) => {
     const table = hatchExportPack();
     const exported = hatchExportPack();
-    const ebf = exported.machines.get(IDS.EBF)!;
+    const ebf = machineByMteId(exported, IDS.EBF)!;
     ebf.structure = withElements(ebf.structure!, rowElements(ebf, EBF_ROW));
     // two sources that agree: the export narrows the row by nothing, and the other pack has the row alone
-    expect(hatchRulesOf(table.machines.get(IDS.EBF)!)!.source).toBe('table');
+    expect(hatchRulesOf(machineByMteId(table, IDS.EBF)!)!.source).toBe('table');
     const both = hatchRulesOf(ebf)!;
     expect(both.source).toBe('both');
     expect(both.rule.elements).toEqual(hatchRuleFor(ebf)!.elements);
@@ -70,7 +71,7 @@ describe('export-ruled multiblocks in every logistics mode', () => {
 
   it.each(MODES)('connects an export-ruled multiblock in %s mode', async (mode) => {
     const pack = hatchExportPack();
-    const box = pack.machines.get(FRONT_BOX_ID)!;
+    const box = machineByMteId(pack, FRONT_BOX_ID)!;
     box.structure = withElements(box.structure!, FRONT_BOX_ELEMENTS);
     const layout = await layoutLine(pack, makePlan([macerator, frontBoxStep], { flows: frontBoxFlows }), emptyScan(), makeProject({ logistics: mode }));
     const codes = layout.warnings.map((w) => w.code);
@@ -80,7 +81,7 @@ describe('export-ruled multiblocks in every logistics mode', () => {
     // every bus, fluid hatch and energy hatch of the box has the mode's part on the cell it faces, joined to the hatch
     const checked: string[] = [];
     for (const b of layout.blocks.filter((x) => x.stepId === 'f' && x.role === 'hatch')) {
-      const cls = simpleClassName(pack.machines.get(b.block.mteId!)!.cls)!;
+      const cls = simpleClassName(machineByMteId(pack, b.block.mteId!)!.cls)!;
       const spec = PORT_OF_CLASS[cls];
       if (spec === undefined) continue;                                                   // the maintenance hatch takes nothing
       const where = `${b.label} at ${posKey(b.pos)} facing ${b.facing}`;

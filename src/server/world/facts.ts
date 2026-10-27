@@ -3,6 +3,7 @@
 // Architecture §11.19: `Machine.cls` is the fully qualified Java class name, so every class check compares
 // `simpleClassName(cls)`, never the raw `cls`.
 
+import { allMachineIds, machineOf } from '../pack/lookup.ts';
 import type { ItemKey } from '../../shared/keys.ts';
 import type { DimensionInfo, Machine, Pack } from '../../shared/types/pack.ts';
 
@@ -38,7 +39,12 @@ export function emptyFacts(): ScanPackFacts {
 export function packFacts(pack: Pack | null): ScanPackFacts {
   if (pack === null) return emptyFacts();
   const machines = new Map<number, FactMachine>();
-  for (const [mteId, { structure: _structure, ...machine }] of pack.machines) machines.set(mteId, machine);
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m === undefined) continue;
+    const { structure: _structure, ...machine } = m;
+    machines.set(m.mteId, machine);
+  }
   const electric = new Map<ItemKey, { maxCharge: number; tier: number }>();
   for (const [key, item] of pack.items) {
     if (item.electric !== undefined) electric.set(key, { maxCharge: item.electric.maxCharge, tier: item.electric.tier });

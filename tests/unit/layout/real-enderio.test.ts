@@ -13,6 +13,7 @@ import { overlaps } from '../../../src/server/layout/arrange.ts';
 import { layoutLine } from '../../../src/server/layout/layout.ts';
 import { PART_DEFS, resolveParts, type PartId } from '../../../src/server/layout/parts.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { planLine } from '../../../src/server/planner/plan.ts';
 import { contextFromScan } from '../../../src/server/world/context.ts';
 import { packFacts } from '../../../src/server/world/facts.ts';
@@ -123,7 +124,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('an EnderIO line laid out on the
     const offSide = layout.blocks.flatMap((b) => (b.conduits ?? []).filter((c) => c.kind !== 'item').flatMap((c) => c.faces.filter((f) => {
       const side = FACES.indexOf(f.face);
       const target = at.get(posKey(step(b.pos, side)));
-      const basic = target?.role === 'machine' && target.block.mteId !== undefined && pack.machines.get(target.block.mteId)?.kind === 'basic';
+      const basic = target?.role === 'machine' && target.block.mteId !== undefined && machineByMteId(pack, target.block.mteId)?.kind === 'basic';
       return f.mode !== 'disabled' && basic && target.facing !== OPPOSITE[side];
     })));
     expect(offSide.length, 'fluid faces of basic machines off their output side').toBe(0);

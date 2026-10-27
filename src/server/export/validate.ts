@@ -8,6 +8,7 @@ import type { Pack } from '../../shared/types/pack.ts';
 import { tableItemCount } from '../pack/crops.ts';
 import { MARKER_FAILED, MARKER_OK } from '../pack/format.ts';
 import { loadPack } from '../pack/load.ts';
+import { allMachines } from '../pack/lookup.ts';
 
 export interface ValidationIssue { level: 'error' | 'warn'; code: string; text: string }
 /** `ok` = no issue of level error; `pack` is null when the export could not be loaded. */
@@ -41,7 +42,7 @@ const indented = (lines: readonly string[]) => lines.map((line) => `\n    ${line
  * hatch rules (exporter 0.6.0+) when some do.
  */
 function summarize(pack: Pack): string {
-  const machines = [...pack.machines.values()];
+  const machines = allMachines(pack);
   const { veins, dimensions } = pack.worldgen;
   const hatchRules = machines.filter((m) => m.structure?.elements !== undefined).length;
   return [
@@ -72,7 +73,7 @@ function checkPack(pack: Pack, error: Report, warn: Report): void {
   };
   spot('item', 'Iron Dust', [...pack.items.values()].some((i) => i.name === 'Iron Dust'));
   spot('fluid', 'Molten Iron', [...pack.fluids.values()].some((f) => f.name === 'Molten Iron'));
-  spot('machine', 'Electric Blast Furnace', [...pack.machines.values()].some((x) => x.name === 'Electric Blast Furnace'));
+  spot('machine', 'Electric Blast Furnace', allMachines(pack).some((x) => x.name === 'Electric Blast Furnace'));
   if (!gt.some((r) => r.meta.cleanroom === true)) {
     warn('no-cleanroom', 'no GregTech recipe needs a cleanroom (meta.cleanroom); recipe metadata may be missing');
   }

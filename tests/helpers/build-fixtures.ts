@@ -340,7 +340,7 @@ export function gizmoSpec(): PackSpec {
  */
 export function opt(mteId: number, tier: number, perMachine: number, build: number | null, owned = 0, solveBuild = build ?? 0): MachineOption {
   return {
-    mteId, name: `M${mteId}`, tier, kind: 'basic',
+    id: `gt:${mteId}`, name: `M${mteId}`, tier, kind: 'basic',
     oc: { euPerTick: 16, durationTicks: 20 / perMachine, overclocks: 0, heatOverclocks: 0, machineVoltage: V[tier] ?? 0, machineAmps: 1, parallel: 1 },
     perMachine, build, owned, solveBuild, canAdd: true,
   };
@@ -585,9 +585,9 @@ export async function solvedWithBuild(
   };
   const graph = buildCandidates(pack, defaultSettings(), BUILD_ENV, leaf, demand.map(([key]) => key));
   const optionsOf = (id: string): readonly MachineOption[] => (Object.hasOwn(build.options, id) ? build.options[id] as MachineOption[] : []);
-  const owned = new Map<number, number>();
+  const owned = new Map<import('../../src/shared/ids.ts').MachineId, number>();
   for (const list of Object.values(build.options)) {
-    for (const o of list) if (o.owned > 0) owned.set(o.mteId, Math.max(owned.get(o.mteId) ?? 0, o.owned));
+    for (const o of list) if (o.owned > 0) owned.set(o.id, Math.max(owned.get(o.id) ?? 0, o.owned));
   }
   const held = new Map(graph.recipes.map((r) => [r.id, r.nonConsumed]));
   const model: BuildModel = {
@@ -612,7 +612,7 @@ export async function solvedWithBuild(
     pinFallback: () => undefined,
     planting: (id) => (build.planting !== undefined && Object.hasOwn(build.planting, id) ? build.planting[id] : undefined),
     owned,
-    pools: new Map([...owned].map(([mteId, n]) => [mteId, new Array<null>(n).fill(null)])),
+    pools: new Map([...owned].map(([id, n]) => [id, new Array<null>(n).fill(null)])),
     prices: { cost: () => Infinity, gap: () => ({ kind: 'no-recipe' }) },
     cleanroom: build.cleanroom ?? null,
   };

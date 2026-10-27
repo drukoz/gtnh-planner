@@ -13,6 +13,7 @@
 // in unit order, goods in the order the step lists them.
 
 import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
+import { isPseudoMachineId, machineIdOfLegacy } from '../../../shared/ids.ts';
 import { fmtInt, joinNames } from '../../../shared/layout/format.ts';
 import type { LogisticsMode, PlanFlow, PlanStep, PlanWarning } from '../../../shared/types/plan.ts';
 import type { PlacedUnit } from '../arrange.ts';
@@ -94,7 +95,7 @@ export function handSteps(input: ModeInput, mode: HandMode): { drafts: StepDraft
     if (placed.has(end)) return isFluidKey(key) ? LINE_END : lineWord;
     // a step the line places no machine for: one of your machines, else crafting or smelting you do yourself
     const owned = plan.steps.find((s) => s.id === end);
-    return owned === undefined || owned.handCraft || owned.machine.mteId < 0 ? STORAGE : `your ${owned.machine.name}`;
+    return owned === undefined || owned.handCraft || isPseudoMachineId(machineIdOfLegacy(owned.machine.mteId)) ? STORAGE : `your ${owned.machine.name}`;
   };
   /** The places of the far ends of `flows`, each once in flow order; your storage when no flow carries the good. */
   const placesOf = (flows: readonly PlanFlow[], end: (f: PlanFlow) => string, lineWord: string): string[] => {

@@ -4,10 +4,12 @@
 
 import { basename, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { legacyMteId } from '../../shared/ids.ts';
 import { recipeTier, tierName } from '../../shared/gt/tiers.ts';
-import type { Ingredient, Pack, Product, Recipe, RecipeSource, SearchHit } from '../../shared/types/pack.ts';
+import type { Ingredient, Machine, Pack, Product, Recipe, RecipeSource, SearchHit } from '../../shared/types/pack.ts';
 import { activeExportDir, ConfigError, loadConfig, NoActiveExportError } from '../config.ts';
 import { tableItemCount } from '../pack/crops.ts';
+import { allMachineIds, machineByMteId, machineIdsForMap, machineOf } from '../pack/lookup.ts';
 import { ExportFormatError, loadPack } from '../pack/load.ts';
 import { searchPack } from '../pack/search.ts';
 
@@ -46,7 +48,7 @@ function parseOptions(argv: string[]): Options {
 function summary(exportId: string, pack: Pack): string[] {
   const m = pack.manifest;
   const bySource = (source: RecipeSource) => pack.recipes.filter((r) => r.source === source).length;
-  const machines = [...pack.machines.values()];
+  const machines = allMachineIds(pack).map((id) => machineOf(pack, id)).filter((m): m is Machine => m !== undefined);
   const hatchRules = machines.filter((x) => x.structure?.elements !== undefined).length;   // exporter 0.6.0+
   const { dimensions, veins, capabilities } = pack.worldgen;
   const warnings = [...(pack.warnings ?? []), ...(m.warnings ?? [])];   // the loader's, then the exporter's
@@ -84,8 +86,8 @@ function productText(pack: Pack, output: Product): string {
 
 /** The names of the machines that run any of the recipe's maps, lowest tier first. */
 function machineText(pack: Pack, recipe: Recipe): string {
-  const ids = new Set(recipe.maps.flatMap((map) => pack.machinesByMap.get(map) ?? []));
-  const names = [...ids].map((id) => pack.machines.get(id)?.name ?? `machine ${id}`);
+  const ids = new Set<number>(recipe.maps.flatMap((map) => machineIdsForMap(pack, map).map(legacyMteId)));
+  const names = [...ids].map((id) => machineByMteId(pack, id)?.name ?? `machine ${id}`);
   if (names.length === 0) return '(no machine)';
   const more = names.length > SHOWN_MACHINES ? ` +${names.length - SHOWN_MACHINES} more` : '';
   return `${names.slice(0, SHOWN_MACHINES).join(', ')}${more}`;

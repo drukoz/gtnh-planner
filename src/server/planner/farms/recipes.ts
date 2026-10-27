@@ -10,6 +10,7 @@ import { isFluidKey, type StuffKey } from '../../../shared/keys.ts';
 import { TGS_MODE_ORDER, type FarmRecipeMeta, type FarmSettings, type FarmStep, type TgsMode } from '../../../shared/types/farm.ts';
 import type { CropCard, Ingredient, Machine, Pack, Product, Recipe } from '../../../shared/types/pack.ts';
 import type { PlanStep } from '../../../shared/types/plan.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { recipeId } from '../../pack/recipe-id.ts';
 import { TREE_FARM_MAP } from '../../pack/recipes.ts';
 import { canonicalRank, type CandidateGraph } from '../candidates.ts';
@@ -185,7 +186,7 @@ export function soilsToPrice(pack: Pack, setup: FarmSetup, wanted: ReadonlySet<S
  */
 function tgsFootprint(pack: Pack, machines: readonly number[]): [number, number, number] {
   const id = machines[0];
-  const size = id === undefined ? undefined : pack.machines.get(id)?.structure?.size;
+  const size = id === undefined ? undefined : machineByMteId(pack, id)?.structure?.size;
   return size === undefined ? [...TGS_FOOTPRINT] : [size[0], size[1], size[2]];
 }
 

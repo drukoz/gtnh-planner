@@ -26,13 +26,14 @@ const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId
 function farmPack(): Pack {
   const pack = layoutPack();
   const machine = (mteId: number, name: string, metaName: string, kind: Machine['kind'], cls: string): Machine => ({
-    mteId, metaName, name, cls, itemKey: `gregtech:gt.blockmachines@${mteId}`, kind, maps: [], tier: 1,
+    id: `gt:${mteId}`, mteId, metaName, name, cls, itemKey: `gregtech:gt.blockmachines@${mteId}`, kind, maps: [], tier: 1,
   });
   for (const m of [
     machine(TGS, 'Tree Growth Simulator', 'multimachine.treefarm', 'multiblock', 'gregtech.common.tileentities.machines.multi.MTETreeFarm'),
     machine(CROP_MANAGER, 'Basic Crop Manager', 'basicmachine.cropmanager.tier.01', 'basic', 'gregtech.common.tileentities.machines.basic.MTECropManager'),
   ]) {
-    pack.machines.set(m.mteId, m);
+    pack.machines.set(m.id, m);
+    pack.machineByMteId.set(m.mteId, m);
     pack.items.set(m.itemKey, { key: m.itemKey, id: 'gregtech:gt.blockmachines', meta: m.mteId, name: m.name, oreDict: [] });
   }
   pack.items.set('t:wood@0', { key: 't:wood@0', id: 't:wood', meta: 0, name: 'Rubber Wood', oreDict: [] });

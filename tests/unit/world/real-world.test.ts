@@ -8,6 +8,7 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig, type AppConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { COIL_HEAT_BY_META, isEbf } from '../../../src/server/world/coils.ts';
 import { packFacts, type ScanPackFacts } from '../../../src/server/world/facts.ts';
 import { DIRS, posKey, step } from '../../../src/server/world/model.ts';
@@ -86,7 +87,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('a scan of the real world', () =
     const scan = (await svc.getScan(id))!;
     scanned = scan;
     const ebfs = scan.machines.filter((m) => {
-      const cls = pack.machines.get(m.mteId)?.cls;
+      const cls = machineByMteId(pack, m.mteId)?.cls;
       return isEbf({ mteId: m.mteId, cls: cls ?? null });
     });
     const heats = ebfs.flatMap((m) => (m.coilHeat === undefined ? [] : [m.coilHeat]));

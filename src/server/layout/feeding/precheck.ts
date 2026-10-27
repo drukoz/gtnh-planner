@@ -20,6 +20,7 @@ import type { Pack } from '../../../shared/types/pack.ts';
 import type { LogisticsMode } from '../../../shared/types/plan.ts';
 import { FEED_KINDS, type ChipKind, type FeedCode, type FeedFinding, type ItemFilterSpec, type RoutedChipSpec } from './contract.ts';
 import { basicSlots, ignoredByBlocking, PART_KEYS, stackLimit } from './facts.ts';
+import { machineOf } from '../../pack/lookup.ts';
 import type { Ae2Iface, BasicNode, BenchNode, ChestNode, EioFace, FeedModel, FeedNode, MultiNode, NodeId, RoutedNet, RoutedPipe } from './model.ts';
 import { amountText, listText, slotWord } from './text.ts';
 
@@ -246,7 +247,7 @@ function stepLabel(model: FeedModel, stepId: string): string {
 function r1(c: Ctx): void {
   for (const node of c.machines) {
     if (node.kind !== 'basic') continue;
-    const machine = c.pack.machines.get(node.mteId);
+    const machine = machineOf(c.pack, node.machineId);
     if (machine === undefined || basicSlots(machine) === null) continue;
     let kinds = 0;
     let held: readonly StuffKey[] = [];

@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { largeBenderSpec } from '../../helpers/build-fixtures.ts';
+import { allMachines } from '../../../src/server/pack/lookup.ts';
 import { buildKeys, itemPrices } from '../../../src/server/planner/build-cost.ts';
 import { lineBuildModel, machineOptions, ONLY_REQUIRED_MULTIBLOCK_WEIGHT, type BuildModel } from '../../../src/server/planner/machine-options.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
@@ -128,12 +129,12 @@ describe('build machines at one tier', () => {
   it('keeps only that tier for new machines, owned ones of every tier beside them', async () => {
     const pack = packFromSpec(widgetSpec());
     const press = W({ recipeChoice: { [WIDGET]: 'press-widget' } });
-    expect((await modelOf(pack, press)).options('press-widget').map((o) => [o.mteId, o.canAdd])).toEqual([[101, true], [102, true]]);
-    expect((await modelOf(pack, { ...press, buildTier: 2 })).options('press-widget').map((o) => [o.mteId, o.canAdd])).toEqual([[102, true]]);
-    expect((await modelOf(pack, { ...press, buildTier: 1 })).options('press-widget').map((o) => [o.mteId, o.canAdd])).toEqual([[101, true]]);
+    expect((await modelOf(pack, press)).options('press-widget').map((o) => [o.id, o.canAdd])).toEqual([['gt:101', true], ['gt:102', true]]);
+    expect((await modelOf(pack, { ...press, buildTier: 2 })).options('press-widget').map((o) => [o.id, o.canAdd])).toEqual([['gt:102', true]]);
+    expect((await modelOf(pack, { ...press, buildTier: 1 })).options('press-widget').map((o) => [o.id, o.canAdd])).toEqual([['gt:101', true]]);
     const lvOwned = owning({ mteId: 101, count: 1 });
-    expect((await modelOf(pack, { ...press, buildTier: 2 }, lvOwned)).options('press-widget').map((o) => [o.mteId, o.canAdd, o.owned]))
-      .toEqual([[101, false, 1], [102, true, 0]]);
+    expect((await modelOf(pack, { ...press, buildTier: 2 }, lvOwned)).options('press-widget').map((o) => [o.id, o.canAdd, o.owned]))
+      .toEqual([['gt:101', false, 1], ['gt:102', true, 0]]);
     // 33 widgets a minute: 0.55 presses a second; the owned LV bender does 0.2 at most, so one new MV bender (0.4) does
     // the rest, where two would be needed without it.
     const plan = await planLine(pack, { ...press, buildTier: 2, amount: 33, per: 'min' }, lvOwned);
@@ -222,7 +223,7 @@ describe('multiblocks only when nothing else can do it', () => {
     expect(notes(stepOf(plan, 'smelt-alloy'))).toEqual(['A multiblock is needed: nothing else makes Alloy Ingot']);
     expect(plan.cost?.build).toBe(20);
     const options = (await modelOf(pack, A({ multiblocks: 'only-required' }))).options('smelt-alloy');
-    expect(options.map((o) => [o.mteId, o.build, o.solveBuild])).toEqual([[1300, 20, 20 + ONLY_REQUIRED_MULTIBLOCK_WEIGHT]]);
+    expect(options.map((o) => [o.id, o.build, o.solveBuild])).toEqual([['gt:1300', 20, 20 + ONLY_REQUIRED_MULTIBLOCK_WEIGHT]]);
     expect(ONLY_REQUIRED_MULTIBLOCK_WEIGHT).toBe(1e6);
   });
 
@@ -237,11 +238,11 @@ describe('multiblocks only when nothing else can do it', () => {
     // The Large Bender (1100) is offered beside the Basic Bending Machine only because the group owns one.
     const pack = packFromSpec(largeBenderSpec());
     const lv = { ...defaultSettings(), tier: 1 };
-    const prices = await itemPrices(pack, lv, emptyContext(), buildKeys(pack, [...pack.machines.values()]));
-    const env = { groupTier: 1, coilHeat: 1801, owned: new Map([[1100, 1]]), prices };
+    const prices = await itemPrices(pack, lv, emptyContext(), buildKeys(pack, allMachines(pack)));
+    const env = { groupTier: 1, coilHeat: 1801, owned: new Map([['gt:1100', 1]]), prices };
     const bend = pack.recipeById.get('bend-plate')!;
-    expect(machineOptions(pack, bend, 'gt.recipe.metalbender', env).map((o) => [o.mteId, o.canAdd])).toEqual([[101, true], [1100, true]]);
-    expect(machineOptions(pack, bend, 'gt.recipe.metalbender', { ...env, onlyRequiredMultiblocks: true }).map((o) => [o.mteId, o.canAdd, o.solveBuild]))
-      .toEqual([[101, true, 17], [1100, false, 83]]);
+    expect(machineOptions(pack, bend, 'gt.recipe.metalbender', env).map((o) => [o.id, o.canAdd])).toEqual([['gt:101', true], ['gt:1100', true]]);
+    expect(machineOptions(pack, bend, 'gt.recipe.metalbender', { ...env, onlyRequiredMultiblocks: true }).map((o) => [o.id, o.canAdd, o.solveBuild]))
+      .toEqual([['gt:101', true, 17], ['gt:1100', false, 83]]);
   });
 });

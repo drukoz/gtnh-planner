@@ -43,7 +43,7 @@ describe('makeN', () => {
     // Ruling R3: wire runs 10 (circuit-lv takes 2 copper wire, a wire run makes 2).
     expect(r.steps.map((s) => [s.id, s.machine.mteId, s.count, s.owned, s.runs])).toEqual([
       ['bend-plate', 101, 1, 1, 10], ['circuit-lv', 121, 2, 2, 10], ['wire', 111, 1, 0, 10]]);
-    expect(r.addedMachines).toEqual([{ mteId: 111, count: 1 }]);
+    expect(r.addedMachines).toEqual([{ id: 'gt:111', count: 1 }]);
     expect(r.totalSeconds).toBeCloseTo(65, 6);          // slowest type 50 s + fill 15 s (100 t + 200 t)
     expect(r.leftovers).toEqual([]);
   });
@@ -158,7 +158,7 @@ describe('more Make N cases', () => {
   it('adds one machine for a type nothing owned covers and shares it between the steps', async () => {
     const { run } = await planned(assemblerLine, 't@0', 4);
     const r = await run();
-    expect(r.addedMachines).toEqual([{ mteId: 1, count: 1 }]);
+    expect(r.addedMachines).toEqual([{ id: 'gt:1', count: 1 }]);
     expect(r.totalSeconds).toBeCloseTo(50, 9);   // 8 runs × 100 t on one machine = 40 s, plus 10 s to fill (100 t + 100 t)
     expect(r.steps.map((s) => [s.id, s.count, s.owned, s.runs, s.runsPerSecond, s.utilization, s.warnings])).toEqual([
       ['make-a', 1, 0, 4, 0.08, 0.4, [SHARES_T]],
@@ -178,7 +178,7 @@ describe('more Make N cases', () => {
     const ctx = { ...emptyContextForTest(), ownedMachines: [{ mteId: 121, count: 2 }] };
     const r = await makeN(pack, graph, sol, demand, { settings: { ...defaultSettings(), declineReuse: [121] }, groupTier: 1, coilHeat: 1801, ctx });
     expect(r.steps.find((s) => s.id === 'circuit-lv')).toMatchObject({ count: 1, owned: 0, circuit: 2, mainOutput: 't:circuit@0' });
-    expect(r.addedMachines).toEqual([{ mteId: 101, count: 1 }, { mteId: 111, count: 1 }, { mteId: 121, count: 1 }]);
+    expect(r.addedMachines).toEqual([{ id: 'gt:101', count: 1 }, { id: 'gt:111', count: 1 }, { id: 'gt:121', count: 1 }]);
     expect(r.totalSeconds).toBeCloseTo(115, 6);   // assembler 10 × 200 t = 100 s, plus 15 s to fill
   });
   it('hand-crafts without adding a machine or a sharing warning', async () => {

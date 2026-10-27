@@ -5,6 +5,7 @@
 // is sorted by local position, then local side. Ids are the local cell, `x,y,z` (`nodeId`).
 // Pure TypeScript: nothing from node:* may be imported here.
 
+import type { MachineId } from '../../../shared/ids.ts';
 import type { StuffKey } from '../../../shared/keys.ts';
 import type { Vec3 } from '../../../shared/layout/geometry.ts';
 import type { DyeColor, RedstoneMode } from '../../../shared/types/layout.ts';
@@ -26,14 +27,14 @@ interface NodeBase {
   kinds: StuffKey[];                                          // the item kinds it takes: distinct consumed item keys of its recipes, sorted
 }
 export interface BasicNode extends NodeBase {
-  kind: 'basic'; mteId: number; tier: number; inSlots: number; outSlots: number; outputSide: number; front: number; maps: string[]; settings: MachineSettings;
+  kind: 'basic'; machineId: MachineId; tier: number; inSlots: number; outSlots: number; outputSide: number; front: number; maps: string[]; settings: MachineSettings;
   steam: boolean;                                             // pack kind `steam` (E17): no cover, no auto-output, AE2 outputs by hand
 }
 export interface BusNode { id: NodeId; pos: Vec3; local: Vec3; label: string; front: number; slots: number; limited: boolean | null; inputFilter: boolean | null; maps: string[] }
 export interface OutBusNode { id: NodeId; pos: Vec3; local: Vec3; label: string; front: number; slots: number; lock: StuffKey | null /* `config.lock` */ }
-export interface MultiNode extends NodeBase { kind: 'multi'; mteId: number; inBuses: BusNode[]; outBuses: OutBusNode[]; inputSeparation: boolean | null; separationDefault: boolean }
+export interface MultiNode extends NodeBase { kind: 'multi'; machineId: MachineId; inBuses: BusNode[]; outBuses: OutBusNode[]; inputSeparation: boolean | null; separationDefault: boolean }
 export interface BenchNode extends NodeBase {
-  kind: 'bench'; mteId: number; tier: number; front: number; back: number; grid: Array<StuffKey | null>; result: { key: StuffKey; amount: number };
+  kind: 'bench'; machineId: MachineId; tier: number; front: number; back: number; grid: Array<StuffKey | null>; result: { key: StuffKey; amount: number };
   containers: Record<StuffKey, StuffKey>; throughput: number;
   fluidSides: number[]; powerSides: number[]; itemPipeSides: number[];   // sides whose neighbour connects toward it (GT6-style, E17)
 }

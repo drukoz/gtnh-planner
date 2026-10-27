@@ -8,15 +8,16 @@
 
 import { createHash } from 'node:crypto';
 import { mergeBuildSteps } from '../layout/merge.ts';
+import { machineByMteId } from '../pack/lookup.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { BlockRole, ConduitKind, Layout, LayoutBlock } from '../../shared/types/layout.ts';
-import type { BlockRef, Machine, MachineKind, Pack } from '../../shared/types/pack.ts';
+import type { BlockRef, MachineKind, Pack } from '../../shared/types/pack.ts';
 import type { BuildStep } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { PROJECTOR_FORMAT, type ProjectorBlock, type ProjectorPayload, type ProjectorStep } from '../../shared/types/projector.ts';
 
-/** What the payload reads from the pack: the names of cover items and the kinds of GT machines. */
-export type PayloadPack = Pick<Pack, 'nameOf'> & { machines: ReadonlyMap<number, Pick<Machine, 'kind'>> };
+/** What the payload reads from the pack: the names of cover items and the kinds of GT machines (through `machineByMteId`). */
+export type PayloadPack = Pack;
 
 /** Pseudo block id prefixes (`fmp:<part>`, `conduit:<type>`, `ae2cable:<centre>`, §11.17) → the block that holds the part in the world. */
 export const CONTAINER_BLOCKS: Readonly<Record<string, string>> = {
@@ -112,7 +113,7 @@ export function payloadVersion(p: Pick<ProjectorPayload, 'dim' | 'blocks' | 'ste
 
 /** Whether GT machine `mteId` is a single-block machine, whose checked facing is its output side. */
 function isSingleBlockMachine(pack: PayloadPack, mteId: number): boolean {
-  const kind = pack.machines.get(mteId)?.kind;
+  const kind = machineByMteId(pack, mteId)?.kind;
   return kind !== undefined && OUTPUT_FACING_KINDS.has(kind);
 }
 

@@ -10,6 +10,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { OPPOSITE, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
@@ -41,7 +42,7 @@ function counts(values: readonly string[]): string {
 /** A plan step of `count` × machine `mteId` on the export's recipe `recipeId` (its id is the recipe's, so its circuit is found). */
 function stepOf(pack: Pack, recipeId: string, mteId: number, count: number): StepSpec {
   const r = pack.recipeById.get(recipeId);
-  const m = pack.machines.get(mteId);
+  const m = machineByMteId(pack, mteId);
   expect(r, `recipe ${recipeId} in the export`).toBeDefined();
   expect(m, `machine ${mteId} in the export`).toBeDefined();
   return {
@@ -97,7 +98,7 @@ function servedSide(layout: Layout, machine: LayoutBlock): number | undefined {
 function faults(pack: Pack, layout: Layout): string[] {
   const out: string[] = [];
   const taken = new Set(layout.blocks.map((b) => key(b.pos)));
-  for (const s of layout.blocks.filter((b) => b.role === 'machine' && b.block.mteId !== undefined && pack.machines.get(b.block.mteId)?.kind === 'steam')) {
+  for (const s of layout.blocks.filter((b) => b.role === 'machine' && b.block.mteId !== undefined && machineByMteId(pack, b.block.mteId)?.kind === 'steam')) {
     if (s.facing !== UP || !HORIZONTAL.includes(s.mainFacing ?? -1)) out.push(`${s.label}: output side ${s.facing}, front ${s.mainFacing}`);
     if ((s.covers ?? []).length > 0) out.push(`${s.label}: a cover`);
     if (taken.has(key(step(s.pos, UP)))) out.push(`${s.label}: a block on its vent`);
@@ -133,7 +134,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("GT's primitive machines laid ou
       const started = performance.now();
       const layout = await layoutLine(pack, plan, emptyScan(), project);
       const ms = performance.now() - started;
-      const steam = layout.blocks.filter((b) => b.role === 'machine' && b.block.mteId !== undefined && pack.machines.get(b.block.mteId)?.kind === 'steam');
+      const steam = layout.blocks.filter((b) => b.role === 'machine' && b.block.mteId !== undefined && machineByMteId(pack, b.block.mteId)?.kind === 'steam');
       const hand = layout.buildSteps.filter((s) => s.id.startsWith('layout:hand:'));
       console.log(`real-primitive ${mode} ${line}: status ${layout.status}, ${layout.blocks.filter((b) => b.role === 'machine').length} machines `
         + `(${steam.length} steam), footprint ${layout.size.join('×')}, hand steps ${hand.length}, warnings ${counts(layout.warnings.map((w) => w.code))}, `
