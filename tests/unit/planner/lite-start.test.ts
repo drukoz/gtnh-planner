@@ -258,4 +258,28 @@ describe('the lite start when a solve fails', () => {
     });
     expect(unhandled).toEqual([]);
   });
+
+  it('plans without the lite start where the lite fails, its solve or its model', async () => {
+    // A lite that fails is a lite without a plan: the leanest line and the build MIP then solve as without the lite start.
+    const without = timeless((await week()).sol);
+    const solve = await unhandledOf({ aside: (_job, index) => (index === 0 ? Promise.reject(new Error('the lite failed')) : undefined) }, async () => {
+      const { sol } = await week(LITE);
+      expect(sol.buildStats?.beside).toBeUndefined();
+      expect(timeless(sol)).toEqual(without);
+    });
+    expect(solve).toEqual([]);
+    const spy = vi.mocked(buildMip);
+    const real = spy.getMockImplementation() as typeof buildMip;
+    spy.mockImplementation((input) => {
+      if (input.lite === true) throw new Error('the lite model failed');
+      return real(input);
+    });
+    try {
+      const { sol } = await week(LITE);
+      expect(sol.buildStats?.beside).toBeUndefined();
+      expect(timeless(sol)).toEqual(without);
+    } finally {
+      spy.mockImplementation(real);
+    }
+  });
 });

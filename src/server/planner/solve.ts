@@ -1921,8 +1921,9 @@ async function liteLine(lp: MainLp, plain: BuildMipInput, limit: number, opts: S
  * is the lite plan's, that MIP is the build MIP of the true cap, from the same starts, so it is kept (`beside`: `kept`):
  * the plan is the one `sequentialLean` solves after the leanest line; else it is solved again at the leanest line's
  * (`re-solved`). The 9 digits make the two match where the leanest line keeps the lite plan's recipes but moves its
- * machines (Duty plate: 9.64027777777862 against 9.640277777777778). Where the lite gives no plan, the leanest line and
- * the build MIP run as without it. Every decision reads the solves' results only, never their timing.
+ * machines (Duty plate: 9.64027777777862 against 9.640277777777778). Where the lite gives no plan, or fails (its model
+ * or its solve throws), the leanest line and the build MIP run as without it. Every decision reads the solves' results
+ * only, never their timing.
  */
 async function liteStaged(
   lp: MainLp, s1: LpResult, plain: BuildMipInput, leanMip: ReturnType<typeof buildMip>, sparse: readonly number[] | null, cap: number,
@@ -1931,7 +1932,8 @@ async function liteStaged(
   lean: { raw: number; x?: readonly number[] }; ignoredPlan: Awaited<ReturnType<typeof finish>>; input: BuildMipInput;
   others: ReadonlyArray<readonly number[] | null | undefined>; cheapest: SolvedMip; beside?: 'kept' | 're-solved';
 }> {
-  const [liteX, ignoredPlan] = await Promise.all([liteLine(lp, plain, limit, opts), finish(lp, s1, [], opts)]);
+  // A lite that fails (its model or its solve) is a lite without a plan: the line plans as without the lite start.
+  const [liteX, ignoredPlan] = await Promise.all([liteLine(lp, plain, limit, opts).catch(() => undefined), finish(lp, s1, [], opts)]);
   if (liteX === undefined) {
     const lean = await leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false) ?? { raw: s1.objective };
     const input: BuildMipInput = { ...plain, leanRaw: lean.raw, rawBound: (1 + cap) * lean.raw };
