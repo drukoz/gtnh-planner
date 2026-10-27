@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { routeInternal, fluidNets, headWidthFor, runX, supplyRunLoss } from '../../../src/server/layout/internal.ts';
-import { unitsFromPlan, placeUnits, type LocalBlock, type Placement, type Unit } from '../../../src/server/layout/arrange.ts';
+import { unitsFromPlan, placeUnits, type LocalBlock, type Unit } from '../../../src/server/layout/arrange.ts';
 import { hookupAllowanceVolts, tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makePlan, IDS } from '../../helpers/layout-fixtures.ts';
+import { tierContacts } from '../../helpers/power-loss.ts';
 import { machineIdOfLegacy } from '../../../src/shared/ids.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { Machine } from '../../../src/shared/types/pack.ts';
@@ -27,29 +28,6 @@ function reachesRun(blocks: LocalBlock[], from: Vec3, x: number): boolean {
     for (let s = 0; s < 6; s++) if ((b.connections ?? 0) & (1 << s)) queue.push(step(p, s));
   }
   return false;
-}
-
-/**
- * Final review C2: every pair of touching cable blocks and every cable beside a machine's power input, as text, when
- * the two are of different tiers (a cable's tier is its run's, by its label) or the machine is below the cable's tier.
- */
-function tierContacts(blocks: LocalBlock[], cables: Array<{ tier: number; cable: Machine }>, placement: Placement): string[] {
-  const tierOf = new Map(cables.map((c) => [c.cable.name, c.tier]));
-  const at = new Map(blocks.map((b) => [posKey(b.pos), b]));
-  const machines = new Map(placement.units.filter((u) => u.ports.power !== null).map((u) => [posKey(step(u.ports.power!, u.facing)), u]));
-  const out: string[] = [];
-  for (const b of blocks) {
-    if (b.role !== 'cable') continue;
-    const tier = tierOf.get(b.label)!;
-    for (let side = 0; side < DIRS.length; side++) {
-      const n = step(b.pos, side);
-      const other = at.get(posKey(n));
-      if (other?.role === 'cable' && tierOf.get(other.label) !== tier) out.push(`${b.label} at ${posKey(b.pos)} touches ${other.label} at ${posKey(n)}`);
-      const unit = machines.get(posKey(n));
-      if (unit !== undefined && unit.tier < tier) out.push(`${b.label} at ${posKey(b.pos)} touches ${unit.name} at ${posKey(n)}`);
-    }
-  }
-  return out;
 }
 
 describe('internal routing', () => {
