@@ -6,7 +6,8 @@
 // the picture, the wheel zooms it and Fit shows all of it (./pan-zoom.ts), as for the flow diagram; a click on a box, one
 // of its face rows or a link shows its full configuration in the side panel, and a picked link marks the face rows it
 // leaves and enters. When the panel opens or closes beside it, the picture is fitted again if it still is the fitted one,
-// else keeps its middle (the review of 401d0ca).
+// else keeps its middle (the review of 401d0ca). The Fit button pans the picture there over 250 ms (Phase 2 spec §16.2, P2-D20), and a
+// new picture glides into place from the last over 260 ms (§16.3).
 
 import {
   Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactElement,
@@ -16,15 +17,23 @@ import { DYE_HEX } from '../../shared/layout/enderio.ts';
 import type { DyeColor, Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
+import { Figs } from '../components/Figs.tsx';
+import { focusMain, focusOn } from '../components/focus.ts';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { SHEET_KEY_HINT } from '../components/ShortcutsSheet.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
+import { tipText } from '../components/tooltip-model.ts';
 import {
   CONN_LINE_HEIGHT, CONN_TITLE_HEIGHT, connectionsElk, connectionsFromElk, connectionsGraph, faceLines, faceModeText, hasLine, pickDetails,
   type ConnEdge, type ConnFace, type ConnGraph, type ConnLayout, type ConnPick, type ConnVia,
 } from '../connections/model.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
+import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { useLayout } from '../state/use-layout.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
-import { DRAG_THRESHOLD, fitView, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
+import { layoutChange } from './flow-model.ts';
+import { glideLayout, usePan, type GlideTargets, type PanView } from './glide.ts';
+import { DRAG_THRESHOLD, fitView, pointIn, resizeView, sameView, wheelFactor, zoomAround, type Size, type View } from './pan-zoom.ts';
 import { pipeAnimationMode, pipeSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
@@ -43,7 +52,7 @@ const INFEASIBLE_TEXT = 'This line cannot be planned yet, so there is nothing to
 const LAYING_OUT_TEXT = 'Laying out the line…';
 const NOTHING_TEXT = 'Nothing to connect yet: the line places no new machines';
 const DRAWING_TEXT = 'Drawing the connections…';
-const HINT_TEXT = 'Drag or use the arrow keys to move, scroll to zoom, and click a box, one of its face rows or a link for its full configuration.';
+const HINT_TEXT = 'Drag or use the arrow keys to move, scroll to zoom; click a box, a face row or a link for its full configuration.';
 const loadFailed = (error: string): string => `Could not load the layout: ${error}`;
 const drawFailed = (error: string): string => `Could not lay out the connections: ${error}`;
 
@@ -66,7 +75,7 @@ const DIVIDER_GAP = 2;
  * A box text longer than this many characters shows its first that many and '…' (plan 11, Task 8's review ruling): a
  * title (13 px bold) and a line or face row (11.5 px). Measured for a box `CONN_NODE_WIDTH` (260 px) wide: cut there,
  * every title and face row of the pack's machines and hatches fits with 8 px to spare on each side. The box's tooltip
- * and the panel hold the whole text.
+ * and accessible name, and the panel, hold the whole text.
  */
 const TITLE_CHARS = 32;
 const ROW_CHARS = 38;
@@ -82,6 +91,19 @@ const PAN_KEYS: Readonly<Record<string, readonly [number, number]>> = { ArrowLef
  * 2.8:1): their pipes get a panel-grey casing instead, on which each reads at 3.6:1 or more (design spec §7).
  */
 const DARK_DYES: ReadonlySet<DyeColor> = new Set(['black', 'brown', 'blue', 'gray', 'green', 'purple', 'red']);
+
+/** What a new picture glides (./glide.ts): its boxes and its links. */
+const CONN_GLIDE: GlideTargets = { boxes: ['data-node'], edges: 'data-edge' };
+
+/** A view as its pan's (./glide.ts): the zoom `k` is the pan group's scale. */
+function toPan(v: View): PanView {
+  return { x: v.x, y: v.y, scale: v.k };
+}
+
+/** A pan's picture as a view. */
+function fromPan(p: PanView): View {
+  return { x: p.x, y: p.y, k: p.scale };
+}
 
 /** `text`, or its first `max` characters and '…' when it is longer, so the box shows where its text is cut. */
 function cut(text: string, max: number): string {
@@ -100,7 +122,7 @@ function facesOutline(width: number, top: number, bottom: number): string {
   return `M 0 ${top} H ${width} V ${bottom - r} A ${r} ${r} 0 0 1 ${width - r} ${bottom} H ${r} A ${r} ${r} 0 0 1 0 ${bottom - r} Z`;
 }
 
-/** A face row in the box's tooltip: its title, and a conduit face's mode after a dash. */
+/** A face row in the box's tooltip and accessible name: its title, and a conduit face's mode after a dash. */
 function faceTip(face: ConnFace): string {
   return face.mode === undefined ? face.title : `${face.title} — ${faceModeText(face.mode)}`;
 }
@@ -111,14 +133,15 @@ function faceTip(face: ConnFace): string {
  * it, or on the face rows' background, picks the box, and a click on either line of a face row picks that face. Only the
  * face rows take clicks among the texts, so the middle of the rect is always the rect's own. A face row is `selected`
  * when picked and `linked` when the picked link leaves or enters through it (`linked` holds those faces). A text too
- * long for the box ends in '…' (`cut`), and the box's tooltip, its first child as in the flow diagram, holds every text
- * in full, one per line; the panel shows a picked one in full too. The nested svg still clips anything wider than the
- * box.
+ * long for the box ends in '…' (`cut`), and the box's tooltip and accessible name (its `data-tip` and `aria-label`, as
+ * in the flow diagram: Phase 2 spec §6.4) hold every text in full, one per line of the tooltip; the panel shows a picked
+ * one in full too. The nested svg still clips anything wider than the box.
  */
 function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; linked: ReadonlySet<string>; onPick(pick: ConnPick): void }): ReactElement {
   const { node, pick, linked, onPick } = props;
   const picked = pick !== null && 'node' in pick && pick.node === node.id ? pick : null;
   const top = facesTop(node);
+  const tip = tipText([node.title, ...node.lines, ...node.faces.map(faceTip)]);
   const pickBox = (): void => onPick({ node: node.id });
   /** Each face row's first line, counted from the divider. */
   let lines = 0;
@@ -128,8 +151,10 @@ function NodeShape(props: { node: PlacedNode; pick: ConnPick | null; linked: Rea
     return at;
   });
   return (
-    <g data-node={node.id} className={`conn-node conn-${node.kind}${picked === null ? '' : ' selected'}`} transform={`translate(${node.x} ${node.y})`}>
-      <title>{[node.title, ...node.lines, ...node.faces.map(faceTip)].join('\n')}</title>
+    <g
+      data-node={node.id} className={`conn-node conn-${node.kind}${picked === null ? '' : ' selected'}`} transform={`translate(${node.x} ${node.y})`}
+      aria-label={tip} data-tip={tip}
+    >
       {/* the face rows' part, drawn over the rect's lower edge (and its corners, were they rounded), gives the box one outline */}
       <rect width={node.width} height={node.faces.length === 0 ? node.height : top + CORNER} rx={CORNER} onClick={pickBox} />
       {node.faces.length > 0 && <path d={facesOutline(node.width, top, node.height)} onClick={pickBox} />}
@@ -183,7 +208,7 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
   const arrow = edge.via === 'attached' ? {} : { markerEnd: 'url(#conn-arrow)' };
   const pipeVars = {
     ...(moving ? { '--pipe-dur': `${pipeSeconds(edge.perSecond, edge.key !== null && isFluidKey(edge.key))}s` } : {}),
-    ...(edge.color !== null && DARK_DYES.has(edge.color) ? { '--pipe-casing': 'var(--panel)' } : {}),
+    ...(edge.color !== null && DARK_DYES.has(edge.color) ? { '--pipe-casing': 'var(--dye-casing)' } : {}),
   } as CSSProperties;
   return (
     <g data-edge={edge.id} className={`conn-edge conn-via-${edge.via}${selected ? ' selected' : ''}`} style={pipeVars} onClick={() => onPick({ edge: edge.id })}>
@@ -198,13 +223,19 @@ function EdgeShape(props: { edge: PlacedEdge; selected: boolean; onPick(pick: Co
 /**
  * The picture, under a Fit button and the Pause pipes button (ruling R31: paused, the area's `data-pipes` is `paused` and no pipe
  * moves), in an area as tall as the picture at its own size (at most 75vh) that moves and
- * zooms it as the flow diagram does: a drag moves it, from a box too once the pointer has moved DRAG_THRESHOLD px (a
- * plain click still picks, and the click that ends a drag picks nothing), the wheel or a pinch zooms around the
+ * zooms it as the flow diagram does: a press becomes a drag once the pointer itself has moved DRAG_THRESHOLD px on the
+ * page, from a box too, and the drag moves the picture by what the pointer moved over the area (so the spot it grabbed
+ * stays under the pointer while the area moves on the page; ledger ruling P2-R16). A press the area moves under stays a
+ * click: a plain click still picks, and the click that ends a drag picks nothing. The wheel or a pinch zooms around the
  * pointer, and the arrow keys move it while the area has focus. Fit, also when the picture first shows and whenever its
  * boxes change, shows all of it. When the area changes size (the side panel opening or closing beside it), the view is
  * fitted again while nothing has moved or zoomed it since it was fitted, else it keeps the spot in its middle
  * (`resizeView`). The links come first, then the boxes over them. A group, not an image, so assistive technology reads
- * the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling).
+ * the boxes, rows and links inside it, as for the flow diagram (plan 11, Task 8's review ruling). The Fit button pans the
+ * picture over 250 ms (Phase 2 spec §16.2, P2-D20: `usePan`), its attribute the fitted view at once; every other move is
+ * instant and ends a pan under way, the wheel, the drag and the arrow keys from the picture on screen (review focus 1),
+ * a refit from the view it was going to, the fitted one. A new picture glides into place from the last (§16.3, `glideLayout`),
+ * inside the view it is drawn in, which a new picture of other boxes fits at once first: one motion a box at a time.
  */
 function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: boolean; onPick(pick: ConnPick): void }): ReactElement {
   const { picture, pick, busy, onPick } = props;
@@ -216,13 +247,28 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   }, [picture, pickedEdge]);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ x: PAD, y: PAD, k: 1 });
+  /** The pan group (`g.conn-pan`), whose attribute is the view; Fit pans there (`glideTo`), `holdView` holds a pan for an instant move. */
+  const { panRef, glideTo, holdView } = usePan(view, setView, toPan, fromPan);
   const [dragging, setDragging] = useState(false);
   /** The pipes stand still where they are: this browser's Pause pipes (ruling R31). */
   const pipesPaused = usePipesPaused();
-  const drag = useRef<{ pointer: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  /** Whether the single-key shortcuts act, so Fit and Pause pipes say their keys, and the hint the sheet's (ledger ruling P2-R85). */
+  const keysOn = useSingleKeyShortcuts();
+  /**
+   * The press that may become a drag: its pointer, where it went down on the page (`cx`, `cy`: client px) and in the area (`sx`, `sy`:
+   * `pointIn`), and the view then (the picture on screen once it is a drag, when a pan was under way).
+   */
+  const drag = useRef<{ pointer: number; cx: number; cy: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  /**
+   * While that press is pending (pressed in the area, not yet a drag, so its pointer is not captured and a release off the area goes unheard
+   * there), how to stop the window's listening for its release (`hearRelease`); null when no press is pending.
+   */
+  const unhearRelease = useRef<(() => void) | null>(null);
   const dragged = useRef(false);
   // The view is fitted again only when the boxes change, not when someone else's change only moves a rate.
   const shape = useMemo(() => picture.nodes.map((n) => n.id).join('\n'), [picture]);
+  /** The picture drawn before, which a new one glides from (`layoutChange`); null before the first. */
+  const placedBefore = useRef<ConnLayout | null>(null);
   /** The view the last fit gave, the area's size then (or at its last change), and the latest view and picture. */
   const fitted = useRef<View | null>(null);
   const area = useRef<Size>({ width: 0, height: 0 });
@@ -231,16 +277,28 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     latest.current = { view, picture };
   }, [view, picture]);
 
-  const fit = (): void => {
+  /** Fits the picture: panned to by the Fit button (`glide`), at once when it first shows and when its boxes change. */
+  const fit = (glide = false): void => {
     const svg = svgRef.current;
     const size = { width: svg?.clientWidth ?? 0, height: svg?.clientHeight ?? 0 };
     const next = fitView(picture, size, PAD);
     area.current = size;
     fitted.current = next;
     latest.current.view = next;
-    setView(next);
+    if (glide) glideTo(next);
+    else setView(next);
   };
   useLayoutEffect(() => fit(), [shape]);   // reads the current picture; only a change of boxes refits
+  // A new picture glides into place from the last, before it is painted (Phase 2 spec §16.3): its boxes that moved, came and went, and its
+  // links that changed (no ghosts here: Flow's). One of other boxes was fitted at once just above, so its view is drawn as it lands, in this
+  // frame, and the boxes glide inside that view: no pan runs with them (the refit is never panned), so a box moves along one path only. The
+  // first picture, and StrictMode's second run of this effect, which finds the same one, change nothing.
+  useLayoutEffect(() => {
+    const change = layoutChange(placedBefore.current, picture);
+    placedBefore.current = picture;
+    const pan = panRef.current;
+    if (pan !== null) glideLayout(pan, change, CONN_GLIDE);
+  }, [picture]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -250,6 +308,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
       const after = { width: svg.clientWidth, height: svg.clientHeight };
       if (after.width === before.width && after.height === before.height) return;
       area.current = after;
+      // while Fit pans, the view is the fitted one it is going to, so a fitted view is fitted again; the view set ends the pan
       const { view: was, picture: shown } = latest.current;
       const refit = fitted.current !== null && sameView(was, fitted.current);
       const next = resizeView(was, fitted.current, shown, before, after, PAD);
@@ -264,12 +323,14 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
   useEffect(() => {
     const svg = svgRef.current;
     if (svg === null) return undefined;
-    // React's wheel listener is passive, so it cannot stop the page from scrolling (or zooming, on a pinch); this can.
+    // React's wheel listener is passive, so it cannot stop the page from scrolling (or zooming, on a pinch); this can. It zooms the picture
+    // on screen at once: a pan under way stops where it is (review focus 1).
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault();
       const box = svg.getBoundingClientRect();
       const factor = wheelFactor(e.deltaY, e.deltaMode === WheelEvent.DOM_DELTA_LINE);
-      setView((v) => zoomAround(v, e.clientX - box.left, e.clientY - box.top, factor));
+      const held = holdView();
+      setView((v) => zoomAround(held ?? v, e.clientX - box.left, e.clientY - box.top, factor));
     };
     svg.addEventListener('wheel', onWheel, { passive: false });
     return () => svg.removeEventListener('wheel', onWheel);
@@ -277,12 +338,39 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
 
   const onPointerDown = (e: PointerEvent<SVGSVGElement>): void => {
     if (e.button !== 0 || drag.current !== null) return;   // one pointer at a time moves the picture
-    drag.current = { pointer: e.pointerId, sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, moved: false };
+    const [sx, sy] = pointIn(e);
+    const press = { pointer: e.pointerId, cx: e.clientX, cy: e.clientY, sx, sy, ox: view.x, oy: view.y, moved: false };
+    drag.current = press;
+    hearRelease(press);
   };
+  /**
+   * The release of a pending press ends it wherever it happens, as the Flow canvas's does (ledger ruling P2-R143): let go off the area, which
+   * never hears it there (the area captures the pointer only once the press is a drag), it would otherwise stay pending, and a later press
+   * elsewhere, dragged into the area, would carry it on. A one-shot listener on the window, in the bubble phase, so a release in the area
+   * reaches `onPointerEnd` first (React's root is under the window); that end, the press's capture and a newer press each stop it.
+   */
+  const hearRelease = (press: NonNullable<typeof drag.current>): void => {
+    unhearRelease.current?.();
+    const release = (e: globalThis.PointerEvent): void => {
+      if (e.pointerId !== press.pointer) return;
+      unhear();
+      if (drag.current === press) drag.current = null;
+    };
+    const unhear = (): void => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      if (unhearRelease.current === unhear) unhearRelease.current = null;
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    unhearRelease.current = unhear;
+  };
+  useEffect(() => () => unhearRelease.current?.(), []);
   const onPointerEnd = (e: PointerEvent<SVGSVGElement>): void => {
     const d = drag.current;
     if (d === null || d.pointer !== e.pointerId) return;
     drag.current = null;
+    unhearRelease.current?.();
     if (!d.moved) return;
     setDragging(false);
     dragged.current = true;   // the click that ends a drag picks nothing
@@ -297,15 +385,25 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
       onPointerEnd(e);   // released outside the picture before the drag began, so the svg never heard it
       return;
     }
-    const dx = e.clientX - d.sx;
-    const dy = e.clientY - d.sy;
     if (!d.moved) {
-      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      // the pointer's own move decides: a still press stays a click while the area moves under it (P2-R16)
+      if (Math.hypot(e.clientX - d.cx, e.clientY - d.cy) < DRAG_THRESHOLD) return;
       d.moved = true;
       setDragging(true);
       e.currentTarget.setPointerCapture(e.pointerId);   // only now: a plain click must still reach the box under it
+      unhearRelease.current?.();                         // the area hears its release now
+      // a pan under way stops where it is on screen, and the drag carries on from that picture, its zoom too, as the move below sets x and y
+      // only (review focus 1); a click lets it run on
+      const held = holdView();
+      if (held !== null) {
+        setView(held);
+        d.ox = held.x;
+        d.oy = held.y;
+      }
     }
-    setView((v) => ({ ...v, x: d.ox + dx, y: d.oy + dy }));
+    // the drag follows the area: the spot it grabbed stays under the pointer while the area moves on the page (`pointIn`, P2-R16)
+    const [px, py] = pointIn(e);
+    setView((v) => ({ ...v, x: d.ox + px - d.sx, y: d.oy + py - d.sy }));
   };
   const pickUnlessDragged = (p: ConnPick): void => {
     if (!dragged.current) onPick(p);
@@ -314,15 +412,24 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
     const step = PAN_KEYS[e.key];
     if (step === undefined || e.altKey || e.ctrlKey || e.metaKey) return;   // Alt+← is the browser's Back
     e.preventDefault();   // the page does not scroll too
-    setView((v) => ({ ...v, x: v.x + step[0] * KEY_PAN, y: v.y + step[1] * KEY_PAN }));
+    const held = holdView();   // from the picture on screen, where a pan under way stops
+    setView((v) => {
+      const from = held ?? v;
+      return { ...from, x: from.x + step[0] * KEY_PAN, y: from.y + step[1] * KEY_PAN };
+    });
   };
 
   return (
     <>
       <div className="conn-toolbar row">
-        <button type="button" className="small" onClick={() => fit()}>Fit</button>
-        <PipesButton paused={pipesPaused} />
-        <span className="muted small">{HINT_TEXT}</span>
+        <button
+          type="button" className="small" aria-keyshortcuts={keysOn ? 'F' : undefined} data-tip={keysOn ? 'Fit · F' : undefined}
+          onClick={() => fit(true)}
+        >
+          Fit
+        </button>
+        <PipesButton paused={pipesPaused} keys={keysOn} />
+        <span className="muted small">{HINT_TEXT}{keysOn && SHEET_KEY_HINT}</span>
       </div>
       {/* above PIPE_ANIMATION_LIMIT links only the picked link's pipe moves, so a huge line still pans smoothly (pipe-motion.ts);
           while this browser has the pipes paused, none moves */}
@@ -347,7 +454,7 @@ function Picture(props: { picture: ConnLayout; pick: ConnPick | null; busy: bool
               <path className="conn-arrow-head" d="M 0 0 L 10 5 L 0 10 z" />
             </marker>
           </defs>
-          <g className="conn-pan" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+          <g className="conn-pan" ref={panRef} transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
             {picture.edges.map((edge) => <EdgeShape key={edge.id} edge={edge} selected={edge.id === pickedEdge} onPick={pickUnlessDragged} />)}
             {picture.nodes.map((node) => <NodeShape key={node.id} node={node} pick={pick} linked={linked} onPick={pickUnlessDragged} />)}
           </g>
@@ -368,14 +475,22 @@ function Legend(props: { edges: readonly ConnEdge[] }): ReactElement | null {
   );
 }
 
-/** The picked box, face row or link in full: its title and every line. */
+/**
+ * The picked box, face row or link in full: its title and every line. Its Close gives the focus back before the panel goes (ledger ruling
+ * P2-R77), as Flow's does (P2-R36): a box here takes no focus (the diagram is one focus stop, which the arrow keys pan, and a box is picked
+ * by the pointer), so the diagram takes it, else the page's main. A focus elsewhere is left where it is.
+ */
 function Panel(props: { details: Details; onClose(): void }): ReactElement {
   const { details, onClose } = props;
+  const close = (button: HTMLButtonElement): void => {
+    if (document.activeElement === button && !focusOn(button.closest('.conn-view')?.querySelector('.connections > svg'))) focusMain();
+    onClose();
+  };
   return (
     <aside className="conn-panel" data-testid="conn-panel" aria-label="Connection details">
       <header className="conn-panel-head">
-        <h3>{details.title}</h3>
-        <button type="button" className="small" aria-label="Close the panel" onClick={onClose}>Close</button>
+        <h3><Figs text={details.title} /></h3>
+        <button type="button" className="small" aria-label="Close the panel" onClick={(e) => close(e.currentTarget)}>Close</button>
       </header>
       {details.lines.length > 0 && (
         <ul className="conn-panel-lines">
@@ -387,19 +502,27 @@ function Panel(props: { details: Details; onClose(): void }): ReactElement {
 }
 
 /**
+ * A loading line of the tab, and beside it a skeleton of a diagram (Phase 2 spec §11.1): only while there is no picture yet, never over one,
+ * whose busy state keeps it up, dimmed (connections.spec.ts asks the page what is under a point of it).
+ */
+function Waiting(props: { text: string }): ReactElement {
+  return <><p className="muted">{props.text}</p><Skeleton shape="diagram" /></>;
+}
+
+/**
  * Everything the tab shows, from its state (markup but for the picture's own view, which it moves and zooms; tested
- * with renderToStaticMarkup): why there is nothing to draw yet, else the picture with its legend and, for a pick that
- * names something in `graph`, the side panel. While a newer layout or picture is on its way, or failed, the last
- * picture stays up (dimmed while busy) under the reason.
+ * with renderToStaticMarkup): why there is nothing to draw yet, beside a skeleton while it is on its way, else the picture with its
+ * legend and, for a pick that names something in `graph`, the side panel. While a newer layout or picture is on its way, or failed,
+ * the last picture stays up (dimmed while busy) under the reason.
  */
 export function ConnectionsShell(props: ConnectionsShellProps): ReactElement {
   const { plan, layout, loading, error, graph, picture, layoutError, pick, onPick } = props;
-  if (plan === null) return <p className="muted">{PLANNING_TEXT}</p>;
+  if (plan === null) return <Waiting text={PLANNING_TEXT} />;
   if (plan.status === 'empty') return <p className="muted">{EMPTY_PLAN_TEXT}</p>;
   if (plan.status === 'infeasible') return <p className="muted">{INFEASIBLE_TEXT}</p>;
-  if (layout === null) return error === null ? <p className="muted">{LAYING_OUT_TEXT}</p> : <p className="error" role="alert">{loadFailed(error)}</p>;
+  if (layout === null) return error === null ? <Waiting text={LAYING_OUT_TEXT} /> : <p className="error" role="alert">{loadFailed(error)}</p>;
   if (layout.status === 'empty' || graph?.nodes.length === 0) return <p className="muted">{NOTHING_TEXT}</p>;
-  if (picture === null) return layoutError === null ? <p className="muted">{DRAWING_TEXT}</p> : <p className="error" role="alert">{drawFailed(layoutError)}</p>;
+  if (picture === null) return layoutError === null ? <Waiting text={DRAWING_TEXT} /> : <p className="error" role="alert">{drawFailed(layoutError)}</p>;
 
   const details = pick === null || graph === null ? null : pickDetails(graph, pick);
   return (

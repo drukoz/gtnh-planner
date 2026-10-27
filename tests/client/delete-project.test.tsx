@@ -59,6 +59,22 @@ describe('typed confirmation', () => {
     expect(canDelete('MV circuits', 'MV circuits')).toBe(true);
     expect(deleteButton('MV circuits', true)).toContain('disabled');   // while the delete is on its way
   });
+  // the final fix wave, FW-6: Escape in the form is its Cancel, one layer per press (P2-R21b): a key a layer above took is not its, and the
+  // key it acts on it takes, so the drawer or a list under it does not close too
+  it('takes Escape as Cancel, unless a layer above has taken it', () => {
+    const onCancel = vi.fn();
+    const form = DeleteConfirm({ name: 'MV circuits', typed: '', busy: false, error: null, onType: () => {}, onConfirm: () => {}, onCancel }) as ReactElement<{ onKeyDown(e: unknown): void }>;
+    const press = (key: string, defaultPrevented: boolean) => {
+      const preventDefault = vi.fn();
+      form.props.onKeyDown({ key, nativeEvent: { defaultPrevented }, preventDefault });
+      return preventDefault;
+    };
+    expect(press('Escape', true)).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(press('Enter', false)).not.toHaveBeenCalled();
+    expect(press('Escape', false)).toHaveBeenCalledOnce();
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
   it('asks inline, with no browser dialog', () => {
     const html = renderToStaticMarkup(<DeleteConfirm name="MV circuits" typed="" busy={false} error="No project p1" onType={() => {}} onConfirm={() => {}} onCancel={() => {}} />);
     expect(html).toContain('Type the project name to confirm');

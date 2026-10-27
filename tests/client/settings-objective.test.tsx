@@ -216,7 +216,8 @@ describe('farm settings', () => {
     expect(text(renderToStaticMarkup(<StatInput {...props} />))).toContain('Enter a whole number from 1 to 31');
     const [input] = findAll(StatInput(props), (e) => e.type === 'input');
     (input!.props.onBlur as (e: unknown) => void)({ currentTarget: { value: '32' } });
-    (input!.props.onKeyDown as (e: unknown) => void)({ key: 'Enter', currentTarget: { value: '32' } });
+    // a key of its own, not a held Enter's repeat a guard has prevented (ledger ruling P2-R76: the field reads the native event's state)
+    (input!.props.onKeyDown as (e: unknown) => void)({ key: 'Enter', currentTarget: { value: '32' }, nativeEvent: { defaultPrevented: false } });
     expect(onValue).not.toHaveBeenCalled();
     (input!.props.onBlur as (e: unknown) => void)({ currentTarget: { value: '12' } });
     expect(onValue).toHaveBeenCalledWith(12);

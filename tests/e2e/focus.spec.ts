@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, expect, type Locator } from '@playwright/test';
 import { makeSampleWorld } from '../helpers/sample-world.ts';
-import { login, setName, createProject } from './helpers.ts';
+import { login, setName, setTheme, createProject } from './helpers.ts';
 
 /** The focus ring of an element as the browser computes it. */
 async function ring(element: Locator): Promise<{ color: string; width: string }> {
@@ -52,6 +52,23 @@ test('the focus ring shows on panels and on the top bar', async ({ page }) => {
   await page.keyboard.press('Tab');
   await expect(link).toBeFocused();
   expect(await ring(link)).toEqual(PANEL_LINK_RING);
+});
+
+// In the dark look a panel is dark (#2a2a2a), so the focus ink of a panel is the stone's yellow (--panel-focus, Phase 2 spec §4.3): the ring
+// of a link there is the 3 px yellow of every other ring.
+test('in the dark look a link on a panel rings yellow', async ({ page }) => {
+  await setTheme(page, 'dark');
+  await login(page); await setName(page, 'Ann');
+  const project = `Dark focus link ${test.info().repeatEachIndex + 1}`;                // one per run: the server is shared
+  await createProject(page, project);
+  await page.goto('/');
+  const link = page.getByRole('link', { name: project, exact: true });
+  await expect(link).toBeVisible();
+  await link.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await expect(link).toBeFocused();
+  expect(await ring(link)).toEqual(RING);
 });
 
 test('the focus ring of a tick and of a disclosure on a panel is near black too', async ({ page }) => {

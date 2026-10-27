@@ -94,6 +94,8 @@ Single theme. B is inherently one look (Minecraft GUIs are always light-grey pan
 `@media (prefers-color-scheme: dark)` blocks go away and `<meta name="color-scheme">` becomes `dark` (page) — the
 panels stay light. *(Designer's call; see §10.)*
 
+*Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default.*
+
 | Token | Value | Use |
 |---|---|---|
 | `--page` | `#2b2b2b` + checker `#262626` (16 px, CSS gradients) | page background ("stone") |
@@ -151,6 +153,7 @@ bold. One source of truth used by CSS (custom properties) and TS (the Flow SVG).
 
 - **Pixelify Sans** (SIL OFL 1.1) — headings, tabs, buttons, readout numbers, tier chips, stack counts, tooltips.
   Never below 13 px, never for paragraphs.
+  *Superseded by Phase 2 (2026-10-24 spec §25): figures in VT323, words in Pixelify.*
 - **Inter** (SIL OFL 1.1) — everything else, 14 px base, line-height 1.45; tabular numbers for amounts and rates. The
   14 px is set on `body`; the root keeps the browser's 16 px, so a `rem` means what it did (R9).
 - Bundled through Vite, not a CDN: add `@fontsource/pixelify-sans` and `@fontsource/inter` (pinned exact versions,
@@ -291,9 +294,9 @@ Transitions (Phase 1 [CSS]: entrances; exits that need an element kept mounted a
 - Settings column on narrow screens (< 900 px): becomes a drawer toggled from the project header, sliding in from the
   left over a dimmed page [TSX `ProjectPage.tsx`]. While it is open it is a layer of its own (R36): the focus moves to
   its "Close settings" button (drawn in the drawer only), the page behind is `inert` (the head, the banners, the views
-  and the top bar), Escape (one layer per press: an open search list first, R15), a click on the dimmed page, Close
-  and the Settings button all close it and give the focus back to the Settings button, and it closes when the window
-  grows past 900 px. It slides in with `--dur-slow`/`--ease-out` and out with `--dur-exit`/`--ease-in`.
+  and the top bar), Escape (one layer per press: an open search list first, R15), a click on the dimmed page and Close
+  all close it and give the focus back to the Settings button, and it closes when the window grows past 900 px. It
+  slides in with `--dur-slow`/`--ease-out` and out with `--dur-exit`/`--ease-in`.
   What to make is never out of sight behind it (the make-picker fix, after Phase 1): the Settings button reads
   "Settings · Make: <target>" or "Settings · Make: nothing yet" (the target part is Inter 13 px in `--ink-muted` on a
   `--screen` readout, since the muted ink is 2.3:1 on the button's own face; a long name ends in an ellipsis, and above
@@ -392,11 +395,11 @@ Limits: at most 1 per edge and 150 per diagram; when a diagram has more than 200
 `animation-play-state: paused` while the canvas is being dragged/zoomed if profiling shows jank. All animation
 stops under `prefers-reduced-motion: reduce`.
 
-**A way to stop the pipes** (WCAG 2.2.2 Pause, Stop, Hide; R31). The pipes move for as long as a diagram is shown,
-so the Flow and Connections toolbars have a text button after Fit, "Pause pipes" / "Play pipes" (`aria-pressed`),
-that stops them where they are, dashes showing. One setting for the browser, shared by both diagrams and kept in
-localStorage (`gtnh-planner:pipes-paused`); paused, the Flow svg has the class `pipes-paused` and the Connections area
-`data-pipes="paused"`.
+**A way to stop the pipes** (WCAG 2.2.2 Pause, Stop, Hide; R31). The pipes move for as long as a diagram is shown, so
+the Flow and Connections toolbars have a text button after Fit, "Pause pipes" / "Play pipes" (its label says what a
+press does, R44), that stops them where they are, dashes showing. One setting for the browser, shared by both diagrams
+and kept in localStorage (`gtnh-planner:pipes-paused`); paused, the Flow svg has the class `pipes-paused` and the
+Connections area `data-pipes="paused"`.
 
 ## 8. Per-screen treatment and phases
 
@@ -473,7 +476,7 @@ list as large tiles, real block textures as panel backgrounds when assets exist.
 
 ## 10. Calls the designer made (nobody asked the user)
 
-1. Single theme, no automatic dark mode (B is one look).
+1. Single theme, no automatic dark mode (B is one look). *Superseded by Phase 2 (2026-10-24 spec §4): two looks, Auto by default.*
 2. Pixelify Sans + Inter, bundled via `@fontsource` packages (new dependencies).
 3. Diagram box text keeps the system UI stack it had (`system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif`, §5),
    which keeps its measured box metrics valid; the pixel font only outside the SVG text.

@@ -5,6 +5,7 @@
 import type { ComponentType } from 'react';
 import type { Plan } from '../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../shared/types/project.ts';
+import type { ProjectStore } from '../state/project-store.ts';
 import { ConnectionsView } from './ConnectionsView.tsx';
 import { FlowView } from './FlowView.tsx';
 import { MapTab } from './MapTab.tsx';
@@ -17,6 +18,11 @@ export interface ProjectViewProps {
   // optional addition
   /** The plan a settings change replaced (`ProjectViewState.previousPlan`), for the "What changed" note (fix spec §6.4). */
   previousPlan?: Plan | null;
+  /**
+   * Sends ops later, through the page's store (Phase 2 spec §12.2): a deleted note, posted once the Undo of its toast has gone. Without it a
+   * view sends at once.
+   */
+  sendLater?: ProjectStore['sendLater'];
 }
 export interface ProjectTab { id: 'map' | '3d' | 'connections' | 'flow' | 'materials' | 'notes'; label: string; component: ComponentType<ProjectViewProps> }
 

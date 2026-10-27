@@ -1,12 +1,15 @@
 // The Map tab's "New line" panel (spec §3.7): the line summary — new and reused machines, footprint W×L×H, peak EU/t
 // and whether the base's power fits the line, with the fit's detail and generator suggestions — the buttons that move,
 // turn or re-place the line, its numbered pins (a click shows that pin on the map) and its warnings. A line that is not
-// placed in the world, or that has nothing new to build, says so in place of the summary.
+// placed in the world, or that has nothing new to build, says so in place of the summary. While its first layout is on its
+// way, a skeleton of a few lines stands beside the loading line (Phase 2 spec §11.1).
 
 import { useId, type ReactElement } from 'react';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Plan } from '../../shared/types/plan.ts';
+import { Figs } from '../components/Figs.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { PIN_COLORS } from './layout-overlay.ts';
 
 export interface LineSummary { newMachines: number; reused: number; footprint: string; peak: string; fits: string; fitsClass: 'yes' | 'tight' | 'no' | 'unknown' }
@@ -142,7 +145,7 @@ function Body(props: LinePanelProps & { layout: Layout }): ReactElement {
       <Summary layout={layout} plan={plan} />
       <div className="row line-actions">
         <button type="button" className={moving ? 'small primary' : 'small'} aria-pressed={moving} onClick={onToggleMove}>Move line</button>
-        <button type="button" className="small" onClick={onRotate}>Rotate 90°</button>
+        <button type="button" className="small" onClick={onRotate}><Figs text="Rotate 90°" /></button>
         <button type="button" className="small" onClick={onAutoPlace}>Auto place</button>
       </div>
       {moving && <p className="muted small">Drag the line on the map to where it should go.</p>}
@@ -160,6 +163,7 @@ export function LinePanel(props: LinePanelProps): ReactElement {
       <h3 id={headingId}>New line</h3>
       {error !== null && <p className="error small">{error}</p>}
       {loading && <p className="muted small">{LOADING_TEXT}</p>}
+      {loading && layout === null && <Skeleton shape="lines" rows={3} />}
       {layout !== null && <Body {...props} layout={layout} />}
     </section>
   );

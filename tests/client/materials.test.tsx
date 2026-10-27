@@ -1,13 +1,20 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys, missingRows } from '../../src/client/views/materials-model.ts';
+import {
+  buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys, missingRows,
+  gatheredStacks, groupBuildSlots, MAX_STACKS_SHOWN, slotTipLines, stackCount, stackSplit, stillNeeded,
+} from '../../src/client/views/materials-model.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
 import { MaterialsView, UsedByChips } from '../../src/client/views/MaterialsView.tsx';
+import { BuildGrid, GatherMeter, ViewToggle } from '../../src/client/views/MaterialsGrid.tsx';
 import { PROJECT_TABS } from '../../src/client/views/project-tabs.ts';
+import { localTime } from '../../src/client/format.ts';
 import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts';
+import { MATERIALS_VIEW_KEY, getMaterialsView, setMaterialsView } from '../../src/client/state/materials-view.ts';
 import { indexPlan } from '../../src/shared/plan/balance.ts';
 import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
+import { keepIn } from './storage-stub.ts';
 
 /** What a reader sees: the markup without its tags and comments, entities decoded. */
 function text(html: string): string {
@@ -22,7 +29,14 @@ function findAll(node: ReactNode, match: (e: ReactElement<Record<string, unknown
   return [...(match(node) ? [node] : []), ...findAll(node.props.children as ReactNode, match)];
 }
 
-afterEach(() => { setFlowFocus(null); vi.unstubAllGlobals(); });
+// The Grid / List choice is a module's page value as well as storage's (state/materials-view.ts): a case that left Grid behind would draw
+// the next case's build list as the grid, so the store is put back to the List as theme.test.tsx does, through a storage that keeps it.
+afterEach(() => {
+  setFlowFocus(null);
+  vi.stubGlobal('localStorage', keepIn(new Map()));
+  setMaterialsView('list');
+  vi.unstubAllGlobals();
+});
 
 const names = { 'machine:111@0': 'Basic Wiremill', 't:hull_lv@0': 'LV Machine Hull', 't:iron_ingot@0': 'Iron Ingot', 't:titanium_ingot@0': 'Titanium Ingot', 'dim:overworld': 'Overworld', 'dim:moon': 'Moon', 'dimId:0': 'Overworld' };
 const plan = {
@@ -139,6 +153,10 @@ describe('materials rows', () => {
     expect(html.indexOf('data-row="missing:fluid:solder@asm"')).toBeGreaterThan(-1);
     expect(html.indexOf('data-row="missing:fluid:solder@asm"')).toBeLessThan(html.indexOf('data-row="run:fluid:pva"'));
     expect(missingRows(plan, indexPlan(plan))).toEqual([]);
+    // the figures of a used-by chip and of a short input's badge are VT323 (span.fig), the words and the % Pixelify (Phase 2 spec §25)
+    expect(html).toContain('<span class="chip">Assembler (Circuit Board) <span class="fig">259</span> L/h</span>');
+    const halfGlue = { ...tiny, flows: tiny.flows.map((f) => (f.key === 't:glue@0' ? { ...f, perSecond: f.perSecond / 2 } : f)) } as Plan;
+    expect(view(halfGlue)).toContain('<span class="badge missing-badge">short: gets <span class="fig">50</span>%</span>');
   });
   it('opens a total of base materials to the build lines that need it', () => {
     const [row] = buildRows(tiny.buildTotals!, tiny.names!, new Set());
@@ -215,5 +233,155 @@ describe('views', () => {
     const html = renderToStaticMarkup(<MaterialsView project={stopping} plan={batch} send={() => {}} me="Ann" />);
     for (const s of ['Left over', 'LV Machine Hull', '3×', 'Takes about 2 min', 'Stop treating as made', 'We&#x27;ll make it ourselves']) expect(html).toContain(s);
     expect(renderToStaticMarkup(<MaterialsView project={project} plan={batch} send={() => {}} me="Ann" />)).not.toContain('Stop treating as made');   // not in stopItems any more
+  });
+});
+
+// "To build (once)" as an inventory grid (Phase 2 spec §9, D9): the top-level build lines as 36 px Minecraft slots in their groups, an item
+// split into stacks of 64, opted into per browser with the head's Grid / List toggle; the List stays the default and the source of truth.
+// One mark per row: the first stack of an item is its one checkbox, its other stacks hidden copies that tick the same row.
+describe('the inventory grid', () => {
+  const slotNames = { ...names, 'p:cable@0': 'Cable', 'fluid:water': 'Water' };
+  /** The second case's result, which the later cases share: the wiremill in Machines; 80 cables and 1,000 L of water in Power. */
+  const groups = groupBuildSlots([{ key: 'p:cable@0', amount: 80, why: 'power hookup', group: 'power' }, { key: 'machine:111@0', amount: 1, why: '1× Basic Wiremill' },
+    { key: 'fluid:water', amount: 1000, why: 'for the boiler', group: 'power' }], slotNames, new Set(['machine:111@0']));
+  const cable = groups[1]!.items[0]!;
+  const mark = { by: 'Ann', at: '2026-10-24T10:00:00.000Z' };
+
+  it('splits an amount into stacks of 64', () => {
+    expect([80, 128, 1, 0, 0.25, 64.0000000001].map((a) => stackSplit(a))).toEqual([[64, 16], [64, 64], [1], [], [1], [64]]);
+  });
+  // the final fix wave, FW-5: the split stops at the stacks the grid draws, and an item's count of stacks is worked out, never counted in an
+  // array, so a build of a trillion items makes no array of 15.6 billion stacks (a renderer killed, again on every reload, from about 8.6e9)
+  it('splits only the stacks the grid draws, and counts the rest', () => {
+    expect(stackSplit(64 * 9 + 16)).toEqual(Array(MAX_STACKS_SHOWN).fill(64));                 // the tenth stack, the 16, is not drawn
+    expect(stackSplit(64 * 8 + 16)).toEqual([...Array(8).fill(64), 16]);
+    expect(stackSplit(1e12)).toEqual(Array(MAX_STACKS_SHOWN).fill(64));
+    expect([80, 128, 1, 0, 0.25, 64.0000000001, 64 * 9 + 16, 1e12].map((a) => stackCount(a))).toEqual([2, 2, 1, 0, 1, 1, 10, 15_625_000_000]);
+    expect([Number.NaN, Number.POSITIVE_INFINITY, -5].map((a) => [stackSplit(a), stackCount(a)])).toEqual([[[], 0], [[], 0], [[], 0]]);
+    const [huge, water] = groupBuildSlots([{ key: 'p:x@0', amount: 1e12, why: 'x' }, { key: 'fluid:water', amount: 1e12, why: 'y' }], names)[0]!.items;
+    expect([huge!.stacks.length, huge!.stackCount]).toEqual([MAX_STACKS_SHOWN, 15_625_000_000]);
+    expect([water!.stacks, water!.stackCount]).toEqual([[1], 1]);                               // a fluid is one slot, whatever its litres
+    expect(gatheredStacks([{ id: 'machines', label: 'Machines', items: [huge!, water!] }], { [huge!.row]: mark })).toEqual({ done: 15_625_000_000, total: 15_625_000_001 });
+  });
+  it('writes the counts of stacks as the List writes its figures: in the meter, its spoken words and a slot\'s name', () => {
+    expect(renderToStaticMarkup(<GatherMeter done={1563} total={100_000} />)).toMatch(
+      /<span>1,563 of 100,000 stacks<\/span>.*aria-valuemax="100000" aria-valuenow="1563" aria-valuetext="1,563 of 100,000 stacks gathered"/);
+    const html = renderToStaticMarkup(<BuildGrid groups={groupBuildSlots([{ key: 'p:x@0', amount: 1563 * 64, why: 'x' }], names)} marks={{}} send={() => {}} />);
+    expect(html).toContain('aria-label="p:x@0, 100,032× in 1,563 stacks"');
+    expect(html).toContain('<span class="stack-count" aria-hidden="true">+1.6k</span>');           // 1,554 more: rolled up as a stack count is
+  });
+  it('groups the top-level build lines as slots, in the groups\' order, a fluid as one slot', () => {
+    const groups = groupBuildSlots([{ key: 'p:cable@0', amount: 80, why: 'power hookup', group: 'power' }, { key: 'machine:111@0', amount: 1, why: '1× Basic Wiremill' },
+      { key: 'fluid:water', amount: 1000, why: 'for the boiler', group: 'power' }], slotNames, new Set(['machine:111@0']));
+    expect(groups.map((g) => [g.label, g.items.map((i) => [i.row, i.stacks])])).toEqual([['Machines', [['build:machine:111@0', [1]]]], ['Power', [['build:p:cable@0', [64, 16]], ['build:fluid:water', [1]]]]]);
+    expect(groups[0]!.items[0]).toMatchObject({ amount: '1×', avoid: true, fluid: false }); expect(groups[1]!.items[1]).toMatchObject({ amount: '1,000 L', fluid: true });
+  });
+  it('counts the stacks gathered and the items still needed', () => {
+    expect(gatheredStacks(groups, { 'build:p:cable@0': mark })).toEqual({ done: 2, total: 4 });
+    expect(stillNeeded(groups[1]!.items, { 'build:p:cable@0': mark })).toBe('1 of 2 still needed'); expect(stillNeeded(groups[0]!.items, { 'build:machine:111@0': mark })).toBe('all in your chests');
+  });
+  it('tells a slot\'s need, stock, why, avoid and tick in its tip lines', () => {
+    expect(slotTipLines({ ...cable, have: 'have 1,440 (64 reachable)', avoid: true }, { by: 'Ann', at: 'now' }, () => '10:00')).toEqual(
+      ['need 80× · have 1,440 (64 reachable)', 'power hookup', 'On the avoid list or made from it, but no recipe at this tier avoids it', '✓ Ann, 10:00']);
+  });
+  it('draws one checkbox per item, its other stacks hidden, counts above 1, and a tick on a marked row', () => {
+    const html = renderToStaticMarkup(<BuildGrid groups={groups} marks={{ 'build:p:cable@0': mark }} send={() => {}} />);
+    expect(html.match(/data-row="build:p:cable@0"/g)).toHaveLength(1);
+    expect(html).toMatch(/<button type="button" class="mat-slot marked" role="checkbox" aria-checked="true" aria-label="Cable, 80× in 2 stacks" data-row="build:p:cable@0" data-marked="true" data-tip="/);
+    expect(html).toMatch(/<button type="button" class="mat-slot marked" aria-hidden="true" tabindex="-1" data-stack-of="build:p:cable@0"/);
+    expect(html.match(/class="stack-count"/g)).toHaveLength(2);           // 64 and 16; the single machine and the fluid draw none
+    expect(html.match(/class="mat-slot-tick"/g)).toHaveLength(2);         // both stacks of the marked row
+    const ten = renderToStaticMarkup(<BuildGrid groups={groupBuildSlots([{ key: 'p:x@0', amount: 640, why: 'x' }], names)} marks={{}} send={() => {}} />);
+    expect(ten.match(/class="mat-slot[ "]/g)).toHaveLength(10); expect(ten).toContain('<span class="stack-count" aria-hidden="true">+1</span>');
+  });
+  it('ticks the row from any of its stacks', () => {
+    const send = vi.fn(); const stacks = findAll(BuildGrid({ groups, marks: {}, send }), (e) => e.props['data-row'] === 'build:p:cable@0' || e.props['data-stack-of'] === 'build:p:cable@0');
+    for (const s of stacks) (s.props.onClick as () => void)();
+    expect(send.mock.calls).toEqual([[[{ op: 'mark', row: 'build:p:cable@0', on: true }]], [[{ op: 'mark', row: 'build:p:cable@0', on: true }]]]);
+    const [first] = findAll(BuildGrid({ groups, marks: { 'build:p:cable@0': mark }, send }), (e) => e.props['data-row'] === 'build:p:cable@0');
+    (first!.props.onClick as () => void)(); expect(send).toHaveBeenLastCalledWith([{ op: 'mark', row: 'build:p:cable@0', on: false }]);
+  });
+  it('shows the meter and the toggle', () => {
+    expect(renderToStaticMarkup(<GatherMeter done={2} total={4} />)).toMatch(/role="progressbar"[^>]*aria-valuemin="0" aria-valuemax="4" aria-valuenow="2" aria-valuetext="2 of 4 stacks gathered"/);
+    expect(renderToStaticMarkup(<ViewToggle view="grid" />)).toBe('<div class="mat-view-toggle" role="group" aria-label="Show the build list as"><button type="button" class="small" aria-pressed="true">Grid</button><button type="button" class="small" aria-pressed="false">List</button></div>');
+  });
+
+  // beyond the brief's cases: what the slots say and hold where it shows only in a browser
+  it('gives every stack of an item the item\'s tip and mod line, and names a fluid by its litres alone', () => {
+    const stacks = findAll(BuildGrid({ groups, marks: { 'build:p:cable@0': mark }, send: () => {} }), (e) => e.props['data-row'] === 'build:p:cable@0' || e.props['data-stack-of'] === 'build:p:cable@0');
+    expect(stacks.map((s) => s.props['data-tip'])).toEqual(Array(2).fill(`Cable\nneed 80×\npower hookup\n✓ Ann, ${localTime(mark.at)}`));
+    const html = renderToStaticMarkup(<BuildGrid groups={groups} marks={{}} send={() => {}} />);
+    expect(html).toContain('aria-label="Water, 1,000 L" data-row="build:fluid:water" data-marked="false" data-tip="Water\nneed 1,000 L\nfor the boiler"');
+    // a GregTech item's slot names its mod on its tip's last line (Phase 2 spec §6.5), the e2e pack's `t:` and `machine:` keys none
+    const steel = renderToStaticMarkup(<BuildGrid groups={groupBuildSlots([{ key: 'gregtech:gt.blockmachines@1', amount: 2, why: 'x' }], {})} marks={{}} send={() => {}} />);
+    expect(steel).toContain('data-tip-mod="GregTech"');
+    expect(html).not.toContain('data-tip-mod');
+  });
+  it('heads each group with how many of its items are still needed, over its slots, after the hint', () => {
+    const html = renderToStaticMarkup(<BuildGrid groups={groups} marks={{ 'build:p:cable@0': mark }} send={() => {}} />);
+    expect(html).toMatch(/^<div class="mat-grid"><p class="mat-grid-hint muted">Click a stack to mark it as in your chests\. Stacks split at 64, like in game\.<\/p>/);
+    expect(html).toContain('<h4 id="slots-power">Power <span class="mat-grid-left">· 1 of 2 still needed</span></h4><div class="mat-slots" role="group" aria-labelledby="slots-power">');
+    expect(html).toContain('<h4 id="slots-machines">Machines <span class="mat-grid-left">· 1 of 1 still needed</span></h4>');
+  });
+  it('tells a slot past the ninth stack how many more there are, rolled up past 999 as a stack count is, so it stays in its slot', () => {
+    const more = (amount: number): string => /<span class="stack-count" aria-hidden="true">(\+[^<]*)<\/span>/.exec(renderToStaticMarkup(
+      <BuildGrid groups={groupBuildSlots([{ key: 'p:x@0', amount, why: 'x' }], names)} marks={{}} send={() => {}} />))?.[1] ?? '';
+    expect([64 * 9, 64 * 1008, 64 * 1009, 64 * 15634].map(more)).toEqual(['', '+999', '+1k', '+16k']);
+    // the meter counts every stack, the ones past the ninth too
+    expect(gatheredStacks(groupBuildSlots([{ key: 'p:x@0', amount: 640, why: 'x' }], names), { 'build:p:x@0': mark })).toEqual({ done: 10, total: 10 });
+  });
+  // spec §9.1, §9.2: the slot past the ninth stack says how many more there are, with no icon; like the item's other stacks it is a hidden copy,
+  // out of the tab order and with no name of its own (the item's one checkbox names it), and it ticks the same row, ticked or not
+  it('draws the +N slot as a hidden copy out of the tab order, with no icon and no name of its own, that ticks the same row', () => {
+    const big = groupBuildSlots([{ key: 'p:x@0', amount: 640, why: 'x' }], names);
+    const html = renderToStaticMarkup(<BuildGrid groups={big} marks={{}} send={() => {}} />);
+    expect(html).toContain('<button type="button" class="mat-slot mat-slot-more" aria-hidden="true" tabindex="-1" data-stack-of="build:p:x@0" '
+      + 'data-tip="p:x@0\nneed 640×\nx"><span class="stack-count" aria-hidden="true">+1</span></button></div>');
+    expect(html.match(/tabindex="-1"/g)).toHaveLength(9);                // the eight other stacks drawn, and the +N slot
+    expect(html.match(/role="checkbox"/g)).toHaveLength(1);
+    const send = vi.fn();
+    const more = (marks: Record<string, typeof mark>) => findAll(BuildGrid({ groups: big, marks, send }), (e) => String(e.props.className).includes('mat-slot-more'));
+    const [plain] = more({});
+    (plain!.props.onClick as () => void)();
+    expect(send).toHaveBeenLastCalledWith([{ op: 'mark', row: 'build:p:x@0', on: true }]);
+    const [ticked] = more({ 'build:p:x@0': mark });
+    expect(ticked!.props.className).toBe('mat-slot marked mat-slot-more');
+    (ticked!.props.onClick as () => void)();
+    expect(send).toHaveBeenLastCalledWith([{ op: 'mark', row: 'build:p:x@0', on: false }]);
+    // ticked, it is dimmed and ticked as every stack of its row
+    expect(renderToStaticMarkup(<BuildGrid groups={big} marks={{ 'build:p:x@0': mark }} send={() => {}} />))
+      .toContain('<span class="stack-count" aria-hidden="true">+1</span><span class="mat-slot-tick" aria-hidden="true"></span></button></div>');
+  });
+  it('switches the view from the toggle, in this browser only: the project hears nothing of it', () => {
+    vi.stubGlobal('localStorage', keepIn(new Map()));
+    const [grid, list] = findAll(ViewToggle({ view: 'list' }), (e) => e.type === 'button');
+    (grid!.props.onClick as () => void)(); expect(getMaterialsView()).toBe('grid');
+    (list!.props.onClick as () => void)(); expect(getMaterialsView()).toBe('list');
+  });
+  it('puts the toggle in the head of To build, and in Grid the meter beside it and the slots after the total line', () => {
+    const project = { id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 3, settings: { mode: 'rate', per: 'min', stopItems: [], expandItems: [] },
+      world: { scanId: null, baseId: null }, placement: null, notes: [], marks: {} } as never;
+    const costed = { ...plan, cost: { runPerHour: 1, build: 182, horizonHours: 24, layout: 40 } } as Plan;
+    const section = (p: Plan): string => /<section[^>]*aria-labelledby="to-build-title"[^>]*>.*?<\/section>/s.exec(
+      renderToStaticMarkup(<MaterialsView project={project} plan={p} send={() => {}} me="Ann" />))?.[0] ?? '';
+    const list = section(costed);
+    expect(list).toContain('<div class="mat-head"><h3 id="to-build-title">To build (once)</h3><div class="mat-view-toggle" role="group" aria-label="Show the build list as">'
+      + '<button type="button" class="small" aria-pressed="false">Grid</button><button type="button" class="small" aria-pressed="true">List</button></div></div>');
+    expect(list).toContain('<li class="mat-row"'); expect(list).not.toContain('progressbar'); expect(list).not.toContain('mat-slot');
+    vi.stubGlobal('localStorage', keepIn(new Map([[MATERIALS_VIEW_KEY, 'grid']])));
+    const grid = section(costed);
+    expect(grid).toMatch(/^<section[^>]*><div class="mat-head"><h3 id="to-build-title">To build \(once\)<\/h3><div class="mat-view-toggle"[^>]*>(?:(?!<\/div>).)*<\/div><div class="mat-meter-box">/s);
+    expect(grid).toContain('aria-valuemax="1" aria-valuenow="0" aria-valuetext="0 of 1 stack gathered"');
+    // the total line is still the section's own paragraph, before the slots, and nothing before it says "Machines"
+    expect(grid).toContain('</div><p class="muted">About 222 raw to build');
+    expect(grid.indexOf('About 222 raw to build')).toBeLessThan(grid.indexOf('Machines'));
+    expect(grid.indexOf('About 222 raw to build')).toBeLessThan(grid.indexOf('class="mat-grid"'));
+    expect(grid).not.toContain('<li class="mat-row"');
+    // nothing to build: the one line that says so, and no toggle, meter or grid, in either view
+    const empty = { ...costed, buildList: [] } as Plan;
+    for (const stored of ['grid', 'list']) {
+      vi.stubGlobal('localStorage', keepIn(new Map([[MATERIALS_VIEW_KEY, stored]])));
+      expect(section(empty), stored).toMatch(/^<section[^>]*><div class="mat-head"><h3 id="to-build-title">To build \(once\)<\/h3><\/div><p class="muted">Nothing new to build: the machines you have cover this line\.<\/p><\/section>$/);
+    }
   });
 });

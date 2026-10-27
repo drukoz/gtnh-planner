@@ -2,14 +2,16 @@
 // the World page, the browser finds its hotspots and sends only level.dat and the two trimmed region files, the server
 // scans the upload, and a project picks the scan's Overworld base on its Map tab, reads what was found, hovers its
 // centre to see what is there (before and after its tile is drawn, and gone once the pointer leaves the map) and pins a
-// note that survives a reload. Last, the upload route refuses a path that climbs out of the upload.
+// note that survives a reload. Last, the upload route refuses a path that climbs out of the upload. A second test presses the map while
+// the page moves under the pointer: the press stays a click that picks a block, and the map does not pan (ledger rulings P2-R16, P2-R19).
 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
 import { makeSampleWorld } from '../helpers/sample-world.ts';
-import { createProject, login, setName } from './helpers.ts';
+import { createProject, login, setName, shiftViews } from './helpers.ts';
+import { uploadSampleWorld } from './world-upload.ts';
 
 let tmp: string;
 
@@ -95,4 +97,49 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
 
   const { uploadId } = await (await page.request.post('/api/world/uploads', { data: {} })).json();
   expect((await page.request.put(`/api/world/uploads/${uploadId}/files/..%2Flevel.dat`, { data: 'x' })).status()).toBe(400);
+});
+
+// A press on the map that the page moves under stays a click (ledger rulings P2-R16, P2-R19): click and drag go by the pointer's own move
+// on the page, as in the diagrams (flow-drag.spec.ts, connections.spec.ts), and a pan, once started, follows the map. So after the page
+// moved under a still press, 1 px of jitter still picks the block under the pointer for a note, and the map does not pan.
+test('a press on the map that the page moves under stays a click: it picks the block and the map holds', async ({ page }) => {
+  await login(page);
+  await setName(page, 'E2E');
+  const scanId = await uploadSampleWorld(page);
+  const id = await createProject(page, 'E2E map click');
+  // the base, read with no other project's surplus: no other project's change reaches the page. Once the plan names the scan, the replan
+  // of these ops has sent its plan event (the server plans one at a time, the replan first), and the page opened again after it hears
+  // none, so nothing above the tabs moves the map (a change of the hash alone would keep the page that heard it: hence the reload)
+  const ops = [{ op: 'settings', patch: { useSurplus: false } }, { op: 'world', scanId, baseId: '0:0:0' }];
+  expect((await page.request.post(`/api/projects/${id}/ops`, { data: { ops }, headers: { 'X-Planner-Name': 'E2E' } })).ok()).toBe(true);
+  await expect.poll(async () => (await (await page.request.get(`/api/projects/${id}/plan`)).json()).scanId).toBe(scanId);
+  await page.goto(`/p/${id}#map`);
+  await page.reload();
+  const panel = page.getByTestId('found-panel');
+  await expect(panel.getByTestId('machine-count')).toHaveText('6');
+  await expect(panel.locator('[data-key="minecraft:cobblestone@0"]')).toContainText('Cobblestone · 704');   // the names are in
+  await page.waitForFunction(() => {                                      // the base centre's tile is drawn
+    const c = document.querySelector<HTMLCanvasElement>('canvas[role=img]');
+    return c !== null && c.width > 0 && c.getContext('2d')!.getImageData(c.width / 2, c.height / 2, 1, 1).data[3]! > 0;
+  });
+  const canvas = page.locator('canvas[role=img]');
+  const centreOf = async (): Promise<{ x: number; y: number }> => {
+    const box = (await canvas.boundingBox())!;
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  };
+  const tip = page.getByRole('tooltip');
+  const centre = await centreOf();
+  await page.mouse.move(centre.x, centre.y);
+  await expect(tip).toContainText('4 63 5');                              // the map is centred on the base's centre column, 4 px a block
+  await page.mouse.down();
+  const unshift = await shiftViews(page, 5);                               // the map moves 5 px down under the still pointer: 1¼ blocks
+  await page.mouse.move(centre.x + 1, centre.y);                           // 1 px of jitter
+  await page.mouse.up();
+  await expect(page.getByText('Add note at 4, 63, 4')).toBeVisible();     // the click picks the block now under the pointer
+  await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();   // the note's dialog covers the map until it closes
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  const moved = await centreOf();
+  await page.mouse.move(moved.x, moved.y);
+  await expect(tip).toContainText('4 63 5');                              // no pan: the map's centre is the base's centre column still
+  await unshift();
 });

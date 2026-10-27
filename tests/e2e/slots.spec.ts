@@ -93,6 +93,32 @@ test('a slot in the materials list is veiled under the pointer, and sits centred
   }).toEqual([0, 1, -1, 0]);
 });
 
+test('a row of the materials list keeps its slot level with its first line while a disclosure of it is open', async ({ page }) => {
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Slots disclosure', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 });
+  await page.getByRole('tab', { name: 'Materials & steps' }).click();
+  // a base material's "for …" disclosure (ledger ruling P2-R44): the row's tick line sits at the top of its line, so the open disclosure
+  // makes the line taller below the label; centred, the label dropped to the middle of it, away from the slot (Phase 1's Task 5 minor)
+  const needed = page.locator('section[aria-labelledby="build-totals-title"] details.mat-needed').first();
+  await expect(needed).toBeVisible();
+  const apart = (): Promise<number> => needed.evaluate((details) => {
+    const row = details.closest('li.mat-row');
+    const middle = (el: Element | null | undefined): number => {
+      const box = (el as HTMLElement).getBoundingClientRect();
+      return (box.top + box.bottom) / 2;
+    };
+    return Math.abs(middle(row?.querySelector(':scope > .item-icon')) - middle(row?.querySelector('.tick-label')));
+  });
+  expect(await apart(), 'shut').toBeLessThanOrEqual(1);
+  await needed.locator('summary').click();
+  // its height grows over the fold (ruling R16): measured once it holds the whole of its list
+  await expect.poll(() => needed.evaluate((details: HTMLDetailsElement) => {
+    const list = details.querySelector('.mat-where');
+    return details.open && list !== null && details.getBoundingClientRect().bottom >= list.getBoundingClientRect().bottom - 0.5;
+  })).toBe(true);
+  expect(await apart(), 'open').toBeLessThanOrEqual(1);
+});
+
 test('the icons of the Flow diagram stay bare 16px images, not framed slots', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
   await createProject(page, 'Flow slots', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 });

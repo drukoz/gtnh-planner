@@ -1,11 +1,22 @@
 // The project's notes (spec §3.7, §3.11): anyone can add, edit or delete one, and everyone sees who wrote it and when.
-// Notes with a map pin (added from Plan 4's map) show where they point.
+// Notes with a map pin (added from Plan 4's map) show where they point. A note's Delete asks nothing first: its toast offers Undo instead
+// (Phase 2 spec §12.2, §13.1), and no browser dialog is left in the client.
+//
+// A button pressed here that goes, or is disabled, hands the keyboard's focus on, never leaving it on the page's body (ledger rulings P2-R57,
+// P2-R68): Delete before its note goes, to the next note's Delete, else the previous note's, else the field to add a note; Add note, which the
+// field it clears disables, to that field; Save and Cancel, whose form goes, back to the note's Edit. A held Enter deletes one note, not the
+// next one Delete hands the focus to (focus.ts's guard, ledger ruling P2-R69a). A note's Undo gives the focus back to the note it restored
+// (P2-R74): once its row is back, its Delete takes the focus that the Undo left on the page's main (P2-R57's last resort) or to be lost (a
+// pointer's Undo, which moves none); a focus anywhere else stays where it is, and a row not drawn moves nothing.
 
-import { useState, type FormEvent, type ReactElement } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_NOTE_LENGTH } from '../../shared/project/apply-op.ts';
 import type { Plan } from '../../shared/types/plan.ts';
-import type { Note } from '../../shared/types/project.ts';
+import type { Note, ProjectOp } from '../../shared/types/project.ts';
+import { focusLost, focusMain, focusOn } from '../components/focus.ts';
+import { focusInLeavingToast } from '../components/Toasts.tsx';
 import { localTime } from '../format.ts';
+import { dismissToast, showToast } from '../state/toasts.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
 /** A random UUID; crypto.randomUUID exists only on HTTPS and localhost, and friends reach the planner over plain HTTP. */
@@ -23,17 +34,71 @@ function pinText(pin: NonNullable<Note['pin']>, plan: Plan | null): string {
   return `Pin: ${pin.x} ${pin.y} ${pin.z} (${dim})`;
 }
 
-function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps['send'] }): ReactElement {
-  const { note, plan, send } = props;
+/** The Delete of note `li`, by its words; a note being edited has none. */
+const deleteOf = (li: Element): HTMLButtonElement | undefined =>
+  [...li.querySelectorAll<HTMLButtonElement>('.note-actions > button')].find((b) => b.textContent === 'Delete');
+
+/**
+ * Before note `row` goes, the focus inside it moves on: to the Delete of the nearest note after it that has one, else of the nearest before
+ * it, else to the field to add a note, else to the page's main. A focus elsewhere is left where it is.
+ */
+function handFocusOn(row: Element): void {
+  if (!row.contains(document.activeElement)) return;
+  const notes = [...(row.parentElement?.children ?? [])];
+  const at = notes.indexOf(row);
+  for (const li of [...notes.slice(at + 1), ...notes.slice(0, at).reverse()]) if (focusOn(deleteOf(li))) return;
+  if (!focusOn(row.closest('.notes')?.querySelector('.note-add textarea'))) focusMain();
+}
+
+/**
+ * After a note's Undo (P2-R74): once note `id` is back, its Delete takes the focus that the Undo left on the page's main, lost, or in its toast as
+ * that leaves. The Undo's cancel draws the row in the commit it makes, so the next frame finds it; it is looked up in the document, because the
+ * view that drew the note may have been drawn anew since (a switch to another tab and back) while its toast lived on. A focus anywhere else
+ * stays where it is (where P2-R57 gave it back, or the user put it), and a row not drawn (another tab is shown) moves nothing.
+ */
+function focusRestored(id: string): void {
+  requestAnimationFrame(() => {
+    const row = document.querySelector(`.note-list > li[data-note-id="${CSS.escape(id)}"]`);
+    if (row === null) return;
+    if (document.activeElement === document.querySelector('main') || focusLost() || focusInLeavingToast()) focusOn(deleteOf(row));
+  });
+}
+
+function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps['send']; sendLater: ProjectViewProps['sendLater'] }): ReactElement {
+  const { note, plan, send, sendLater } = props;
   const [draft, setDraft] = useState<string | null>(null);
+  const edit = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  // Save and Cancel take the form away with the button pressed: the focus that leaves on the body goes back to the note's Edit
+  useLayoutEffect(() => {
+    const was = wasEditing.current;
+    wasEditing.current = draft !== null;
+    if (was && draft === null && focusLost() && !focusOn(edit.current)) focusMain();
+  }, [draft]);
   const save = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
     const text = (draft ?? '').trim();
     if (text !== '' && text !== note.text) send([{ op: 'editNote', id: note.id, text }]);
     setDraft(null);
   };
-  const remove = (): void => {
-    if (confirm('Delete this note for everyone?')) send([{ op: 'deleteNote', id: note.id }]);
+  const remove = (button: HTMLButtonElement): void => {
+    const row = button.closest('li');
+    if (row !== null) handFocusOn(row);
+    const ops: ProjectOp[] = [{ op: 'deleteNote', id: note.id }];
+    if (sendLater === undefined) {
+      send(ops);
+      return;
+    }
+    // No op brings a note back (adding it again would make whoever undoes it its author, now, last), so the delete waits in the page's store
+    // while the toast offers Undo, and is posted once the toast has gone (Phase 2 spec §12.2), or as the page goes. Posted, it has no Undo
+    // left, so it takes the toast away. Its toast's going posts it, so its time runs on while the page is hidden (ledger ruling P2-R63).
+    const key = `note:${note.id}`;
+    const later = sendLater(ops, { onFlush: () => dismissToast(key) });
+    const undo = (): void => {
+      later.cancel();
+      focusRestored(note.id);
+    };
+    showToast('Note deleted', { key, action: { label: 'Undo', run: undo }, onExpire: () => later.flush(), runsHidden: true });
   };
   return (
     <li className="note" data-note-id={note.id}>
@@ -56,8 +121,8 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
       </p>
       {draft === null && (
         <div className="row note-actions">
-          <button type="button" onClick={() => setDraft(note.text)}>Edit</button>
-          <button type="button" onClick={remove}>Delete</button>
+          <button ref={edit} type="button" onClick={() => setDraft(note.text)}>Edit</button>
+          <button type="button" onClick={(e) => remove(e.currentTarget)}>Delete</button>
         </div>
       )}
     </li>
@@ -65,14 +130,18 @@ function NoteItem(props: { note: Note; plan: Plan | null; send: ProjectViewProps
 }
 
 export function NotesView(props: ProjectViewProps): ReactElement {
-  const { project, plan, send } = props;
+  const { project, plan, send, sendLater } = props;
   const [text, setText] = useState('');
   const add = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault();
     const note = text.trim();
     if (note === '') return;
+    // the field it clears disables Add note, and a disabled button drops the focus it has on the body at its next frame: the field takes it first
+    const form = e.currentTarget;
+    if (document.activeElement === form.querySelector('button[type="submit"]') && !focusOn(form.querySelector('textarea'))) focusMain();
     send([{ op: 'addNote', note: { id: newNoteId(), text: note } }]);
     setText('');
+    showToast('Note added');
   };
   return (
     <div className="notes">
@@ -80,7 +149,7 @@ export function NotesView(props: ProjectViewProps): ReactElement {
         <p className="muted">No notes yet.</p>
       ) : (
         <ul className="note-list">
-          {project.notes.map((note) => <NoteItem key={note.id} note={note} plan={plan} send={send} />)}
+          {project.notes.map((note) => <NoteItem key={note.id} note={note} plan={plan} send={send} sendLater={sendLater} />)}
         </ul>
       )}
       <form className="note-add" onSubmit={add}>

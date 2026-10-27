@@ -48,7 +48,7 @@ export function AvoidPicker(props: AvoidPickerProps): ReactElement {
             const label = avoidLabel(entry, materials, nameOf);
             return (
               <li key={entry} className="avoid-chip" data-avoid-entry={entry} title={entry}>
-                {isStuffKey(entry) && <ItemIcon itemKey={entry} size={CHIP_ICON_SIZE} name={label} />}
+                {isStuffKey(entry) && <ItemIcon itemKey={entry} size={CHIP_ICON_SIZE} name={label} tip={false} />}
                 <span className="avoid-chip-name">{label}</span>
                 <button type="button" className="avoid-chip-remove" aria-label={`Remove ${label}`} onClick={() => set(avoidWithout(avoid, entry))}>×</button>
               </li>
@@ -95,11 +95,12 @@ function MaterialBox(props: { materials: readonly AvoidMaterial[]; onAdd(entry: 
       e.preventDefault();
       setOpen(true);
       if (hits.length > 0) setActive(e.key === 'ArrowDown' ? Math.min(current + 1, hits.length - 1) : Math.max(current - 1, 0));
-    } else if (e.key === 'Enter' && text.trim() !== '') {
+    } else if (e.key === 'Enter' && text.trim() !== '' && !e.nativeEvent.defaultPrevented) {   // not a held Enter's repeat (P2-R69a)
       e.preventDefault();
       // The highlighted material while the list shows, else the text as typed.
       commit((showList ? hits[current]?.name : undefined) ?? text);
-    } else if (e.key === 'Escape') {
+    } else if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented) {
+      // a key something has already handled (the shared tooltip's, hiding its tip) is not the list's: one layer per press (R15, P2-R21)
       setOpen(false);
     }
   };
@@ -147,7 +148,7 @@ function MaterialBox(props: { materials: readonly AvoidMaterial[]; onAdd(entry: 
         </ul>
       )}
       {open && text.trim() !== '' && hits.length === 0 && (
-        <p className="search-note muted">No material is called that; Enter adds it as typed</p>
+        <p className="search-note muted" data-no-match="">No material is called that; Enter adds it as typed</p>
       )}
     </div>
   );

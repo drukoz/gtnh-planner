@@ -1,7 +1,9 @@
 /*
- * The Machine GUI look (design spec §4): light-grey bevelled panels on a dark stone page, one theme whatever the browser or
- * the OS prefers. The palette, bevels, motion and fonts are tokens on :root. Text colour depends on the surface it sits
- * on, so each surface sets its own ink (--ink and its siblings) and the generic classes below read those.
+ * The Machine GUI look (design spec §4): bevelled panels on a stone page, in two looks (Phase 2 spec §4): Light, the light-grey panels
+ * on a dark stone, and Dark, dark-steel panels on a darker stone. Auto, the default, follows the OS with no JS: with no data-theme on
+ * <html>, the dark look applies while the OS is in dark. The Theme button sets data-theme="dark" or "light", which outranks the OS.
+ * The palette, bevels, motion and fonts are tokens on :root, and the dark look redefines the palette's. Text colour depends on the
+ * surface it sits on, so each surface sets its own ink (--ink and its siblings) and the generic classes below read those.
  */
 :root {
   --page: #2b2b2b; --page-check: #262626; --bar: #1a1a1a;
@@ -24,15 +26,102 @@
   --dur-fast: 90ms; --dur-base: 160ms; --dur-slow: 260ms; --dur-exit: 180ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1); --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1); --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --font-pixel: 'Pixelify Sans', Inter, sans-serif; --font-ui: Inter, system-ui, sans-serif;
+  /* Figures in VT323, words in Pixelify (Phase 2 spec §25): Pixelify draws 5 like S, 2 like Z and 0 like O. A rule that sets this font
+     also sets `font-size-adjust: cap-height 0.56` after its `font`, so a fallback is drawn as tall as VT323's digits. */
+  --font-digits: VT323, ui-monospace, Menlo, Consolas, monospace;
   --font-diagram: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  /* The brand's 8 x 8 pixel mark (design spec §6), one image for the top bar and the login card: a URL-encoded SVG (%3C %3E are the
-     angle brackets, %23 the hash) whose four paths are the outline, the gold rim, the dark gold and the white of the mockup's map. */
-  --brand-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23000' d='M2 0h4v1H2zM1 1h1v1H1zM6 1h1v1H6zM0 2h1v4H0zM7 2h1v4H7zM1 6h1v1H1zM6 6h1v1H6zM2 7h4v1H2z'/%3E%3Cpath fill='%23ffd84a' d='M2 1h4v1H2zM1 2h1v4H1zM6 2h1v4H6zM2 6h4v1H2z'/%3E%3Cpath fill='%23c98a00' d='M2 2h4v1H2zM2 3h1v2H2zM5 3h1v2H5zM2 5h4v1H2z'/%3E%3Cpath fill='%23fff' d='M3 3h2v2H3z'/%3E%3C/svg%3E");
+  /* Logo C (Phase 2 spec §5), the brand's 16 x 16 pixel mark: two machines joined by a pipe whose contents move. A URL-encoded SVG
+     (%3C %3E are the angle brackets, %23 the hash) in seven paths, in painter's order: the outline and casing, the lit faces, the shade,
+     the orange and the green contents, the pipe and its dark gaps. --brand-mark is frame 0, the still frame, one image for the top bar,
+     the login card and the tab icon (index.html holds the same data URI); --brand-flow-1 and -2 are the pipe alone with the gaps of
+     frames 1 and 2, the top bar's two overlays. */
+  --brand-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Cpath fill='%23141414' d='M1 1h6v6H1zM6 2h7v3H6zM10 5h3v4H10zM9 9h6v6H9z'/%3E%3Cpath fill='%23d8d8d8' d='M2 2h3v1H2zM2 3h1v2H2zM10 10h3v1H10zM10 11h1v2H10z'/%3E%3Cpath fill='%236e6e6e' d='M5 2h1v3H5zM2 5h4v1H2zM13 10h1v3H13zM10 13h4v1H10z'/%3E%3Cpath fill='%23ff8a1f' d='M3 3h2v2H3z'/%3E%3Cpath fill='%2355ff55' d='M11 11h2v2H11z'/%3E%3Cpath fill='%23ffd84a' d='M7 3h5v1H7zM11 4h1v6H11z'/%3E%3Cpath fill='%237a5a10' d='M9 3h1v1H9zM11 4h1v1H11zM11 7h1v1H11z'/%3E%3C/svg%3E");
+  --brand-flow-1: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffd84a' d='M7 3h5v1H7zM11 4h1v6H11z'/%3E%3Cpath fill='%237a5a10' d='M7 3h1v1H7zM10 3h1v1H10zM11 5h1v1H11zM11 8h1v1H11z'/%3E%3C/svg%3E");
+  --brand-flow-2: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffd84a' d='M7 3h5v1H7zM11 4h1v6H11z'/%3E%3Cpath fill='%237a5a10' d='M8 3h1v1H8zM11 3h1v1H11zM11 6h1v1H11zM11 9h1v1H11z'/%3E%3C/svg%3E");
   --ink: #dddddd; --ink-muted: #aaaaaa; --ink-title: #ffffff; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
+  /* What the rules once wrote as literals, a token each so that a look can change it (Phase 2 spec §4.3): the top bar's inner line, the
+     canvas grids, a disabled face and its ink, the tabs, the 1px rules, a flat row's hover veil and a bare caret's press, the edge of a
+     field, the well of a tick, and the panel ink the panel group reads. */
+  --bar-line: #3c3c3c; --grid: #404040; --btn-off: #4a4a4a; --btn-off-ink: #a0a0a0;
+  --tab-face: #8b8b8b; --tab-face-hi: #a8a8a8; --tab-ink: #1b1b1b; --tab-face-hover: #9a9a9a;
+  --rule: #8b8b8b; --veil: rgb(255 255 255 / 0.35); --press: rgb(0 0 0 / 0.15); --field-edge: #a0a0a0; --bevel-tick: var(--bevel-slot);
+  /* The selected tab's label and a slider's track (the final fix wave, ledger rulings P2-R129, P2-R130): the panel's ink and the well's bevel,
+     as they were, which the dark look gives the accent and a light lower edge, so the selected tab and a track's extent show there. */
+  --tab-on-ink: var(--text); --bevel-track: var(--bevel-well);
+  --panel-error: #aa0000; --panel-ok: #1e5a1e; --panel-warn: #6a4000; --panel-focus: #1b1b1b;
+  /* The features of Phase 2, at their light values (Phase 2 spec §4.3), so the dark look can give each its own now: a readout tile's
+     lower bevel, the slider's thumb, the Flow chips and busy band, a stack's count and its shadow, the bevels of a recessed slot area and
+     of a readout tile, the energy bar, the progress arrow's base on a chat box, the skeletons and their sheen, the tooltip's mod line;
+     then the Theme button's 8 x 8 icons (§4.8, URL-encoded as the brand mark is): Auto's square half light and half dark, a moon, a sun. */
+  --screen-lo: #555555; --thumb: var(--btn); --flow-chip: var(--screen); --flow-busy-track: var(--screen);
+  --flow-busy: #55ff55; --flow-busy-high: #ffaa00; --stack-ink: #ffffff; --stack-shadow: #3f3f3f;
+  --bevel-inset: inset 2px 2px 0 var(--panel-lo), inset -2px -2px 0 var(--panel-hi);
+  --bevel-screen: inset 2px 2px 0 #000000, inset -2px -2px 0 var(--screen-lo);
+  --energy: #e03c3c; --progress-base: #555555; --skeleton: #b5b5b5; --skeleton-well: #4a4a4a; --sheen: rgb(255 255 255 / 0.1);
+  --tip-mod: #8080ff;
+  --icon-auto: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c6c6c6' d='M0 0h4v8H0z'/%3E%3Cpath fill='%232a2a2a' d='M4 0h4v8H4z'/%3E%3C/svg%3E");
+  --icon-moon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23c8d4ff' d='M2 0h3v1H2zM1 1h2v1H1zM0 2h2v3H0zM1 5h2v1H1zM6 5h1v1H6zM2 6h4v1H2z'/%3E%3C/svg%3E");
+  --icon-sun: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23ffd84a' d='M3 0h1v7H3zM0 3h7v1H0zM2 2h3v3H2zM1 1h1v1H1zM5 1h1v1H5zM1 5h1v1H1zM5 5h1v1H5z'/%3E%3C/svg%3E");
   --gap: 12px;
-  color-scheme: dark; scrollbar-color: var(--btn) var(--screen);
+  /* Every scroll bar the page colours takes the slider's thumb (ledger ruling P2-R128): the button's face in light, as it was, and in dark a
+     grey that shows on the screen's black (4.59:1; the dark button's face was 1.78:1). The property is inherited, so every scrolling box has it. */
+  color-scheme: dark; scrollbar-color: var(--thumb) var(--screen);
   font-family: var(--font-ui); line-height: 1.45; color: var(--ink); background: var(--page);
+}
+
+/* The dark look (Phase 2 §4): chosen, or Auto with the OS in dark. The two lists are identical (a contract case checks it).
+   They redefine tokens of the light look, and none of those the same in both looks (the edge, the accent, the screens' inks, the chat
+   and tooltip colours, the tiers, motion and fonts); a token built on others (the bevels, --flow-chip) follows the values it reads. Both
+   selectors are (0,2,0), so they outrank every :root block, the Flow one further down included. The base's own surfaces read these
+   tokens too (add-on 17's Compare card, Plan for and farm fields, the Make picker's Settings readout and its drawer), and follow. */
+:root[data-theme='dark'] {
+  --page: #141414; --page-check: #181818; --bar: #0b0b0b; --bar-line: #2a2a2a;
+  --panel: #2a2a2a; --panel-hi: #474747; --panel-lo: #0d0d0d;
+  --slot: #1d1d1d; --slot-hi: #4a4a4a; --slot-lo: #070707;
+  --well: #1a1a1a; --grid: #242424; --screen: #0b0b0b; --screen-lo: #2f2f2f;
+  --text: #e6e6e6; --text-muted: #a8a8a8; --title: #ffffff; --link: #8fb4ff;
+  --ink: #e6e6e6; --ink-muted: #a8a8a8;
+  --btn: #3c3c3c; --btn-hi: #5a5a5a; --btn-lo: #1e1e1e; --btn-off: #262626; --btn-off-ink: #8a8a8a;
+  --tab-face: #1f1f1f; --tab-face-hi: #2f2f2f; --tab-ink: #c8c8c8; --tab-face-hover: #2a2a2a;
+  --rule: #474747; --veil: rgb(0 0 0 / 0.3); --press: rgb(255 255 255 / 0.08);
+  --bevel-tick: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b; --thumb: #7a7a7a;
+  --tab-on-ink: var(--accent); --bevel-track: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b;
+  --panel-error: #ff6b6b; --panel-ok: #55ff55; --panel-warn: #ffaa00; --panel-focus: #ffff55;
+  --flow-owned: #22402a; --flow-owned-line: #55c06a; --flow-new: #303030; --flow-raw: #303030;
+  --flow-out: #3b3313; --flow-out-line: #d9b43a; --flow-import: #34301e; --flow-import-line: #a89a5c;
+  --flow-missing: #3e1e1e; --flow-missing-line: #ff5555; --flow-sink: #242424; --flow-sink-line: #6e6e6e;
+  --flow-line: #2d2740; --flow-line-line: #a58bd6; --flow-error: #ff8080; --flow-warn: #ffb84d;
+  --flow-edge: #050505; --casing: #050505; --flow-hover: rgb(0 0 0 / 0.3); --flow-focus: #ffffff; --flange: #6e6e6e;
+  --conn-box: #303030; --conn-face: #3a3a3a; --conn-face-link: #8fb4ff;
+  --conn-chest: #3b3313; --conn-chest-line: #d9b43a; --conn-interface: #2d2740; --conn-interface-line: #a58bd6;
+  --conn-source: #34301e; --conn-source-line: #a89a5c; --conn-hookup: #242424; --conn-hookup-line: #6e6e6e;
+  --stack-shadow: #000000; --skeleton: #383838; --skeleton-well: #2a2a2a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --page: #141414; --page-check: #181818; --bar: #0b0b0b; --bar-line: #2a2a2a;
+    --panel: #2a2a2a; --panel-hi: #474747; --panel-lo: #0d0d0d;
+    --slot: #1d1d1d; --slot-hi: #4a4a4a; --slot-lo: #070707;
+    --well: #1a1a1a; --grid: #242424; --screen: #0b0b0b; --screen-lo: #2f2f2f;
+    --text: #e6e6e6; --text-muted: #a8a8a8; --title: #ffffff; --link: #8fb4ff;
+    --ink: #e6e6e6; --ink-muted: #a8a8a8;
+    --btn: #3c3c3c; --btn-hi: #5a5a5a; --btn-lo: #1e1e1e; --btn-off: #262626; --btn-off-ink: #8a8a8a;
+    --tab-face: #1f1f1f; --tab-face-hi: #2f2f2f; --tab-ink: #c8c8c8; --tab-face-hover: #2a2a2a;
+    --rule: #474747; --veil: rgb(0 0 0 / 0.3); --press: rgb(255 255 255 / 0.08);
+    --bevel-tick: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b; --thumb: #7a7a7a;
+    --tab-on-ink: var(--accent); --bevel-track: inset 2px 2px 0 #000000, inset -2px -2px 0 #8b8b8b;
+    --panel-error: #ff6b6b; --panel-ok: #55ff55; --panel-warn: #ffaa00; --panel-focus: #ffff55;
+    --flow-owned: #22402a; --flow-owned-line: #55c06a; --flow-new: #303030; --flow-raw: #303030;
+    --flow-out: #3b3313; --flow-out-line: #d9b43a; --flow-import: #34301e; --flow-import-line: #a89a5c;
+    --flow-missing: #3e1e1e; --flow-missing-line: #ff5555; --flow-sink: #242424; --flow-sink-line: #6e6e6e;
+    --flow-line: #2d2740; --flow-line-line: #a58bd6; --flow-error: #ff8080; --flow-warn: #ffb84d;
+    --flow-edge: #050505; --casing: #050505; --flow-hover: rgb(0 0 0 / 0.3); --flow-focus: #ffffff; --flange: #6e6e6e;
+    --conn-box: #303030; --conn-face: #3a3a3a; --conn-face-link: #8fb4ff;
+    --conn-chest: #3b3313; --conn-chest-line: #d9b43a; --conn-interface: #2d2740; --conn-interface-line: #a58bd6;
+    --conn-source: #34301e; --conn-source-line: #a89a5c; --conn-hookup: #242424; --conn-hookup-line: #6e6e6e;
+    --stack-shadow: #000000; --skeleton: #383838; --skeleton-well: #2a2a2a;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -64,21 +153,23 @@ h2 { font-size: 1.2rem; margin: 0 0 var(--gap); }
 /*
  * Ink on a panel (design spec §4): dark text on the light grey. The surfaces that are panels are listed here and what they
  * hold inherits it; a dark box (chat, screen, well) sets the light ink of the same table instead, in the group below. Both
- * groups come before .muted and .error, so those two still win on an element that is both (.banner.error).
+ * groups come before .muted and .error, so those two still win on an element that is both (.banner.error). The panel ink reads
+ * the tokens of :root, so a look changes it there and never repeats this list (Phase 2 spec §4.2).
  */
 .card, .modal, .settings-section, .flow-panel, .conn-panel, .tab-panel, .note, .note-add, .materials-section, .line-panel, .found-panel,
 .view3d-box, .compare-card {
-  --ink: #303030; --ink-muted: #4a4a4a; --ink-title: #404040; --ink-link: #1a3fa0;
-  --ink-error: #aa0000; --ink-ok: #1e5a1e; --ink-warn: #6a4000; --ink-focus: #1b1b1b;
+  --ink: var(--text); --ink-muted: var(--text-muted); --ink-title: var(--title); --ink-link: var(--link);
+  --ink-error: var(--panel-error); --ink-ok: var(--panel-ok); --ink-warn: var(--panel-warn); --ink-focus: var(--panel-focus);
   color: var(--ink);
 }
 /* Ink on a dark box (a chat box, a screen, a chip): light text on near black. It sets the focus ink too, so a dark box inside a
    panel does not take the panel's dark ring. The Compare card's notes are named by their place with the `p` in `:where()`, which keeps
-   them at the specificity of one class, so .muted and .error still win on them. */
+   them at the specificity of one class, so .muted and .error still win on them. A recipe card's readout tile is a screen (Phase 2 §8.4),
+   and a toast a chat box (Phase 2 §12.3), as is the in-app confirm (Phase 2 §13.2). */
 .banner, .plan-banner, .what-changed, .delete-confirm, .connection, .badge, .chip, .avoid-chip,
 .search-results, .mat-unlock, .flow-issues, .flow-infeasible,
 .flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made,
-.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p) {
+.view3d-warnings, .compare-card > :where(p), .compare-column > :where(p), .readout, .toast, .inline-confirm {
   --ink: #ffffff; --ink-muted: #aaaaaa; --ink-title: #ffff55; --ink-link: #ffff55;
   --ink-error: #ff5555; --ink-ok: #55ff55; --ink-warn: #ffaa00; --ink-focus: #ffff55;
   color: var(--ink);
@@ -92,7 +183,15 @@ a, button.link { color: var(--ink-link); }
  * Motion (design spec §7a): the entrances the later rules ask for by name, on transform and opacity only (the pipes' dash
  * offset aside), and the dots that breathe or blink and the rim of a newly lit pipe that blinks once, on opacity alone (ruling
  * R19: a brightness pulse could not show on the lit pipe's white contents). A tooltip fades in and rises 2px (`tip-in`, ruling
- * R27). Under reduced motion every duration is zero and an animation runs once, for a millisecond: nothing moves.
+ * R27). Logo C's pipe steps through its frames on opacity alone (`brand-flow`, Phase 2 spec §5.3). The shared tooltip fades out and
+ * sinks 2px as it goes (`tip-out`, Phase 2 spec §6.3), an exit that keeps its last frame, as the box is removed once it has run.
+ * A changed tile of the key-numbers strip flashes its frame once, from full opacity to its own nothing (`flash-out`, Phase 2 spec §10.1).
+ * A skeleton's sheen passes over its blocks from their left edge to their right, on transform alone (`sheen`, Phase 2 spec §11.2).
+ * A toast pops in from 12 px below at 96 % (`toast-in`) and sinks back out as it goes, the other exit that keeps its last frame, for it
+ * is removed once that has run (`toast-out`, Phase 2 spec §12.1).
+ * A good rides its Flow pipe from one end of its ride route to the other, the arrow's path run on into the boxes (ledger ruling P2-R97), on
+ * its offset along the route alone (`pipe-ride`, Phase 2 spec §15.3), the other exception beside the dashes.
+ * Under reduced motion every duration is zero and an animation runs once, for a millisecond: nothing moves.
  */
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(-4px); } }
@@ -104,6 +203,13 @@ a, button.link { color: var(--ink-link); }
 @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.25; } }
 @keyframes pipe-flow { to { stroke-dashoffset: -16; } }
 @keyframes pipe-pulse { 0%, 100% { opacity: 1; } 35% { opacity: 0.15; } }
+@keyframes pipe-ride { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+@keyframes brand-flow { 0% { opacity: 1; } 33.333% { opacity: 0; } }
+@keyframes tip-out { to { opacity: 0; transform: translateY(2px); } }
+@keyframes flash-out { from { opacity: 1; } }
+@keyframes sheen { to { transform: translateX(100%); } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(0.96); } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(12px) scale(0.96); } }
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-exit: 0ms; }
   *, *::before, *::after {
@@ -131,11 +237,11 @@ a, button.link { color: var(--ink-link); }
 :where(button.danger:hover:not(:disabled)) { background: var(--danger-face-hover); }
 /* 13px is the smallest the pixel font goes; the .small utility below leaves a button's size to this rule. */
 :where(button.small) { min-height: 28px; padding: 0 10px; font-size: 13px; }
-:where(button:disabled) { background: #4a4a4a; color: #a0a0a0; text-shadow: none; box-shadow: none; cursor: default; }
+:where(button:disabled) { background: var(--btn-off); color: var(--btn-off-ink); text-shadow: none; box-shadow: none; cursor: default; }
 
 /* A text field, a text area and a select are black fields. A tick, a slider and a file input get no such box. */
 :where(input:not([type=checkbox], [type=radio], [type=range], [type=file]), textarea, select) {
-  min-height: 36px; padding: 6px 10px; background: #000000; border: 2px solid var(--btn-hi); border-radius: 0;
+  min-height: 36px; padding: 6px 10px; background: #000000; border: 2px solid var(--field-edge); border-radius: 0;
   color: #ffffff; font: 14px var(--font-ui);
 }
 :where(input:not([type=checkbox], [type=radio], [type=range], [type=file]):focus, textarea:focus, select:focus) {
@@ -164,7 +270,7 @@ textarea { resize: vertical; width: 100%; }
 /* A checkbox or a radio is a 16px well. Its mark pops in (scale 0.6 to 1) when it is checked: a pixel tick, a square dot. */
 :where(input[type=checkbox], input[type=radio]) {
   appearance: none; display: inline-grid; place-content: center; flex: none; width: 16px; height: 16px; margin: 0;
-  background: var(--screen); box-shadow: var(--bevel-slot); cursor: pointer;
+  background: var(--screen); box-shadow: var(--bevel-tick); cursor: pointer;
 }
 :where(input[type=checkbox], input[type=radio])::before {
   content: ''; width: 10px; height: 10px; opacity: 0; transform: scale(0.6);
@@ -184,16 +290,16 @@ textarea { resize: vertical; width: 100%; }
    has a pseudo-element it does not know, so the WebKit and the Gecko rules cannot share a list. */
 :where(input[type=range]) { appearance: none; height: 20px; margin: 0; background: transparent; cursor: pointer; }
 :where(input[type=range])::-webkit-slider-runnable-track {
-  height: 6px; background: var(--screen); box-shadow: var(--bevel-well); border-radius: 0;
+  height: 6px; background: var(--screen); box-shadow: var(--bevel-track); border-radius: 0;
 }
-:where(input[type=range])::-moz-range-track { height: 6px; background: var(--screen); box-shadow: var(--bevel-well); border-radius: 0; }
+:where(input[type=range])::-moz-range-track { height: 6px; background: var(--screen); box-shadow: var(--bevel-track); border-radius: 0; }
 :where(input[type=range])::-webkit-slider-thumb {
   appearance: none; box-sizing: border-box; width: 12px; height: 20px; margin-top: -7px;
-  background: var(--btn); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
+  background: var(--thumb); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
 }
 :where(input[type=range])::-moz-range-thumb {
   box-sizing: border-box; width: 12px; height: 20px;
-  background: var(--btn); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
+  background: var(--thumb); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-btn);
 }
 :where(input[type=range]:disabled) { opacity: 0.5; cursor: default; }
 
@@ -215,7 +321,7 @@ textarea { resize: vertical; width: 100%; }
 }
 :where(input[type=file]:not(:disabled))::file-selector-button:hover { background: var(--btn-hover); }
 :where(input[type=file]:not(:disabled))::file-selector-button:active { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
-:where(input[type=file]:disabled)::file-selector-button { background: #4a4a4a; color: #a0a0a0; text-shadow: none; box-shadow: none; cursor: default; }
+:where(input[type=file]:disabled)::file-selector-button { background: var(--btn-off); color: var(--btn-off-ink); text-shadow: none; box-shadow: none; cursor: default; }
 
 /*
  * The summary of a settings section or of a disclosure is a full-width Minecraft button with a pixel caret that turns down
@@ -264,13 +370,20 @@ details.settings-section > summary .muted { color: inherit; }
  */
 .top-nav {
   display: flex; align-items: center; flex-wrap: wrap; gap: 20px; min-height: 50px; padding: 6px 20px;
-  background: var(--bar); border-bottom: 2px solid #000; box-shadow: inset 0 -2px 0 #3c3c3c;
+  background: var(--bar); border-bottom: 2px solid #000; box-shadow: inset 0 -2px 0 var(--bar-line);
 }
 .brand {
   display: inline-flex; align-items: center; gap: 10px;
   color: #ffd84a; font: 700 20px/1 var(--font-pixel); letter-spacing: 0.02em; text-shadow: 2px 2px 0 #3f3300;
 }
-.brand-mark { flex: none; width: 32px; height: 32px; background: var(--brand-mark) center / contain no-repeat; }
+.brand-mark { position: relative; flex: none; width: 32px; height: 32px; background: var(--brand-mark) center / contain no-repeat; }
+/* The pipe flows six turns and rests on the still frame (WCAG 2.2.2, ruling R31); reduced motion: never moves. */
+/* Seven runs for six turns on screen: the negative delays spend each overlay's first run before the first paint (P2-R12). */
+.brand-mark::before, .brand-mark::after {
+  content: ''; position: absolute; inset: 0; opacity: 0; background: var(--brand-flow-1) center / contain no-repeat;
+  animation: brand-flow 0.66s step-end 7 -0.44s;
+}
+.brand-mark::after { background-image: var(--brand-flow-2); animation-delay: -0.22s; }
 .top-nav nav { display: flex; gap: 6px; }
 /* The links of the nav only (a bare `.top-nav a` would dress every link in the header). They are links, so the button rules do not
    reach them: this is the button look again, with the current page in yellow. */
@@ -283,6 +396,17 @@ details.settings-section > summary .muted { color: inherit; }
 .top-nav nav a:hover { background: var(--btn-hover); }
 .top-nav nav a:active { transform: translateY(1px); box-shadow: var(--bevel-btn-down); }
 .top-nav nav a[aria-current='page'] { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
+/* The Theme button (Phase 2 spec §4.8): the base button at the end of the bar, after the nav (so the keyboard reaches the pages first),
+   with an 8 x 8 pixel icon drawn at 2x before its words: Auto's square, the moon or the sun. Its face is the base button's 36px, so the
+   bar stays one row of the same height down to about 655px. */
+.theme-button { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; }
+.theme-button::before { content: ''; flex: none; width: 16px; height: 16px; background: var(--icon-auto) center / contain no-repeat; }
+.theme-button[data-choice='dark']::before { background-image: var(--icon-moon); }
+.theme-button[data-choice='light']::before { background-image: var(--icon-sun); }
+/* A switch of look cross-fades the page over --dur-slow (Phase 2 spec §4.9), 0ms under reduced motion, where the JS starts no fade
+   anyway. Two rules, not one list: the minifier once dropped the pseudo-element half of such a list (R28). */
+::view-transition-old(root) { animation-duration: var(--dur-slow); animation-timing-function: var(--ease-out); }
+::view-transition-new(root) { animation-duration: var(--dur-slow); animation-timing-function: var(--ease-out); }
 
 .page { max-width: 1200px; margin: 0 auto; padding: 20px; }
 /* The project page uses the full window width so the flow diagram, map and 3D view get room. */
@@ -326,7 +450,7 @@ details.settings-section > summary .muted { color: inherit; }
 
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
 .login { width: min(360px, 100%); display: flex; flex-direction: column; gap: 14px; }
-/* The brand mark, 64px and centred, above the title. */
+/* The brand mark, 64px and centred, above the title: logo C's still frame (a pseudo-element cannot hold the overlays). */
 .login::before { content: ''; align-self: center; flex: none; width: 64px; height: 64px; background: var(--brand-mark) center / contain no-repeat; }
 .login .error { margin: 0; }
 
@@ -339,7 +463,7 @@ details.settings-section > summary .muted { color: inherit; }
   flex: 1; min-height: 36px; padding: 0 8px; border-color: transparent; background: transparent;
   color: var(--ink); font: 600 22px/1.2 var(--font-pixel);
 }
-.project-name:hover { border-color: var(--btn-hi); }
+.project-name:hover { border-color: var(--field-edge); }
 .project-name:focus { border-color: var(--accent); background: #000000; }
 /* The connection is a readout with a square dot: green and breathing while live (opacity only), amber and blinking while the
    page reconnects. Twice and three times, then the dot holds still at its full opacity (no fill mode): what moves by itself beside
@@ -361,8 +485,9 @@ details.settings-section > summary .muted { color: inherit; }
   background: var(--chat); border: 2px solid var(--outline); border-radius: 0;
   animation: rise-in var(--dur-base) var(--ease-out);
 }
-/* The busy line alone is on screen for every replan, so it appears without the entrance. */
-.plan-banner:has(> p.muted:only-child) { animation: none; }
+/* The busy line alone is on screen for every replan, so it appears without the entrance; and the line hangs out of the flow (below), so a
+   banner that says nothing else draws no box: no margin, padding, edge or face. */
+.plan-banner:has(> p.muted:only-child) { animation: none; margin: 0; padding: 0; border: 0; background: none; }
 .plan-banner p { margin: 0 0 4px; }
 .plan-banner ul { margin: 0 0 4px; padding-left: 20px; }
 .plan-banner .banner-heading { margin-top: 6px; font: 600 14px/1.45 var(--font-pixel); }
@@ -374,9 +499,70 @@ details.settings-section > summary .muted { color: inherit; }
 .banner-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
 /* A derived material's chip is a small button with its 16px icon: the size of `button.small`, which its markup does not carry. */
 button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px 0 4px; font-size: 13px; }
+/*
+ * The banner's busy line (Phase 2 spec §11.3, ledger rulings P2-R18 and P2-R51): "Updating the plan…" after the GT progress arrow, out of
+ * the flow. Every replan of the project and other projects' surplus send a plan event, and the line in the flow pushed everything under the
+ * banners down the page and back (24.3 px, a whole banner's 60.3 px when it said nothing else), which threw drags off the pointer (P2-R16)
+ * and made tests race; now nothing moves. While the key-numbers strip is drawn (the project makes something, so a replan has figures to
+ * update) the line is a chat box of its own on the strip's top-right corner, the banners' box being its containing block and the strip its
+ * first child: 20 px tall, a tile's edge, padding and label line, in the labels' Inter 11 px, so it covers the label row of that tile and never
+ * a figure, at every width, and holds the 16 px arrow inside its edge. Its top and right edges are the tile's own black edge, so it draws its
+ * left and bottom ones only, and is as narrow as it can be: just under 140 px, so it stays within even the narrowest tile (140 px, at a
+ * 780 px window; past it is the 8 px gap to the next tile, never a figure). Its face is the chat box over the page's colour, so the label
+ * under it does not show through; it is drawn over the tile and under the drawer's dimmed page, and takes no pointer. With no strip it is
+ * clipped from sight as `.visually-hidden` clips: a screen reader still hears the banner's status.
+ */
+.project-banners { position: relative; }
+.plan-banner > p.muted {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.project-banners > .key-numbers ~ .plan-banner > p.muted {
+  top: 0; right: 0; z-index: 2; width: auto; height: 20px; overflow: visible; clip-path: none; margin: 0; padding: 0 3px;
+  display: flex; align-items: center; font: 11px/14px var(--font-ui); background: linear-gradient(var(--chat), var(--chat)) var(--page);
+  border-left: 2px solid var(--outline); border-bottom: 2px solid var(--outline); white-space: nowrap; pointer-events: none;
+}
 /* What the plan costs to run and to build (plan 12), above the banner. It is a line on the stone: the ink of the page, with
    figures that line up. */
 .plan-cost { margin: 0 0 var(--gap); color: var(--ink); font-family: var(--font-ui); font-size: 14px; font-variant-numeric: tabular-nums; }
+/*
+ * The key-numbers strip (Phase 2 spec §10): five readout tiles at the top of the banners' box, each a screen in a black edge with its bevel,
+ * five to a row down to a 732 px box (a 780 px window). A tile is 52 px whichever font is in, every line in px: a label row of 11 px Inter
+ * on a 14 px line, the label in capitals and on one line, its qualifier at the right in the page's case, cut with an ellipsis where the
+ * tile is narrow; then the figure in VT323 28 px on a 26 px line (its digits as tall as the 24 px Pixelify the strip was first drawn in,
+ * §25), on one line, never shrunk and cut with an ellipsis past its tile, its unit in VT323 15 px on the same line, a rate in words in
+ * Inter 15 px. A changed tile's qualifier reads yellow while a 2 px yellow frame fades once over its edge (opacity only; the frame rests at
+ * its own opacity 0). The strip takes 60 px with its margin where its five tiles make one row. While the plan is on its way the strip's
+ * place is its own grid, filled by its skeleton's five blocks as tall as a tile, so it takes as much at every width, wrapped or not (ledger
+ * rulings P2-R48, P2-R50b).
+ * The plan's cost sentence stays on the page, hidden from sight as `.visually-hidden` hides, by a sibling rule (its paragraph takes no
+ * class), and from a screen reader by the page, which hears the strip.
+ */
+.key-numbers { margin: 0 0 8px; }
+.key-numbers > dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0; }
+.key-number {
+  position: relative; height: 52px; padding: 4px 10px;
+  background: var(--screen); border: 2px solid var(--outline); box-shadow: var(--bevel-screen);
+}
+.key-number dt {
+  display: flex; justify-content: space-between; gap: 6px; white-space: nowrap;
+  font: 11px/14px var(--font-ui); text-transform: uppercase; letter-spacing: 0.06em; color: var(--screen-muted);
+}
+.key-number-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+.key-number dd {
+  margin: 0; font: 28px/26px var(--font-digits); font-size-adjust: cap-height 0.56; color: var(--screen-text); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.key-number-unit { margin-left: 4px; font: 15px/26px var(--font-digits); color: var(--screen-muted); font-size-adjust: cap-height 0.56; }
+.key-number dd.key-number-words { font: 15px/26px var(--font-ui); }
+.key-number.changed .key-number-sub { color: var(--accent); }
+.key-number-flash {
+  position: absolute; inset: -2px; border: 2px solid var(--accent); pointer-events: none;
+  animation: flash-out 700ms var(--ease-out); opacity: 0;
+}
+.key-numbers-wait { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 0 0 8px; }
+.project-banners > .key-numbers ~ .plan-cost {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 /*
  * The Compare card (add-on 17): the three planning modes side by side, under the plan banner. Its button is a small button in the
  * project head (in a bar of its own under the banner at 900 px and below), yellow while the card is open, so a closed card takes no
@@ -385,11 +571,12 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
  * failed) chat boxes in the light ink. The mode the project plans in has a black edge with a yellow ring inside it, the frame of a
  * selected slot, besides its "In use" button. The card rises in as the banners do, once.
  *
- * A tile is at least 160px wide, room for 11 glyphs of the 24px pixel font: two to a row on a wide card, stacked where a column is
- * narrower (760 to about 1100px, where three columns leave a tile less). A value is never broken: it stays on one line, and one too long
- * for its tile at 24px shrinks to fit, down to 13px (the page gives each value its length in glyphs, `--glyphs`; a glyph of the pixel
- * font is at most 0.6em wide), so every digit stays readable; only past 13px is it cut with an ellipsis, so a tile never spills out of
- * its column. A label sits at the top of its tile and the value at its foot, so the values of a row line up when a label wraps.
+ * A tile is at least 160px wide, room for 12 glyphs of the 28px VT323 (Phase 2 spec §25; every glyph 0.4em, 0.41 with a margin): two
+ * to a row on a wide card, stacked where a column is narrower (760 to about 1100px, where three columns leave a tile less). A value is
+ * never broken: it stays on one line, and one too long for its tile at 28px shrinks to fit, down to 14px (the page gives each value its
+ * length in glyphs, `--glyphs`), so every digit stays readable; only past 14px is it cut with an ellipsis, so a tile never spills out of
+ * its column. Its line is 26.390625px at every size, so a tile is 54.7px. A label sits at the top of its tile and the value at its foot,
+ * so the values of a row line up when a label wraps.
  */
 .compare-toggle[aria-expanded='true'] { color: var(--accent); text-shadow: 2px 2px 0 #3f3f15; }
 /* Below 900 px the head's one row is full (the Settings button says what the line makes there), so the button is in a bar of its own
@@ -421,7 +608,9 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 .compare-row > dt { color: var(--screen-muted); font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
 .compare-row > dd {
   margin: 0; overflow: hidden; color: var(--screen-text); white-space: nowrap; overflow-wrap: normal; text-overflow: ellipsis;
-  font: 24px/1.1 var(--font-pixel); font-size: clamp(13px, calc(100cqi / (var(--glyphs, 1) * 0.6)), 24px);
+  /* 26.390625px, not 26.4px: Chromium floored the old 24px/1.1 to 1/64 px and rounds a px value, so a tile keeps its height (P2-R13) */
+  font: 28px/26.390625px var(--font-digits); font-size: clamp(14px, calc(100cqi / (var(--glyphs, 1) * 0.41)), 28px);
+  font-size-adjust: cap-height 0.56;
 }
 
 /* What changed with the last settings change (fix spec §6.4), above the flow diagram and the materials: a chat box. */
@@ -435,20 +624,21 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
 .what-changed li { overflow-wrap: anywhere; }
 
 /* Creative-inventory tabs (design spec §6): grey tabs with dark text that sit 2px down over the top edge of the panel, the selected
-   one in the panel's own colour so that it joins it. The height is a minimum and the line-height 1, so the strip is 38px
+   one in the panel's own colour so that it joins it; in the dark look, whose faces differ too little to tell it by, its label is the
+   accent (--tab-on-ink, ledger ruling P2-R129). The height is a minimum and the line-height 1, so the strip is 38px
    whichever font is in. The six tabs wrap onto a second row on a narrow screen (as the mockup's do) rather than scroll the page. */
 .tabs { display: flex; flex-wrap: wrap; gap: 2px; padding-left: 6px; border: 0; margin: 0; }
 /* The z-index keeps a tab above the panel, whose fade-in makes it a stacking context for its 160ms, painted after a tab without one:
    its black top edge would cover the selected tab's 2px foot and cut the tab off the panel on every switch. 1 is under the modal. */
 .tabs [role='tab'] {
   position: relative; top: 2px; z-index: 1; min-height: 38px; padding: 0 14px;
-  background: #8b8b8b; border: 2px solid #000; box-shadow: inset 2px 2px 0 #a8a8a8;
-  color: #1b1b1b; font: 15px/1 var(--font-pixel); text-shadow: none;
+  background: var(--tab-face); border: 2px solid #000; box-shadow: inset 2px 2px 0 var(--tab-face-hi);
+  color: var(--tab-ink); font: 15px/1 var(--font-pixel); text-shadow: none;
 }
 /* The button rules that light a hovered button have no specificity, so they do not reach a tab: this is its own. */
-.tabs [role='tab']:hover:not([aria-selected='true']) { background: #9a9a9a; }
+.tabs [role='tab']:hover:not([aria-selected='true']) { background: var(--tab-face-hover); }
 .tabs [role='tab'][aria-selected='true'] {
-  background: var(--panel); box-shadow: inset 2px 2px 0 #fff; border-bottom-color: var(--panel); color: #303030;
+  background: var(--panel); box-shadow: inset 2px 2px 0 var(--panel-hi); border-bottom-color: var(--panel); color: var(--tab-on-ink);
 }
 /* What a tab shows sits on a panel. The strip above has no margin and the padding stays at 8 px, so the chrome keeps its height:
    the e2e tests aim at canvas centres. The panel fades in on a tab switch (its section is keyed by the tab). */
@@ -470,6 +660,39 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
   box-shadow: var(--bevel-panel), 0 2px 0 #000; animation: scale-in var(--dur-slow) var(--ease-out);
 }
 .modal h2, .modal p { margin: 0; }
+/* The keyboard shortcuts' sheet (Phase 2 spec §14.1): a modal whose list sets each key's caps beside what the key does, in two columns. A cap
+   is a key in the button's look, Pixelify 14 px on a fixed 24 px line, so it is 28 px tall whichever font is in (spec §3.6); a digit cap's digit
+   is a `span.fig` (spec §25), whose line of 0 moves nothing. What a key does is a sentence, in the modal's own Inter. */
+/* In a window too short for it, or a zoomed one, the sheet scrolls inside the dimmed page (fix round 1, M5). */
+.shortcuts-sheet { max-height: 100%; overflow: auto; }
+.shortcut-list { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin: 0; }
+.shortcut-list > div { display: contents; }
+.shortcut-list dt { display: flex; align-items: center; gap: 4px; }
+.shortcut-list dd { margin: 0; align-self: center; }
+.shortcut-list kbd {
+  display: inline-grid; place-content: center; min-width: 28px; min-height: 28px; padding: 0 6px;
+  background: var(--btn); border: 2px solid var(--outline); box-shadow: var(--bevel-btn); color: #ffffff; font: 14px/24px var(--font-pixel);
+}
+
+/* Toasts (Phase 2 spec §12.3): what was just done, in chat boxes stacked in the window's bottom-right corner, 16 px in and at most 360 px
+   wide (on a phone, 16 px from each edge), the newest nearest the corner. The region is fixed, so it takes no room on the page (spec §3.6),
+   on layer 40: under the drawer's dimmed page (50) and the drawer (60), which make it inert while they are open (ProjectPage), the modal
+   (100) and the tooltip (200). It takes no pointer, so its empty part never stands between a click and what is under it; a toast does, but
+   for one that is leaving. A toast is a sentence, so Inter (R35), on a fixed 18 px line, in a row as tall as its small buttons, so no late
+   font changes its height; its ink is the dark boxes' (the group at the top). It pops in once, and only its exit keeps its last frame, as
+   the store removes it once that has run. The leaving rule keeps `toast-in` first in its list, so a toast that goes during its entrance goes
+   from where the entrance has brought it (the entrance runs on, and the exit, with no `from` of its own, starts from it) instead of first
+   jumping to its full size; one that goes later does not run its entrance again (an animation kept in the list keeps its own time). */
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 40; pointer-events: none; max-width: min(360px, 100vw - 32px); }
+.toasts > ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 8px 6px 12px; pointer-events: auto;
+  background: var(--chat); border: 2px solid var(--outline); font: 13px/18px var(--font-ui); animation: toast-in var(--dur-slow) var(--ease-pop);
+}
+.toast > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast[data-state='leaving'] {
+  pointer-events: none; animation: toast-in var(--dur-slow) var(--ease-pop), toast-out var(--dur-exit) var(--ease-in) forwards;
+}
 
 .notes { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
 .note-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -493,14 +716,15 @@ button.banner-chip { display: inline-flex; align-items: center; gap: 6px; min-he
  * image, so every HTML icon is 4px wider and taller than its size. The size is the markup's own inline width and height (the unit
  * tests pin them), which is why the box is content-box: the padding must not eat into it. Nothing styles the image inside, and the
  * end-to-end test reads that image's own bitmap. The letters of a placeholder are 7 to 12px, below what the pixel font may be, so
- * they are Inter.
+ * they are Inter. A long press, the touch route to an icon's tip, opens no iOS image callout over the tip (ledger ruling P2-R135: iOS
+ * fires no contextmenu that the tip's host could prevent); the image inherits it.
  */
 .item-icon {
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
   box-sizing: content-box; position: relative; padding: 2px; border-radius: 0;
   background-color: var(--slot); box-shadow: var(--bevel-slot);
   color: #fff; font-family: var(--font-ui); font-weight: 700; letter-spacing: -0.02em; line-height: 1;
-  user-select: none; text-shadow: 0 1px 1px rgb(0 0 0 / 0.35);
+  user-select: none; -webkit-touch-callout: none; text-shadow: 0 1px 1px rgb(0 0 0 / 0.35);
 }
 /* A placeholder (no texture yet or none at all) keeps the inline `background: rgb()` of its markup, which beats the slot face, and has a
    dark ring under the bevel, so a white square still reads as an icon; its letters turn dark when the colour is too light for white
@@ -532,6 +756,53 @@ svg .item-icon::after { content: none; }
 }
 .badge { white-space: nowrap; }
 .badge.muted { color: var(--screen-muted); }
+/*
+ * Skeletons (Phase 2 spec §11, D13): beside a loading line, which stays as it is, an aria-hidden shape of what is coming: empty blocks of the
+ * skeleton grey (on a well, its own darker grey) in a column 8 px apart, 18 px tall unless the shape sizes them, every height in px so nothing
+ * jumps when the data comes and no late font changes one. A sheen passes over each block three times (4.2 s, within WCAG 2.2.2's 5 s), on
+ * transform alone, and rests where it starts, off the block's left edge: no fill mode, so none of it shows. The geometry is the builder's
+ * (§21): the project list's three cards, as far apart as its cards; a project page's head row (40 % wide), strip and views; the strip's five
+ * tiles, which draw no box of their own but are the wait box's grid's items, that grid being the strip's (ledger ruling P2-R48), in the
+ * tiles' own dark face with a shimmer of the screen's lighter edge, so the figures come with no flash from a lighter grey (P2-R53); a
+ * diagram's three boxes and a scene, set into a well as their views are; lines, every other one shorter. The Compare card's (plan ruling
+ * compare-skeletons): a mode's six figures in the tiles' own grid (`.compare-rows`'), 55 px blocks for its 54.7 px tiles, so they fall two
+ * a row or stacked as the tiles will; and its three modes in its columns' grid, each frame edged as a column is and padded with the room of
+ * its title above the tiles (8 + 19.5 + 8 px) and of its button below (8 + 36 + 8 px), 10 px at each side, so it has no height of its own
+ * and is as tall as a loaded column at every width.
+ */
+.skeleton { display: flex; flex-direction: column; gap: 8px; }
+.skeleton-block { position: relative; overflow: hidden; height: 18px; background: var(--skeleton); }
+.skeleton-block::after {
+  content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--sheen), transparent);
+  transform: translateX(-100%); animation: sheen 1.4s var(--ease-out) 3;
+}
+.skeleton-cards { gap: 10px; margin: 0 0 20px; }
+.skeleton-cards .skeleton-block { height: 58px; }
+.skeleton-project .skeleton-block:nth-child(1) { width: 40%; height: 36px; }
+.skeleton-project .skeleton-block:nth-child(2) { height: 52px; }
+.skeleton-project .skeleton-block:nth-child(3) { height: 360px; }
+.skeleton-strip { display: contents; }
+.skeleton-strip .skeleton-block { height: 52px; background: var(--screen); }
+.skeleton-strip .skeleton-block::after { background: linear-gradient(90deg, transparent, var(--screen-lo), transparent); }
+.skeleton-diagram, .skeleton-scene { background: var(--well); border: 2px solid var(--outline); box-shadow: var(--bevel-well); }
+/* Its columns and gaps shrink with a narrow window (ledger ruling P2-R131): three 110 px columns 40 px apart once its box is about 670 px
+   wide, so a phone's window never scrolls sideways while a first plan or layout is on its way. */
+.skeleton-diagram {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 110px)); gap: clamp(12px, 6%, 40px); align-content: center; height: 240px; padding: 20px;
+}
+.skeleton-diagram .skeleton-block { height: 70px; background: var(--skeleton-well); }
+.skeleton-scene { height: 360px; padding: 20px; }
+.skeleton-scene .skeleton-block { flex: 1; }
+.skeleton-lines .skeleton-block:nth-child(even) { width: 70%; }
+.skeleton-readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 4px; }
+.skeleton-readouts .skeleton-block { height: 55px; }
+.skeleton-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.skeleton-compare > .skeleton-readouts {
+  border: 2px solid; border-color: var(--panel-lo) var(--panel-hi) var(--panel-hi) var(--panel-lo); padding: 35.5px 10px 52px;
+}
+/* A figure inside Pixelify text (Figs.tsx): as tall as the Pixelify digits round it, and a line height of 0, so it never grows or moves
+   a line. */
+.fig { font: 1.15em/0 var(--font-digits); font-size-adjust: cap-height 0.56; }
 
 .project-body { display: grid; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .project-views { min-width: 0; }
@@ -548,6 +819,8 @@ svg .item-icon::after { content: none; }
 }
 .settings-toggle { display: none; }
 .settings-close { display: none; }
+/* The way to the keyboard shortcuts' sheet where the head's Shortcuts button is not drawn (ledger ruling P2-R85): the drawer's, at its end. */
+.settings-shortcuts { display: none; }
 .settings { display: flex; flex-direction: column; gap: 12px; }
 .settings-section {
   display: flex; flex-direction: column; gap: 8px; padding: 12px;
@@ -574,7 +847,7 @@ details.settings-section > summary { font-size: 16px; }
 details.settings-section > summary > h3 { min-width: 0; overflow-wrap: anywhere; }
 details.settings-section > summary > .muted {
   flex: none; margin-left: auto; padding: 2px 6px; white-space: nowrap; background: var(--screen); color: var(--screen-text);
-  font: 13px/1.5 var(--font-pixel); text-shadow: none;
+  font: 15px/19.5px var(--font-digits); font-size-adjust: cap-height 0.56; text-shadow: none;
 }
 /* A title, whichever element carries it. The h3 stays a bare h3 (the settings tests match its markup), so the look is on the selector. */
 .settings-section h3, .settings-title, .settings .field > span.settings-title, .choice > legend.settings-title {
@@ -608,7 +881,7 @@ details.settings-section > summary > .muted {
    light ink of its group. A hit is a row of it with square corners. */
 .search-results {
   list-style: none; margin: 0; padding: 4px; max-height: 320px; overflow-y: auto;
-  background: var(--screen); border: 2px solid #a0a0a0; border-radius: 0;
+  background: var(--screen); border: 2px solid var(--field-edge); border-radius: 0;
 }
 .search-hit { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 0; cursor: pointer; }
 /* The highlighted hit (the arrow keys' and the pointer's, which moves it) wears the yellow frame of a selected slot. Inset, so the list's own
@@ -677,6 +950,14 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
   --flow-error: #990000; --flow-warn: #6a4000;
   --flow-edge: #1b1b1b;
   --flow-hover: rgb(255 255 255 / 0.35);
+  /* Phase 2 spec §4.3: a left over's dashed edge, an open line's frame and title, the dark casing of a Connections pipe (its fallback,
+     a hand's lit link, the labels' halo, the legend), the keyboard's ring on a box, a port's flange, and the casing the view gives a
+     channel dye too dark for the dark one; then the Connections boxes' own colours (no Connections rule reads `--flow-`). */
+  --flow-sink-line: var(--flow-raw-line); --flow-group: #cbbbe0; --casing: #1b1b1b; --flow-focus: #1b1b1b;
+  --flange: var(--slot); --dye-casing: #c6c6c6;
+  --conn-box: var(--panel); --conn-face: #e0e0e0; --conn-face-link: #1d3b9a;
+  --conn-chest: #f0d870; --conn-chest-line: #6b5500; --conn-interface: #cbbbe0; --conn-interface-line: #5a3a8a;
+  --conn-source: #d8cfa8; --conn-source-line: #6b5a20; --conn-hookup: #a8a8a8; --conn-hookup-line: var(--outline);
 }
 /* The side panel slides in from the right: the clip keeps it from flashing a horizontal scroll bar on the way (a clip, not a
    scroll container, so the panel still sticks). Its margin leaves room for the 3px focus ring of what sits at the edges (the
@@ -695,13 +976,17 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-canvas {
   display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none;
   background-color: var(--well);
-  background-image: linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 32px 32px;
   border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-well);
   font-family: var(--font-diagram);
 }
 .flow-canvas:active { cursor: grabbing; }
 .flow-canvas g:focus { outline: none; }
+/* The canvas can take the focus (a panel's Close gives it there, ledger ruling P2-R36), so a press on it focuses it too: without a ring, the
+   keyboard with one, inside it, as the Connections area draws its own. */
+.flow-canvas:focus { outline: none; }
+.flow-canvas:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
 .flow-hit { fill: transparent; stroke: none; }
 /* A box: a tinted fill, a 2px edge and a hard shadow under it (the box's alone, so its text stays crisp). */
 .flow-node-box { fill: var(--flow-raw); stroke: var(--flow-raw-line); stroke-width: 2; filter: drop-shadow(0 2px 0 #000); }
@@ -713,13 +998,13 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-node.import.leaf-free > .flow-node-box { stroke-dasharray: 2 2; }
 .flow-node.import.leaf-unavailable > .flow-node-box { stroke: var(--flow-missing-line); }
 .flow-node.missing > .flow-node-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); stroke-dasharray: 5 3; }
-.flow-node.sink > .flow-node-box { fill: var(--flow-sink); stroke-dasharray: 4 3; }
+.flow-node.sink > .flow-node-box { fill: var(--flow-sink); stroke: var(--flow-sink-line); stroke-dasharray: 4 3; }
 .flow-node.line > .flow-node-box { fill: var(--flow-line); stroke: var(--flow-line-line); stroke-dasharray: 6 3; }
 .flow-node-head[role='button'], .flow-row, .flow-edge, .flow-line-toggle { cursor: pointer; }
 /* Pointed at, a box's head or a row takes the white veil of a Minecraft slot. The keyboard's ring is near black: a yellow one on a
    light box would be lost (1.6:1). */
 .flow-node-head[role='button']:hover > .flow-hit { fill: var(--flow-hover); }
-.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit { stroke: #1b1b1b; stroke-width: 2; }
+.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit { stroke: var(--flow-focus); stroke-width: 2; }
 .flow-node text { fill: var(--text); font-size: 11.5px; }
 .flow-node .flow-node-title { font-size: 13px; font-weight: 600; }
 .flow-node .flow-node-line { fill: var(--text-muted); }
@@ -736,8 +1021,42 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 /* The grey of a left over is darker than a panel: its quieter lines and rates would fall under 4.5:1 there. */
 .flow-node.sink .flow-node-line, .flow-node.sink .flow-row-rate { fill: var(--text); }
 /* A port is a pipe flange (FlowView's FLANGE_DEPTH by FLANGE_HEIGHT): a slot grey with a black edge, yellow when its row is lit. */
-.flow-port { fill: var(--slot); stroke: var(--outline); stroke-width: 1; }
+.flow-port { fill: var(--flange); stroke: var(--outline); stroke-width: 1; }
 .flow-row.hl .flow-port { fill: var(--accent); }
+/*
+ * A step box's machine readout (Phase 2 spec §7.3): the machine in a slot with the inverted bevel of a Minecraft slot (two 2px strips,
+ * dark top and left, light bottom and right); its tier and machine count on dark chips in Pixelify 13px, the one diagram text that leaves
+ * the system font (a count's digits in VT323 through tspan.fig: spec §25), the tier's in its tier's ink, which each `.tier-<slug>` names
+ * (the recipe card's chips read it too), MAX's in bold, the count's white; its power in the box's quiet ink; and the busy band, a dark track
+ * filled in green, amber from 90%, its percentage at the right in the diagram's 11px, its figures in columns. No shadow: the box's is its own.
+ */
+.tier-ulv { --tier-ink: var(--tier-ulv); }
+.tier-lv { --tier-ink: var(--tier-lv); }
+.tier-mv { --tier-ink: var(--tier-mv); }
+.tier-hv { --tier-ink: var(--tier-hv); }
+.tier-ev { --tier-ink: var(--tier-ev); }
+.tier-iv { --tier-ink: var(--tier-iv); }
+.tier-luv { --tier-ink: var(--tier-luv); }
+.tier-zpm { --tier-ink: var(--tier-zpm); }
+.tier-uv { --tier-ink: var(--tier-uv); }
+.tier-uhv { --tier-ink: var(--tier-uhv); }
+.tier-uev { --tier-ink: var(--tier-uev); }
+.tier-uiv { --tier-ink: var(--tier-uiv); }
+.tier-umv { --tier-ink: var(--tier-umv); }
+.tier-uxv { --tier-ink: var(--tier-uxv); }
+.tier-max { --tier-ink: var(--tier-max); }
+.flow-machine-slot { fill: var(--slot); }
+.flow-slot-lo { fill: var(--slot-lo); }
+.flow-slot-hi { fill: var(--slot-hi); }
+.flow-chip rect { fill: var(--flow-chip); }
+/* (0,2,1): it beats `.flow-node text`, whose 11.5px is the diagram's; the shorthand resets the weight, so MAX's bold is a rule of its own */
+.flow-node .flow-chip text { fill: var(--tier-ink, var(--stack-ink)); font: 13px/1 var(--font-pixel); text-anchor: middle; }
+.flow-node .flow-chip.tier-max text { font-weight: 700; }
+.flow-node .flow-node-power { fill: var(--text-muted); font-size: 11px; }
+.flow-busy-track { fill: var(--flow-busy-track); }
+.flow-busy-fill { fill: var(--flow-busy); }
+.flow-busy.high .flow-busy-fill { fill: var(--flow-busy-high); }
+.flow-node .flow-busy-text { font-size: 11px; font-variant-numeric: tabular-nums; text-anchor: end; }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
 /*
@@ -768,8 +1087,8 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 }
 /* An open supporting line: a light dashed frame around its boxes on the dark canvas, its name, and its open/collapse button on top,
    a mini Minecraft button (a collapsed line's too). */
-.flow-group-box { fill: var(--flow-line); fill-opacity: 0.08; stroke: var(--flow-line); stroke-width: 1.5; stroke-dasharray: 6 3; }
-.flow-group-title { fill: var(--flow-line); font-size: 12.5px; font-weight: 600; }
+.flow-group-box { fill: var(--flow-group); fill-opacity: 0.08; stroke: var(--flow-group); stroke-width: 1.5; stroke-dasharray: 6 3; }
+.flow-group-title { fill: var(--flow-group); font-size: 12.5px; font-weight: 600; }
 .flow-line-toggle rect { fill: var(--btn); stroke: var(--outline); stroke-width: 2; }
 .flow-line-toggle text { fill: #ffffff; font-size: 15px; font-weight: 700; }
 .flow-line-toggle:hover rect { fill: var(--btn-hover); }
@@ -792,11 +1111,40 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-canvas.dragging .flow-edge-flow { animation-play-state: paused; }
 .flow-canvas.pipes-paused .flow-edge-flow { animation-play-state: paused; }
 .flow-canvas.many-edges .flow-edge:not(.hl) .flow-edge-flow { animation: none; }
+/* Goods riding the pipes (Phase 2 spec §15.3): pipe contents, so they may move for ever, and Pause pipes stops them with the pipes. Each is
+   carried along its arrow's ride route, the arrow's path run on 9 px into the box at each end (`rideRoute`, ledger ruling P2-R97: the view
+   sets the route, the ride's length and where it starts), upright on every run, its pixels crisp; it never takes the pointer, which goes to
+   the arrow under it, and dims with its pipe over the same 160 ms (the pipes' list is pinned, so the fade is the rider's own). A drag, Pause
+   pipes and a dimmed pipe stop it where it is: after the rider's rule, whose `animation` shorthand resets the play state. Above 200 arrows
+   the view draws riders on the lit pipes only (pipe-motion.ts). */
+.flow-rider {
+  offset-rotate: 0deg; animation: pipe-ride var(--rider-dur, 3s) linear infinite; pointer-events: none; image-rendering: pixelated;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+.flow-canvas.dragging .flow-rider, .flow-canvas.pipes-paused .flow-rider, .flow-rider.dim { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .flow-rider { display: none; } }
 /* A lit arrow's good and rate, on an NEI tag above the boxes; it never takes the pointer from what is under it. Its text stays the
    diagram font at 11px: edgeTag sizes the tag at 6.5px per character. */
 .flow-edge-tag { pointer-events: none; }
 .flow-edge-tag rect { fill: var(--tip-bg); stroke: var(--tip-border); stroke-width: 1; }
 .flow-edge-tag text { fill: #ffffff; font-size: 11px; font-weight: 600; }
+/* A box a new layout dropped, fading out where it stood (Phase 2 spec §16.3, P2-D42; FlowView's ghosts, whose fade is a WAAPI animation of their
+   own): a faithful copy of its box's look (ledger ruling P2-R118), its kind's fill and edge, its edge's dashes too, from the boxes' own tokens, so
+   the dark look reaches it with no rule of its own; a partly owned step's half-and-half fill is the same svg's gradient. It never takes the
+   pointer, so what lies under it keeps its hover, its click and its tip. It has no shadow, which is the box's, and no accent edge: once its box
+   is gone nothing selects or lights it. */
+.flow-ghost { pointer-events: none; }
+.flow-ghost-box { fill: var(--flow-raw); stroke: var(--flow-raw-line); stroke-width: 2; }
+.flow-ghost.owned > .flow-ghost-box { fill: var(--flow-owned); stroke: var(--flow-owned-line); }
+.flow-ghost.new > .flow-ghost-box { fill: var(--flow-new); stroke: var(--flow-new-line); }
+.flow-ghost.partly-owned > .flow-ghost-box { fill: url(#flow-partly); stroke: var(--flow-owned-line); }
+.flow-ghost.out > .flow-ghost-box { fill: var(--flow-out); stroke: var(--flow-out-line); }
+.flow-ghost.import > .flow-ghost-box { fill: var(--flow-import); stroke: var(--flow-import-line); }
+.flow-ghost.import.leaf-free > .flow-ghost-box { stroke-dasharray: 2 2; }
+.flow-ghost.import.leaf-unavailable > .flow-ghost-box { stroke: var(--flow-missing-line); }
+.flow-ghost.missing > .flow-ghost-box { fill: var(--flow-missing); stroke: var(--flow-missing-line); stroke-dasharray: 5 3; }
+.flow-ghost.sink > .flow-ghost-box { fill: var(--flow-sink); stroke: var(--flow-sink-line); stroke-dasharray: 4 3; }
+.flow-ghost.line > .flow-ghost-box { fill: var(--flow-line); stroke: var(--flow-line-line); stroke-dasharray: 6 3; }
 /* What does not add up, above the canvas, and why a line cannot be planned: chat boxes (dark boxes, so in the light ink of their
    group), amber, or red with an input nothing supplies. The issues rise in when they appear, like the banners. */
 .flow-issues {
@@ -817,24 +1165,25 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .swatch.import { background: var(--flow-import); border-color: var(--flow-import-line); }
 .swatch.free { background: var(--flow-import); border-color: var(--flow-import-line); border-style: dashed; }
 .swatch.missing { background: var(--flow-missing); border-color: var(--flow-missing-line); border-style: dashed; }
-.swatch.sink { background: var(--flow-sink); border-style: dashed; }
+.swatch.sink { background: var(--flow-sink); border-color: var(--flow-sink-line); border-style: dashed; }
 .swatch.line { background: var(--flow-line); border-color: var(--flow-line-line); border-style: dashed; }
 .flow-infeasible {
   max-width: 760px; padding: 10px 14px; background: var(--chat); border: 2px solid var(--outline); border-radius: 0; color: var(--ink-warn);
 }
 .flow-infeasible p { margin: 0 0 4px; }
 .flow-infeasible ul { margin: 0; padding-left: 20px; }
-/* The panel of a box (design spec §6): a Machine GUI panel with pixel titles that slides in from the right, on opacity and transform
-   only (the grid column changes at once: the e2e tests read it). Its lists are dark wells set into it. */
+/* The panel of a box (design spec §6): a Machine GUI panel with pixel titles that slides in from the right in its wrapper (.flow-side,
+   below), on opacity and transform only (the grid column changes at once: the e2e tests read it). It is keyed by its box, so each new
+   pick fades in (Phase 2 spec §8.6). Its lists are dark wells set into it. */
 .flow-panel {
-  display: flex; flex-direction: column; gap: 12px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px; max-height: calc(100vh - 24px); overflow-y: auto;
   padding: 12px 14px; background: var(--panel); border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-panel);
-  animation: slide-in-right var(--dur-slow) var(--ease-out);
+  animation: fade-in var(--dur-base) var(--ease-out);
 }
 .flow-panel > p { margin: 0; }
 .flow-panel-head { display: flex; align-items: center; gap: 8px; }
 .flow-panel-head h3 { flex: 1; min-width: 0; margin: 0; font: 600 16px/1.3 var(--font-pixel); overflow-wrap: anywhere; }
-.flow-panel-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid #8b8b8b; }
+.flow-panel-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--rule); }
 fieldset.flow-panel-section { border-left: none; border-right: none; border-bottom: none; margin: 0; padding: 10px 0 0; min-width: 0; }
 .flow-panel-section p { margin: 0; }
 .flow-panel-title { margin: 0; padding: 0; color: var(--ink-title); font: 600 14px/1.3 var(--font-pixel); }
@@ -869,13 +1218,72 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 .port-peers { flex-basis: 100%; padding-left: 26px; overflow-wrap: anywhere; }
 .port-short .port-rate, .port-warn { color: var(--ink-error); }
 .option-slot {
-  border: 1px solid #8b8b8b; border-radius: 0; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  border: 1px solid var(--rule); border-radius: 0; margin: 0; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
 }
 .option-slot-title { font-size: 0.85rem; color: var(--ink-muted); padding: 0 4px; }
 .option-why { margin: 0; }
 .option-choice { align-items: flex-start; }
 .option-choice input { margin-top: 2px; }
 .choice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* The side panel's wrapper (Phase 2 spec §8.6): it stays mounted while a box's panel is open, so it slides in from the right once and the
+   panel picked next only fades in; it sticks 12px below the top of the window, and the panel scrolls inside it. */
+.flow-side { position: sticky; top: 12px; min-width: 0; animation: slide-in-right var(--dur-slow) var(--ease-out); }
+/*
+ * The step panel's recipe card (Phase 2 spec §8): one run as NEI draws it. Its tier chip (in its tier's ink, Task 4's .tier-<slug>) and
+ * "One run" lead it; the run's slots, the GT progress arrow between them and, at the right, the energy bar beside the run's time and power
+ * sit in a recess of the panel (the panel's bevel inverted) and wrap at its edge, so at the panel's narrowest the power takes a line of its
+ * own. A slot is a 32 px item icon, a 36 px slot, with its stack count at the bottom right (white VT323 16 px over a 2 px shadow, the
+ * Minecraft way, D8, in the 14 px box Pixelify's 14 px had: spec §25) and a chance tag at the top left (yellow Pixelify, its digits Figs'
+ * span.fig: VT323's % reads as an x; at most 34 px wide with the 2 px right padding its text's shadow falls in, so the tag ends inside the
+ * slot, a wider fallback face clipped there and a short tag drawn whole); a slot the line does not supply in full is framed in red in place
+ * of its bevel. The arrow's fill sweeps in eight steps, three times in 4.8 s, then rests full, its own style (spec §11.3); the energy bar
+ * is filled from the bottom to what one machine draws of what it can (--share, set on the fill). The readouts are screens in the dark box's
+ * ink, their values VT323 21 px (as tall as the mockup's 18 px Pixelify), two a row beside the diagram and four below 1100 px; the
+ * overclock chips are badges, what overclocking did in green and its notes in amber.
+ */
+.recipe-card { display: flex; flex-direction: column; gap: 8px; }
+.recipe-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.recipe-caption { color: var(--ink-muted); font-size: 0.85rem; }
+.recipe-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; background: var(--panel); box-shadow: var(--bevel-inset);
+}
+.recipe-slots { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; min-width: 0; }
+.recipe-slot { position: relative; display: flex; }
+.recipe-slot.slot-short > .item-icon { box-shadow: inset 0 0 0 2px var(--ink-error); }
+.stack-count {
+  position: absolute; right: 1px; bottom: -2px; z-index: 1; pointer-events: none; font: 16px/14px var(--font-digits); font-size-adjust: cap-height 0.56;
+  color: var(--stack-ink); text-shadow: 2px 2px 0 var(--stack-shadow);
+}
+.slot-chance {
+  position: absolute; left: 2px; top: 2px; z-index: 1; pointer-events: none; font: 14px/1 var(--font-pixel); color: #ffff55;
+  text-shadow: 2px 2px 0 var(--stack-shadow); max-width: 34px; box-sizing: border-box; padding-right: 2px; overflow-x: clip; white-space: nowrap;
+}
+.gt-arrow {
+  position: relative; display: inline-block; flex: none; width: 22px; height: 16px; vertical-align: middle; background: var(--slot);
+  clip-path: polygon(0 35%, 60% 35%, 60% 0, 100% 50%, 60% 100%, 60% 65%, 0 65%);
+}
+.gt-arrow-fill { position: absolute; inset: 0; background: var(--stack-ink); transform-origin: left; animation: gt-arrow 1.6s steps(8) 3; }
+.gt-arrow.on-chat { background: var(--progress-base); margin-right: 8px; }
+.gt-arrow.on-chat .gt-arrow-fill { background: var(--accent); }
+.gt-arrow.still .gt-arrow-fill { animation: none; }
+@keyframes gt-arrow { from { transform: scaleX(0); } }
+.recipe-power { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.energy-bar {
+  position: relative; flex: none; width: 10px; height: 36px; overflow: hidden; background: var(--screen); box-shadow: inset 1px 1px 0 #000000;
+}
+.energy-fill { position: absolute; inset: 0; background: var(--energy); transform-origin: bottom; transform: scaleY(var(--share)); }
+.recipe-time { font-size: 12px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.recipe-stats { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.readout { padding: 5px 7px; background: var(--screen); box-shadow: var(--bevel-screen); }
+.readout dt { font-size: 11px; color: var(--ink-muted); }
+.readout dd {
+  margin: 0; font: 21px/21.6px var(--font-digits); font-size-adjust: cap-height 0.56; color: var(--screen-text); font-variant-numeric: tabular-nums;
+}
+.oc-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.oc-chip.oc-now { color: var(--ink-ok); }
+.oc-chip.oc-note { color: var(--ink-warn); }
+.badge.tier-chip { color: var(--tier-ink); }
+.badge.tier-chip.tier-max { font-weight: 700; }
 
 /* Materials & steps (spec §3.10): the tree indents by depth, unlock texts are warnings, ticked rows are crossed out. Each section is a
    panel of its own (design spec §6), in the ink of a panel, with a pixel title: the same panel as a note, set into the tab's. */
@@ -888,10 +1296,12 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 .materials-section > p { margin: 0; }
 .mat-group h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); margin: 8px 0 2px; }
 .mat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid #8b8b8b; }
+.mat-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
 /* The first line of text is 20.3px tall (14px at 1.45) and the slot 24px: it starts 2px above the line to be centred on it. */
 .mat-row > .item-icon { margin-top: -2px; }
-.mat-row > .tick { flex: 1; min-width: 0; gap: 4px 10px; }
+/* The tick and the rest of its line sit at the top of the line, so a Stock or Needed disclosure that opens grows the row downward and the
+   tick stays level with the icon: centred, it dropped to the middle of the open disclosure's height. */
+.mat-row > .tick { flex: 1; min-width: 0; gap: 4px 10px; align-items: flex-start; }
 /* The caret that opens a row of the build tree. The glyph in its markup (▸ and ▾, which the pixel font may lack; the aria-label is its
    name) is hidden by a font size of 0, and a pixel caret is drawn in its place, turned down while the row is open. A bare caret, no
    button face: the base button's face, bevel and height are reset. The leaf rows have a span of the same size to keep in line. */
@@ -901,7 +1311,7 @@ button.link:hover:not(:disabled) { background: none; text-decoration: none; }
 }
 span.mat-toggle { display: inline-block; }
 button.mat-toggle { display: inline-grid; place-content: center; }
-button.mat-toggle:hover { background: rgb(0 0 0 / 0.15); }
+button.mat-toggle:hover { background: var(--press); }
 /* Like a link, it has no dark edge for the yellow ring to touch, so its ring takes the focus ink of the surface it is on. */
 button.mat-toggle:focus-visible { outline-color: var(--ink-focus); }
 /* The caret of the toggle and of the two inline disclosures below: the pixel caret of a settings summary, in the colour of the text it
@@ -936,12 +1346,81 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
 /* A missing marker is the dark chip of the shared `.badge` rule in red: colour only, and it comes after that rule (both are one class). */
 .missing-badge { color: #ff5555; }
 .step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
-.step-list li::marker { font-family: var(--font-pixel); }
+.step-list li::marker { font-family: var(--font-digits); font-size: 16px; line-height: 20.3px; font-size-adjust: cap-height 0.56; }
 .step-row { padding: 3px 0; }
 .step-row .tick-label { overflow-wrap: anywhere; }
 /* The pin of a step is a small button: the padding and size its markup used to carry inline, with the 28px height of `button.small`,
    whose class it does not have (the markup is pinned). */
 button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
+
+/*
+ * "To build (once)" as an inventory grid (Phase 2 spec §9.3, D9), chosen with the Grid / List toggle beside the title (the List stays the
+ * default). The head is a row: the title; the toggle, two small buttons sharing one edge, the one in use sunk with its words yellow, whose
+ * negative margins make it no taller than the title's 20.8 px line (16 px at 1.3), so the head keeps the title's height and the List's rows
+ * stay where they were (centred on the title, its 28 px buttons stand 3.6 px past the line each way); and in Grid the meter of the stacks
+ * gathered, a screen in a black edge whose green fill grows on its transform alone. Under the hint each group's head (the pixel font, its
+ * count in the quiet Inter) sits over a recess of the panel, where the slots touch as in an inventory. A slot is a button reset to nothing,
+ * so the 32 px item icon in it is the 36 px slot, its stack count at the bottom right (the recipe card's .stack-count); a long press shows
+ * its tip and selects nothing. Each slot is a stacking context of its own, which keeps its count and tick in it, so the focused one's ring,
+ * in the panel's focus ink (yellow would be 1.6:1 on the light panel: R12), is lifted over the slots beside it, their counts and ticks too,
+ * with the keyboard's veil over its image (a rule of its own: the lit slot's is pinned). A marked row's slots are dimmed by a 40 % black
+ * overlay over the image, never by styling it, under the checkbox's pixel tick in green, whose 1 px black edge is four drop-shadows on the
+ * tick's own box (on the clipped mark the clip would cut them away); the tick pops in. An item past nine stacks ends in a +N slot, a bare
+ * slot face with the count of the stacks not drawn in its middle. The grid fades in once.
+ */
+.mat-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mat-view-toggle { display: flex; margin-block: -4px; }
+.mat-view-toggle button + button { border-left: 0; }
+.mat-view-toggle button[aria-pressed='true'] { background: var(--btn-lo); box-shadow: var(--bevel-btn-down); color: var(--accent); }
+.mat-meter-box { margin-left: auto; display: flex; flex-direction: column; gap: 3px; min-width: min(240px, 100%); }
+.mat-meter-label { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.mat-meter { position: relative; height: 14px; overflow: hidden; background: var(--screen); border: 2px solid var(--outline); }
+.mat-meter-fill {
+  position: absolute; inset: 0; background: var(--screen-text); transform-origin: left; transform: scaleX(var(--done, 0));
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.mat-grid { display: flex; flex-direction: column; gap: 12px; animation: fade-in var(--dur-base) var(--ease-out); }
+.mat-grid-hint { margin: 0; }
+.mat-grid-group h4 { margin: 0 0 6px; font: 600 15px/1.3 var(--font-pixel); color: var(--ink-title); }
+.mat-grid-left { font: 400 12px var(--font-ui); color: var(--ink-muted); }
+.mat-slots { display: grid; grid-template-columns: repeat(auto-fill, 36px); padding: 6px; background: var(--panel); box-shadow: var(--bevel-inset); }
+button.mat-slot {
+  position: relative; display: flex; width: 36px; height: 36px; min-height: 0; padding: 0; border: none; background: none; box-shadow: none;
+  text-shadow: none; transform: none; isolation: isolate; -webkit-touch-callout: none; user-select: none;
+}
+button.mat-slot:focus-visible { outline-color: var(--ink-focus); z-index: 1; }
+button.mat-slot:focus-visible .item-icon::after { opacity: 1; }
+button.mat-slot.marked::after { content: ''; position: absolute; inset: 2px; background: rgb(0 0 0 / 0.4); pointer-events: none; }
+.mat-slot-tick {
+  position: absolute; left: 2px; top: 2px; z-index: 1; width: 10px; height: 10px; pointer-events: none;
+  filter: drop-shadow(1px 0 0 #000000) drop-shadow(-1px 0 0 #000000) drop-shadow(0 1px 0 #000000) drop-shadow(0 -1px 0 #000000);
+  animation: pop var(--dur-fast) var(--ease-pop);
+}
+.mat-slot-tick::before {
+  content: ''; position: absolute; inset: 0; background: var(--screen-text);
+  clip-path: polygon(8px 1px, 10px 1px, 10px 2px, 9px 2px, 9px 3px, 8px 3px, 8px 4px, 7px 4px, 7px 5px, 6px 5px, 6px 7px,
+    5px 7px, 5px 8px, 3px 8px, 3px 7px, 2px 7px, 2px 6px, 1px 6px, 1px 5px, 0px 5px, 0px 4px, 2px 4px, 2px 5px, 3px 5px,
+    3px 6px, 4px 6px, 4px 5px, 5px 5px, 5px 4px, 6px 4px, 6px 3px, 7px 3px, 7px 2px, 8px 2px);
+}
+button.mat-slot-more { display: grid; place-items: center; background: var(--slot); box-shadow: var(--bevel-slot); }
+button.mat-slot-more > .stack-count { position: static; }
+
+/* The Stock and Needed disclosures of a row fold as a settings section does (ruling R16, which Phase 2 spec §3.3 extends to these two):
+   `interpolate-size` lets the content's `block-size` go between 0 and auto, and the transition on `content-visibility` keeps it painted while
+   it closes; a browser that does not know `::details-content` drops those rules and snaps. Each content box has a rule of its own, never a
+   list (R28: the minifier once dropped a pseudo-element's half of one). The content is a block formatting context (`flow-root`), so the 2 px
+   margin over its lines stays inside the clipped box and moves with it. The summary stays the inline text it is. */
+details.mat-have, details.mat-needed { interpolate-size: allow-keywords; }
+details.mat-have::details-content {
+  display: flow-root; block-size: 0; overflow-y: clip; overflow-clip-margin: 4px;
+  transition: block-size var(--dur-base) var(--ease-out), content-visibility var(--dur-base) var(--ease-out) allow-discrete;
+}
+details.mat-needed::details-content {
+  display: flow-root; block-size: 0; overflow-y: clip; overflow-clip-margin: 4px;
+  transition: block-size var(--dur-base) var(--ease-out), content-visibility var(--dur-base) var(--ease-out) allow-discrete;
+}
+details.mat-have[open]::details-content { block-size: auto; }
+details.mat-needed[open]::details-content { block-size: auto; }
 
 /*
  * The Map tab (design spec §6 and §8): the controls on the tab's panel, the map in a frame of its own under a toolbar of Minecraft
@@ -968,16 +1447,18 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .map-main { flex: 3 1 420px; min-width: 0; height: min(72vh, 760px); min-height: 420px; }
 .map-side {
   flex: 1 1 300px; max-width: 400px; max-height: min(72vh, 760px); overflow-y: auto; padding-right: 4px;
-  display: flex; flex-direction: column; gap: 14px; scrollbar-color: var(--btn) var(--well);
+  display: flex; flex-direction: column; gap: 14px; scrollbar-color: var(--thumb) var(--well);
 }
 .map-view { display: flex; flex-direction: column; gap: 8px; min-width: 0; height: 100%; }
 /* The toolbar's buttons are 32px high whichever font is in (a minimum height and a line height of 1), and the readout of the Y level is a
-   screen as high, wide enough for "Y ≤ 255" as for "surface": the box under it keeps its size when the pixel font arrives late. */
+   screen as high, in VT323 (Phase 2 spec §25), wide enough for "Y ≤ 255" as for "surface": the box under it keeps its size when VT323
+   arrives late. */
 .map-toolbar > button { min-height: 32px; }
 .map-zoom { min-width: 32px; padding: 0; font-size: 18px; }
 .map-y {
   display: inline-flex; align-items: center; justify-content: center; min-width: 6em; min-height: 32px; padding: 0 8px;
-  background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text); font: 13px/1 var(--font-pixel);
+  background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text); font: 15px/1 var(--font-digits);
+  font-size-adjust: cap-height 0.56;
 }
 /* The frame of the map is a well with the inverted bevel of a slot (dark above and left, white below and right) inside a black outline.
    It is the box's border and not an inset shadow, which the canvas, covering the whole padding box, would hide. */
@@ -994,6 +1475,19 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   color: #aaaaaa; font: 14px/1.35 var(--font-pixel); animation: tip-in 120ms var(--ease-out);
 }
 .map-tooltip > :first-child { color: #ffffff; }
+/* The page's one NEI tooltip (Phase 2 §6): the map tooltip's look, placed in the window by TooltipHost. It never takes the
+   pointer (hit tests and Playwright's clicks need that) and sits above every layer, the modal included. Its mod line is a lighter
+   blue than NEI's own, which would not read on the box (#5555ff: 3.70:1). It fades out as it goes, and is then removed. It is at most as
+   wide as the window (a fixed box's containing block), so a long tip in a phone's window wraps inside it (ledger ruling P2-R131). */
+.nei-tooltip {
+  position: fixed; top: 0; left: 0; z-index: 200; pointer-events: none;
+  width: max-content; max-width: min(360px, 100%); padding: 6px 8px; overflow-wrap: anywhere;
+  background: var(--tip-bg); border: 2px solid var(--tip-border); box-shadow: 0 0 0 1px #100010, inset 0 0 0 1px var(--tip-inner);
+  color: #aaaaaa; font: 14px/1.35 var(--font-pixel); animation: tip-in 120ms var(--ease-out);
+}
+.nei-tooltip > :first-child { color: #ffffff; }
+.nei-tooltip-mod { color: var(--tip-mod); font-style: italic; }
+.nei-tooltip[data-state='closing'] { animation: tip-out 80ms var(--ease-in) forwards; }
 /* The new line and what the scan found are a panel each, in the ink of a panel (their group is at the top), with pixel titles. The micro
    headings of the line stay Inter, as in the settings. What the scan found is one panel with a line between its sections. */
 .line-panel, .found-panel {
@@ -1008,7 +1502,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .line-panel ul, .found-panel ul { margin: 0; padding-left: 18px; }
 .line-actions { gap: 6px; }
 .found-section { display: flex; flex-direction: column; gap: 4px; }
-.found-section + .found-section { padding-top: 10px; border-top: 1px solid #8b8b8b; }
+.found-section + .found-section { padding-top: 10px; border-top: 1px solid var(--rule); }
 .found-panel summary { cursor: pointer; }
 .found-item-label { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
 .found-item-name { overflow-wrap: anywhere; }
@@ -1016,7 +1510,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 /* The pins, the notes and the stored items are lists of rows, not bullets. The reset has two classes, which out-rank `.found-panel ul`
    (a class and an element), and it comes after it. */
 .line-panel .map-list, .found-panel .map-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
-.map-list > li + li { border-top: 1px solid #8b8b8b; }
+.map-list > li + li { border-top: 1px solid var(--rule); }
 .map-list > li > details { padding: 4px 0; }
 /* A row of the pins or the notes is a button with no face of its own: flat on the panel, in its ink, and it does not sink when it is
    pressed (a row of a list is not a key). A button's face would put the muted coordinates of a note at 1.7:1, and its line height of 1
@@ -1027,7 +1521,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   width: 100%; padding: 4px 8px; background: transparent; border: 0; box-shadow: none; transform: none;
   color: var(--ink); font: 0.85rem/1.3 var(--font-ui); text-align: left; text-shadow: none;
 }
-.map-row-button:hover { background: rgb(255 255 255 / 0.35); }
+.map-row-button:hover { background: var(--veil); }
 .map-list > li[aria-current='true'] > .map-row-button { background: var(--screen); color: var(--accent); }
 .map-list > li[aria-current='true'] > .map-row-button .muted { color: var(--screen-muted); }
 /* A flat row has no dark edge for the yellow ring to touch, so its ring takes the focus ink of the panel, as a link's does; a dark row has. */
@@ -1065,7 +1559,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .connections {
   overflow: hidden; border: 2px solid var(--outline); border-radius: 0; box-shadow: var(--bevel-well);
   background-color: var(--well);
-  background-image: linear-gradient(#404040 1px, transparent 1px), linear-gradient(90deg, #404040 1px, transparent 1px);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 .connections > svg {
@@ -1084,17 +1578,17 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
    Pointed at, a box's edge turns white; it never moves or grows (connections.spec.ts measures a hovered box). Picked, its edge
    is yellow and 3px. */
 .conn-node > rect, .conn-node > path {
-  fill: var(--panel); stroke: var(--outline); stroke-width: 2; filter: drop-shadow(0 2px 0 #000); cursor: pointer;
+  fill: var(--conn-box); stroke: var(--outline); stroke-width: 2; filter: drop-shadow(0 2px 0 #000); cursor: pointer;
 }
-.conn-node > path { fill: #e0e0e0; }
-.conn-chest > rect { fill: #f0d870; }
-.conn-chest > rect, .conn-chest > path { stroke: #6b5500; }
-.conn-interface > rect { fill: #cbbbe0; }
-.conn-interface > rect, .conn-interface > path { stroke: #5a3a8a; }
-.conn-source > rect { fill: #d8cfa8; }
-.conn-source > rect, .conn-source > path { stroke: #6b5a20; }
-.conn-hookup > rect, .conn-sink > rect { fill: #a8a8a8; }
-.conn-hookup > rect, .conn-hookup > path, .conn-sink > rect, .conn-sink > path { stroke-dasharray: 4 3; }
+.conn-node > path { fill: var(--conn-face); }
+.conn-chest > rect { fill: var(--conn-chest); }
+.conn-chest > rect, .conn-chest > path { stroke: var(--conn-chest-line); }
+.conn-interface > rect { fill: var(--conn-interface); }
+.conn-interface > rect, .conn-interface > path { stroke: var(--conn-interface-line); }
+.conn-source > rect { fill: var(--conn-source); }
+.conn-source > rect, .conn-source > path { stroke: var(--conn-source-line); }
+.conn-hookup > rect, .conn-sink > rect { fill: var(--conn-hookup); }
+.conn-hookup > rect, .conn-hookup > path, .conn-sink > rect, .conn-sink > path { stroke: var(--conn-hookup-line); stroke-dasharray: 4 3; }
 .conn-node:hover > rect, .conn-node:hover > path { stroke: #ffffff; }
 .conn-node.selected > rect, .conn-node.selected > path { stroke: var(--accent); stroke-width: 3; }
 /* only the face rows take clicks among a box's texts; a click anywhere else on the box picks the box. Every text keeps 4.5:1 on
@@ -1104,7 +1598,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-node .conn-line { fill: var(--text-muted); }
 /* the grey of a hookup or a left over is darker than a panel: its quieter lines would fall under 4.5:1 there */
 .conn-hookup .conn-line, .conn-sink .conn-line { fill: var(--text); }
-.conn-node .conn-face { fill: #1d3b9a; cursor: pointer; pointer-events: auto; }
+.conn-node .conn-face { fill: var(--conn-face-link); cursor: pointer; pointer-events: auto; }
 .conn-node .conn-face:hover, .conn-node .conn-face.selected { text-decoration: underline; }
 .conn-node .conn-face.selected { font-weight: 600; }
 /* a conduit face's mode and channels, under its row's title; a row a picked link passes through is linked */
@@ -1119,8 +1613,9 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
  * way), one cycle per `--pipe-dur` (pipe-motion.ts). The good takes its EnderIO channel's dye (the contents' stroke attribute),
  * else the colour of what carries it (`--conn-link`, the same as the map's LOGISTICS_COLORS and the 3D view's VIA_RGB); the
  * arrow head on it takes the same colour. A dye too dark for the dark casing gets a panel-grey one from the view
- * (`--pipe-casing`). A flow carried by hand has no pipe, only its good in a dash-dot (whose lengths add up to the same 16px, so
- * the loop is seamless); what carries nothing (an interface on its machine, a hookup) is a thin still grey line, dashed.
+ * (`--pipe-casing: var(--dye-casing)`). A flow carried by hand has no pipe, only its good in a dash-dot (whose lengths add up to
+ * the same 16px, so the loop is seamless); what carries nothing (an interface on its machine, a hookup) is a thin still grey line,
+ * dashed.
  */
 .conn-via-gt_pipe { --conn-link: #9ccc65; }
 .conn-via-fluid_pipe { --conn-link: #1e88e5; }
@@ -1131,7 +1626,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-via-attached, .conn-via-hookup { --conn-link: #8a92a0; }
 .conn-edge { cursor: pointer; }
 .conn-edge polyline { fill: none; stroke-linejoin: miter; }
-.conn-edge-line { stroke: var(--pipe-casing, #1b1b1b); stroke-width: 6; stroke-linecap: butt; }
+.conn-edge-line { stroke: var(--pipe-casing, var(--casing)); stroke-width: 6; stroke-linecap: butt; }
 .conn-edge-flow { stroke-width: 2.5; stroke-dasharray: 6 10; animation: pipe-flow var(--pipe-dur, 0.8s) linear infinite; }
 .conn-edge-flow:not([stroke]) { stroke: var(--conn-link); }
 /* the marker sits on the contents (on the casing where nothing moves), and its head takes that element's stroke where the browser knows
@@ -1154,7 +1649,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-via-attached .conn-edge-rim, .conn-via-hookup .conn-edge-rim { stroke-width: 5; }
 .conn-edge:hover .conn-edge-rim { stroke: #ffffff; }
 .conn-edge.selected .conn-edge-rim { stroke: var(--accent); animation: pipe-pulse 400ms var(--ease-out); }
-.conn-via-hand:hover .conn-edge-line, .conn-via-hand.selected .conn-edge-line { stroke: #1b1b1b; }
+.conn-via-hand:hover .conn-edge-line, .conn-via-hand.selected .conn-edge-line { stroke: var(--casing); }
 /* Panning stays smooth (design spec §7 "Motion budget"): the pipes stand still while the picture is dragged, and above 200 links
    only the picked one moves (pipe-motion.ts, `data-pipes` on the area). While this browser has the pipes paused (`data-pipes` is
    `paused`, ruling R31) every pipe stands still where it is. */
@@ -1163,7 +1658,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .connections[data-pipes='paused'] .conn-edge-flow { animation-play-state: paused; }
 /* a link's label, in white on a dark halo over the well; 11px of the diagram font, as ELK sizes it */
 .conn-label {
-  fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: #1b1b1b; stroke-width: 3px; stroke-linejoin: round;
+  fill: #ffffff; font-size: 11px; paint-order: stroke; stroke: var(--casing); stroke-width: 3px; stroke-linejoin: round;
 }
 .conn-edge.selected .conn-label { font-weight: 600; }
 /* The legend, on the panel: per kind of link a mini pipe drawn on its one empty span (a dark casing with the link's dashes), so the
@@ -1171,7 +1666,7 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .conn-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.85rem; color: var(--ink-muted); }
 .conn-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .conn-swatch {
-  flex: none; width: 26px; height: 6px; background-color: #1b1b1b;
+  flex: none; width: 26px; height: 6px; background-color: var(--casing);
   background-image: linear-gradient(90deg, var(--conn-link) 6px, transparent 6px);
   background-size: 16px 2px; background-position: 2px 50%; background-repeat: repeat-x;
 }
@@ -1197,7 +1692,17 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 
 @media (max-width: 1100px) {
   .flow.has-panel { grid-template-columns: minmax(0, 1fr); }
-  .flow-panel { position: static; max-height: none; }
+  .flow-side { position: static; }
+  .flow-panel { max-height: none; }
+  /* the four readouts in one row (ledger ruling P2-R142, amending P2-R131: a row sized by how many fit wrapped them three and one beside the
+     settings column, and spread a hand step's lone readout over the whole row); two a row on a phone, the block below */
+  .recipe-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* A phone (P2-R131, P2-R142): two readouts a row, where four ran a seven-glyph figure ("131,072") into the next tile. After the 1100 px block,
+   which it narrows. */
+@media (max-width: 600px) {
+  .recipe-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /*
@@ -1253,8 +1758,8 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .view3d-controls > .check:has(> input[type=range]) { align-items: center; gap: 10px; }
 .view3d-layer-text {
   display: inline-flex; align-items: center; justify-content: center; min-width: 10em; min-height: 28px; padding: 0 8px;
-  background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text); font: 13px/1 var(--font-pixel);
-  font-variant-numeric: tabular-nums;
+  background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text); font: 15px/1 var(--font-digits);
+  font-variant-numeric: tabular-nums; font-size-adjust: cap-height 0.56;
 }
 /*
  * The side column (design spec §6): the clicked block's or link's details, the blocks to place and the layout's warnings, a panel each in
@@ -1325,7 +1830,8 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
 .smart-radius { gap: 12px; }
 .smart-total {
   align-self: flex-start; padding: 4px 8px; background: var(--screen); box-shadow: var(--bevel-well); color: var(--screen-text);
-  font: 14px/1.3 var(--font-pixel);
+  /* 18.1875px, not 18.2px: Chromium floored the old 14px/1.3 to 1/64 px and rounds a px value, so nothing below it moves (P2-R13) */
+  font: 16px/18.1875px var(--font-digits); font-size-adjust: cap-height 0.56;
 }
 
 /*
@@ -1350,6 +1856,19 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   padding: 1px 5px; background: var(--screen); color: var(--screen-text); font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
+/* The in-app confirm (Phase 2 spec §13.2): a question asked in the page, never in a browser dialog, in a chat box in the light ink of the
+   dark boxes (the group at the top), the same in both looks, which rises in once; the question and why an answer failed have no margin of
+   their own, the column's gap spaces them. In the projector's token list it is drawn in the row of the token it would revoke, in place of
+   the row's Revoke button, on a line of its own under the token's name. In forced colours it needs no rule: it lies in a panel, whose face
+   the theme paints its canvas, as it paints the confirm's 82 % face, and its edge, a border, takes the theme's text colour. */
+.inline-confirm {
+  display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; background: var(--chat); border: 2px solid var(--outline);
+  animation: rise-in var(--dur-base) var(--ease-out);
+}
+.inline-confirm p { margin: 0; }
+.key-list > li:has(> .inline-confirm) { flex-wrap: wrap; }
+.key-list > li > .inline-confirm { flex: 1 1 100%; }
+
 /* The settings drawer (design spec §7a). The page is one column and the settings column leaves it: it waits off the left edge, slides in
    over a dimmed page when the Settings button opens it, and slides out again, faster and easing in as exits do (ruling R36: the closed
    state's transition is the one it leaves with). Hidden, it is also `visibility: hidden`, so the keyboard cannot reach what is not on
@@ -1365,7 +1884,9 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
    narrower widths) the toggle, the name, the connection and Delete are one row on a tablet (768 px), as they were with the bare button.
    Below 700 px the head wraps whatever the button's width, so the 40% protects nothing there and only cut a short name ("· Make: Basi…",
    and an empty readout at 320 px, where the title does not show on a touch screen): the block after this one lets the button take the
-   whole head, and only a name longer than the head is cut. */
+   whole head, and only a name longer than the head is cut. Nothing else joins that row here: add-on 17's Compare modes button moves to a bar
+   of its own under the banner, and the head's Shortcuts button is not drawn: below 900 px the drawer's Keyboard shortcuts button opens the
+   sheet (Phase 2 Task 11, ledger ruling P2-R85). */
 @media (max-width: 900px) {
   .project-body { grid-template-columns: 1fr; }
   .settings-toggle { display: inline-flex; align-items: center; gap: 8px; max-width: 40%; }
@@ -1375,8 +1896,10 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   }
   .project-name { flex: 1 1 160px; min-width: 0; }
   .project-head > .compare-toggle { display: none; }
+  .project-head > .shortcuts-open { display: none; }
   .compare-bar { display: flex; margin: 0 0 var(--gap); }
   .settings-close { display: inline-flex; align-items: center; align-self: flex-end; }
+  .settings-shortcuts { display: inline-flex; align-items: center; align-self: flex-start; }
   .settings-panel {
     position: fixed; inset: 0 auto 0 0; width: min(340px, 88vw); max-height: none; overflow: auto; padding: 12px;
     background: var(--page); z-index: 60; transform: translateX(-105%); visibility: hidden;
@@ -1406,8 +1929,10 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
  * forced colours keep: a tick or a radio gets an edge and its mark the Highlight, a caret the text colour of what it sits on, the track an
  * edge, the fill the Highlight. A select and a search field get the browser's own arrow and cross back, which the theme draws (the pixel
  * ones are white images, lost on a light theme's field). The selected tab, the highlighted search hit and the picked map row, which no
- * theme shows, get a cue it keeps. At the end of the file: each rule repaints a rule above with its specificity, so it is its place after
- * that rule that lets it win. A WebKit and a Gecko pseudo-element never share a rule (a browser drops a list with one it does not know).
+ * theme shows, get a cue it keeps; the map row, a button, not while it shows the focus ring, which its outline would replace (R42): a
+ * cue never takes the place of the focus ring. At the end of the file: each rule repaints a rule above with its specificity, so it is its
+ * place after that rule that lets it win. A WebKit and a Gecko pseudo-element never share a rule (a browser drops a list with one it does
+ * not know).
  */
 @media (forced-colors: active) {
   :where(input[type=checkbox], input[type=radio]) { border: 1px solid ButtonText; }
@@ -1423,8 +1948,44 @@ button.pin-link { min-height: 28px; padding: 2px 10px; font-size: 0.85rem; }
   :where(select) { appearance: auto; background-image: none; }
   :where(input[type=search])::-webkit-search-cancel-button { appearance: auto; background: none; }
   .tabs [role='tab'][aria-selected='true'] { text-decoration: underline; }
-  .search-hit.active, .search-hit[aria-selected='true'], .map-list > li[aria-current='true'] > .map-row-button { outline: 2px solid Highlight; outline-offset: -2px; }
+  .search-hit.active, .search-hit[aria-selected='true'],
+  .map-list > li[aria-current='true'] > .map-row-button:not(:focus-visible) { outline: 2px solid Highlight; outline-offset: -2px; }
   /* add-on 17: the open Compare card's button, and the mode the project plans in, whose yellow is gone in a contrast theme */
   .compare-toggle[aria-expanded='true'] { text-decoration: underline; }
   .compare-column.current { outline: 2px solid Highlight; outline-offset: -4px; }
+  /* Phase 2 Task 4: Chromium leaves an SVG paint as it is here, so a Flow box's busy fill would keep a green or an amber the theme does not
+     have: it takes the Highlight (the amber one's rule out-ranks the plain fill's, so it is named too); the busy track and the chips, dark
+     faces on whatever the theme puts round them, get an edge in its text colour */
+  .flow-busy-fill, .flow-busy.high .flow-busy-fill { fill: Highlight; }
+  .flow-busy-track, .flow-chip rect { stroke: CanvasText; }
+  /* ledger ruling P2-R26: the machine's slot, SVG fills as well, keeps its frame: its face the theme's canvas, its two bevel strips (the
+     dark and the light one alike) the theme's text colour, each at the specificity of the slot's own rule, which it beats by coming after */
+  .flow-machine-slot { fill: Canvas; }
+  .flow-slot-lo, .flow-slot-hi { fill: CanvasText; }
+  /* Phase 2 Task 5a: the progress arrow's fill and the recipe card's energy fill, backgrounds the theme would paint its canvas like what
+     they lie on, are the Highlight (the chat arrow's own fill rule out-ranks a bare .gt-arrow-fill, so it is named too) */
+  .gt-arrow-fill, .gt-arrow.on-chat .gt-arrow-fill, .energy-fill { background: Highlight; }
+  /* ledger ruling P2-R33: what the card draws with a background or a shadow keeps a cue there. The energy bar's track gets an edge in the
+     text colour, so its fill has a scale; a short slot gets a Highlight ring for the red one the theme drops; and the arrow gets its base
+     in GrayText, the part not yet filled (the chat arrow's own base rule out-ranks a bare .gt-arrow, so it is named too) */
+  .energy-bar { outline: 1px solid CanvasText; outline-offset: -1px; }
+  .recipe-slot.slot-short > .item-icon { outline: 2px solid Highlight; outline-offset: -2px; }
+  .gt-arrow, .gt-arrow.on-chat { background: GrayText; }
+  /* Phase 2 Task 6a: the inventory grid. A slot's bevel is a shadow the theme drops, so each slot keeps a frame in the buttons' text colour,
+     but not while it shows the focus ring (R42's pattern); a marked slot's tick and the meter's fill, backgrounds the theme would paint like
+     what they lie on, are the Highlight (two rules: a pseudo-element never shares a list with a plain selector, R28); and the pressed Grid or
+     List, whose sunk face and yellow are gone, is underlined, as the selected tab is. The button's frame shows on the +N slot alone: a slot's
+     icon fills it, and the icon's face, the theme's canvas, is painted over the button's outline. So the icon carries its slot's frame, an
+     outline of its own, painted with it over its face (ledger ruling P2-R41) */
+  button.mat-slot:not(:focus-visible) { outline: 1px solid ButtonText; outline-offset: -1px; }
+  button.mat-slot > .item-icon { outline: 1px solid CanvasText; outline-offset: -1px; }
+  .mat-slot-tick::before { background: Highlight; }
+  .mat-meter-fill { background: Highlight; }
+  .mat-view-toggle button[aria-pressed='true'] { text-decoration: underline; }
+  /* Phase 2 Task 9a: a toast floats over the page, and the theme keeps its chat face's 82 % (Chromium keeps a background's alpha), so what it
+     floats over would show through its words: its face is the theme's canvas, whole; its edge, a border, is the theme's text colour already */
+  .toast { background: Canvas; }
+  /* Phase 2 Task 8: a skeleton's blocks, a background the theme would paint like the well or the page they lie on, are GrayText (the well's
+     blocks' and the strip's blocks' own rules out-rank a bare .skeleton-block, so they are named too), so the shape of what is coming stays */
+  .skeleton-block, .skeleton-diagram .skeleton-block, .skeleton-strip .skeleton-block { background: GrayText; }
 }

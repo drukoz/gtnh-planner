@@ -14,8 +14,11 @@ export function horizonText(hours: number): string {
   return hours === HOURS_PER_WEEK ? '1 week' : `${formatNumber(hours)} h`;
 }
 
-/** ` (<n> more not counted)` for the new machines the build figure leaves out, else nothing. */
-function notCounted(cost: NonNullable<Plan['cost']>): string {
+/**
+ * ` (<n> more not counted)` for the new machines the build figure leaves out, else nothing; the key-numbers strip asks it whether its build
+ * tile leaves any out (Phase 2 spec §10.3).
+ */
+export function notCounted(cost: NonNullable<Plan['cost']>): string {
   return cost.unpriced !== undefined && cost.unpriced > 0 ? ` (${formatNumber(cost.unpriced)} more not counted)` : '';
 }
 

@@ -15,7 +15,8 @@ describe('ItemIcon', () => {
     const html = renderToStaticMarkup(<ItemIcon itemKey="fluid:water" size={16} />);
     expect(html).toContain('data-item-key="fluid:water"');
     expect(html).toContain('data-icon-source="loading"');
-    expect(html).toContain('title="fluid:water"');
+    expect(html).toContain('data-tip="fluid:water"');                              // the shared NEI tooltip (Phase 2 spec §6.4), not a native title
+    expect(html).not.toContain(' title=');
     expect(html).toContain('width:16px');
     expect(html).toContain('rgb(89, 192, 106)');
     expect(html).toContain('>WA<');
@@ -25,11 +26,34 @@ describe('ItemIcon', () => {
 
   it('names the good it shows in its tooltip and accessible name', () => {
     const html = renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={16} name="Copper Wire" />);
-    expect(html).toContain('title="Copper Wire"');
+    expect(html).toContain('data-tip="Copper Wire"');
     expect(html).toContain('aria-label="Copper Wire"');
-    expect(html).not.toContain('title="t:copper_wire@0"');
+    expect(html).not.toContain('data-tip="t:copper_wire@0"');
+    expect(html).not.toContain(' title=');
     expect(html).not.toContain('aria-label="t:copper_wire@0"');
     expect(html).toContain('data-item-key="t:copper_wire@0"');               // the key stays for the code that looks it up
+  });
+
+  // ledger ruling P2-R32: a recipe slot's icon is named by more than its tip's first line (what a run takes of it, its chance), so `label`
+  // names it while the tip still starts with the good's name
+  it('takes an accessible name of its own where the name says more than the tip\'s first line', () => {
+    const html = renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={32} name="Copper Wire" label="Copper Wire, 2 per run" tip={['2× Copper Wire per run']} />);
+    expect(html).toMatch(/role="img" aria-label="Copper Wire, 2 per run" data-tip="Copper Wire\n2× Copper Wire per run" data-item-key=/);
+    expect(renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={32} label="Copper Wire, 2 per run" />)).toContain('data-tip="t:copper_wire@0"');
+  });
+
+  // Phase 2 spec §6.4: the tip is the shared NEI tooltip's, through `data-tip` (its lines joined by \n) and `data-tip-mod`, appended where
+  // the title was, so every attribute before it keeps its place
+  it('gives the shared tooltip its lines and its mod, or no tip where a parent shows one', () => {
+    const off = renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={16} name="Copper Wire" tip={false} />);
+    expect(off).toContain('aria-label="Copper Wire"');
+    expect(off).not.toContain('data-tip');
+    expect(renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={16} name="Copper Wire" tip={['need 3 · have 1']} />))
+      .toContain('data-tip="Copper Wire\nneed 3 · have 1"');
+    expect(renderToStaticMarkup(<ItemIcon itemKey="gregtech:gt.metaitem.01@2032" size={16} />)).toContain('data-tip-mod="GregTech"');
+    expect(renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={16} name="Copper Wire" />)).not.toContain('data-tip-mod');
+    expect(renderToStaticMarkup(<ItemIcon itemKey="t:copper_wire@0" size={16} name="Copper Wire" />))
+      .toMatch(/role="img" aria-label="Copper Wire" data-tip="Copper Wire" data-item-key=/);
   });
 
   it('keeps the placeholder letters', () => {

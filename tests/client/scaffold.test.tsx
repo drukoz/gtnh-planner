@@ -40,6 +40,10 @@ describe('router and top pages', () => {
       '<span class="brand"><span class="brand-mark" aria-hidden="true"></span>GTNH Line Planner</span>',
     );
   });
+  it('ends the header with the Theme button, after the pages (Phase 2 spec §4.8): Auto where nothing is stored', () => {
+    // after the nav, so the keyboard reaches Projects first (focus.spec.ts) and the Settings button within ten Tabs (drawer.spec.ts)
+    expect(renderToStaticMarkup(<TopNav current="/" />)).toMatch(/<\/nav><button type="button" class="theme-button" data-choice="auto">Theme: Auto<\/button><\/header>$/);
+  });
 });
 
 describe('project tabs', () => {
@@ -68,7 +72,7 @@ describe('display name', () => {
 describe('components', () => {
   it('draws a placeholder item icon of the given size', () => {
     const html = renderToStaticMarkup(<ItemIcon itemKey="gregtech:gt.metaitem.01@2032" size={32} />);
-    expect(html).toContain('title="gregtech:gt.metaitem.01@2032"');
+    expect(html).toContain('data-tip="gregtech:gt.metaitem.01@2032"');
     expect(html).toContain('width:32px');
     expect(html).toContain('data-item-key="gregtech:gt.metaitem.01@2032"');
   });

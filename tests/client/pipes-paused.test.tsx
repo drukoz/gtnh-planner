@@ -1,24 +1,15 @@
 // The Pause pipes setting (ruling R31, WCAG 2.2.2 Pause, Stop, Hide; design spec §7 "Motion budget"): the pipes of the Flow and
 // Connections diagrams move for as long as a diagram is shown, so the page offers a way to stop them. One value for this browser, kept in
 // localStorage under `gtnh-planner:pipes-paused` and shared by both toolbars; a browser that refuses storage keeps it for the page.
-// pipes.spec.ts presses the button in a browser; these cases pin the store and the button.
+// pipes.spec.ts presses the button in a browser; these cases pin how the setting is stored and the button. The store's storage cases (refused
+// storage, storage read but not written, its subscribers) are browser-choice.test.tsx's, asserted there for this setting (ledger ruling P2-R40).
 
 import { isValidElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { PipesButton } from '../../src/client/components/PipesButton.tsx';
-import { PIPES_PAUSED_KEY, getPipesPaused, setPipesPaused, subscribePipesPaused } from '../../src/client/state/pipes-paused.ts';
-
-/** A localStorage that keeps what it is given in `store`. */
-function keepIn(store: Map<string, string>): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
-  return {
-    getItem: (key) => store.get(key) ?? null,
-    setItem: (key, value) => { store.set(key, value); },
-    removeItem: (key) => { store.delete(key); },
-  };
-}
-
-const refuse = (): never => { throw new Error('storage is disabled'); };
+import { PIPES_PAUSED_KEY, getPipesPaused, setPipesPaused } from '../../src/client/state/pipes-paused.ts';
+import { keepIn } from './storage-stub.ts';
 
 /** What `PipesButton` renders, unrendered, so that its props can be read. */
 function button(paused: boolean): ReactElement<Record<string, unknown>> {
@@ -52,41 +43,19 @@ describe('the Pause pipes setting', () => {
     store.set(PIPES_PAUSED_KEY, 'yes');
     expect(getPipesPaused()).toBe(false);
   });
-
-  it('survives a browser that refuses storage, and keeps the setting for the page', () => {
-    vi.stubGlobal('localStorage', { getItem: refuse, setItem: refuse, removeItem: refuse });
-    expect(getPipesPaused()).toBe(false);
-    expect(() => setPipesPaused(true)).not.toThrow();
-    expect(getPipesPaused()).toBe(true);
-    setPipesPaused(false);
-    expect(getPipesPaused()).toBe(false);
-  });
-
-  it('keeps the setting for the page in a browser that can read its storage but refuses to write it', () => {
-    // a private window of some browsers: the stale value it can still read must not win over the page's own
-    vi.stubGlobal('localStorage', { getItem: () => '0', setItem: refuse, removeItem: refuse });
-    setPipesPaused(true);
-    expect(getPipesPaused()).toBe(true);
-    setPipesPaused(false);
-    expect(getPipesPaused()).toBe(false);
-  });
-
-  it('tells every view that subscribed when it changes, and no longer once it has left', () => {
-    vi.stubGlobal('localStorage', keepIn(new Map()));
-    const heard = vi.fn();
-    const leave = subscribePipesPaused(heard);
-    setPipesPaused(true);
-    expect(heard).toHaveBeenCalledTimes(1);
-    leave();
-    setPipesPaused(false);
-    expect(heard).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('the Pause pipes button', () => {
+  // R44 (Phase 2 spec §17, §3.9): no `aria-pressed`, the label says what a press does; its key is P (spec §14), which its tip says too
   it('is a small text button that says what pressing it does, and whether the pipes are paused', () => {
-    expect(renderToStaticMarkup(<PipesButton paused={false} />)).toBe('<button type="button" class="small" aria-pressed="false">Pause pipes</button>');
-    expect(renderToStaticMarkup(<PipesButton paused />)).toBe('<button type="button" class="small" aria-pressed="true">Play pipes</button>');
+    expect(renderToStaticMarkup(<PipesButton paused={false} />)).toBe('<button type="button" class="small" aria-keyshortcuts="P" data-tip="Pause pipes · P">Pause pipes</button>');
+    expect(renderToStaticMarkup(<PipesButton paused />)).toBe('<button type="button" class="small" aria-keyshortcuts="P" data-tip="Play pipes · P">Play pipes</button>');
+  });
+
+  // Task 11's fix round 1 (ledger ruling P2-R85): with the single-key shortcuts off it says no key and has no tip, as before Task 11
+  it('says no key, and has no tip, while the single-key shortcuts are off', () => {
+    expect(renderToStaticMarkup(<PipesButton paused={false} keys={false} />)).toBe('<button type="button" class="small">Pause pipes</button>');
+    expect(renderToStaticMarkup(<PipesButton paused keys={false} />)).toBe('<button type="button" class="small">Play pipes</button>');
   });
 
   it('pauses the pipes when they move, and plays them when they are paused', () => {

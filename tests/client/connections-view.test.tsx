@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CONN_NODE_WIDTH, connectionsElk, connectionsFromElk, connectionsGraph, type ConnNode } from '../../src/client/connections/model.ts';
 import { setPipesPaused } from '../../src/client/state/pipes-paused.ts';
+import { setSingleKeyShortcuts } from '../../src/client/state/single-key-shortcuts.ts';
 import { ConnectionsShell, ConnectionsView, type ConnectionsShellProps } from '../../src/client/views/ConnectionsView.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { DYE_HEX } from '../../src/shared/layout/enderio.ts';
@@ -46,7 +47,7 @@ describe('the Connections tab', () => {
     expect(pan).toBeDefined();
     for (const id of ['step:a', 'step:b', 'chest:2,64,0', 'chest:2,64,2']) expect(pan).toContain(`data-node="${id}"`);
     expect(pan).toContain('data-edge="flow:step:a&gt;step:b:t:dust@0"');
-    expect(html).toMatch(/<button type="button" class="small">Fit<\/button>.*<div class="connections" data-testid="connections"/s);
+    expect(html).toMatch(/<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit<\/button>.*<div class="connections" data-testid="connections"/s);
   });
   // the audit of the EnderIO In / Out fix: a conduit face's row names its mode and the channel of each side under its
   // title, so the picture shows that the link in (insert side) and the link out (extract side) pass the same face
@@ -83,7 +84,7 @@ describe('the Connections tab', () => {
 
   it('marks the picked box or link, and titles a picked link by its label', () => {
     const link = shell({ pick: { edge: 'flow:step:a>step:b:t:dust@0' } });
-    expect(link).toContain('<h3>Titanium Dust 60/min · Red</h3>');
+    expect(link).toContain('<h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>');
     expect(link).toContain('data-edge="flow:step:a&gt;step:b:t:dust@0" class="conn-edge conn-via-item_conduit selected"');
     expect(shell({ pick: { node: 'step:b' } })).toContain('data-node="step:b" class="conn-node conn-machine selected"');
     expect(shell({ pick: { node: 'nope' } })).not.toContain('selected');
@@ -116,14 +117,17 @@ describe('the Connections tab', () => {
     expect(html).toContain('Could not load the layout: boom');
     expect(html).toContain('Could not lay out the connections: elk');
   });
-  // plan 11, Task 8's review ruling: a box is a fixed 260 px wide, so a text too long for it ends in … and the box's
-  // tooltip (its first child, as in the flow diagram) holds every text in full
+  // plan 11, Task 8's review ruling: a box is a fixed 260 px wide, so a text too long for it ends in … and the box's tip
+  // and accessible name (its `data-tip` and `aria-label`, as in the flow diagram; Phase 2 spec §6.4) hold every text in full
   it('cuts a box text too long for its box with …, and keeps every text of the box in full in its tooltip', () => {
-    const box = /<g data-node="step:b"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
-    expect(/^<title>(.*?)<\/title><rect /s.exec(box)?.[1])
-      .toBe('1× Advanced Assembler\nMV · 30 EU/t\nAdvanced Assembler, south side · Item Conduit — In / Out · in Red · out Yellow');
+    const [, tag, box] = /(<g data-node="step:b"[^>]*>)(.*?)<\/g>/s.exec(shell())!;
+    const full = '1× Advanced Assembler\nMV · 30 EU/t\nAdvanced Assembler, south side · Item Conduit — In / Out · in Red · out Yellow';
+    expect(/ data-tip="([^"]*)"/.exec(tag!)?.[1]).toBe(full);
+    expect(/ aria-label="([^"]*)"/.exec(tag!)?.[1]).toBe(full);
+    expect(box).toMatch(/^<rect /);
     expect(box).toMatch(/data-face="step:b#conduit:1,64,1:item:north"[^>]*>Advanced Assembler, south side · Item …<\/text>/);
     expect(box).not.toContain('Item Conduit</text>');
+    expect(shell()).not.toContain('<title');                                           // no SVG title is left in the picture
   });
   it('shows a title of up to 32 characters and a line or face row of up to 38 whole, and cuts a longer one there', () => {
     const text = (n: number): string => 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ'.slice(0, n);
@@ -135,7 +139,7 @@ describe('the Connections tab', () => {
     const texts = (html: string): string[] => [...html.matchAll(/<text class="(conn-[a-z]+)"[^>]*>(.*?)<\/text>/g)].map((m) => `${m[1]}: ${m[2]}`);
     expect(texts(draw(32, 38))).toEqual([`conn-title: ${text(32)}`, `conn-line: ${text(38)}`, `conn-face: ${text(38)}`]);
     expect(texts(draw(33, 39))).toEqual([`conn-title: ${text(32)}…`, `conn-line: ${text(38)}…`, `conn-face: ${text(38)}…`]);
-    expect(draw(33, 39)).toContain(`<title>${text(33)}\n${text(39)}\n${text(39)}</title>`);
+    expect(draw(33, 39)).toContain(`data-tip="${text(33)}\n${text(39)}\n${text(39)}"`);
   });
   it('lays the line out before it draws it', () => {
     const project = { id: 'P1', settings: { mode: 'rate', per: 'min', logistics: 'enderio' }, placement: null, world: { scanId: null, baseId: null } } as never;
@@ -180,7 +184,7 @@ describe('the Connections pipes', () => {
     // the group keeps what the tests and the e2e specs read first, the pipe's custom properties after them: 1 item/s, a second a cycle
     expect(red.tag).toMatch(/^<g data-edge="flow:step:a&gt;step:b:t:dust@0" class="conn-edge conn-via-item_conduit" style="--pipe-dur:1s;/);
     // Red is too dark to read on the dark casing, so its casing is panel grey
-    expect(red.tag).toContain('--pipe-casing:var(--panel)');
+    expect(red.tag).toContain('--pipe-casing:var(--dye-casing)');
     // under the casing the rim a hovered or picked link shows; the casing never has a stroke attribute (the stylesheet colours it),
     // the contents carry the channel's colour and the arrow head
     expect(red.inner).toMatch(pipeMarkup(' stroke="#b3312c" marker-end="url\\(#conn-arrow\\)"'));
@@ -188,12 +192,12 @@ describe('the Connections pipes', () => {
 
   it('gives the seven dyes too dark for the dark casing a panel-grey one, and every other dye the dark casing', () => {
     const html = shell();
-    expect(edgeOf(html, 'flow:chest:2,64,0&gt;step:a:t:in@0').tag).toContain('--pipe-casing:var(--panel)');      // Blue
+    expect(edgeOf(html, 'flow:chest:2,64,0&gt;step:a:t:in@0').tag).toContain('--pipe-casing:var(--dye-casing)');      // Blue
     expect(edgeOf(html, 'flow:step:b&gt;chest:2,64,2:t:ingot@0').tag).not.toContain('--pipe-casing');            // Yellow
     const dyes = Object.keys(DYE_HEX) as DyeColor[];
     const every = withEdges(dyes.map((color) => ({ ...redLink, id: `dye:${color}`, color })));
     for (const color of dyes) expect(edgeOf(every, `dye:${color}`).inner, color).toContain(`<polyline class="conn-edge-flow" points="260,52 300,52" stroke="${DYE_HEX[color]}"`);
-    const panelGrey = dyes.filter((color) => edgeOf(every, `dye:${color}`).tag.includes('--pipe-casing:var(--panel)'));
+    const panelGrey = dyes.filter((color) => edgeOf(every, `dye:${color}`).tag.includes('--pipe-casing:var(--dye-casing)'));
     expect(panelGrey.sort()).toEqual(['black', 'blue', 'brown', 'gray', 'green', 'purple', 'red']);           // design spec §7
   });
 
@@ -256,17 +260,17 @@ describe('the Connections pipes', () => {
 
   it('draws square boxes, the face rows\' part starting where the rect ends', () => {
     const box = /<g data-node="step:a"[^>]*>(.*?)<\/g>/s.exec(shell())![1]!;
-    expect(box).toMatch(/<\/title><rect width="260" height="46" rx="0"><\/rect><path d="M 0 46 H 260 V 84 /);
+    expect(box).toMatch(/^<rect width="260" height="46" rx="0"><\/rect><path d="M 0 46 H 260 V 84 /);
   });
 
   // ruling R31 (WCAG 2.2.2): the pipes move for as long as the picture is shown, so a text button after Fit stops them all, the one
   // setting of this browser that the Flow toolbar shares (state/pipes-paused.ts); paused, the area says so in `data-pipes`
   it('offers a Pause pipes button after Fit, and stops every pipe while the pipes are paused', () => {
-    expect(shell()).toMatch(/<button type="button" class="small">Fit<\/button><button type="button" class="small" aria-pressed="false">Pause pipes<\/button><span class="muted small">/);
+    expect(shell()).toMatch(/<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit<\/button><button type="button" class="small" aria-keyshortcuts="P" data-tip="Pause pipes · P">Pause pipes<\/button><span class="muted small">/);
     setPipesPaused(true);
     try {
       const html = shell();
-      expect(html).toContain('<button type="button" class="small">Fit</button><button type="button" class="small" aria-pressed="true">Play pipes</button>');
+      expect(html).toContain('<button type="button" class="small" aria-keyshortcuts="F" data-tip="Fit · F">Fit</button><button type="button" class="small" aria-keyshortcuts="P" data-tip="Play pipes · P">Play pipes</button>');
       expect(html).toContain('<div class="connections" data-testid="connections" aria-busy="false" data-pipes="paused">');
       // a pause stops the picked link of a huge picture too, the one pipe that moves there
       const links = Array.from({ length: 201 }, (_, i) => ({ ...redLink, id: `link:${i}` }));
@@ -275,5 +279,22 @@ describe('the Connections pipes', () => {
       setPipesPaused(false);
     }
     expect(shell()).toContain('aria-busy="false" data-pipes="all">');
+  });
+
+  // Task 11's fix round 1 (ledger ruling P2-R86): the hint ends with the sheet's key, its `?` said as a word, which a screen reader would skip
+  it('ends its hint with the sheet\'s key, its ? said as a word', () => {
+    expect(shell()).toContain('full configuration. <span aria-hidden="true">?</span><span class="visually-hidden">question mark</span> shows the shortcuts.</span>');
+  });
+
+  // Task 11's fix round 1 (ledger ruling P2-R85): with the single-key shortcuts off, Fit and Pause pipes say no key and have no tip, as before
+  // Task 11, and the hint says nothing of the sheet's key
+  it('says no key, and has no tips, while the single-key shortcuts are off', () => {
+    setSingleKeyShortcuts(false);
+    try {
+      expect(shell()).toContain('<button type="button" class="small">Fit</button><button type="button" class="small">Pause pipes</button>'
+        + '<span class="muted small">Drag or use the arrow keys to move, scroll to zoom; click a box, a face row or a link for its full configuration.</span>');
+    } finally {
+      setSingleKeyShortcuts(true);
+    }
   });
 });
