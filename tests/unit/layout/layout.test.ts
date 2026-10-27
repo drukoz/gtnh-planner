@@ -124,7 +124,9 @@ describe('layoutLine', () => {
     expect(layout.loss).toEqual({ tiers: [
       { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 14, worstVolts: 114, lossEUt: 34 },
       { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 16 },
-    ], totalEUt: 78 });                                   // the tiers' 50, the bank's emitter 4 and the hookup's 24
+    ], hookupEUt: 24, banksEUt: 4, totalEUt: 78 });       // the tiers' 50, the bank's emitter 4 and the hookup's 24
+    const parts = layout.loss!;
+    expect(parts.totalEUt).toBe(parts.tiers.reduce((sum, t) => sum + t.lossEUt, 0) + parts.hookupEUt + parts.banksEUt);
     expect(layout.power!.detail).toContain('cables and hookup lose 78 EU/t');
   });
 
@@ -133,7 +135,7 @@ describe('layoutLine', () => {
     expect([layout.status, layout.loss]).toEqual(['no-world', { tiers: [
       { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 14, worstVolts: 114, lossEUt: 34 },
       { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 16 },
-    ], totalEUt: 4 + 16 + 34 }]);                         // no hookup to lose anything, and no network to fit against
+    ], hookupEUt: 0, banksEUt: 4, totalEUt: 4 + 16 + 34 }]); // no hookup to lose anything, and no network to fit against
   });
 });
 

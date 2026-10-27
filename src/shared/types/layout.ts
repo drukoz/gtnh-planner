@@ -166,6 +166,10 @@ export interface TierLoss {
 export interface LayoutLoss {
   /** Tier descending; the tiers of the line's own wiring, plus the supply run's tier once the hookup's landing cell is known. */
   tiers: TierLoss[];
+  /** EU/t the power hookup's own cable run loses outside the line. */
+  hookupEUt: number;
+  /** EU/t the step-down banks' emitters pay on their output side (gt-mechanics §3.2). */
+  banksEUt: number;
   /** EU/t the power need counts: the banks' emitter loss, the line's own cables, the supply run and the power hookup. */
   totalEUt: number;
 }

@@ -735,7 +735,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       bom: bomFromBlocks([], fit?.optional ?? []), warnings, status,
       power: fit?.power ?? { ...plan.power },
       // nothing of its own to wire, so nothing to lose
-      loss: { tiers: [], totalEUt: 0 },
+      loss: { tiers: [], hookupEUt: 0, banksEUt: 0, totalEUt: 0 },
       ...(reserved.length === 0 ? {} : { reserved }),
     };
   }
@@ -779,7 +779,9 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
   // highest tier, so the list stays tier descending
   const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
-  const loss: LayoutLoss = { tiers, totalEUt: lossEUt };
+  const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
+  const banksEUt = stages?.lossEUt ?? 0;
+  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt };
   const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
 
   // stages 10–11 (parts and warnings first: the warning pins come from them)
