@@ -18,6 +18,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { flowGraph, focusSets } from '../../../src/client/views/flow-model.ts';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { isBaseItem } from '../../../src/server/planner/availability.ts';
 import { isAutoWorkbench } from '../../../src/server/planner/benches.ts';
 import { planBasis, type PlanBasis } from '../../../src/server/planner/basis.ts';
@@ -463,9 +464,9 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the user's Electronic Circuit p
       expect(step.warnings.filter((w) => w.startsWith('Crafted by hand: it ')), step.id).toHaveLength(1);
     }
     for (const step of crafting.filter((x) => !x.handCraft)) {
-      expect(isAutoWorkbench(pack.machines.get(step.machine.mteId)), `${step.id} on ${step.machine.name}`).toBe(true);
+      expect(isAutoWorkbench(machineByMteId(pack, step.machine.mteId)), `${step.id} on ${step.machine.name}`).toBe(true);
       expect(step.machine.tier, step.id).toBeLessThanOrEqual(plan.tier);
-      if (step.count > step.owned) expect(plan.buildList.some((l) => l.key === pack.machines.get(step.machine.mteId)?.itemKey), step.id).toBe(true);
+      if (step.count > step.owned) expect(plan.buildList.some((l) => l.key === machineByMteId(pack, step.machine.mteId)?.itemKey), step.id).toBe(true);
     }
   }, 60_000);
 });

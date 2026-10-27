@@ -5,6 +5,7 @@
 // dead ends of one good's chain, for machine prices).
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { compareMachineId } from '../../shared/ids.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
   BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, buildMip, laterRoom,
@@ -1840,7 +1841,7 @@ async function leanestLine(
  */
 function planPick(options: readonly MachineOption[]): number | undefined {
   const before = (a: MachineOption, b: MachineOption): number =>
-    Number(b.kind === 'basic') - Number(a.kind === 'basic') || Number(b.owned > 0) - Number(a.owned > 0) || b.tier - a.tier || a.mteId - b.mteId;
+    Number(b.kind === 'basic') - Number(a.kind === 'basic') || Number(b.owned > 0) - Number(a.owned > 0) || b.tier - a.tier || compareMachineId(a.id, b.id);
   return options.map((o, i) => ({ o, i })).filter(({ o }) => o.canAdd).sort((a, b) => before(a.o, b.o))[0]?.i;
 }
 

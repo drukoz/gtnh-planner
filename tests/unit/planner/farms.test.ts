@@ -6,12 +6,14 @@
 // on owned farms only. The final review: the soil each crop is planted on (`cropSoil`), one the line can get.
 
 import { describe, it, expect } from 'vitest';
+import { gtMachineId, type MachineId } from '../../../src/shared/ids.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings, type FarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
 import { recipeId } from '../../../src/server/pack/recipe-id.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { itemPrices, type ItemPrices } from '../../../src/server/planner/build-cost.ts';
 import type { CandidateGraph } from '../../../src/server/planner/candidates.ts';
@@ -262,10 +264,10 @@ describe('the synthetic farm recipes', () => {
     expect(pack.producers.get(RESIN)?.some((i) => pack.recipes[i]?.meta.farm !== undefined)).toBe(false);
     expect(farms.maps.get(CROP_MANAGER_MAP)).toEqual({ id: CROP_MANAGER_MAP, name: 'Crop Manager', amps: 1, specialValue: 'none', aliases: [] });
     expect(pack.maps.has(CROP_MANAGER_MAP)).toBe(false);
-    expect(farms.machinesByMap.get(CROP_MANAGER_MAP)).toEqual([28001, 28002]);
-    expect(farms.machines.get(28001)).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
-    expect(pack.machines.get(28001)).toMatchObject({ kind: 'other', maps: [] });
-    expect(farms.machines.get(15541)).toBe(pack.machines.get(15541));
+    expect(farms.machinesByMap.get(CROP_MANAGER_MAP)).toEqual([gtMachineId(28001), gtMachineId(28002)]);
+    expect(farms.machines.get(gtMachineId(28001))).toMatchObject({ kind: 'basic', maps: [CROP_MANAGER_MAP], tier: 1, name: 'Basic Crop Manager' });
+    expect(machineByMteId(pack, 28001)).toMatchObject({ kind: 'other', maps: [] });
+    expect(farms.machines.get(gtMachineId(15541))).toBe(machineByMteId(pack, 15541));
   });
 });
 
@@ -427,27 +429,27 @@ describe('farms in the line', () => {
     const priced = await pricingOf(farmPack(), settingsOf(RESIN_BOARD, { tier: 3 }));
     const farms = priced.pack!;
     const tgs = farms.recipes.find((r) => r.meta.farm?.kind === 'tgs')!;
-    const opts = { groupTier: 5, coilHeat: 1801, automateCrafting: true, owned: new Map<number, number>() };
+    const opts = { groupTier: 5, coilHeat: 1801, automateCrafting: true, owned: new Map<MachineId, number>() };
     const pick = pickMachine(farms, tgs, TREE_FARM, opts);
-    expect(pick).toMatchObject({ mteId: 15541, tier: 1, kind: 'multiblock', runsPerSecondPerMachine: 0.2, handCraft: false });
+    expect(pick).toMatchObject({ id: 'gt:15541', tier: 1, kind: 'multiblock', runsPerSecondPerMachine: 0.2, handCraft: false });
     expect(pick.oc).toEqual({ euPerTick: 30, durationTicks: 100, overclocks: 0, heatOverclocks: 0, machineVoltage: 32, machineAmps: 1, parallel: 1 });
     const cane = farms.recipes.find((r) => r.meta.farm?.crop?.id === 'cropsnh:testCane')!;
     const crop = pickMachine(farms, cane, CROP_MANAGER_MAP, opts);
-    expect(crop).toMatchObject({ mteId: 28001, tier: 1, kind: 'basic', runsPerSecondPerMachine: 0.47265625 });
+    expect(crop).toMatchObject({ id: 'gt:28001', tier: 1, kind: 'basic', runsPerSecondPerMachine: 0.47265625 });
     expect(crop.oc.euPerTick).toBeCloseTo((4.5235540375 / 5120) * 121, 12);
     expect(crop.oc).toMatchObject({ durationTicks: 5120, overclocks: 0, parallel: 121, machineVoltage: 32, machineAmps: 1 });
 
     const options = machineOptions(farms, tgs, TREE_FARM, { groupTier: 5, coilHeat: 1801, owned: new Map(), prices: FLAT });
     expect(options).toHaveLength(1);
-    expect(options[0]).toMatchObject({ mteId: 15541, tier: 1, perMachine: 0.2, kind: 'multiblock', canAdd: true });
+    expect(options[0]).toMatchObject({ id: 'gt:15541', tier: 1, perMachine: 0.2, kind: 'multiblock', canAdd: true });
     expect(options[0]?.oc.overclocks).toBe(0);
     expect(machineOptions(farms, cane, CROP_MANAGER_MAP, { groupTier: 5, coilHeat: 1801, owned: new Map(), prices: FLAT }))
-      .toMatchObject([{ mteId: 28001, tier: 1, kind: 'basic', perMachine: 0.47265625 }]);
+      .toMatchObject([{ id: 'gt:28001', tier: 1, kind: 'basic', perMachine: 0.47265625 }]);
     // Where nothing builds the farm's machine, its owned ones alone serve (rule 5).
     const gap: ItemPrices = { cost: () => Infinity, gap: () => ({ kind: 'no-recipe' }) };
     expect(machineOptions(farms, tgs, TREE_FARM, { groupTier: 5, coilHeat: 1801, owned: new Map(), prices: gap })).toEqual([]);
-    expect(machineOptions(farms, tgs, TREE_FARM, { groupTier: 5, coilHeat: 1801, owned: new Map([[15541, 1]]), prices: gap }))
-      .toMatchObject([{ mteId: 15541, owned: 1, canAdd: false }]);
+    expect(machineOptions(farms, tgs, TREE_FARM, { groupTier: 5, coilHeat: 1801, owned: new Map([['gt:15541', 1]]), prices: gap }))
+      .toMatchObject([{ id: 'gt:15541', owned: 1, canAdd: false }]);
   });
 
   it('plans resin from an owned tree farm', async () => {

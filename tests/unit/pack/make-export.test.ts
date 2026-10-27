@@ -52,7 +52,8 @@ describe('makeExport', () => {
     for (const k of FILE_KEYS) expect(await readJsonlGz(join(dir, EXPORT_FILES[k]))).toEqual([]);
     expect(JSON.parse(await readFile(join(dir, EXPORT_FILES.manifest), 'utf8'))).toEqual({
       format: EXPORT_FORMAT, exportId: 'bare', exporterVersion: '0.1.0', exportedAt: '2026-10-17T12:00:00Z',
-      packVersion: '2.9.0', gtVersion: '5.09.54.183', mods: { minecraft: '1.7.10', gregtech: '5.09.54.183' },
+      packVersion: '2.9.0', gtVersion: '5.09.54.183', mcVersion: '1.7.10', loader: 'forge-10.13.4.1614',
+      mods: { minecraft: '1.7.10', gregtech: '5.09.54.183' },
       counts: Object.fromEntries(FILE_KEYS.map((k) => [k, 0])),
       nameFailures: 0, nameFailureSamples: [], sectionMillis: {}, failedSections: [], skippedSections: [], warnings: [],
     });

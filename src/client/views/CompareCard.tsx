@@ -13,6 +13,7 @@ import type { CompareResult } from '../../shared/types/api.ts';
 import type { PlanObjective, PlanSettings } from '../../shared/types/plan.ts';
 import type { ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, messageOf } from '../api/client.ts';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { useItemNames } from '../map/FoundPanel.tsx';
 import { compareColumns, compareKeys } from './compare-model.ts';
 import { objectivePatch } from './settings-model.ts';
@@ -146,7 +147,9 @@ export function CompareToggle(props: { open: boolean; onToggle: () => void; ref?
  * what its plan comes to (each figure with its length in glyphs, `--glyphs`, by which the stylesheet fits a long one to its
  * tile) or that it is still planning or why it failed, what it avoids, adds and makes for other projects, and "Use this
  * mode", which sends `objectivePatch` of the project's `settings` — disabled and reading "In use" on the mode the project
- * plans in.
+ * plans in. Its two loading lines have a skeleton beside them (Phase 2 spec §11.1, plan ruling compare-skeletons): while it has no
+ * answer for its target, three columns' frames; a mode still planning, its six figures' place. "Updating…" keeps the columns up, and a
+ * failed fetch is no loading line.
  */
 export function CompareCardView(props: {
   state: CompareState; settings: PlanSettings; send: (ops: ProjectOp[]) => void; nameOf: (k: StuffKey) => string; onClose(): void;
@@ -164,13 +167,14 @@ export function CompareCardView(props: {
       </div>
       {error !== null && <p className="error small" role="alert">{`Could not compare the modes: ${error}`}</p>}
       {result === null ? (
-        loading && <p className="muted">Planning the three modes…</p>
+        loading && <><p className="muted">Planning the three modes…</p><Skeleton shape="compare" /></>
       ) : (
         <div className="compare-columns">
           {compareColumns(result, nameOf).map((c) => (
             <section key={c.objective} className={c.current ? 'compare-column current' : 'compare-column'} data-objective={c.objective}>
               <h4>{c.label}</h4>
               {c.note !== null && <p className={c.status === 'failed' ? 'error small' : 'muted small'}>{c.note}</p>}
+              {c.status === 'pending' && <Skeleton shape="readouts" />}
               {c.rows.length > 0 && (
                 <dl className="compare-rows">
                   {c.rows.map((r) => (

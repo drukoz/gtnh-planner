@@ -6,9 +6,11 @@ import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { posKey, rotateConnections, rotateFace } from '../../../src/shared/layout/geometry.ts';
 import { FACES, type Face } from '../../../src/shared/types/assets.ts';
 import type { Layout } from '../../../src/shared/types/layout.ts';
+import type { Machine } from '../../../src/shared/types/pack.ts';
 import type { Plan } from '../../../src/shared/types/plan.ts';
 import { layoutPack, makePlan, makeProject, IDS } from '../../helpers/layout-fixtures.ts';
 import { ENDER, ITEM, basic, faces, fluidFilter, fluidPlan, fluidSteps, lineGround, lineScan, setup } from '../../helpers/enderio-fixtures.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 const iron = fluidFilter(['fluid:molten.iron']);
 const fluidKinds = (r: ModeResult) => [...new Set(r.blocks.flatMap((b) => (b.conduits ?? []).map((c) => c.kind)).filter((k) => k !== 'item'))];
@@ -22,7 +24,11 @@ const ALONG = 'along the middle row to the output side of each electric single-b
  */
 function topPortSetup(plan: Plan, mteIds: readonly number[]): ReturnType<typeof setup> {
   const pack = layoutPack();
-  for (const id of mteIds) pack.machines.set(id, { ...pack.machines.get(id)!, kind: 'other', cls: 'gregtech.api.metatileentity.implementations.MTETestMachine' });
+  for (const id of mteIds) {
+    const m: Machine = { ...machineByMteId(pack, id)!, kind: 'other', cls: 'gregtech.api.metatileentity.implementations.MTETestMachine' };
+    pack.machines.set(m.id, m);
+    pack.machineByMteId.set(id, m);
+  }
   return { pack, plan, placement: placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 1, portSpacing: PORT_SPACING.enderio }), parts: resolveParts(pack) };
 }
 

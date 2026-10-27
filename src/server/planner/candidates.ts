@@ -6,19 +6,21 @@
 import { ebfHeat, voltageTier } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { type MachineId, compareMachineId } from '../../shared/ids.ts';
 import type { Ingredient, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { LeafClass, PlanSettings, PlanWarning } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import { machineOf, machineIdsForMap } from '../pack/lookup.ts';
 import { benchRefusal, isBenchVariant, type BenchLine } from './benches.ts';
 
 export interface PlanEnv {
   tier: number; reachable: ReadonlySet<string> /* DimensionInfo.key and Capability.key */; lowGravity: boolean; coilHeat: number; excluded: ReadonlySet<string>;
   /**
-   * The mteIds of the multiblocks the group can build at this tier: their controller is available (availability.ts).
-   * Absent = every multiblock counts as built. Multiblocks carry no tier in the export, so without this gate the
-   * Eye of Harmony, the Godforge modules or the HTGR (EU/t 0 or 1) would run at any tier.
-   */
-  multiblocks?: ReadonlySet<number>;
+    * The ids of the multiblocks the group can build at this tier: their controller is available (availability.ts).
+    * Absent = every multiblock counts as built. Multiblocks carry no tier in the export, so without this gate the
+    * Eye of Harmony, the Godforge modules or the HTGR (EU/t 0 or 1) would run at any tier.
+    */
+   multiblocks?: ReadonlySet<MachineId>;
   /**
    * Ids of the recipes that make an ore material out of nothing but free inputs (availability.ts `fromNothing`), left out
    * like every other recipe of the `lava-centrifuge` category. Absent = none.
@@ -274,10 +276,10 @@ interface MapMachines {
   amps: number;
   /** Tiers of the singleblocks (`kind: 'basic'`), ascending, without repeats. */
   basicTiers: number[];
-  /** The multiblocks without a heat check that run the map, by mteId. */
-  plain: number[];
-  /** The multiblocks whose recipes need coil heat (heat map, or `heatOC`) that run the map, by mteId. */
-  heated: number[];
+  /** The multiblocks without a heat check that run the map, by id. */
+  plain: MachineId[];
+  /** The multiblocks whose recipes need coil heat (heat map, or `heatOC`) that run the map, by id. */
+  heated: MachineId[];
   /** A fuel map (`specialValue` 'fuel') or one a generator, boiler or turbine runs: its recipes burn, they make nothing. */
   fuel: boolean;
 }
@@ -299,8 +301,8 @@ function machinesOfMap(pack: Pack, mapId: string): MapMachines {
     const heatMap = info?.specialValue === 'heat';
     const tiers = new Set<number>();
     table = { amps: info?.amps ?? 1, basicTiers: [], plain: [], heated: [], fuel: info?.specialValue === 'fuel' };
-    for (const id of pack.machinesByMap.get(mapId) ?? []) {
-      const machine = pack.machines.get(id);
+    for (const id of machineIdsForMap(pack, mapId)) {
+      const machine = machineOf(pack, id);
       if (machine !== undefined && POWER_KINDS.has(machine.kind)) table.fuel = true;
       if (machine?.kind === 'basic') tiers.add(machine.tier ?? 0);
       else if (machine?.kind === 'multiblock') {
@@ -321,7 +323,7 @@ function machinesOfMap(pack: Pack, mapId: string): MapMachines {
 type MapVerdict = { ok: true } | { ok: false; hasMachine: boolean; heat: boolean; unbuilt: boolean; needTier: number /* Infinity: none */ };
 
 /** Some of `ids` is built: any of them when the env does not gate multiblocks. */
-function anyBuilt(ids: readonly number[], env: PlanEnv): boolean {
+function anyBuilt(ids: readonly MachineId[], env: PlanEnv): boolean {
   const built = env.multiblocks;
   return built === undefined ? ids.length > 0 : ids.some((id) => built.has(id));
 }
@@ -463,18 +465,18 @@ export function acceptanceMemoStats(pack: Pack): { contexts: number; hits: numbe
 }
 
 /**
- * The multiblocks that would run `r` at `env` if the group could build them (any map of the recipe, by mteId, sorted),
+ * The multiblocks that would run `r` at `env` if the group could build them (any map of the recipe, by id, sorted),
  * whatever `env.multiblocks` says; empty when a singleblock, the crafting table or the furnace runs it, or nothing does.
  */
-export function multiblocksFor(pack: Pack, r: Recipe, env: PlanEnv): number[] {
+export function multiblocksFor(pack: Pack, r: Recipe, env: PlanEnv): MachineId[] {
   const none: PlanEnv = { ...env, multiblocks: new Set() };
   if (acceptRecipe(pack, r, none).ok || !acceptRecipe(pack, r, { ...env, multiblocks: undefined }).ok) return [];
-  const ids = new Set<number>();
+  const ids = new Set<MachineId>();
   for (const mapId of r.maps) {
     const t = machinesOfMap(pack, mapId);
     for (const id of [...t.plain, ...t.heated]) if (acceptRecipe(pack, r, { ...env, multiblocks: new Set([id]) }).ok) ids.add(id);
   }
-  return [...ids].sort((a, b) => a - b);
+  return [...ids].sort(compareMachineId);
 }
 
 /** The virtual good one ore-dictionary slot stands for. */

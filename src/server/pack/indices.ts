@@ -2,6 +2,7 @@
 // from the smelting list at lookup time, the producer and consumer indices over `pack.recipes`, and the machines of
 // every recipe map.
 
+import { compareMachineId, type MachineId } from '../../shared/ids.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Machine, Recipe, RecipeMapInfo } from '../../shared/types/pack.ts';
 import { recipeId } from './recipe-id.ts';
@@ -62,8 +63,8 @@ export function buildIndices(recipes: readonly Recipe[]): { producers: Map<Stuff
   return { producers, consumers };
 }
 
-/** The machines of every map they list, sorted by tier (none = 0), then MTE id. */
-export function buildMachinesByMap(machines: ReadonlyMap<number, Machine>): Map<string, number[]> {
+/** The machines of every map they list, sorted by tier (none = 0), then machine id (`compareMachineId`). */
+export function buildMachinesByMap(machines: ReadonlyMap<MachineId, Machine>): Map<string, MachineId[]> {
   const byMap = new Map<string, Machine[]>();
   for (const machine of machines.values()) {
     for (const map of machine.maps) {
@@ -72,9 +73,9 @@ export function buildMachinesByMap(machines: ReadonlyMap<number, Machine>): Map<
       else list.push(machine);
     }
   }
-  const result = new Map<string, number[]>();
+  const result = new Map<string, MachineId[]>();
   for (const [map, list] of byMap) {
-    result.set(map, list.sort((a, b) => (a.tier ?? 0) - (b.tier ?? 0) || a.mteId - b.mteId).map((m) => m.mteId));
+    result.set(map, list.sort((a, b) => (a.tier ?? 0) - (b.tier ?? 0) || compareMachineId(a.id, b.id)).map((m) => m.id));
   }
   return result;
 }

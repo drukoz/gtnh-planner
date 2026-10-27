@@ -5,6 +5,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createRef, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { Skeleton } from '../../src/client/components/Skeleton.tsx';
 import { compareColumns, compareKeys } from '../../src/client/views/compare-model.ts';
 import { CompareCardView, CompareToggle, compareLoader, type CompareState } from '../../src/client/views/CompareCard.tsx';
 import { objectivePatch } from '../../src/client/views/settings-model.ts';
@@ -311,6 +312,25 @@ describe('compare card', () => {
     const credited = markup(open({ ...RESULT, modes: [{ objective: 'multi-output', status: 'ok', summary, credited: ['t:y@0'] }] }));
     expect(text(credited)).toContain('Also makes for other projects: Y');
     expect(text(markup(open(RESULT, { loading: true })))).toContain('Updating…');
+  });
+
+  // Phase 2 Task 8 (spec §11.1, D13; plan ruling compare-skeletons): an aria-hidden skeleton beside each of the card's own loading lines
+  it('draws a skeleton beside its own loading lines: the three modes while a target\'s compare plans, a mode still planning its six figures', async () => {
+    const planning = 'Planning the three modes…</p><div class="skeleton skeleton-compare" aria-hidden="true">';
+    expect(markup(open(null, { loading: true }))).toContain(planning);
+    const shapes = (objective: string): unknown[] => {
+      const [column] = findAll(CompareCardView(props(open(RESULT))), (e) => e.props['data-objective'] === objective);
+      return findAll(column!.props.children as ReactNode, (e) => e.type === Skeleton).map((e) => e.props.shape);
+    };
+    expect([shapes('least-raw'), shapes('cheapest'), shapes('multi-output')]).toEqual([[], [], ['readouts']]);
+    expect(markup(open(RESULT, { loading: true }))).not.toContain('skeleton-compare');             // Updating… keeps the columns drawn
+    expect(markup(open(null, { error: 'The planner failed' }))).not.toContain('class="skeleton');   // a failed fetch is no loading line
+    // another target picked with the card open (68c06c1): the old figures go, and the planning line comes back with its skeleton
+    let asked = 0;
+    const swap = compareLoader('p1', () => (asked++ === 0 ? Promise.resolve(RESULT) : new Promise<CompareResult>(() => {})));
+    swap.target('t:a@0'); swap.open(); await settle();
+    swap.target('t:b@0');
+    expect(markup(swap.getSnapshot())).toContain(planning);
   });
 
   it('uses a mode: "Use this mode" sends its settings patch', () => {

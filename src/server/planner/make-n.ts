@@ -4,7 +4,6 @@
 // or a new one pays for itself against the batch (plan 12: the build-cost solve decides which); and the batch takes as
 // long as the busiest machine type plus the time one run needs to pass down the chain.
 
-import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Product } from '../../shared/types/pack.ts';
 import type { PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
@@ -13,13 +12,15 @@ import type { CandidateGraph, LpRecipe } from './candidates.ts';
 import {
   boughtGoods, describeStep, machineWarnings, ownedPools, pickStepMachines, reusedOf, stepLine, type PickedRecipe, type StepLine, type StepSize,
 } from './machines.ts';
+import { compareMachineId, isPseudoMachineId, type MachineId } from '../../shared/ids.ts';
+import { machineOf } from '../pack/lookup.ts';
 import { solveLp, type LpRow } from './lp.ts';
-import type { BuildModel } from './machine-options.ts';
+import type { BuildModel, OwnedPools } from './machine-options.ts';
 import { BEYOND_STOCK_FACTOR, stockShare, type Solution, type SolveOptions } from './solve.ts';
 
 export interface MakeNResult {
   steps: PlanStep[]; buys: Map<StuffKey, number>; leftovers: Product[]; totalSeconds: number;
-  addedMachines: Array<{ mteId: number; count: number }>;
+  addedMachines: Array<{ id: MachineId; count: number }>;
   /** Goods whole runs could not balance: the batch comes out this much short of them (`wholeRuns`). */
   short: Product[];
 }
@@ -338,7 +339,7 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
 export async function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
   opts: {
-    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<number>;
+    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; multiblocks?: ReadonlySet<MachineId>;
     /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
     value?: Pick<StepLine, 'valueOf' | 'empties'>;
     /** The line's build model (plan 12): its owned pools. */
@@ -349,23 +350,22 @@ export async function makeN(
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
   const whole = await wholeRuns(graph, sol, demand, opts.stock);
-  const pools = opts.build?.pools ?? ownedPools(ctx, settings);
-  const owned = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
+  const pools: OwnedPools = opts.build?.pools ?? ownedPools(ctx, settings);
+  const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
 
-  const ownedOf = (mteId: number): number => Math.max(0, owned.get(mteId) ?? 0);
-  const machinesOf = (mteId: number): number => ownedOf(mteId) || 1;
-  const stepsOfType = new Map<number, string[]>();
-  const workOfType = new Map<number, number>();
+  const ownedOf = (id: MachineId): number => Math.max(0, owned.get(id) ?? 0);
+  const machinesOf = (id: MachineId): number => ownedOf(id) || 1;
+  const stepsOfType = new Map<MachineId, string[]>();
+  const workOfType = new Map<MachineId, number>();
   for (const p of picked) {
-    const mteId = p.pick.mteId;
-    const ids = stepsOfType.get(mteId);
-    if (ids === undefined) stepsOfType.set(mteId, [p.id]);
+    const ids = stepsOfType.get(p.pick.id);
+    if (ids === undefined) stepsOfType.set(p.pick.id, [p.id]);
     else ids.push(p.id);
-    workOfType.set(mteId, (workOfType.get(mteId) ?? 0) + workTicks(p));
+    workOfType.set(p.pick.id, (workOfType.get(p.pick.id) ?? 0) + workTicks(p));
   }
   let busiest = 0;
-  for (const [mteId, ticks] of workOfType) busiest = Math.max(busiest, ticks / (machinesOf(mteId) * TICKS_PER_SECOND));
+  for (const [id, ticks] of workOfType) busiest = Math.max(busiest, ticks / (machinesOf(id) * TICKS_PER_SECOND));
   const totalSeconds = busiest + fillSeconds(graph, whole.runs, picked, demand.keys());
 
   const line = stepLine(graph, whole.runs, opts.value);
@@ -375,23 +375,22 @@ export async function makeN(
   const lp = stepLine(graph, sol.runs).runsFor;
   if (lp !== undefined) line.runsFor = lp;
   const steps = picked.map((p): PlanStep => {
-    const mteId = p.pick.mteId;
-    const count = machinesOf(mteId);
+    const count = machinesOf(p.pick.id);
     // A batch of machines that take no time at all has nothing to spread over; it reads 0 rather than NaN.
     const runsPerSecond = totalSeconds > 0 ? p.runs / totalSeconds : 0;
     const utilization = totalSeconds > 0 ? workTicks(p) / TICKS_PER_SECOND / (count * totalSeconds) : 0;
     const warnings = machineWarnings(p.lp, p.pick, runsPerSecond);
-    const others = (stepsOfType.get(mteId) ?? []).filter((id) => id !== p.id);
+    const others = (stepsOfType.get(p.pick.id) ?? []).filter((stepId) => stepId !== p.id);
     // Hand-crafting, a crafting table or a furnace has no circuit or mold to swap; an Auto Workbench is switched by
     // setting its 3x3 crafting grid (controller ruling 177).
-    if (others.length > 0 && !PSEUDO_IDS.has(mteId)) {
-      const swap = isAutoWorkbench(pack.machines.get(mteId)) ? 'set its crafting grid between batches' : 'swap circuits/molds between batches';
+    if (others.length > 0 && !isPseudoMachineId(p.pick.id)) {
+      const swap = isAutoWorkbench(machineOf(pack, p.pick.id)) ? 'set its crafting grid between batches' : 'swap circuits/molds between batches';
       warnings.push(`Shares machines with ${others.join(', ')} — ${swap}`);
     }
     if (p.recipe.outputs.some((o) => o.chance < 1)) warnings.push(CHANCED_WARNING);
-    const size: StepSize = { count, owned: ownedOf(mteId), runsPerSecond, utilization, warnings };
+    const size: StepSize = { count, owned: ownedOf(p.pick.id), runsPerSecond, utilization, warnings };
     if (size.owned > 0) {
-      const reused = reusedOf(pools, mteId, Array.from({ length: size.owned }, (_, u) => u));
+      const reused = reusedOf(pools, p.pick.id, Array.from({ length: size.owned }, (_, u) => u));
       if (others.length > 0) reused.sharedWith = [...others].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
       size.reused = reused;
     }
@@ -402,8 +401,8 @@ export async function makeN(
   });
 
   const addedMachines = [...stepsOfType.keys()]
-    .filter((mteId) => ownedOf(mteId) === 0 && !PSEUDO_IDS.has(mteId))
-    .sort((a, b) => a - b)
-    .map((mteId) => ({ mteId, count: 1 }));
+    .filter((id) => ownedOf(id) === 0 && !isPseudoMachineId(id))
+    .sort(compareMachineId)
+    .map((id) => ({ id, count: 1 }));
   return { steps, buys: whole.buys, leftovers: whole.leftovers, totalSeconds, addedMachines, short: whole.short };
 }

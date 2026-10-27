@@ -6,8 +6,10 @@
 // the plan cache the plan route keys on (architecture §7, §11.8).
 
 import { formatNumber, formatRate } from '../../shared/format.ts';
-import { PSEUDO_IDS, V, tierName } from '../../shared/gt/tiers.ts';
+import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { isPseudoMachineId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
+import { machineIdsForMap, machineOf } from '../pack/lookup.ts';
 import { indexPlan, issueText, noteWarningCode, type PlanIssue } from '../../shared/plan/balance.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { DimensionInfo, Ingredient, Pack, Product, Recipe } from '../../shared/types/pack.ts';
@@ -155,11 +157,11 @@ export function planCacheKey(hash: string, exportId: string, scanId: string | nu
  *
  * `peakEUt` (rate; plan 12, architecture §11.39): each step's new machines, `count − reused.units.length` at its EU/t —
  * a sharing pool's (`machineGroups`) once, each at the largest EU/t of its steps, as one machine runs one recipe at a
- * time — plus each distinct owned machine (mteId and unit, those of `reused.others` at their own EU/t) once, at the
+ * time — plus each distinct owned machine (id and unit, those of `reused.others` at their own EU/t) once, at the
  * largest EU/t among the steps on it. A step that lists no units counts `count × EU/t`, as before plan 12.
  *
  * `sharedByType` (Make N, where every step of a machine type runs on that type's machines): the peak is instead
- * Σ over machine types (mteId) of the largest count × the largest EU/t among that type's steps, so shared machines
+ * Σ over machine types (id) of the largest count × the largest EU/t among that type's steps, so shared machines
  * are counted once. The average is the same either way, because utilization already divides by the shared count.
  */
 export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean } = {}): PowerSummary {
@@ -175,10 +177,11 @@ export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean }
     }
   }
   if (opts.sharedByType === true) {
-    const byType = new Map<number, { count: number; euPerTick: number }>();
+    const byType = new Map<MachineId, { count: number; euPerTick: number }>();
     for (const step of steps) {
-      const type = byType.get(step.machine.mteId);
-      if (type === undefined) byType.set(step.machine.mteId, { count: step.count, euPerTick: step.euPerTick });
+      const id = machineIdOfLegacy(step.machine.mteId);
+      const type = byType.get(id);
+      if (type === undefined) byType.set(id, { count: step.count, euPerTick: step.euPerTick });
       else {
         type.count = Math.max(type.count, step.count);
         type.euPerTick = Math.max(type.euPerTick, step.euPerTick);
@@ -186,9 +189,9 @@ export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean }
     }
     for (const type of byType.values()) peak += type.count * type.euPerTick;
   } else {
-    const units = new Map<string, number>();   // `<mteId>:<unit>` → the largest EU/t of the steps on that owned machine
-    const onUnit = (mteId: number, unit: number, euPerTick: number): void => {
-      const key = `${mteId}:${unit}`;
+    const units = new Map<string, number>();   // `<id>:<unit>` → the largest EU/t of the steps on that owned machine
+    const onUnit = (id: MachineId, unit: number, euPerTick: number): void => {
+      const key = `${id}:${unit}`;
       units.set(key, Math.max(units.get(key) ?? 0, euPerTick));
     };
     for (const group of machineGroups(steps)) {
@@ -197,10 +200,11 @@ export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean }
       for (const step of group) euPerTick = Math.max(euPerTick, step.euPerTick);
       peak += Math.max(0, first.count - (first.reused?.units?.length ?? 0)) * euPerTick;
       for (const step of group) {
-        for (const u of step.reused?.units ?? []) onUnit(step.machine.mteId, u, step.euPerTick);
+        const id = machineIdOfLegacy(step.machine.mteId);
+        for (const u of step.reused?.units ?? []) onUnit(id, u, step.euPerTick);
         for (const o of step.reused?.others ?? []) {
           if (o.units === undefined) peak += o.count * o.euPerTick;
-          else for (const u of o.units) onUnit(o.mteId, u, o.euPerTick);
+          else for (const u of o.units) onUnit(machineIdOfLegacy(o.mteId), u, o.euPerTick);
         }
       }
     }
@@ -370,7 +374,7 @@ function metalOf(pack: Pack, material: string): readonly StuffKey[] {
 
 /** Whether a singleblock machine runs some map of `r` (not only multiblocks). */
 function singleblockMap(pack: Pack, r: Recipe): boolean {
-  return r.maps.some((mapId) => (pack.machinesByMap.get(mapId) ?? []).some((id) => pack.machines.get(id)?.kind === 'basic'));
+  return r.maps.some((mapId) => machineIdsForMap(pack, mapId).some((id) => machineOf(pack, id)?.kind === 'basic'));
 }
 
 /**
@@ -1642,7 +1646,7 @@ function unavoidableUses(
 function unitBuild(pack: Pack, model: BuildModel, step: PlanStep): number | null {
   const recipe = pack.recipeById.get(step.recipeId);
   const use = recipe === undefined ? undefined : { recipe, tier: step.machine.tier };
-  return machineBuildCost(exportPack(pack), model.prices, pack.machines.get(step.machine.mteId), use);
+  return machineBuildCost(exportPack(pack), model.prices, machineOf(pack, machineIdOfLegacy(step.machine.mteId)), use);
 }
 
 /**
@@ -1665,7 +1669,7 @@ function plantingsOf(pack: Pack, model: BuildModel, steps: readonly PlanStep[]):
 }
 
 /** New machines of one type a plan adds, and what building one costs (`each`; null: no price could be worked out). */
-interface NewMachines { mteId: number; name: string; count: number; each: number | null }
+interface NewMachines { id: MachineId; name: string; count: number; each: number | null }
 
 /**
  * The new machines a plan adds, in step order: rate, `count − owned` of each step that holds machines (a sharing pool
@@ -1674,16 +1678,17 @@ interface NewMachines { mteId: number; name: string; count: number; each: number
  */
 function newMachinesOf(pack: Pack, model: BuildModel, steps: readonly PlanStep[], made: MakeNResult | undefined): NewMachines[] {
   if (made !== undefined) {
-    return made.addedMachines.flatMap(({ mteId, count }) => {
-      const step = steps.find((s) => s.machine.mteId === mteId);
-      return step === undefined ? [] : [{ mteId, name: step.machine.name, count, each: unitBuild(pack, model, step) }];
+    return made.addedMachines.flatMap(({ id, count }) => {
+      const step = steps.find((s) => machineIdOfLegacy(s.machine.mteId) === id);
+      return step === undefined ? [] : [{ id, name: step.machine.name, count, each: unitBuild(pack, model, step) }];
     });
   }
   return machineGroups(steps).flatMap((group) => {
     const first = group[0] as PlanStep;
     const count = first.count - first.owned;
-    if (count <= 0 || first.handCraft || PSEUDO_IDS.has(first.machine.mteId)) return [];
-    return [{ mteId: first.machine.mteId, name: first.machine.name, count, each: unitBuild(pack, model, first) }];
+    const id = machineIdOfLegacy(first.machine.mteId);
+    if (count <= 0 || first.handCraft || isPseudoMachineId(id)) return [];
+    return [{ id, name: first.machine.name, count, each: unitBuild(pack, model, first) }];
   });
 }
 
@@ -1711,12 +1716,12 @@ function planCost(
   const planted = plantingsOf(pack, model, steps);
   let build = planted.build;
   let unpriced = 0;
-  const names = new Map<number, string>();
+  const names = new Map<MachineId, string>();
   for (const m of machines) {
     if (m.each !== null) build += m.count * m.each;
     else {
       unpriced += m.count;
-      if (!names.has(m.mteId)) names.set(m.mteId, m.name);
+      if (!names.has(m.id)) names.set(m.id, m.name);
     }
   }
   const unknown = [...names.values(), ...planted.unpriced];
@@ -1779,7 +1784,7 @@ function addBuildNotes(pack: Pack, settings: PlanSettings, model: BuildModel, st
     if (built !== undefined && step.machine.tier === built.tier) {
       step.warnings.push(`Built at ${tierName(built.tier)}, not ${tierName(built.wanted)}: ${built.why}`);
     }
-    if (onlyRequired && pack.machines.get(step.machine.mteId)?.kind === 'multiblock') {
+    if (onlyRequired && machineOf(pack, machineIdOfLegacy(step.machine.mteId))?.kind === 'multiblock') {
       step.warnings.push(`A multiblock is needed: nothing else makes ${stepProductName(pack, step)}`);
     }
   }
@@ -1807,7 +1812,7 @@ export function deliberateSplits(steps: readonly PlanStep[], flows: readonly Pla
   const index = indexPlan({ steps, flows, warnings: [], rawInputs });
   const byId = new Map(steps.map((s) => [s.id, s]));
   const stepOf = (id: string): PlanStep => byId.get(id) as PlanStep;
-  const onNoMachine = (s: PlanStep): boolean => s.handCraft || s.machine.mteId < 0;
+  const onNoMachine = (s: PlanStep): boolean => s.handCraft || isPseudoMachineId(machineIdOfLegacy(s.machine.mteId));
   const fullness = (s: PlanStep): number => {
     const pool = s.pool;
     return pool === undefined ? s.utilization : steps.filter((t) => t.pool?.id === pool.id).reduce((sum, t) => sum + t.utilization, 0);

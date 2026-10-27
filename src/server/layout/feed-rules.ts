@@ -18,6 +18,7 @@ import type { InterfaceSpec, ItemFilterSpec, RoutedChipSpec } from '../../shared
 import type { Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { Plan, PlanFlow, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
+import { machineByMteId } from '../pack/lookup.ts';
 import { stepOneOffs } from '../planner/bom.ts';
 import { isAutoWorkbench } from '../planner/machine-options.ts';
 import { comparePos } from '../world/graph.ts';
@@ -104,7 +105,7 @@ function lineNodes(pack: Pack, plan: Plan, live: readonly LayoutBlock[]): Node[]
   for (const b of live) {
     if (b.role !== 'machine' || b.stepId === undefined) continue;
     const step = plan.steps.find((s) => s.id === b.stepId);
-    const machine = b.block.mteId === undefined ? undefined : pack.machines.get(b.block.mteId);
+    const machine = b.block.mteId === undefined ? undefined : machineByMteId(pack, b.block.mteId);
     if (step === undefined || (machine !== undefined && manualReasonOf(machine) !== null)) continue;
     const steps = (b.stepIds ?? [b.stepId]).flatMap((id) => plan.steps.find((s) => s.id === id) ?? []);
     nodes.push({ block: b, step, steps, machine, label: where(b), multiblock: machine?.kind === 'multiblock', inBuses: [], outBuses: [] });

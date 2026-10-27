@@ -10,6 +10,7 @@ import type { WorldSource } from '../../shared/types/world.ts';
 import { messageOf } from '../api/client.ts';
 import { localTime } from '../format.ts';
 import { worldApi } from '../map/api.ts';
+import { showToast } from '../state/toasts.ts';
 import { browserInflate } from '../world/inflate.ts';
 import { dimLabel, pickWorldFiles, selectDims, type WorldPick } from '../world/pick-files.ts';
 import { findHotspots, formatSize, planSmartUpload, plural, SMART_RADIUS, type Hotspot, type ReadFile, type SmartPlan } from '../world/smart.ts';
@@ -491,9 +492,11 @@ function UploadSection(props: { onUploaded(): void }): ReactElement {
     stopper.current = ac;
     setVia(from);
     setUpload({ ...IDLE_UPLOAD, running: true });
+    showToast('Upload started');
     uploadWorld(items, worldApi, (progress) => setUpload((u) => ({ ...u, progress })), ac.signal).then(
       () => {
         setUpload({ ...IDLE_UPLOAD, outcome: `Sent ${plural(items.length, 'file')}. The scan is listed under Scans.` });
+        showToast('Upload finished');
         onUploaded();
       },
       (err: unknown) => {

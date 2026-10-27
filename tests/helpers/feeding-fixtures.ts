@@ -7,6 +7,7 @@
 
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import { DIRS, OPPOSITE, posKey, step, type Rotation, type Vec3 } from '../../src/shared/layout/geometry.ts';
 import { FACES } from '../../src/shared/types/assets.ts';
 import type { ConduitMode, Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
@@ -26,6 +27,7 @@ import { emptyScan, layoutLine } from '../../src/server/layout/layout.ts';
 import { amountList, finalItemOutputs, nameList, rawItemInputs, stepItemInputs, stepItemOutputs } from '../../src/server/layout/modes/mode.ts';
 import { manualReasonOf } from '../../src/server/layout/multiblock-rules.ts';
 import { resolveParts } from '../../src/server/layout/parts.ts';
+import { machineByMteId } from '../../src/server/pack/lookup.ts';
 import { lineGround, lineScan } from './enderio-fixtures.ts';
 import { EBF_STRUCTURE, IDS, layoutPack, makePlan, makeProject, type StepSpec } from './layout-fixtures.ts';
 
@@ -37,7 +39,7 @@ const BASIC_CLASS = 'gregtech.api.metatileentity.implementations.MTEBasicMachine
 
 /** A machine in the fixture table's own shape (the fields of `layout-fixtures.ts`'s `gtMachine`). */
 function gtMachine(mteId: number, name: string, metaName: string, kind: MachineKind, cls: string, more: Partial<Machine> = {}): Machine {
-  return { mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
 }
 
 function item(key: ItemKey, name: string): Item {
@@ -46,7 +48,8 @@ function item(key: ItemKey, name: string): Item {
 }
 
 function addMachine(pack: Pack, m: Machine): void {
-  pack.machines.set(m.mteId, m);
+  pack.machines.set(m.id, m);
+  pack.machineByMteId.set(m.mteId, m);
   pack.items.set(m.itemKey, item(m.itemKey, m.name));
 }
 
@@ -105,7 +108,7 @@ function feedMachines(): Machine[] {
 export function feedPack(): Pack {
   const pack = layoutPack();
   for (const [mteId, map] of FIXTURE_MAPS) {
-    const m = pack.machines.get(mteId);
+    const m = machineByMteId(pack, mteId);
     if (m === undefined) throw new Error(`the layout fixtures define no machine ${mteId}`);
     m.maps = [map];
   }
@@ -168,7 +171,7 @@ function stepRecipe(pack: Pack, spec: FeedStep, nominal: { inputs: readonly Prod
   }));
   for (const key of spec.held ?? []) inputs.push({ slot: itemSlot++, consumed: false, chance: 0, options: [{ key, amount: 1 }] });
   return {
-    id: spec.id, source: 'gt', maps: [...(pack.machines.get(spec.mteId)?.maps ?? [])], inputs, outputs, euPerTick: spec.euPerTick ?? 30,
+    id: spec.id, source: 'gt', maps: [...(machineByMteId(pack, spec.mteId)?.maps ?? [])], inputs, outputs, euPerTick: spec.euPerTick ?? 30,
     durationTicks: spec.ticks ?? DEFAULT_TICKS, amps: 1, specialValue: 0, meta: {}, flags: {},
   };
 }
@@ -267,7 +270,7 @@ export function legacyFeed(layout: Layout, pack: Pack, plan: Plan): Layout {
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
   const unitName = (stepId: string | undefined): string | undefined => {
     const s = stepId === undefined ? undefined : steps.get(stepId);
-    return s === undefined ? undefined : pack.machines.get(s.machine.mteId)?.name;
+    return s === undefined ? undefined : machineByMteId(pack, s.machine.mteId)?.name;
   };
   const isStepBlock = (b: LayoutBlock | undefined): b is LayoutBlock & { stepId: string } =>
     b !== undefined && b.stepId !== undefined && (b.role === 'machine' || b.hatch === 'input_bus' || b.hatch === 'output_bus');
@@ -288,7 +291,7 @@ export function legacyFeed(layout: Layout, pack: Pack, plan: Plan): Layout {
     const placed = new Set<string>(), hand = new Set<string>();
     for (const b of live) {
       if (b.role !== 'machine' || b.stepId === undefined) continue;
-      const m = b.block.mteId === undefined ? undefined : pack.machines.get(b.block.mteId);
+      const m = b.block.mteId === undefined ? undefined : machineByMteId(pack, b.block.mteId);
       (m !== undefined && manualReasonOf(m) !== null ? hand : placed).add(b.stepId);
     }
     const items = plan.flows.filter((f) => !isFluidKey(f.key));
@@ -435,7 +438,7 @@ export function simRecipe(stepId: string, ticks: number, inputs: Array<[StuffKey
 
 const UNSET: MachineSettings = { multiStack: null, inputFilter: null, inputFromOutputSide: null, autoOutput: null };
 
-type BasicBase = Pick<BasicNode, 'id' | 'mteId' | 'name' | 'tier' | 'inSlots' | 'outSlots' | 'outputSide' | 'front' | 'maps' | 'recipes'>;
+type BasicBase = Pick<BasicNode, 'id' | 'machineId' | 'name' | 'tier' | 'inSlots' | 'outSlots' | 'outputSide' | 'front' | 'maps' | 'recipes'>;
 
 /**
  * A basic node from `base` and the caller's `over`: its local cell and world cell (the same, in a hand-built model) from
@@ -461,7 +464,7 @@ function basicNode(base: BasicBase, over: Partial<BasicNode>): BasicNode {
  */
 export function smelterNode(over: Partial<BasicNode> = {}): BasicNode {
   return basicNode({
-    id: '0,0,0', mteId: FEED_IDS.SMELTER, name: 'Advanced Alloy Smelter', tier: 2, inSlots: 2, outSlots: 1, outputSide: 3, front: 4,
+    id: '0,0,0', machineId: gtMachineId(FEED_IDS.SMELTER), name: 'Advanced Alloy Smelter', tier: 2, inSlots: 2, outSlots: 1, outputSide: 3, front: 4,
     maps: ['gt.recipe.alloysmelter'], recipes: [simRecipe('sm', 100, [['t:a@0', 1], ['t:b@0', 4]], [['t:c@0', 1]])],
   }, over);
 }
@@ -469,7 +472,7 @@ export function smelterNode(over: Partial<BasicNode> = {}): BasicNode {
 /** A Basic Macerator (`IDS.MACERATOR`) at `id`: 1 input and 1 output slot, output side 3, front 4, recipe `one`: 1 `t:a@0` → 1 `t:x@0` in 20 ticks. */
 export function oneSlotNode(id: NodeId, over: Partial<BasicNode> = {}): BasicNode {
   return basicNode({
-    id, mteId: IDS.MACERATOR, name: 'Basic Macerator', tier: 1, inSlots: 1, outSlots: 1, outputSide: 3, front: 4, maps: ['gt.recipe.macerator'],
+    id, machineId: gtMachineId(IDS.MACERATOR), name: 'Basic Macerator', tier: 1, inSlots: 1, outSlots: 1, outputSide: 3, front: 4, maps: ['gt.recipe.macerator'],
     recipes: [simRecipe('one', 20, [['t:a@0', 1]], [['t:x@0', 1]])],
   }, over);
 }
@@ -481,7 +484,7 @@ export function oneSlotNode(id: NodeId, over: Partial<BasicNode> = {}): BasicNod
  */
 export function sinkNode(id: NodeId, inSlots: number, side = 2): BasicNode {
   return basicNode({
-    id, mteId: FEED_IDS.MIXER, name: 'Basic Mixer', tier: 1, inSlots, outSlots: 1, outputSide: side, front: 4, maps: ['gt.recipe.mixer'],
+    id, machineId: gtMachineId(FEED_IDS.MIXER), name: 'Basic Mixer', tier: 1, inSlots, outSlots: 1, outputSide: side, front: 4, maps: ['gt.recipe.mixer'],
     recipes: [simRecipe('n', 20, [['t:z@0', 1]], [['t:c@0', 1]])],
   }, {});
 }
@@ -512,7 +515,7 @@ export function ebfNode(over: Partial<MultiNode> = {}): MultiNode {
   const name = over.name ?? 'Electric Blast Furnace';
   const recipes = over.recipes ?? [simRecipe('e', 100, [['t:a@0', 1], ['t:b@0', 1]], [['t:x@0', 1]])];
   return {
-    kind: 'multi', ...placed(over.id ?? '1,0,0', name, over), name, mteId: IDS.EBF, recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
+    kind: 'multi', ...placed(over.id ?? '1,0,0', name, over), name, machineId: gtMachineId(IDS.EBF), recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
     kinds: distinctKeys(recipes.flatMap((r) => r.inputs.map((i) => i.key))), inBuses: [busNode('0,0,0')], outBuses: [outBusNode('2,0,0')],
     inputSeparation: null, separationDefault: true, ...over,
   };
@@ -543,7 +546,7 @@ export function benchNode(over: Partial<BenchNode> = {}): BenchNode {
   for (const key of grid) if (key !== null) cells.set(key, (cells.get(key) ?? 0) + 1);
   const recipes = over.recipes ?? [simRecipe('w', 1, [...cells], [[result.key, result.amount]])];
   return {
-    kind: 'bench', id, local, pos, name, label: `${name} at ${pos.join(' ')}`, mteId: FEED_IDS.BENCH, tier, front: 2, back: 3, grid, result,
+    kind: 'bench', id, local, pos, name, label: `${name} at ${pos.join(' ')}`, machineId: gtMachineId(FEED_IDS.BENCH), tier, front: 2, back: 3, grid, result,
     containers: {}, throughput: 0, fluidSides: [], powerSides: [], itemPipeSides: [], recipes, stepIds: [...new Set(recipes.map((r) => r.stepId))],
     kinds: distinctKeys(recipes.flatMap((r) => r.inputs.map((i) => i.key))), ...over,
   };

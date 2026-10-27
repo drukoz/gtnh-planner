@@ -26,9 +26,11 @@
 
 import { multiblockOverclock, multiplierUnderOneTick, singleblockOverclock, voltageTier, type MachineOc } from '../../src/shared/gt/overclock.ts';
 import { V, tierName } from '../../src/shared/gt/tiers.ts';
+import { isPseudoMachineId, legacyMteId, machineIdOfLegacy, type MachineId } from '../../src/shared/ids.ts';
 import type { StuffKey } from '../../src/shared/keys.ts';
 import type { Machine, Pack, Recipe } from '../../src/shared/types/pack.ts';
 import { FREE_KEYS, type Plan, type PlanContext, type PlanSettings, type PlanStep } from '../../src/shared/types/plan.ts';
+import { machineByMteId, machinesForMap } from '../../src/server/pack/lookup.ts';
 // The world blocks the planner gathers, and with build cost counted may also make (plan 12's change request 13)
 import { GATHERED_BLOCKS as MADE_WHEN_IT_PAYS } from '../../src/server/planner/availability.ts';
 import { planBasis, type PlanBasis } from '../../src/server/planner/basis.ts';
@@ -489,14 +491,14 @@ function checkProducers(pack: Pack, plan: Plan, led: Map<StuffKey, Ledger>): Vio
  * amps covers the recipe's EU/t; or a multiblock whose energy hatch is from the recipe's voltage tier (at most the
  * project's) up to the project's, one the group owns or one for a recipe no such singleblock runs.
  */
-function notEligible(pack: Pack, r: Recipe, step: PlanStep, m: Machine, groupTier: number, owned: ReadonlyMap<number, number>): string | null {
+function notEligible(pack: Pack, r: Recipe, step: PlanStep, m: Machine, groupTier: number, owned: ReadonlyMap<MachineId, number>): string | null {
   const tier = step.machine.tier;
   if (step.mapId === 'crafting') {
     if (!isAutoWorkbench(m)) return 'a crafting-table step runs on an Auto Workbench';
     return tier === (m.tier ?? 0) && tier <= groupTier ? null : `an Auto Workbench of ${tierName(tier)} above the project's ${tierName(groupTier)}`;
   }
-  const onMap = (pack.machinesByMap.get(step.mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? []);
-  if (!onMap.some((x) => x.mteId === m.mteId)) return `${m.name} runs no recipe of ${pack.maps.get(step.mapId)?.name ?? step.mapId}`;
+  const onMap = machinesForMap(pack, step.mapId);
+  if (!onMap.some((x) => x.id === m.id)) return `${m.name} runs no recipe of ${pack.maps.get(step.mapId)?.name ?? step.mapId}`;
   const mapAmps = pack.maps.get(step.mapId)?.amps ?? 1;
   const runs = (x: Machine): boolean => x.kind === 'basic' && (x.tier ?? 0) <= groupTier && (V[x.tier ?? 0] as number) * mapAmps >= r.euPerTick;
   if (m.kind === 'basic') {
@@ -506,7 +508,7 @@ function notEligible(pack: Pack, r: Recipe, step: PlanStep, m: Machine, groupTie
   if (m.kind === 'multiblock') {
     const lowest = Math.min(voltageTier(r.euPerTick), groupTier);
     if (tier < lowest || tier > groupTier) return `an energy hatch of ${tierName(tier)} is outside ${tierName(lowest)}–${tierName(groupTier)}`;
-    return onMap.some(runs) && (owned.get(m.mteId) ?? 0) === 0 ? `a singleblock runs it and the group owns no ${m.name}` : null;
+    return onMap.some(runs) && (owned.get(m.id) ?? 0) === 0 ? `a singleblock runs it and the group owns no ${m.name}` : null;
   }
   return `${m.name} is no machine a step runs on`;
 }
@@ -531,14 +533,14 @@ function ownOverclock(pack: Pack, r: Recipe, step: PlanStep, m: Machine, coilHea
 /**
  * The peak draw `powerSummary` (plan.ts) gives with build cost counted (plan 12, architecture §11.39): each step's new
  * machines, `count − reused.units.length` at its EU/t — a sharing pool's once, by its first step, at the largest EU/t of
- * its steps — plus each distinct owned machine (mteId and unit, those of `reused.others` at their own EU/t) once, at the
+ * its steps — plus each distinct owned machine (id and unit, those of `reused.others` at their own EU/t) once, at the
  * largest EU/t among the steps on it; an owned machine of another option without units at its count × EU/t.
  */
 function peakAsPlanned(steps: readonly PlanStep[]): number {
   let peak = 0;
   const units = new Map<string, number>();
-  const onUnit = (mteId: number, unit: number, euPerTick: number): void => {
-    const key = `${mteId}:${unit}`;
+  const onUnit = (id: MachineId, unit: number, euPerTick: number): void => {
+    const key = `${id}:${unit}`;
     units.set(key, Math.max(units.get(key) ?? 0, euPerTick));
   };
   const seen = new Set<string>();
@@ -553,10 +555,11 @@ function peakAsPlanned(steps: readonly PlanStep[]): number {
     for (const s of group) euPerTick = Math.max(euPerTick, s.euPerTick);
     peak += Math.max(0, first.count - (first.reused?.units?.length ?? 0)) * euPerTick;
     for (const s of group) {
-      for (const u of s.reused?.units ?? []) onUnit(s.machine.mteId, u, s.euPerTick);
+      const id = machineIdOfLegacy(s.machine.mteId);
+      for (const u of s.reused?.units ?? []) onUnit(id, u, s.euPerTick);
       for (const o of s.reused?.others ?? []) {
         if (o.units === undefined) peak += o.count * o.euPerTick;
-        else for (const u of o.units) onUnit(o.mteId, u, o.euPerTick);
+        else for (const u of o.units) onUnit(machineIdOfLegacy(o.mteId), u, o.euPerTick);
       }
     }
   }
@@ -583,7 +586,7 @@ function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: Pl
       out.push({ kind: 'machines', severity: 'error', stepId: step.id, message: `${label}: machine tier ${step.machine.tier} above the group's tier ${plan.tier}` });
     }
     let parallel = 1;
-    const machine = step.machine.mteId >= 0 ? pack.machines.get(step.machine.mteId) : undefined;
+    const machine = step.machine.mteId >= 0 ? machineByMteId(pack, step.machine.mteId) : undefined;
     const farm = r.meta.farm;
     if (farm !== undefined) {
       // A farm recipe (add-on 17): its own tier and machines, no overclock, `parallel` crops or trees a machine.
@@ -629,7 +632,7 @@ function checkMachines(pack: Pack, settings: PlanSettings, plan: Plan, basis: Pl
       }
       if (pick !== undefined) {
         parallel = pick.oc.parallel;
-        if (pick.mteId !== step.machine.mteId || pick.tier !== step.machine.tier || pick.oc.euPerTick !== step.euPerTick
+        if (legacyMteId(pick.id) !== step.machine.mteId || pick.tier !== step.machine.tier || pick.oc.euPerTick !== step.euPerTick
           || pick.oc.durationTicks !== step.durationTicks || pick.oc.overclocks !== step.overclocks) {
           out.push({
             kind: 'machines', severity: 'error', stepId: step.id,
@@ -912,7 +915,7 @@ export interface HeldMachines { most: ReadonlyMap<string, number>; pools: Readon
 
 /** Whether `step` runs on no machine a build counts: by hand, or on a pseudo machine (the furnace, the crafting table). */
 function onPseudo(step: PlanStep): boolean {
-  return step.handCraft || step.machine.mteId < 0;
+  return step.handCraft || isPseudoMachineId(machineIdOfLegacy(step.machine.mteId));
 }
 
 /**

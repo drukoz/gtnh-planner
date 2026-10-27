@@ -5,12 +5,15 @@
 // project and a tree farm's tool wear said so (add-on 17) — the inputs nothing in the plan supplies (fix spec §6.4),
 // whom its byproducts serve in other projects (add-on 17), and the amount, stock and storage texts next to each row
 // (spec §3.4, architecture §11.20); and what a plan uses beyond its line, for the plan banner (ruling R18). Amounts never
-// read 0: tiny rates read "1 every N days" (fix spec §6.1).
+// read 0: tiny rates read "1 every N days" (fix spec §6.1). The build list can also be drawn as an inventory grid (Phase 2
+// spec §9): its top-level lines as slots in their groups, each item split into stacks of 64, with what a group still needs,
+// the stacks gathered, and what each slot's tip says.
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
 import type { BomLine, LeafClass, Plan, PlanStep, RawInput, SourceInfo, StorageWhere } from '../../shared/types/plan.ts';
+import type { Mark } from '../../shared/types/project.ts';
 import { formatNumber, formatPercent, formatRate } from '../format.ts';
 
 type BuildGroup = NonNullable<BomLine['group']>;
@@ -60,6 +63,12 @@ export function amountText(n: number): string {
   const whole = Math.round(n) || 0;   // never `-0`
   if (Math.abs(n - whole) <= WHOLE_TOLERANCE * Math.max(1, Math.abs(n))) return WHOLE.format(whole);
   return Math.abs(n) < SMALLEST_TWO_DECIMALS ? formatNumber(n) : TWO_DECIMALS.format(n);
+}
+
+/** A count with its unit: litres for a fluid, `×` for an item. A rate (`rate`) carries its unit already. The List and the grid share it. */
+export function quantity(key: StuffKey, amount: string, rate = false): string {
+  if (rate) return amount;
+  return isFluidKey(key) ? `${amount} L` : `${amount}×`;
 }
 
 /** A good's name in a build list: a Programmed Circuit says its configuration ("Programmed Circuit (config 3)"). */
@@ -116,6 +125,9 @@ export interface BuildRow {
 
 const NONE: ReadonlySet<StuffKey> = new Set();
 
+/** What the avoid marker says of a good the line uses although the avoid list covers it: its title in the List, a line of its slot's tip in the grid. */
+export const AVOID_NOTE = 'On the avoid list or made from it, but no recipe at this tier avoids it';
+
 /** The goods the plan uses although the avoid list covers them, as nothing at its tier avoids them (spec §3.3). */
 export function unavoidableKeys(plan: Plan): Set<StuffKey> {
   return new Set((plan.avoided ?? []).filter((a) => a.unavoidable).map((a) => a.key));
@@ -164,6 +176,109 @@ export function groupBuildRows(
   return BUILD_GROUPS
     .map(({ id, label }) => ({ id, label, rows: buildRows(lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id), names, expanded, unavoidable) }))
     .filter((group) => group.rows.length > 0);
+}
+
+/** Minecraft's stack (Phase 2 spec §9.1). The export has no stack size per item (pack.ts `Item`), and a build list asks for one of each tool. */
+export const STACK_SIZE = 64;
+/** The stacks of an item the grid draws: past them one more slot says how many it holds (`+N`), which bounds the page however big the build. */
+export const MAX_STACKS_SHOWN = 9;
+/** How far past a whole number an amount may be and still count as it (float noise: 64.0000000001 items are one stack of 64). */
+const STACK_NOISE = 1e-6;
+
+/** Whole items: the amount rounded up (0.25 → 1), but for a hair of float noise (64.0000000001 → 64); 0 for none or for no number. */
+function wholeItems(amount: number): number {
+  const n = Math.ceil(amount - STACK_NOISE);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * The first `limit` stacks of whole items in stacks of `size` (the grid draws `MAX_STACKS_SHOWN`), the last one holding the rest: 80 →
+ * [64, 16], 128 → [64, 64], 1 → [1], 0.25 → [1], 64.0000000001 → [64]; nothing for 0 or less. However many there are, the array is at most
+ * `limit` long (the final fix wave, FW-5: a build of 1e12 once built 15.6 billion entries): `stackCount` counts them all.
+ */
+export function stackSplit(amount: number, size: number = STACK_SIZE, limit: number = MAX_STACKS_SHOWN): number[] {
+  const n = wholeItems(amount);
+  const full = Math.floor(n / size);
+  const rest = n - full * size;
+  const stacks = Array.from({ length: Math.min(full, limit) }, () => size);
+  if (rest > 0 && stacks.length < limit) stacks.push(rest);
+  return stacks;
+}
+
+/** How many stacks of `size` whole items fill (80 → 2, 1 → 1, 0.25 → 1), worked out, never counted in an array; 0 for none. */
+export function stackCount(amount: number, size: number = STACK_SIZE): number {
+  return Math.ceil(wholeItems(amount) / size);
+}
+
+/** A top-level line of the build list as inventory slots (Phase 2 spec §9.4). */
+export interface SlotItem {
+  /** `build:<key>`, the row's one mark, which the List's row shares and every stack of it shows. */
+  row: string; key: StuffKey; name: string; group: BuildGroup;
+  /** The quantity the List shows: "80×", "1,000 L". */
+  amount: string;
+  /** The sizes of the item's stacks the grid draws, at most `MAX_STACKS_SHOWN` (`stackSplit`); a fluid is one slot, whatever its litres. */
+  stacks: number[];
+  /** How many stacks the item fills in all (`stackCount`), those past the ninth too; 1 for a fluid. */
+  stackCount: number;
+  why: string; have?: string; where?: string[];
+  /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
+  avoid?: true;
+  fluid: boolean;
+}
+
+/** A group of the build list as slots: one of `BUILD_GROUPS`. */
+export interface SlotGroup { id: BuildGroup; label: string; items: SlotItem[] }
+
+/**
+ * The build list's top-level lines as slots (their breakdown stays in the List), grouped as `groupBuildRows` groups them: in `BUILD_GROUPS`
+ * order, a line without a group a machine, empty groups left out; a good in `unavoidable` is marked `avoid`.
+ */
+export function groupBuildSlots(lines: BomLine[], names: Record<string, string>, unavoidable: ReadonlySet<StuffKey> = NONE): SlotGroup[] {
+  return BUILD_GROUPS
+    .map(({ id, label }) => ({ id, label, items: lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id).map((line) => slotItem(line, id, names, unavoidable)) }))
+    .filter((group) => group.items.length > 0);
+}
+
+function slotItem(line: BomLine, group: BuildGroup, names: Record<string, string>, unavoidable: ReadonlySet<StuffKey>): SlotItem {
+  const fluid = isFluidKey(line.key);
+  const item: SlotItem = {
+    row: `build:${line.key}`, key: line.key, name: buildName(line.key, names), group, amount: quantity(line.key, amountText(line.amount)),
+    stacks: fluid ? [1] : stackSplit(line.amount), stackCount: fluid ? 1 : stackCount(line.amount), why: line.why, ...stockOf(line.have), fluid,
+  };
+  if (unavoidable.has(line.key)) item.avoid = true;
+  return item;
+}
+
+/** The stacks of every item, those past the ninth too, and of the marked rows among them: "Gathered <done> of <total> stacks". */
+export function gatheredStacks(groups: readonly SlotGroup[], marks: Readonly<Record<string, Mark>>): { done: number; total: number } {
+  let done = 0;
+  let total = 0;
+  for (const group of groups) {
+    for (const item of group.items) {
+      total += item.stackCount;
+      if (marks[item.row] !== undefined) done += item.stackCount;
+    }
+  }
+  return { done, total };
+}
+
+/** What a group still needs, counting its rows: "3 of 11 still needed", or "all in your chests" once every row is marked. */
+export function stillNeeded(items: readonly SlotItem[], marks: Readonly<Record<string, Mark>>): string {
+  const left = items.filter((item) => marks[item.row] === undefined).length;
+  return left === 0 ? 'all in your chests' : `${left} of ${items.length} still needed`;
+}
+
+/**
+ * A slot's tip after its name (Phase 2 spec §9.4): what the build needs, and what the scanned world holds; why; the avoid marker's words,
+ * for a good nothing at the tier avoids; and who marked the row, and when (`when` writes the time).
+ */
+export function slotTipLines(item: SlotItem, mark: Mark | undefined, when: (iso: string) => string): string[] {
+  return [
+    item.have === undefined ? `need ${item.amount}` : `need ${item.amount} · ${item.have}`,
+    item.why,
+    ...(item.avoid === true ? [AVOID_NOTE] : []),
+    ...(mark === undefined ? [] : [`✓ ${mark.by}, ${when(mark.at)}`]),
+  ];
 }
 
 /** A step that takes a good, and how much: per hour in rate mode, for the whole batch in Make N. */

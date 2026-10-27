@@ -12,6 +12,7 @@ import type {
 } from '../../src/server/pack/format.ts';
 import { DERIVED_FROM_FURNACE } from '../../src/server/pack/indices.ts';
 import { PSEUDO_MAPS } from '../../src/server/pack/load.ts';
+import { allMachines } from '../../src/server/pack/lookup.ts';
 import { FLUID_SLOT_BASE, META_RENAMES, VANILLA_FURNACE_TICKS } from '../../src/server/pack/recipes.ts';
 import { CAPABILITY_MIN_TIER, TIER_DEFAULTS, UNKNOWN_DIM_TIER, dimKey } from '../../src/server/pack/worldgen.ts';
 import { isFluidKey, parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
@@ -126,7 +127,7 @@ export function toExportSpec(spec: PackSpec): ExportSpec {
   }
   for (const r of derived) addDerived(r, recipesFurnace, item);
 
-  const machines: MachineLine[] = [...pack.machines.values()].map((m) => {
+  const machines: MachineLine[] = allMachines(pack).map((m) => {
     if (m.structure !== undefined) unsupported(`the structure of machine ${m.mteId}`);
     const line: MachineLine = { id: m.mteId, name: m.metaName, cls: m.cls, dn: m.name, item: item(m.itemKey), kind: m.kind, maps: [...m.maps] };
     if (m.tier !== undefined) line.tier = m.tier;

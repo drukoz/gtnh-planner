@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PlanBanner } from '../../src/client/views/ProjectPage.tsx';
+import { drawerStatus, PlanBanner } from '../../src/client/views/ProjectPage.tsx';
 import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Plan, PlanSettings, PlanStep } from '../../src/shared/types/plan.ts';
@@ -55,6 +55,8 @@ describe('plan banner', () => {
     const served = { ...broken, warnings: [{ code: 'orphan-input', key: 'fluid:pva', stepId: 'mixer', text: 'Nothing supplies the PVA (as the server says it).' }] };
     const out = text(html(served));
     expect(out).toContain('This plan does not add up: 2 inputs have no source, 1 good is made two ways');
+    // its figures are VT323 (span.fig), its words Pixelify (Phase 2 spec §25)
+    expect(html(served)).toContain('This plan does not add up: <span class="fig">2</span> inputs have no source, <span class="fig">1</span> good is made two ways');
     expect(out).toContain('Show in the flow');
     expect(out).toContain('Nothing supplies the PVA (as the server says it).');
     expect(out).not.toContain('Nothing supplies Polyvinyl Acetate');             // the server's text, not the client's
@@ -119,7 +121,15 @@ describe('plan banner', () => {
     expect(getFlowFocus()).toEqual({ kind: 'item', key: 't:a2@0' });               // each chip shows its import in the flow
     expect(location.hash).toBe('#flow');
     const [plan] = findAll(tree, (e) => e.type === 'button' && e.props.children === 'Plan them as supporting lines');
+    // the final fix wave, FW-7(b): the button goes with the op it sends, and the chips beside it with the next plan, so the page's main takes
+    // the focus first, never the body (ledger ruling P2-R57); node has no DOM, so a stand-in main records it
+    const order: string[] = [];
+    class Main { hasAttribute(): boolean { return true; } focus(): void { order.push('focus main'); } }
+    vi.stubGlobal('HTMLElement', Main);
+    vi.stubGlobal('document', { querySelector: (selector: string) => (selector === 'main' ? new Main() : null) });
+    send.mockImplementationOnce(() => order.push('send'));
     (plan!.props.onClick as () => void)();
+    expect(order).toEqual(['focus main', 'send']);
     expect(send).toHaveBeenCalledWith([{ op: 'settings', patch: { routeDerived: true } }]);
   });
   it('leaves what a Make N batch comes out short of to its batch-short warning', () => {
@@ -226,5 +236,75 @@ describe('plan banner: the hint to pick something to make', () => {
   it('adds nothing of its own: a plan with nothing to say is still no banner, and a plan not yet loaded is none either', () => {
     expect(htmlWithPicker(planOf({}))).toBe('');
     expect(renderToStaticMarkup(<PlanBanner plan={null} planError={null} planLoading={true} settings={S()} send={() => {}} onPickTarget={() => {}} />)).toBe('');
+  });
+});
+
+// Phase 2 Task 8 (spec §17 R43, §11.3): the banners are inert behind an open settings drawer, so their status is not announced there; the
+// drawer has a status line of its own: why a change was refused or failed (the store's error, the final fix wave's FW-10), else the planner's
+// error, else that the plan is updating (in other words than the banner's busy line,
+// which drawer.spec.ts finds by its text while the drawer is open: plan ruling drawer-status-words), else how many problems the banner
+// lists (never their words, which other e2e specs find by text), leaving out the hint to pick something to make, which the drawer answers
+// (plan ruling drawer-status-count), else, for a plan that runs, that it has no problems, so an update is heard to end as it was heard to
+// start (ledger ruling P2-R52). The banner's busy line carries the GT progress arrow on its chat box.
+describe('the drawer\'s status (R43)', () => {
+  const hint = { code: 'no-target', text: 'Pick something to make' };
+  const oneOrphan = planOf({
+    steps: [step({ id: 'mixer', mainOutput: 't:glue@0', inputs: [{ key: 't:resin@0', amount: 1, chance: 1 }], outputs: [{ key: 't:glue@0', amount: 1, chance: 1 }] })],
+    flows: [{ from: 'mixer', to: 'out', key: 't:glue@0', perSecond: 0.5 }],
+  });
+  const avoid = 'Basic Wiremill uses Copper Ingot — no recipe at LV avoids it';
+  const twoWarnings = planOf({ warnings: [{ code: 'avoid-unavoidable', key: 't:copper_ingot@0', stepId: 'wire', text: avoid }, { code: 'no-recipe', text: 'Nothing at ≤ LV makes Glue' }] });
+
+  // the final fix wave, FW-10: a change the page sent that failed or was refused (the store's error, the banner's alert) comes first: the field
+  // in the drawer snaps back, and the banner that says why is inert behind it
+  it('says why a change was refused or failed before anything else', () => {
+    expect(drawerStatus(planOf({}), 'The planner refused that change', null, false)).toBe('The planner refused that change');
+    expect(drawerStatus(broken, 'Failed to fetch', 'boom', true)).toBe('Failed to fetch');
+    expect(drawerStatus(null, 'Failed to fetch', null, false)).toBe('Failed to fetch');
+  });
+
+  it('says the planner\'s error, else that the plan is updating, else how many problems the banner lists', () => {
+    expect(drawerStatus(null, null, 'boom', false)).toBe('boom');
+    expect(drawerStatus(broken, null, 'boom', true)).toBe('boom');
+    expect(drawerStatus(broken, null, null, true)).toBe('The plan is updating…');
+    expect(drawerStatus(broken, null, null, true).toLowerCase()).not.toContain('updating the plan');
+    expect(drawerStatus(broken, null, null, false)).toBe('The plan has 3 problems');                   // two inputs with no source, a good made two ways
+    expect(drawerStatus(oneOrphan, null, null, false)).toBe('The plan has 1 problem');
+    expect(drawerStatus(twoWarnings, null, null, false)).toBe('The plan has 2 problems');
+    expect(drawerStatus(twoWarnings, null, null, false)).not.toContain(avoid);
+    // the hint to pick something to make is no problem: the drawer that opens by itself is where it is answered
+    expect(drawerStatus(planOf({ status: 'empty', warnings: [hint] }), null, null, false)).toBe('');
+    expect(drawerStatus(planOf({ status: 'empty', warnings: [hint, { code: 'no-recipe', text: 'Nothing at ≤ LV makes Glue' }] }), null, null, false)).toBe('The plan has 1 problem');
+    // ledger ruling P2-R52: a plan that runs with nothing to warn about has no problems, and says so; one that is on its way is updating
+    expect(drawerStatus(planOf({}), null, null, false)).toBe('No problems');
+    expect(drawerStatus(planOf({}), null, null, true)).toBe('The plan is updating…');
+    // a plan that cannot run and says nothing about it is no "No problems"; it has none to count either
+    expect(drawerStatus(planOf({ status: 'infeasible' }), null, null, false)).toBe('');
+    expect(drawerStatus(null, null, null, true)).toBe('');                                               // the first plan is on its way: the view says "Planning…"
+    expect(drawerStatus(null, null, null, false)).toBe('');
+  });
+
+  it('counts what the banner lists, its problems and other warnings, and not what the plan uses beyond its line', () => {
+    // the banner's lists: each problem and each other warning is an item of a `ul.warnings`; the hint's item is not counted
+    const listed = (plan: Plan): number => [...html(plan).matchAll(/<ul class="warnings">(.*?)<\/ul>/g)]
+      .flatMap((m) => m[1]!.match(/<li>.*?<\/li>/g) ?? []).filter((li) => !li.includes('Pick something to make')).length;
+    for (const plan of [broken, oneOrphan, twoWarnings, planOf({ status: 'empty', warnings: [hint, { code: 'no-recipe', text: 'Nothing at ≤ LV makes Glue' }] })]) {
+      const n = listed(plan);
+      expect(n).toBeGreaterThan(0);
+      expect(drawerStatus(plan, null, null, false)).toBe(`The plan has ${n} ${n === 1 ? 'problem' : 'problems'}`);
+    }
+    // a farm the plan uses is a source note, not a problem
+    const farmed = planOf({ steps: [step({ id: 'tgs', mapId: 'gt.recipe.treefarm', mainOutput: 't:wood@0', outputs: [{ key: 't:wood@0', amount: 1, chance: 1 }],
+      farm: { kind: 'tgs', tier: 1, footprint: [7, 7, 7], text: 'Tree Growth Simulator', tools: [] } })], flows: [{ from: 'tgs', to: 'out', key: 't:wood@0', perSecond: 0.5 }] });
+    expect(text(html(farmed))).toContain('This plan uses');
+    expect(drawerStatus(farmed, null, null, false)).toBe('No problems');
+  });
+
+  it('draws the GT progress arrow in the banner\'s busy line', () => {
+    const busy = renderToStaticMarkup(<PlanBanner plan={broken} planError={null} planLoading={true} settings={S()} send={() => {}} />);
+    expect(busy).toContain('<p class="muted"><span class="gt-arrow on-chat" aria-hidden="true"><span class="gt-arrow-fill"></span></span>Updating the plan…</p>');
+    // alone too, when the banner has nothing else to say
+    expect(renderToStaticMarkup(<PlanBanner plan={planOf({})} planError={null} planLoading={true} settings={S()} send={() => {}} />))
+      .toBe('<div class="plan-banner" role="status"><p class="muted"><span class="gt-arrow on-chat" aria-hidden="true"><span class="gt-arrow-fill"></span></span>Updating the plan…</p></div>');
   });
 });

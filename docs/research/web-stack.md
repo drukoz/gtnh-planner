@@ -72,6 +72,7 @@ installed with npm's `--before` flag, so **transitive** dependencies obey the ru
 | @fastify/busboy | 3.2.2 | 2026-08-21 | MIT | evaluated; keeps the old busboy 0.x API |
 | @fontsource/pixelify-sans | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI restyle (design spec §5): headings, tabs, buttons; weights 400/600/700, bundled by Vite, no CDN; added 2026-10-23 with `--before=2026-10-09`, no transitive dependencies |
 | @fontsource/inter | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI restyle (design spec §5): body text; weights 400/500/600/700; installed with the line above |
+| @fontsource/vt323 | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI Phase 2 (spec §25): figures — readouts, counts, step numbers and the digits in pixel text; weight 400, bundled by Vite, no CDN; added 2026-10-24 at the version of the two rows above, no transitive dependencies |
 
 Evidence:
 ```text

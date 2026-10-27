@@ -10,6 +10,7 @@ import { MaterialsView } from '../../src/client/views/MaterialsView.tsx';
 import { PlanBanner } from '../../src/client/views/ProjectPage.tsx';
 import { RawPanel, StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { flowGraph, importWords } from '../../src/client/views/flow-model.ts';
+import { FlowNodeShape } from '../../src/client/views/FlowView.tsx';
 import { defaultSettings, validateOp } from '../../src/shared/project/apply-op.ts';
 import type { FarmStep } from '../../src/shared/types/farm.ts';
 import type { Plan, PlanStep, RawInput } from '../../src/shared/types/plan.ts';
@@ -186,6 +187,15 @@ describe('farm steps and from imports in the flow', () => {
     const twoFarms = planOf({ rawInputs: [raw({ key: LATEX, from: FROM_PROJECT }), raw({ key: LATEX, from: { kind: 'farm', id: 'f', name: 'Crop manager' } }),
       raw({ key: 't:x@0' })] });
     expect(importWords(twoFarms)).toEqual(new Map([[LATEX, 'from Rubber line and Crop manager']]));
+  });
+  // Phase 2 spec §6.4: the diagram's tooltips tell them too, an arrow's route naming the import as its title does, and a farm step's box
+  // holding the farm's words whole, a line of its tip
+  it('tells a from import and a farm step\'s words in the diagram\'s tooltips', () => {
+    const graph = flowGraph(farmed, 'min');
+    expect(graph.edges.find((e) => e.from === 'import:t:latex@0@mixer')?.route).toBe('import (from Rubber line) → Mixer (Glue)');
+    const box = graph.nodes.find((n) => n.id === 'tgs-rubber')!;
+    const tag = /<g class="flow-node[^"]*" data-node-id="tgs-rubber"[^>]*>/.exec(renderToStaticMarkup(<svg><FlowNodeShape node={{ ...box, x: 0, y: 0 }} /></svg>))![0];
+    expect(/ data-tip="([^"]*)"/.exec(tag)![1]!.split('\n')).toContain(TGS_FARM.text);
   });
   it('says in the step and raw panels where an import comes from', () => {
     const takes = text(renderToStaticMarkup(<StepPanel step={mixer} plan={shared} settings={defaultSettings()} send={() => {}} onClose={() => {}} per="min" />));

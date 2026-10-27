@@ -15,6 +15,7 @@ import { exportedCells, grownCells, KIND_SOURCES } from '../../../src/server/lay
 import { elementMap, elementTakes, hatchRuleFor, ruleFits } from '../../../src/server/layout/hatch-rules.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { simpleClassName } from '../../../src/server/world/facts.ts';
 import { exportKindOfClass, type ExportHatchKind } from '../../../src/shared/gt/hatch-kinds.ts';
@@ -106,14 +107,14 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
 
   /** The kinds GregTech's check took on the element of machine `mteId` with character `ch`; fails when it has none. */
   function takes(mteId: number, ch: string): ExportHatchKind[] {
-    const element = pack.machines.get(mteId)?.structure?.elements?.find((e) => e.ch === ch);
+    const element = machineByMteId(pack, mteId)?.structure?.elements?.find((e) => e.ch === ch);
     expect(element, `machine ${mteId} has an element '${ch}'`).toBeDefined();
     return [...element!.hatches];
   }
 
   it("carries GregTech's hatch rules", () => {
     const manifest = pack.manifest;
-    const machines = [...pack.machines.values()];
+    const machines = allMachines(pack);
     const ruled = machines.filter((m) => m.structure?.elements !== undefined);
     console.log(`real-hatch-export: exporter ${manifest.exporterVersion}, hatchRules ${manifest.counts.hatchRules} of `
       + `${machines.filter((m) => m.structure !== undefined).length} structures (${ruled.length} machines with elements)`);
@@ -121,16 +122,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     expect(manifest.exporterVersion).toBe('0.6.0');
     expect(manifest.counts.hatchRules).toBeGreaterThanOrEqual(300);
     expect(manifest.counts.hatchRules).toBe(ruled.length);
-    const bbf = pack.machines.get(140);
+    const bbf = machineByMteId(pack, 140);
     expect(bbf?.structure, 'the Bricked Blast Furnace has a structure').toBeDefined();
     expect(bbf?.structure?.elements, 'the Bricked Blast Furnace has no hatch rules').toBeUndefined();
     for (const id of [3013, 15411]) {
-      const st = pack.machines.get(id)?.structure;
+      const st = machineByMteId(pack, id)?.structure;
       expect(st?.truncated, `${id} is truncated`).toBe(true);
       expect(st?.elements, `${id} has no hatch rules`).toBeUndefined();
     }
     // the item slot counts of GT's basic machines (exporter 0.6.0, architecture §11.49 (5))
-    const slots = (id: number): Array<number | undefined> => [pack.machines.get(id)?.itemInSlots, pack.machines.get(id)?.itemOutSlots];
+    const slots = (id: number): Array<number | undefined> => [machineByMteId(pack, id)?.itemInSlots, machineByMteId(pack, id)?.itemOutSlots];
     expect(slots(302), 'the Advanced Macerator').toEqual([1, 1]);
     expect(slots(211)[0], 'the LV Assembler').toBe(6);
     expect(slots(212)[0], 'the MV Assembler').toBe(9);
@@ -161,12 +162,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     expect(takes(1169, 'c')).toEqual(ALL_SIX);
     expect(takes(1169, 'x')).toEqual(ALL_SIX);
     expect(takes(1169, 'P')).toEqual([]);
-    const coke = pack.machines.get(236)?.structure?.elements ?? [];
+    const coke = machineByMteId(pack, 236)?.structure?.elements ?? [];
     console.log(`real-hatch-export: Coke Oven 236 elements: ${coke.map(elementText).join('; ') || 'none'}`);
     expect(coke.some((e) => e.hatches.includes('coke_oven_hatch')), 'some element of the Coke Oven takes a Coke Oven Hatch').toBe(true);
     // for review, not asserted: with Task 2's verdict these are steam multiblocks and data-stick machines
     const special: ReadonlySet<ExportHatchKind> = new Set(['steam_input_bus', 'steam_output_bus', 'steam_hatch', 'data_access']);
-    const marked = [...pack.machines.values()].filter((m) => m.structure?.elements?.some((e) => e.hatches.some((h) => special.has(h))));
+    const marked = allMachines(pack).filter((m) => m.structure?.elements?.some((e) => e.hatches.some((h) => special.has(h))));
     console.log(`real-hatch-export: ${marked.length} machines with an element taking a steam kind or data_access: `
       + marked.map((m) => {
         const kinds = [...new Set(m.structure!.elements!.flatMap((e) => e.hatches.filter((h) => special.has(h))))];
@@ -178,7 +179,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     const problems: string[] = [];
     const matched = new Map<string, number>(EXPORT_WIDER.map((w) => [wider(w.cls, w.ch, w.kind), 0]));
     const cellCounts: string[] = [];
-    for (const m of pack.machines.values()) {
+    for (const m of allMachines(pack)) {
       const st = m.structure;
       const cells = exportedCells(m);
       const row = hatchRuleFor(m);
@@ -227,7 +228,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
    */
   function checkUnit(u: Unit): string[] {
     if (UNPROBED.has(u.mteId)) return [];
-    const m = pack.machines.get(u.mteId)!;
+    const m = machineByMteId(pack, u.mteId)!;
     const cells = exportedCells(m);
     if (cells === null) return ['its structure has no hatch rules in the export'];
     if (u.manual !== undefined) return [];          // run by hand: no hatch cells
@@ -241,7 +242,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     const bad: string[] = [];
     for (const c of u.cells) {
       if (c.role !== 'hatch') continue;
-      const hatch = c.block.mteId === undefined ? undefined : pack.machines.get(c.block.mteId);
+      const hatch = c.block.mteId === undefined ? undefined : machineByMteId(pack, c.block.mteId);
       const kind = hatch === undefined ? null : exportKindOfClass(simpleClassName(hatch.cls) ?? '', hatch.metaName);
       const key = posKey(c.pos);
       const ch = grown.charOf.get(key);
@@ -336,7 +337,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     expect(recipe, `a recipe of ${map}`).toBeDefined();
     expect(recipe!.euPerTick).toBeGreaterThan(0);
     for (const [id, tier] of FUSION) {
-      const m = pack.machines.get(id)!;
+      const m = machineByMteId(pack, id)!;
       const elements = m.structure?.elements;
       console.log(`real-hatch-export: ${m.name} (${id}) elements: ${(elements ?? []).map(elementText).join('; ') || 'none'}`);
       expect(elements, `${m.name} has hatch rules`).toBeDefined();

@@ -35,6 +35,7 @@ import type { ChipKind, RoutedChipSpec } from '../../../shared/types/feed.ts';
 import type { BlockRole, TailChest } from '../../../shared/types/layout.ts';
 import type { BomLine, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import type { LocalBlock } from '../arrange.ts';
 import { benchCapWarning, routedStock } from '../bench.ts';
 import { linkBits } from '../path.ts';
@@ -139,7 +140,7 @@ export function routedMode(input: ModeInput): ModeResult {
   const benches = placement.units.filter((u) => u.bench !== undefined);
   // a step on owned Auto Workbenches the line does not place orders what it takes as a placed one does: its hook step
   // gives it an Item Stock Keeper Chip (plan 12's final review)
-  const owned = plan.steps.filter((s) => !placed.has(s.id) && isAutoWorkbench(pack.machines.get(s.machine.mteId))).map((s) => s.id);
+  const owned = plan.steps.filter((s) => !placed.has(s.id) && isAutoWorkbench(machineByMteId(pack, s.machine.mteId))).map((s) => s.id);
   const benchSteps = new Set([...benches.map((u) => u.stepId), ...owned]);
   const returns = sorted(benches.flatMap((u) => u.bench!.returns.map((r) => r.key)));
   const entering = sorted(edge.entering.map((f) => f.key));

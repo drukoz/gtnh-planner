@@ -14,11 +14,13 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { buildKeys, itemPrices, machineBuildCost, machineGap } from '../../../src/server/planner/build-cost.ts';
 import { sharesMachines } from '../../../src/server/planner/machine-options.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import type { Solution } from '../../../src/server/planner/solve.ts';
 import { tierName, V } from '../../../src/shared/gt/tiers.ts';
+import type { MachineId } from '../../../src/shared/ids.ts';
 import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
 import { normalizeSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
@@ -206,13 +208,13 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
    */
   const machineCounts = (run: BuildRun): { candidates: number; unbuildable: number; gaps: number } => {
     const rank = { priced: 0, gap: 1, unbuildable: 2 } as const;
-    const verdict = new Map<number, keyof typeof rank>();
+    const verdict = new Map<MachineId, keyof typeof rank>();
     for (const r of run.first.graph.recipes) {
       if (r.kind !== 'recipe') continue;
       for (const o of run.first.model.eligible(r.id)) {
         const v = o.build !== null ? 'priced' : o.unbuildable !== undefined ? 'unbuildable' : 'gap';
-        const before = verdict.get(o.mteId);
-        if (before === undefined || rank[v] < rank[before]) verdict.set(o.mteId, v);
+        const before = verdict.get(o.id);
+        if (before === undefined || rank[v] < rank[before]) verdict.set(o.id, v);
       }
     }
     const values = [...verdict.values()];
@@ -281,7 +283,7 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
     // which the build-cost-unknown warning names.
     const unknown = plan.warnings.find((w) => w.code === 'build-cost-unknown')?.text ?? '';
     for (const step of plan.steps) {
-      const m = pack.machines.get(step.machine.mteId);
+      const m = machineByMteId(pack, step.machine.mteId);
       const r = pack.recipeById.get(step.recipeId);
       if (!(step.count > step.owned) || m === undefined || r === undefined || step.machine.mteId < 0) continue;
       const use = { recipe: r, tier: step.machine.tier };

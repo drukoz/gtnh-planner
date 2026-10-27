@@ -20,11 +20,13 @@ import type { SearchHit } from '../../shared/types/pack.ts';
 import { MAX_INPUTS_ONLY } from '../../shared/project/apply-op.ts';
 import { LogisticsMode, type Plan, type PlanSettings } from '../../shared/types/plan.ts';
 import { AvoidPicker } from '../components/AvoidPicker.tsx';
+import { focusMain, focusOn } from '../components/focus.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { ItemSearch } from '../components/ItemSearch.tsx';
 import { OwnedMachinesEditor } from '../components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../components/TierPicker.tsx';
 import { formatNumber } from '../format.ts';
+import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { haveSupplyPatch, optionPatch } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import {
@@ -150,8 +152,14 @@ function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElem
             if (draft !== null && commit(e.currentTarget.value)) setDraft(null);
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && draft !== null) commit(e.currentTarget.value);
-            if (e.key === 'Escape') {
+            // a held Enter's repeat that landed here is not a commit (P2-R69a)
+            if (e.key === 'Enter' && draft !== null && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);
+            // one layer per press: a key a layer above has handled (the shared tooltip's, hiding its tip) is not this one's (P2-R21b); one
+            // that takes back a draft differing from the amount shown without it is taken, so the drawer stays open (FW-9); a draft equal to
+            // it (a commit's, by Enter or the timer, which leaves the draft as typed) takes nothing back, and its Escape is the drawer's
+            // (ledger ruling P2-R141)
+            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {
+              if (draft !== String(amount)) e.preventDefault();
               stopTimer();
               setDraft(null);
             }
@@ -171,11 +179,18 @@ function AmountField(props: { settings: PlanSettings; patch: Patch }): ReactElem
 function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: NameOf; remember(hit: SearchHit): void }): ReactElement {
   const { settings, patch, nameOf, remember } = props;
   const { target, amount } = settings;
+  const keysOn = useSingleKeyShortcuts();   // the `/` that focuses this search, while single keys act (ledger ruling P2-R85)
   const setMode = (mode: PlanSettings['mode']): void => {
     if (mode === settings.mode) return;
     // Make N takes whole crafts only, so a rate such as 2.5 becomes the nearest whole amount in the same op.
     if (mode === 'makeN' && !Number.isInteger(amount)) patch({ mode, amount: Math.max(1, Math.round(amount)) });
     else patch({ mode });
+  };
+  // Clear goes with the target it clears, so it hands the focus first to the item search, the next thing to do, drawn in both states (ledger
+  // ruling P2-R78); else to the page's main. A focus elsewhere is left where it is.
+  const clear = (button: HTMLButtonElement): void => {
+    if (document.activeElement === button && !focusOn(button.closest('.settings-section')?.querySelector('.item-search input'))) focusMain();
+    patch({ target: null });
   };
   return (
     <section className="settings-section">
@@ -186,10 +201,11 @@ function MakeSection(props: { settings: PlanSettings; patch: Patch; nameOf: Name
         <div className="settings-target">
           <ItemIcon itemKey={target} size={28} name={nameOf(target)} />
           <span className="settings-target-name">{nameOf(target)}</span>
-          <button type="button" onClick={() => patch({ target: null })}>Clear</button>
+          <button type="button" onClick={(e) => clear(e.currentTarget)}>Clear</button>
         </div>
       )}
       <ItemSearch
+        shortcut={keysOn ? '/' : undefined}
         onPick={(hit) => {
           remember(hit);
           if (hit.key !== target) patch({ target: hit.key });
@@ -267,7 +283,7 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
     <tr data-cost-key={costKey}>
       <td>
         <span className="cost-name" title={costKey}>
-          {isStuffKey(costKey) && <ItemIcon itemKey={costKey} size={18} name={name} />}
+          {isStuffKey(costKey) && <ItemIcon itemKey={costKey} size={18} name={name} tip={false} />}
           {name}
         </span>
       </td>
@@ -283,8 +299,12 @@ function CostRow(props: { costKey: string; name: string; value: number; onChange
           onChange={(e) => setDraft(e.currentTarget.value)}
           onBlur={(e) => commit(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') commit(e.currentTarget.value);
-            if (e.key === 'Escape') setDraft(null);
+            if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
+            // one layer per press: a draft that differs from the cost shown without it is taken back, and takes the key (FW-9, P2-R141)
+            if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {
+              if (draft !== String(value)) e.preventDefault();
+              setDraft(null);
+            }
           }}
         />
         {error !== null && <span className="field-error error" role="alert">{error}</span>}
@@ -811,8 +831,12 @@ export function StatInput(props: {
         onChange={(e) => onDraft(e.currentTarget.value)}
         onBlur={(e) => commit(e.currentTarget.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') commit(e.currentTarget.value);
-          if (e.key === 'Escape') onDraft(null);
+          if (e.key === 'Enter' && !e.nativeEvent.defaultPrevented) commit(e.currentTarget.value);   // not a held Enter's repeat (P2-R69a)
+          // one layer per press: a draft that differs from the stat shown without it is taken back, and takes the key (FW-9, P2-R141)
+          if (e.key === 'Escape' && !e.nativeEvent.defaultPrevented && draft !== null) {
+            if (draft !== String(value)) e.preventDefault();
+            onDraft(null);
+          }
         }}
       />
       {error !== null && <span className="field-error error" role="alert">{error}</span>}

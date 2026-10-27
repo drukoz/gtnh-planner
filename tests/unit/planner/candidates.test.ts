@@ -80,7 +80,7 @@ describe('the shared acceptance memo (fix wave 3 (E))', () => {
       ['ebf-ti', env(3, { coilHeat: 1801 }), env(3, { coilHeat: 2701 })],
       ['lowg', env(1), env(1, { lowGravity: true })],
       ['lava-copper', env(3), env(3, { excluded: new Set() })],
-      ['eoh', env(1, { multiblocks: new Set() }), env(1, { multiblocks: new Set([9]) })],
+      ['eoh', env(1, { multiblocks: new Set() }), env(1, { multiblocks: new Set(['gt:9']) })],
       ['nothing', env(1), env(1, { fromNothing: new Set(['nothing']) })],
     ];
     for (const [id, a, b] of pairs) {
@@ -103,8 +103,8 @@ describe('the shared acceptance memo (fix wave 3 (E))', () => {
   });
   it('is one context however its sets were built', () => {
     const p = miniGt();
-    acceptOf(p, env(1, { excluded: new Set(['recycling', 'massfab']), multiblocks: new Set([2, 10, 1]), fromNothing: new Set(['b', 'a']) }));
-    acceptOf(p, env(1, { excluded: new Set(['massfab', 'recycling']), multiblocks: new Set([1, 2, 10]), fromNothing: new Set(['a', 'b']) }));
+    acceptOf(p, env(1, { excluded: new Set(['recycling', 'massfab']), multiblocks: new Set(['gt:2', 'gt:10', 'gt:1']), fromNothing: new Set(['b', 'a']) }));
+    acceptOf(p, env(1, { excluded: new Set(['massfab', 'recycling']), multiblocks: new Set(['gt:1', 'gt:2', 'gt:10']), fromNothing: new Set(['a', 'b']) }));
     expect(acceptanceMemoStats(p).contexts).toBe(1);
   });
   it('keeps at most ACCEPTANCE_MEMO_SIZE contexts per pack, the least recently used going first', () => {
@@ -394,7 +394,7 @@ describe('real-data rules (final review)', () => {
     const r = p.recipeById.get('eoh')!;
     expect(acceptRecipe(p, r, env(1)).ok).toBe(true);                                         // no gate given: any multiblock
     expect(acceptRecipe(p, r, env(1, { multiblocks: new Set() }))).toEqual({ ok: false, why: 'multiblock' });
-    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set([9]) })).ok).toBe(true);
+    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set(['gt:9']) })).ok).toBe(true);
   });
   it('leaves out the recipes an env names as making ore from nothing, and smelting parts back into metal', () => {
     const p = packFromSpec({

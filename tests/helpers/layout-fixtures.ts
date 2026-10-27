@@ -5,6 +5,7 @@
 // plan or scan changes no other.
 
 import { parseItemKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
+import { gtMachineId, machineIdOfLegacy, type MachineId } from '../../src/shared/ids.ts';
 import type { Vec3 } from '../../src/shared/layout/geometry.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { FarmStep } from '../../src/shared/types/farm.ts';
@@ -18,6 +19,7 @@ import {
 } from '../../src/shared/types/world.ts';
 import { powerSummary } from '../../src/server/planner/plan.ts';
 import { MAX_AREA_VOXELS } from '../../src/server/world/area.ts';
+import { machineByMteId } from '../../src/server/pack/lookup.ts';
 
 /** The machine ids of the fixture pack. */
 export const IDS = {
@@ -78,7 +80,7 @@ export const AIR_MULTI_STRUCTURE: StructureInfo = airMultiStructure();
 // ---- Packs ----
 
 function gtMachine(mteId: number, name: string, metaName: string, kind: MachineKind, cls: string, more: Partial<Machine> = {}): Machine {
-  return { mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
+  return { id: gtMachineId(mteId), mteId, metaName, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind, maps: [], ...more };
 }
 
 function cable(mteId: number, name: string, metaName: string, voltage: number, amps: number, lossPerBlock: number, insulated: boolean, material: string): Machine {
@@ -201,7 +203,8 @@ function fluid(name: string, display: string, gas: boolean): Fluid {
 }
 
 function addMachine(pack: Pack, m: Machine): void {
-  pack.machines.set(m.mteId, m);
+  pack.machines.set(m.id, m);
+  pack.machineByMteId.set(m.mteId, m);
   pack.items.set(m.itemKey, item(m.itemKey, m.name));
 }
 
@@ -213,7 +216,8 @@ export function emptyPack(): Pack {
       packVersion: 'test', gtVersion: 'test', mods: {}, counts: {},
     },
     items: new Map(), fluids: new Map(), oreDict: new Map(), maps: new Map(), recipes: [], recipeById: new Map(),
-    producers: new Map(), consumers: new Map(), machines: new Map(), machinesByMap: new Map(), materials: new Map(),
+    producers: new Map(), consumers: new Map(), machines: new Map(), machineByMteId: new Map(), machinesByMap: new Map(),
+    materials: new Map(),
     worldgen: {
       dimensions: [{ key: 'overworld', id: 0, name: 'Overworld', mod: 'minecraft', kind: 'dimension', defaultTier: 0 }],
       veins: [], fluidSources: [], capabilities: [], byproducts: {},
@@ -230,7 +234,7 @@ export function emptyPack(): Pack {
 export function addLineParts(pack: Pack): Pack {
   for (const m of lineMachines()) addMachine(pack, m);
   for (const [key, name] of PART_ITEMS) pack.items.set(key, item(key, name));
-  const ebf = pack.machines.get(IDS.EBF);
+  const ebf = machineByMteId(pack, IDS.EBF);
   if (ebf !== undefined && ebf.structure === undefined) ebf.structure = structuredClone(EBF_STRUCTURE);
   return pack;
 }
@@ -271,11 +275,11 @@ export function craftingRecipe(id: string, w: number, cells: ReadonlyArray<Stuff
   };
 }
 
-let layoutNames: Map<number, string> | null = null;
+let layoutNames: Map<MachineId, string> | null = null;
 
 function layoutMachineName(mteId: number): string | undefined {
   layoutNames ??= new Map([...withAutoWorkbench(layoutPack()).machines].map(([id, m]) => [id, m.name]));
-  return layoutNames.get(mteId);
+  return layoutNames.get(machineIdOfLegacy(mteId));
 }
 
 // ---- Plans and projects ----

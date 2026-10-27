@@ -1,19 +1,23 @@
 // What the flow diagram shows (spec §3.9, fix spec §6.2), as pure functions: the boxes and arrows of a plan — a box per
-// step listing the goods it takes and makes as rows (each row an ELK port, so an arrow leaves the row of its good), an
-// import stub beside each step that takes a bought good, a red stub where nothing supplies an input, a stub for each
-// good left over, the target, and supporting lines drawn open around their steps or collapsed into one box (a step that
-// cannot avoid a material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
+// step listing the goods it takes and makes as rows (each row an ELK port, so an arrow leaves the row of its good), its
+// head a machine readout (Phase 2 spec §7: the machine, its tier and count, its power, how busy), an import stub beside
+// each step that takes a bought good, a red stub where nothing supplies an input, a stub for each good left over, the
+// target, and supporting lines drawn open around their steps or collapsed into one box (a step that cannot avoid a
+// material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
 // laid-out picture read back from it, what a focus lights (an item, a box or an arrow), what does not add up, the rate
-// and overclock texts (the shared formatter of fix spec §6.1), the word for each kind of import, and the settings
-// patches the panels send (fix spec §6.3), each with the whole new value of one setting. Base materials sit on the left
+// and overclock texts (the shared formatter of fix spec §6.1), the word for each kind of import, the settings patches
+// the panels send (fix spec §6.3), each with the whole new value of one setting, the numbers of the step panel's
+// recipe card (Phase 2 spec §8: its slots and stack counts, its readouts, its overclock chips and its energy bar), and
+// what a new layout changed of the last, which the diagrams glide (Phase 2 spec §16.3). Base materials sit on the left
 // and the target on the right.
 
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { TIER_NAMES, V } from '../../shared/gt/tiers.ts';
+import { PSEUDO_IDS, PSEUDO_MACHINES, TIER_NAMES, V } from '../../shared/gt/tiers.ts';
 import { joinNames } from '../../shared/layout/format.ts';
 import { indexPlan, issueText, type PlanIndex, type PlanIssue, type PlanIssueCode } from '../../shared/plan/balance.ts';
 import { settingsHash } from '../../shared/project/settings-hash.ts';
+import type { Product } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type LeafClass, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { toggleList } from './settings-model.ts';
@@ -55,6 +59,20 @@ export interface FlowNode {
   leaf?: LeafClass;
   /** The open supporting line (`line:<key>`, a `FlowGroup`) whose box holds this one. */
   group?: string;
+  // optional addition (Phase 2 spec §7.2)
+  /** A step box's machine readout, which its head draws in place of `lines[0]` (every step has one; no stub or line does). */
+  machine?: MachineReadout;
+}
+
+/**
+ * A step box's machine readout (Phase 2 spec §7): what the head draws in place of `lines[0]`, which stays as its words. The machine's icon
+ * (`gregtech:gt.blockmachines@<mteId>`, the crafting table's or the furnace's for a pseudo machine, none by hand); its voltage tier (none by
+ * hand or on a pseudo machine, plan ruling pseudo-tier-chip); its machines, "×5" or "×1 shared" for a pool's (none by hand, so `count` is
+ * null for a hand step only); its power (none by hand or at 0 EU/t); how busy, between 0 and 1, in the box's words, and from 90 % `high`.
+ */
+export interface MachineReadout {
+  iconKey: StuffKey | null; tier: { name: string; slug: string } | null; count: string | null; power: string | null;
+  busy: number; busyText: string; high: boolean;
 }
 
 /**
@@ -73,12 +91,15 @@ export const LEAF_WORD: Record<LeafClass, string> = {
 
 /**
  * One arrow, from an output port to an input port: the good, its rate (per second and as text), the rate as its label
- * only where a port at either end has two or more arrows (the box rows say it otherwise), and its tooltip
+ * only where a port at either end has two or more arrows (the box rows say it otherwise), and its accessible name
  * "name · rate · From → To".
  */
 export interface FlowEdge {
   id: string; from: string; to: string; key: StuffKey; fromPort: string; toPort: string; perSecond: number; name: string; rate: string;
   label?: string; title: string;
+  // optional addition (Phase 2 spec §6.4, P2-D36)
+  /** Where it runs, "From → To", the end of its title: its tooltip's third line, under its good and its rate. */
+  route?: string;
 }
 
 /** An open supporting line (fix spec §6.2): an ELK compound node `line:<key>` titled "<name> line" around its boxes. */
@@ -111,6 +132,9 @@ export type Focus = { kind: 'item'; key: StuffKey } | { kind: 'node'; id: string
 /** What a focus lights (fix spec §6.2): boxes, arrows and rows (ports), and of the boxes those that make and that take. */
 export interface FocusSets { nodes: Set<string>; edges: Set<string>; ports: Set<string>; producers: Set<string>; consumers: Set<string> }
 
+/** How what a focus does not light is drawn (fix spec §6.2): dimmed, at the stylesheet's `.flow-canvas.focusing .dim` opacity. */
+export const DIM_OPACITY = 0.18;
+
 /** Box widths come from their text, between these (fix spec §6.2). */
 export const MIN_NODE_WIDTH = 190;
 export const MAX_NODE_WIDTH = 330;
@@ -140,6 +164,39 @@ const LABEL_HEIGHT = 14;
  * outer face, `PORT_SIZE` outside the box (where FlowView's flange has its outer face too).
  */
 export const PORT_SIZE = 2;
+/**
+ * A step box's machine readout (Phase 2 spec §7.2): a 46 px head holding the machine's 32 px icon in a 36 px slot at (8, 6), the title beside
+ * it and a row of 16 px chips (the tier's, then the count's) and the power; under it a 16 px busy band, a 6 px track 5 px down it, the
+ * percentage at its right end. A chip is its text at `CHIP_CHAR_WIDTH` a character with `CHIP_PADDING` each side: 10 px a character, not
+ * spec §7.2's 9, holds every tier label in the fallback face as well as in Pixelify 13 px (ledger ruling P2-R8: with the web fonts refused,
+ * MV is 19.5 px and a bold MAX 28.9 px), and a count's VT323 digits either way (spec §25).
+ */
+export const MACHINE_ICON = 32;
+export const MACHINE_SLOT = 36;
+export const STEP_HEAD_HEIGHT = 46;
+export const BUSY_BAND = 16;
+export const CHIP_HEIGHT = 16;
+export const CHIP_PADDING = 5;
+export const CHIP_CHAR_WIDTH = 10;
+/** The slot's top; the readout's title, chips and power start right of the slot: 8 + 36 + 8. */
+export const SLOT_TOP = 6;
+export const READOUT_LEFT = TEXT_LEFT + MACHINE_SLOT + TEXT_LEFT;
+/** Between two chips; between the last chip and the power, which needs 2 px more. */
+export const CHIP_GAP = 4;
+export const POWER_GAP = 6;
+/** The busy band's track: its height and its top in the band; it is at least this long, with this gap before the band's percentage. */
+export const BUSY_TRACK_HEIGHT = 6;
+export const BUSY_TRACK_TOP = 5;
+const BUSY_TRACK_MIN = 60;
+const BUSY_GAP = 6;
+/** The room the band leaves for its percentage: the widest share `formatPercent` writes below a whole 100 % (`121%` is narrower). */
+const WIDEST_BUSY = '>99.9%';
+/** What a hand step's chip row says in place of its tier, its machines and its power. */
+export const HAND_WORDS = 'by hand';
+/** From this share up the busy band's fill is the amber of a machine that is nearly always busy. */
+const HIGH_BUSY = 0.9;
+/** The block every GT machine item belongs to: its meta is the machine's MTE id (the server's resolver, `assets/resolve.ts`). */
+const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 /** Room around the boxes of an open supporting line; its title sits in the top band. */
 const GROUP_PADDING = '[top=36,left=12,bottom=12,right=12]';
 
@@ -169,6 +226,68 @@ function trimZeros(text: string): string {
 /** A tier's name; a tier outside 0..14 shows as its number instead of breaking the diagram. */
 export function tierText(t: number): string {
   return TIER_NAMES[t] ?? `tier ${t}`;
+}
+
+/** A tier's colour class name, `ulv` … `max` (`.tier-<slug>`, which the recipe card's chips share); `unknown` outside 0..14. */
+export function tierSlug(t: number): string {
+  return TIER_NAMES[t]?.toLowerCase() ?? 'unknown';
+}
+
+/**
+ * The item a machine is drawn as (Phase 2 spec §7.2): a GT machine's item, whose meta is its MTE id; the crafting table's and the vanilla
+ * furnace's for those pseudo machines, the keys the server gives them (`PSEUDO_MACHINE_ENTRIES`, server/pack/machines.ts: a unit test
+ * compares them); none by hand.
+ */
+export function machineIconKey(machine: PlanStep['machine'], handCraft: boolean): StuffKey | null {
+  if (handCraft) return null;
+  if (machine.mteId === PSEUDO_MACHINES.CRAFTING_TABLE) return 'minecraft:crafting_table@0';
+  if (machine.mteId === PSEUDO_MACHINES.FURNACE) return 'minecraft:furnace@0';
+  return Number.isSafeInteger(machine.mteId) && machine.mteId >= 0 ? `${GT_MACHINE_BLOCK}@${machine.mteId}` : null;
+}
+
+/**
+ * What a step box's head shows of its machine (Phase 2 spec §7.2, `MachineReadout`). Add-on 17's farm steps are machine steps (plan ruling
+ * farm-step-readout): a Tree Growth Simulator's tier is its energy hatch's and a Crop Manager's its own, so they have their chip; a Crop
+ * Manager's fraction of an EU/t reads as `formatNumber` writes it ("0.107 EU/t"). How busy reads as the box's words do (`lines[0]`), and
+ * the band holds between empty and full.
+ */
+export function machineReadout(step: PlanStep): MachineReadout {
+  const hand = step.handCraft;
+  const voltage = !hand && !PSEUDO_IDS.has(step.machine.mteId);
+  return {
+    iconKey: machineIconKey(step.machine, hand),
+    tier: voltage ? { name: tierText(step.machine.tier), slug: tierSlug(step.machine.tier) } : null,
+    count: hand ? null : `×${step.count}${step.pool === undefined ? '' : ' shared'}`,
+    power: hand || step.euPerTick === 0 ? null : `${formatNumber(step.euPerTick)} EU/t`,
+    busy: Number.isNaN(step.utilization) ? 0 : Math.min(1, Math.max(0, step.utilization)),
+    busyText: formatPercent(step.utilization),
+    high: step.utilization >= HIGH_BUSY,
+  };
+}
+
+/** A chip's width (Phase 2 spec §7.2): its text at `CHIP_CHAR_WIDTH` a character and `CHIP_PADDING` each side. */
+export function chipWidth(text: string): number {
+  return text.length * CHIP_CHAR_WIDTH + 2 * CHIP_PADDING;
+}
+
+/** How long a readout box's busy track is: its width but the sides, the gap and the widest percentage at its end. */
+export function busyTrack(node: Pick<FlowNode, 'width'>): number {
+  return node.width - 2 * TEXT_LEFT - BUSY_GAP - textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH);
+}
+
+/**
+ * How wide a box with a machine readout must be for its head (the slot, the 13 px title), its chip row (each chip and the gap after it, the
+ * power 2 px further, or "by hand") and its busy band (the shortest track, the gap and the widest percentage), each with its margins.
+ */
+function readoutWidths(title: string, machine: MachineReadout): number[] {
+  let chipRow = READOUT_LEFT;
+  for (const chip of [machine.tier?.name, machine.count]) if (chip !== undefined && chip !== null) chipRow += chipWidth(chip) + CHIP_GAP;
+  if (machine.count === null) chipRow += textWidth(HAND_WORDS, TEXT_CHAR_WIDTH);
+  else if (machine.power !== null) chipRow += POWER_GAP - CHIP_GAP + textWidth(machine.power, TEXT_CHAR_WIDTH);
+  return [
+    READOUT_LEFT + textWidth(title, TITLE_CHAR_WIDTH) + TEXT_LEFT, chipRow + TEXT_LEFT,
+    TEXT_LEFT + BUSY_TRACK_MIN + BUSY_GAP + textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH) + TEXT_LEFT,
+  ];
 }
 
 /** A rate of a good in the project's unit, in litres for a fluid. */
@@ -248,13 +367,19 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
   return byStep;
 }
 
-/** Where a box's rows start: below its title, its lines and its avoid badge. */
-export function rowsTop(node: Pick<FlowNode, 'lines' | 'avoidBadge'>): number {
-  return NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * (node.lines.length + (node.avoidBadge === undefined ? 0 : 1));
+/**
+ * Where a box's rows start: below its title, its lines and its avoid badge; a step box's below its machine readout's head and busy band,
+ * which draw its first line, then its other lines and its badge (Phase 2 spec §7.2). The ELK ports, the drawn rows and `fromElk`'s fallback
+ * all read it, so they move together.
+ */
+export function rowsTop(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>): number {
+  const badge = node.avoidBadge === undefined ? 0 : 1;
+  if (node.machine === undefined) return NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * (node.lines.length + badge);
+  return STEP_HEAD_HEIGHT + BUSY_BAND + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
 }
 
 /** The middle of a box's `i`-th row, from the box's top: where that row's port sits. */
-export function rowCentre(node: Pick<FlowNode, 'lines' | 'avoidBadge'>, i: number): number {
+export function rowCentre(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
   return rowsTop(node) + ROW_HEIGHT * i + ROW_HEIGHT / 2;
 }
 
@@ -284,13 +409,19 @@ export function clipText(text: string, width: number, charWidth: number): string
   return `${text.slice(0, Math.max(1, Math.floor(width / charWidth) - 1)).trimEnd()}…`;
 }
 
-/** A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–330 px, as tall as its rows need. */
+/**
+ * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–330 px, as tall as its rows need. A step box's head is its
+ * machine readout, which draws its first line (Phase 2 spec §7.2): its head, chip row and busy band count instead of its title and that line.
+ */
 function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
   const icon = node.key !== null ? ICON_SPACE : 0;
   const rowIcon = rowHasIcon(node) ? ICON_SPACE : 0;
+  const { machine } = node;
   const widths = [
-    2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(node.title, TITLE_CHAR_WIDTH),
-    ...node.lines.map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
+    ...(machine === undefined
+      ? [2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(node.title, TITLE_CHAR_WIDTH)]
+      : readoutWidths(node.title, machine)),
+    ...(machine === undefined ? node.lines : node.lines.slice(1)).map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
     ...(node.avoidBadge === undefined ? [] : [2 * TEXT_LEFT + textWidth(node.avoidBadge.text, TEXT_CHAR_WIDTH)]),
     ...node.rows.map((r) => 2 * TEXT_LEFT + rowIcon + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)),
   ];
@@ -409,7 +540,7 @@ function stepRows(step: PlanStep, ctx: RowContext): FlowRow[] {
 interface Stub { kind: 'import' | 'missing' | 'sink'; key: StuffKey; perSecond: number; group?: string; leaf?: LeafClass; issue?: PlanIssueCode }
 
 /** An arrow before its words: its ends, its good and how much flows. */
-type Arrow = Omit<FlowEdge, 'name' | 'rate' | 'label' | 'title'>;
+type Arrow = Omit<FlowEdge, 'name' | 'rate' | 'label' | 'title' | 'route'>;
 
 /** A box before its size. */
 type Unsized = Omit<FlowNode, 'width' | 'height'>;
@@ -475,11 +606,12 @@ function groupOf(ctx: GraphContext, stepId: string): string | undefined {
   return line !== undefined && !ctx.collapsed.has(line.key) ? lineNodeId(line.key) : undefined;
 }
 
-/** A step's box: its machine, its line, its rows, and the badge of the avoided goods it cannot do without. */
+/** A step's box: its machine and its readout (Phase 2 spec §7.2), its line, its rows, and the badge of the avoided goods it cannot do without. */
 function stepBox(ctx: GraphContext, step: PlanStep, unavoidable: readonly PlanWarning[] | undefined): Unsized {
   const key = step.mainOutput ?? null;
   const box: Unsized = {
     id: step.id, kind: 'step', key, title: step.machine.name, lines: stepLines(step, ctx.nameOf), owned: ownedState(step), rows: stepRows(step, ctx),
+    machine: machineReadout(step),
   };
   if (key !== null) box.keyName = ctx.nameOf(key);
   const group = groupOf(ctx, step.id);
@@ -625,8 +757,8 @@ function targetBox(ctx: GraphContext): Unsized | undefined {
 
 /**
  * The arrows with a row at both ends (a flow to a step the plan does not list would break the layout), sorted by id,
- * each with its good's name and rate, the rate as its label where a port at either end has other arrows, and its
- * tooltip "name · rate · From → To".
+ * each with its good's name and rate, the rate as its label where a port at either end has other arrows, its route
+ * "From → To", and its title "name · rate · From → To" (its accessible name; the three are its tooltip's lines).
  */
 function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonly FlowNode[]): FlowEdge[] {
   const ports = new Set(nodes.flatMap((n) => n.rows.map((r) => r.port)));
@@ -634,7 +766,7 @@ function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonl
   const atPort = new Map<string, number>();
   for (const a of kept) for (const port of [a.fromPort, a.toPort]) atPort.set(port, (atPort.get(port) ?? 0) + 1);
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  /** How a tooltip names one end of an arrow. */
+  /** How an arrow's route names one of its ends. */
   const endWords = (id: string): string => {
     const node = byId.get(id);
     switch (node?.kind) {
@@ -655,7 +787,8 @@ function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonl
   return kept.map((a): FlowEdge => {
     const name = ctx.nameOf(a.key);
     const rate = ctx.rateOf(a.perSecond, a.key);
-    const edge: FlowEdge = { ...a, name, rate, title: `${name} · ${rate} · ${endWords(a.from)} → ${endWords(a.to)}` };
+    const route = `${endWords(a.from)} → ${endWords(a.to)}`;
+    const edge: FlowEdge = { ...a, name, rate, title: `${name} · ${rate} · ${route}`, route };
     if ((atPort.get(a.fromPort) ?? 0) > 1 || (atPort.get(a.toPort) ?? 0) > 1) edge.label = rate;
     return edge;
   }).sort((a, b) => byString(a.id, b.id));
@@ -676,7 +809,8 @@ function openGroups(ctx: GraphContext, nodes: readonly FlowNode[]): FlowGroup[] 
 /**
  * The boxes and arrows of a plan (fix spec §6.2), sorted by id so the layout never depends on the plan's order:
  * - a box per step titled by its machine, with its line (tier, EU/t, machines, how busy), what it supplies, what is owned,
- *   and a row per good it takes and makes; a step that uses goods on the avoid list gets a badge naming them;
+ *   and a row per good it takes and makes; a step that uses goods on the avoid list gets a badge naming them; its machine
+ *   readout, which its head draws in place of that first line (Phase 2 spec §7);
  * - an import stub `import:<key>@<step>` beside each step that takes a bought good, named by its kind of import;
  * - a stub `missing:<key>@<step>` into each input nothing supplies ("no source in the plan") or supplies short ("short");
  * - a stub `sink:<key>@<step>` for each good a step leaves over;
@@ -912,6 +1046,72 @@ export function centreOn(
   return { zoom: view.zoom, x: canvas.width / 2 - (node.x + node.width / 2) * view.zoom, y: canvas.height / 2 - (node.y + node.height / 2) * view.zoom };
 }
 
+/**
+ * A laid-out picture as a new layout's glide reads it (Phase 2 spec §16.3): where its boxes stand (a Flow diagram's open lines' frames too,
+ * `groups`), each by its id, and the points of its arrows. A Flow layout and a Connections picture are both one.
+ */
+export interface PlacedPicture {
+  nodes: ReadonlyArray<{ id: string; x: number; y: number }>;
+  edges: ReadonlyArray<{ id: string; points: ReadonlyArray<readonly [number, number]> }>;
+  groups?: ReadonlyArray<{ id: string; x: number; y: number }>;
+}
+
+/**
+ * What a new layout changed (Phase 2 spec §16.3): the boxes on both at another place, from where to where (`moved`); those only on the new
+ * (`entered`) and only on the old (`left`); and the arrows whose points changed, with the new ones (`rerouted`).
+ */
+export interface LayoutChange {
+  moved: Array<{ id: string; from: [number, number]; to: [number, number] }>;
+  entered: string[]; left: string[]; rerouted: string[];
+}
+
+/**
+ * A new layout that changes more boxes than this (moves them, brings them or drops them) snaps into place instead of gliding, so no frame of a big
+ * plan runs long (review focus 4).
+ */
+export const GLIDE_LIMIT = 200;
+
+/** Whether two arrows run through the same points. */
+function samePoints(a: ReadonlyArray<readonly [number, number]>, b: ReadonlyArray<readonly [number, number]>): boolean {
+  return a.length === b.length && a.every(([x, y], i) => x === b[i]?.[0] && y === b[i]?.[1]);
+}
+
+/**
+ * What `after` changed of `before` (Phase 2 spec §16.3): a box is a node or an open line's frame, by its id (a line keeps its id, `line:<key>`,
+ * from its collapsed box to its open frame, so it moves); one at the same place is not moved, and an arrow through the same points is not
+ * rerouted, so the same layout again (every SSE refetch's) changes nothing, and so does a first one (`before` null). The lists follow `after`'s
+ * order, `left` `before`'s.
+ */
+export function layoutChange(before: PlacedPicture | null, after: PlacedPicture): LayoutChange {
+  const change: LayoutChange = { moved: [], entered: [], left: [], rerouted: [] };
+  if (before === null) return change;
+  const boxes = (p: PlacedPicture): ReadonlyArray<{ id: string; x: number; y: number }> => [...p.nodes, ...(p.groups ?? [])];
+  const was = new Map(boxes(before).map((b) => [b.id, b]));
+  const now = boxes(after);
+  for (const box of now) {
+    const old = was.get(box.id);
+    if (old === undefined) change.entered.push(box.id);
+    else if (old.x !== box.x || old.y !== box.y) change.moved.push({ id: box.id, from: [old.x, old.y], to: [box.x, box.y] });
+  }
+  const kept = new Set(now.map((b) => b.id));
+  for (const box of boxes(before)) if (!kept.has(box.id)) change.left.push(box.id);
+  const routes = new Map(before.edges.map((e) => [e.id, e.points]));
+  for (const edge of after.edges) {
+    const old = routes.get(edge.id);
+    if (old === undefined || !samePoints(old, edge.points)) change.rerouted.push(edge.id);
+  }
+  return change;
+}
+
+/**
+ * Whether a new layout's change glides: it changes GLIDE_LIMIT boxes or fewer, those it moves, brings and drops (review focus 4; ledger ruling
+ * P2-R119: a new target on a big line drops nearly every box and brings as many, moving few or none); a bigger one snaps. The arrows it reroutes
+ * only fade, and do not count.
+ */
+export function glidable(change: LayoutChange): boolean {
+  return change.moved.length + change.entered.length + change.left.length <= GLIDE_LIMIT;
+}
+
 /** The tag in which a lit arrow writes its good and rate ("1x Copper Wire · 2/h", fix spec §6.2), drawn above the boxes. */
 export interface EdgeTag extends Box { text: string }
 
@@ -1141,4 +1341,111 @@ export function ocLines(step: PlanStep): string[] {
     `${n} ${n === 1 ? 'overclock' : 'overclocks'}${how} → ${step.euPerTick} EU/t × ${step.durationTicks} t`,
     `One machine: ${runsText(perMachine)} · needed: ${runsText(step.runsPerSecond)} → ${machinesText(step.count)}, ${formatPercent(step.utilization)} busy`,
   ];
+}
+
+/** Under 1 by more than this, an item's nominal amount a run is less than one item (a crop harvest's expected drop), not rounding. */
+const BELOW_ONE = 1e-9;
+/** A stack count's units, each 1,000 of the one before: an item's, and a fluid's (litres, buckets, thousands of buckets). */
+const ITEM_UNITS = ['', 'k', 'M'] as const;
+const FLUID_UNITS = ['L', 'B', 'kB', 'MB'] as const;
+
+/** One slot of the recipe card (Phase 2 spec §8.3): a good, what one run takes or makes of it when it comes, and how often it comes (1: every run). */
+export interface RecipeSlot { key: StuffKey; amount: number; chance: number }
+
+/**
+ * The slots of a run's inputs or outputs (Phase 2 spec §8.5): each product at its nominal amount, its expected amount over its chance; one a
+ * run never takes or makes left out. An item a run makes less than one of (a crop farm's harvest, add-on 17: 0.9 Sticky Resin) is one at
+ * that chance, as NEI draws a drop that does not always come (plan ruling farm-step-card); a fluid keeps its litres, and GT's nominal amounts
+ * are whole, so no GT slot changes.
+ */
+export function recipeSlots(products: readonly Product[]): RecipeSlot[] {
+  return products.filter((p) => p.amount > 0 && p.chance > 0).map((p) => {
+    const amount = p.chance < 1 ? p.amount / p.chance : p.amount;
+    return !isFluidKey(p.key) && amount < 1 - BELOW_ONE ? { key: p.key, amount: 1, chance: p.amount } : { key: p.key, amount, chance: p.chance };
+  });
+}
+
+/**
+ * The stack count a slot draws (Phase 2 spec §8.2), as Minecraft writes one: an item none for one, then its number to 999, then thousands
+ * (`1.5k`, `12k`); a fluid its litres to 999 (`144L`), then buckets (`1B`, `2.3B`, `12B`) and thousands of them (`1kB`). Past its first unit
+ * a figure keeps one decimal below 10 (`.0` dropped) and is whole above, and one that rounds to 1,000 of its unit is written in the next.
+ */
+export function stackText(key: StuffKey, amount: number): string {
+  if (!Number.isFinite(amount)) return '';
+  const fluid = isFluidKey(key);
+  const units = fluid ? FLUID_UNITS : ITEM_UNITS;
+  let value = fluid ? Math.max(1, Math.round(amount)) : Math.round(amount);
+  if (!fluid && value <= 1) return '';
+  let unit = 0;
+  while (unit < units.length - 1 && Math.round(value) >= 1000) {
+    value /= 1000;
+    unit++;
+  }
+  if (unit === 0) return `${value}${units[0]}`;
+  const tenths = Math.round(value * 10) / 10;
+  return `${tenths < 10 ? tenths : Math.round(value)}${units[unit]}`;
+}
+
+/**
+ * A slot's chance tag (Phase 2 spec §8.1), short enough to stay inside its 36 px slot: a whole percent, "<1%" below one, and never "100%" for
+ * a chance below a hundred ("99%"); the slot's name and tip say the whole chance (`formatPercent`). Measured in the app, Pixelify's % is 12.1
+ * px and VT323's digits 6.45 px, so "<0.1%" (39.9 px), "99.5%" (37.9) and ">99%" (33.4) pass the 32 px a tag has (2 px in, then its 2 px
+ * shadow), where "<1%" is 27.0 px and "99%" 25.0.
+ */
+export function chanceTag(chance: number): string {
+  return chance < 0.01 ? '<1%' : `${Math.min(99, Math.round(chance * 100))}%`;
+}
+
+/** A readout of the recipe card (Phase 2 spec §8.1): its label and its value. */
+export interface RecipeStat { label: string; value: string }
+
+/**
+ * The recipe card's readouts (Phase 2 spec §8.1): its machines (`×5`; "Shared machines" for a sharing pool's), how busy they are, the power
+ * one draws and what they all draw, the owned machines of other tiers that run the step beside them included (`reused.others`, plan 12); a
+ * hand step, which has no machine, how busy only.
+ */
+export function recipeStats(step: PlanStep): RecipeStat[] {
+  const busy: RecipeStat = { label: 'Busy', value: formatPercent(step.utilization) };
+  if (step.handCraft) return [busy];
+  const others = (step.reused?.others ?? []).reduce((sum, o) => sum + o.count * o.euPerTick, 0);
+  return [
+    { label: step.pool === undefined ? 'Machines' : 'Shared machines', value: `×${step.count}` },
+    busy,
+    { label: 'EU/t each', value: formatNumber(step.euPerTick) },
+    { label: 'EU/t total', value: formatNumber(step.count * step.euPerTick + others) },
+  ];
+}
+
+/** An overclock chip of the recipe card (Phase 2 spec §8.1): what overclocking did (`now`, green) or a note on it (`note`, amber). */
+export interface OcChip { text: string; tone: 'now' | 'note' }
+
+/**
+ * What overclocking did, as chips (Phase 2 spec §8.1): "No overclock at LV", or "1 overclock at MV" and how much faster a run is for it ("2×
+ * faster": the recipe's ticks over the step's), then whether its overclocks were perfect, from an EBF's coil heat ("2 perfect from heat")
+ * or the machine's own ("perfect overclocks"). None by hand or on a crafting table or a furnace, which have no voltage tier to name (as
+ * they have no tier chip: plan ruling pseudo-tier-chip).
+ */
+export function ocChips(step: PlanStep): OcChip[] {
+  if (step.handCraft || PSEUDO_IDS.has(step.machine.mteId)) return [];
+  const tier = tierText(step.machine.tier);
+  const n = step.overclocks;
+  if (!(n > 0)) return [{ text: `No overclock at ${tier}`, tone: 'now' }];
+  const chips: OcChip[] = [{ text: `${n} ${n === 1 ? 'overclock' : 'overclocks'} at ${tier}`, tone: 'now' }];
+  const oc = step.oc;
+  if (oc === undefined) return chips;
+  const faster = oc.recipeDurationTicks / step.durationTicks;
+  if (Number.isFinite(faster) && faster > 1) chips.push({ text: `${formatNumber(faster)}× faster`, tone: 'note' });
+  if (oc.heatOverclocks > 0) chips.push({ text: `${oc.heatOverclocks} perfect from heat`, tone: 'note' });
+  else if (oc.perfect) chips.push({ text: 'perfect overclocks', tone: 'note' });
+  return chips;
+}
+
+/**
+ * How full the recipe card's energy bar is (Phase 2 spec §8.5): the step's EU/t over what one of its machines can draw, its voltage times its
+ * amps (without the overclock inputs, its tier's voltage at 1 A, as `ocLines` reads it), between 0 and 1; null by hand or at 0 EU/t.
+ */
+export function powerShare(step: PlanStep): number | null {
+  if (step.handCraft || !(step.euPerTick > 0)) return null;
+  const most = step.oc === undefined ? (V[step.machine.tier] ?? 0) : step.oc.machineVoltage * step.oc.machineAmps;
+  return most > 0 ? Math.min(1, step.euPerTick / most) : null;
 }

@@ -3,7 +3,7 @@
 
 import { LEAN_BASE_ABOVE, OWNED_STEP_SHARE } from '../../src/server/planner/build-mip.ts';
 import { BY_HAND_FLOOR_CHARGE, HAND_STEP_WEIGHT } from '../../src/server/planner/solve.ts';
-import { PSEUDO_MACHINES } from '../../src/shared/gt/tiers.ts';
+import { isPseudoMachineId, machineIdOfLegacy, MC_MACHINES } from '../../src/shared/ids.ts';
 import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings } from '../../src/shared/types/plan.ts';
 
 const SECONDS_PER_HOUR = 3600;
@@ -41,16 +41,17 @@ export function buildObjective(plan: Plan, settings: PlanSettings, least: number
   const units = new Set<string>();
   let unlisted = 0;
   for (const step of plan.steps) {
-    for (const u of step.reused?.units ?? []) units.add(`${step.machine.mteId}#${u}`);
+    const id = machineIdOfLegacy(step.machine.mteId);
+    for (const u of step.reused?.units ?? []) units.add(`${id}#${u}`);
     for (const o of step.reused?.others ?? []) {
-      for (const u of o.units ?? []) units.add(`${o.mteId}#${u}`);
+      for (const u of o.units ?? []) units.add(`${machineIdOfLegacy(o.mteId)}#${u}`);
       if (o.units === undefined) unlisted += o.count;
     }
     if (step.pool !== undefined && step.pool.steps[0] !== step.id) continue;   // a pool's machines once, by its first step
     if (step.reused?.units === undefined) unlisted += step.owned;
     if (step.handCraft) crafted += HAND_STEP_WEIGHT;
-    else if (step.machine.mteId === PSEUDO_MACHINES.CRAFTING_TABLE) crafted += 1;
-    else if (step.machine.mteId < 0) blocks += 1;
+    else if (id === MC_MACHINES.CRAFTING_TABLE) crafted += 1;
+    else if (isPseudoMachineId(id)) blocks += 1;
     else blocks += Math.max(0, step.count - step.owned);
   }
   const owned = units.size + unlisted;

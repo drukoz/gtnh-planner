@@ -8,9 +8,14 @@
 // The most important setting, what to make, is in the drawer, so a project with no target opens it by itself, once, with the focus in the
 // item search, and the banner's "Pick something to make" is a way back in (the last block of this file). The tests that start with the
 // drawer closed give their project a target, which keeps it from opening.
+//
+// The banners are inert behind the open drawer, so their status is not announced there: the drawer has a status line of its own (Phase 2
+// spec §17 R43, the last three tests), visually hidden, which counts the plan's problems, says when there are none, and is empty once the
+// drawer is closed.
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { login, setName, createProject } from './helpers.ts';
+import { circuitLv, copperUnsourced } from './fixtures/plans.ts';
+import { bodyFocusCount, login, setName, createProject, holdReplan, LV_CIRCUITS, openWithPlan, watchBodyFocus } from './helpers.ts';
 
 /** What the page behind the drawer is made of: inert while the drawer is open. */
 const BEHIND = ['.top-nav', '.project-head', '.project-banners', '.project-views'];
@@ -150,12 +155,42 @@ test('a window that grows past 900 px closes the drawer, and leaves the page liv
   await page.setViewportSize({ width: 1280, height: 720 });
   // the button is not drawn on a wide window, so it is found by its class: it says the drawer is closed
   await expect(page.locator('.settings-toggle')).toHaveAttribute('aria-expanded', 'false');
+  // R46 (plan ruling aside-refocus): the toggle's click put the focus on Close settings, which the column beside the views does not draw, so
+  // the column itself takes it: it is not lost to the page's body
+  await expect(settings).toBeFocused();
+  expect(await focusIsIn(page)).toBe('the drawer');
   await expect(page.locator('.drawer-backdrop')).toHaveCount(0);
   for (const behind of BEHIND) await expect(page.locator(behind).first(), behind).not.toHaveAttribute('inert');
   await expect(settings).toBeVisible();                                                // the column beside the views again
   // narrow once more, the drawer is closed: the state did not wait for a narrow window to show itself
+  await watchBodyFocus(page);
   await page.setViewportSize({ width: 800, height: 900 });
   await expect(settings).toBeHidden();
+  // the final fix wave, FW-8 (ledger ruling P2-R133): the column that had the focus is a closed drawer now, so the focus went to the Settings
+  // button, which shows again, and never to the page's body
+  await expect(page.getByRole('button', { name: SETTINGS_BUTTON })).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});
+
+// FW-8 (ledger ruling P2-R133): a window narrowed to 900 px or less no longer draws the head's Shortcuts and Compare modes buttons; one that had
+// the focus hands it on as it goes, Shortcuts to the Settings button and Compare modes to its twin in the bar under the banner, never to the
+// body. A laptop window snapped to half its screen (683 to 720 px) narrows so
+test('narrowing past 900 px moves a focus on the head\'s Shortcuts to the Settings button, and on Compare modes to the bar\'s', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Narrowed head', TARGET);
+  const head = page.locator('.project-head');
+  const name = page.getByRole('textbox', { name: 'Project name' });
+  await watchBodyFocus(page);
+  await head.getByRole('button', { name: 'Shortcuts', exact: true }).focus();
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect(page.getByRole('button', { name: SETTINGS_BUTTON })).toBeFocused();
+  await name.focus();                                                                     // drawn at both widths
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await head.getByRole('button', { name: 'Compare modes' }).focus();
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect(page.locator('.compare-bar').getByRole('button', { name: 'Compare modes' })).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
 });
 
 test('Escape closes one layer per press: an open search list first, then the drawer', async ({ page }) => {
@@ -184,6 +219,171 @@ test('Escape closes one layer per press: an open search list first, then the dra
   await expect(settings).toBeHidden();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(toggle).toBeFocused();
+});
+
+// ledger ruling P2-R139, P2-R133's mirror: a window that widens past 900 px no longer draws the Settings button nor the bar's Compare modes; one
+// that had the focus hands it on as it goes, the Settings button to the project's name and the bar's Compare modes to the head's, never to the
+// body
+test('widening past 900 px moves a focus on the Settings button to the name, and on the bar\'s Compare modes to the head\'s', async ({ page }) => {
+  await page.setViewportSize({ width: 700, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Widened head', TARGET);
+  const name = page.getByRole('textbox', { name: 'Project name' });
+  await watchBodyFocus(page);
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).focus();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(name).toBeFocused();
+  await page.setViewportSize({ width: 700, height: 900 });                               // the name is drawn at both widths
+  await expect(name).toBeFocused();
+  await page.locator('.compare-bar').getByRole('button', { name: 'Compare modes' }).focus();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.locator('.project-head').getByRole('button', { name: 'Compare modes' })).toBeFocused();
+  expect(await bodyFocusCount(page)).toBe(0);
+});
+
+// the final fix wave, FW-9: a draft in the drawer is a layer of its own, as an open list is: Escape in the Amount takes the draft back and leaves
+// the drawer open (the field takes the key, and the focus stays in it); with nothing to take back, the next Escape closes the drawer. So is an
+// item search that shows only that nothing matches (ledger ruling P2-R138): its list is closed, so the drawer looks for its note, which Escape
+// closes, the field cleared by the browser; the next Escape closes the drawer
+test('Escape takes back a draft in the drawer, or closes a search\'s note, before it closes the drawer', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Drafts in the drawer', TARGET);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  const open = async (): Promise<void> => {
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.locator('.drawer-backdrop')).toHaveCount(1);
+  };
+  await toggle.click();
+  await expect(settings).toBeVisible();
+  const amount = settings.getByLabel('Amount', { exact: true });
+  await amount.fill('2x');                                                                // a draft the field refuses, so nothing sends it
+  await page.keyboard.press('Escape');
+  await expect(amount).toHaveValue('30');
+  await expect(amount).toBeFocused();
+  await open();
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+  // the search that matches nothing (P2-R138)
+  await toggle.click();
+  await open();
+  const search = settings.getByPlaceholder('Search items and fluids');
+  await search.fill('nothing is called this');
+  const note = settings.getByText('No item or fluid matches');
+  await expect(note).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(note).toHaveCount(0);
+  await open();
+  await expect(search).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+});
+
+/** Project `id`'s settings on the server. */
+async function settingsOf(page: Page, id: string): Promise<{ amount: number; costOverrides: Record<string, number>; farms?: { crops?: { stats?: Record<string, number> } } }> {
+  return ((await (await page.request.get(`/api/projects/${id}`)).json()) as { settings: never }).settings;
+}
+
+// Ledger ruling P2-R141 (the residue of FW-9): a settings draft takes Escape only while it differs from what the field would show without it.
+// The Amount kept its draft after a commit (Enter, or its 500 ms timer), equal to the amount the store then shows, so the first Escape after it
+// was taken for nothing and the drawer stayed open. Each draft field, the Amount, a cost and a crop seed's stat: a committed value, then Escape,
+// closes the drawer; a draft equal to what is shown, the same; a draft that differs is taken back, the drawer staying open, and the next
+// Escape closes the drawer
+test('Escape after a committed Amount closes the drawer, and a draft that differs is taken back first (P2-R141)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Committed amount', TARGET);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  const amount = settings.getByLabel('Amount', { exact: true });
+  const reopen = async (): Promise<void> => {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  };
+  await reopen();
+  await amount.fill('45');
+  await amount.press('Enter');                                                            // committed: the store shows 45 at once
+  await expect(amount).toHaveValue('45');
+  await page.keyboard.press('Escape');
+  await expect(toggle, 'nothing to take back: the drawer\'s Escape').toHaveAttribute('aria-expanded', 'false');
+  await reopen();
+  await amount.fill('46');                                                                // committed by its timer
+  await expect.poll(async () => (await settingsOf(page, id)).amount).toBe(46);
+  await expect(amount).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(toggle, 'the timer\'s commit too').toHaveAttribute('aria-expanded', 'false');
+  await reopen();
+  await amount.fill('2x');                                                                // a draft that differs (and that nothing sends)
+  await page.keyboard.press('Escape');
+  await expect(amount).toHaveValue('46');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('Escape after a committed cost or crop seed stat, or a draft equal to it, closes the drawer; one that differs is taken back first (P2-R141)', async ({ page }) => {
+  // the crop seed's stats are drawn while the pack has a crop table, which the e2e pack lacks: the page is told it has one (the server checks
+  // the farm settings for their shape alone, so the stats are sent and stored as for a pack that has)
+  await page.route('**/api/pack', async (route) => {
+    const res = await route.fetch();
+    const info = (await res.json()) as { manifest?: { counts?: Record<string, number> } };
+    return route.fulfill({ response: res, json: { ...info, manifest: { ...info.manifest, counts: { ...info.manifest?.counts, crops: 179 } } } });
+  });
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Committed cost and stat', { ...TARGET, costOverrides: { 't:iron_ingot@0': 2 } });
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  const reopen = async (): Promise<void> => {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  };
+  await reopen();
+  await settings.getByRole('checkbox', { name: 'CropsNH Crop Manager' }).check();
+  const fields = [
+    { field: settings.getByLabel('Cost of Iron Ingot'), stored: async () => (await settingsOf(page, id)).costOverrides['t:iron_ingot@0'] },
+    { field: settings.getByLabel('Growth', { exact: true }), stored: async () => (await settingsOf(page, id)).farms?.crops?.stats?.growth },
+  ];
+  for (const { field, stored } of fields) {
+    await field.fill('3');
+    await field.press('Enter');
+    await expect.poll(stored, 'committed').toBe(3);
+    await page.keyboard.press('Escape');
+    await expect(toggle, 'nothing to take back after a commit: the drawer\'s Escape').toHaveAttribute('aria-expanded', 'false');
+    await reopen();
+    await field.fill('5');
+    await field.fill('3');                                                                // a draft, typed, equal to what the field shows
+    await page.keyboard.press('Escape');
+    await expect(toggle, 'nothing to take back: the drawer\'s Escape').toHaveAttribute('aria-expanded', 'false');
+    await reopen();
+    await field.fill('7');                                                                // a draft that differs
+    await page.keyboard.press('Escape');
+    await expect(field).toHaveValue('3');
+    await expect(toggle, 'the draft\'s Escape').toHaveAttribute('aria-expanded', 'true');
+    await page.keyboard.press('Escape');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await reopen();
+  }
+});
+
+// the final fix wave's R2 (P2-R138 kept to its note): an item search that shows an error is no layer, by ruling: the search's own Escape handler
+// leaves the note to the browser's clear of the field, which takes it away with the text, and the drawer closes on that same, first, Escape
+test('an item search showing an error is no layer: the first Escape closes the drawer', async ({ page }) => {
+  await page.route('**/api/pack/search?**', (route) => route.fulfill({ status: 500, json: { error: 'search-failed', message: 'The search failed' } }));
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Search error', TARGET);
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const toggle = page.getByRole('button', { name: SETTINGS_BUTTON });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await settings.getByPlaceholder('Search items and fluids').fill('iron');
+  await expect(settings.getByText('The search failed')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('the avoid box\'s list, and a key something inside the drawer has handled, keep the drawer open too', async ({ page }) => {
@@ -612,4 +812,64 @@ test('a drawer that opened by itself in a window that has grown past 900 px sinc
   await expect(settings).toBeVisible();
   await expect(search).toBeFocused();
   await expect(toggle).not.toBeFocused();
+});
+
+// Phase 2 Task 8 (spec §17 R43): while the drawer is open the banners behind it are inert, so what they say is not announced; the drawer's
+// own status line says how many problems the plan has (never their words, which other specs find by text), and nothing once it is closed.
+test('the drawer has a status line of its own (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await openWithPlan(page, copperUnsourced());                                       // its LV_CIRCUITS give a target: the drawer stays shut
+  const status = page.locator("aside[aria-label='Project settings'] [role=status]");
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();                 // "Settings · Make: Basic Circuit"
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible();   // the drawer is open
+  await expect(status).toHaveText('The plan has 1 problem');                          // the Copper Ingot nothing supplies
+  await page.keyboard.press('Escape');
+  await expect(status).toHaveText('');
+});
+
+// plan ruling drawer-status-count: the drawer that opens by itself is where the hint to pick something to make is answered, so that hint is
+// no problem it announces over the focused item search
+test('the drawer that opens by itself to pick a target says no problem (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  await createProject(page, 'Status, nothing yet');                                  // no target: the drawer opens by itself into the item search
+  await expect(page.locator('.plan-banner button.link')).toHaveText('Pick something to make');   // the plan is in; the banner is inert, so found by class
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible();   // the drawer is open
+  await expect(page.locator("aside[aria-label='Project settings'] [role=status]")).toHaveText('');
+});
+
+// ledger ruling P2-R52: an update is heard to start in the drawer ("The plan is updating…"), and to end: a plan with nothing to warn about
+// says it has no problems
+test('the drawer says when an update ends with no problems (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  const id = await openWithPlan(page, circuitLv(), { ...LV_CIRCUITS, useSurplus: false });   // nothing to warn about; no other project reaches it
+  const status = page.locator("aside[aria-label='Project settings'] [role=status]");
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
+  await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible();
+  await expect(status).toHaveText('No problems');
+  const letThrough = await holdReplan(page, id);
+  await expect(status).toHaveText('The plan is updating…');
+  await letThrough();
+  await expect(status).toHaveText('No problems');
+  await page.keyboard.press('Escape');
+  await expect(status).toHaveText('');
+});
+
+// the final fix wave, FW-10 (R43): a change the planner refuses snaps back in the drawer, and the banner that says why is inert behind it, so the
+// drawer's own status says it, first. It is read in the status line: the banner holds the same words, which a page-wide getByText would find
+// twice while the drawer is open (spec §3.8)
+test('the drawer\'s status says why a change was refused (R43)', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, 'Refused in the drawer', TARGET);
+  await page.route(`**/api/projects/${id}/ops`, (route) => route.fulfill({ status: 400, json: { error: 'bad-op', message: 'The planner refused that change' } }));
+  await page.getByRole('button', { name: SETTINGS_BUTTON }).click();
+  const settings = page.locator('aside[aria-label="Project settings"]');
+  const status = settings.locator('p[role="status"]');
+  await expect(status).toHaveText(/problem/);                                               // the plan's count, before the change
+  const amount = settings.getByLabel('Amount', { exact: true });
+  await amount.fill('45');
+  await amount.press('Enter');
+  await expect(status).toHaveText('The planner refused that change');
+  await expect(page.locator('.project-banners .banner.error')).toHaveText('The planner refused that change');   // the inert banner's alert
 });

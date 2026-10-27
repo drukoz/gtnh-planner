@@ -8,7 +8,9 @@ import {
 } from '../../../src/server/planner/build-cost.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
+import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
+import { MC_MACHINES } from '../../../src/shared/ids.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import { EBF_STRUCTURE, IDS, layoutPack, makePlan, type StepSpec } from '../../helpers/layout-fixtures.ts';
@@ -27,11 +29,11 @@ const ctx = emptyContext();
 
 /** The prices of every machine of `pack` at `s`. */
 function pricesOf(pack: Pack, s: PlanSettings): Promise<ItemPrices> {
-  return itemPrices(pack, s, ctx, buildKeys(pack, [...pack.machines.values()]));
+  return itemPrices(pack, s, ctx, buildKeys(pack, allMachines(pack)));
 }
 
 function machine(pack: Pack, mteId: number): Machine {
-  const m = pack.machines.get(mteId);
+  const m = machineByMteId(pack, mteId);
   if (m === undefined) throw new Error(`no machine ${mteId}`);
   return m;
 }
@@ -60,7 +62,7 @@ describe('machineBuildCost', () => {
     const prices = await pricesOf(pack, lv);
     expect(machineBuildCost(pack, prices, machine(pack, 122))).toBeNull();
     // A priced item on a pseudo machine (packFromSpec packs hold none).
-    expect(machineBuildCost(pack, prices, { ...machine(pack, 121), mteId: PSEUDO_MACHINES.CRAFTING_TABLE })).toBeNull();
+    expect(machineBuildCost(pack, prices, { ...machine(pack, 121), id: MC_MACHINES.CRAFTING_TABLE, mteId: PSEUDO_MACHINES.CRAFTING_TABLE })).toBeNull();
     expect(machineBuildCost(pack, prices, undefined)).toBeNull();
   });
 
@@ -185,12 +187,12 @@ describe('machineBuildCost', () => {
       pack.recipes.push(r);
       pack.recipeById.set(r.id, r);
       const simple = (m: Machine | undefined): string => (m?.cls ?? '?').slice((m?.cls ?? '?').lastIndexOf('.') + 1);
-      const byItem = new Map([...pack.machines.values()].map((m) => [m.itemKey, m]));
+      const byItem = new Map(allMachines(pack).map((m) => [m.itemKey, m]));
       const build = [...hatchSet(pack, machine(pack, mteId), r, tier)].flatMap(([key, n]) => Array.from({ length: n }, () => simple(byItem.get(key)))).sort();
       const step: StepSpec = { id: r.id, mteId, count: 1, tier, euPerTick: r.euPerTick,
         inputs: r.inputs.map((ing) => [ing.options[0]!.key, ing.options[0]!.amount]), outputs: r.outputs.map((p) => [p.key, p.amount]) };
       const { units } = unitsFromPlan(pack, makePlan([step]));
-      const layout = units[0]!.cells.filter((c) => c.hatch !== undefined && c.exported !== true).map((c) => simple(pack.machines.get(c.block.mteId!))).sort();
+      const layout = units[0]!.cells.filter((c) => c.hatch !== undefined && c.exported !== true).map((c) => simple(machineByMteId(pack, c.block.mteId!))).sort();
       return { build, layout };
     };
     const ALL_SIX: ExportHatchKind[] = ['input_bus', 'output_bus', 'input_hatch', 'output_hatch', 'energy', 'maintenance'];
@@ -260,7 +262,9 @@ describe('machineBuildCost', () => {
       const ruled = both(ebfRule, IDS.EBF, smelt, 2);
       expect(ruled.build).toContain('MTEHatchMuffler');
       expect(ruled.build).toEqual(ruled.layout);
-      ebfRule.machines.set(IDS.EBF, { ...ebf, cls: `${ebf.cls}ExportOnly` });
+      const exportOnly = { ...ebf, cls: `${ebf.cls}ExportOnly` };
+      ebfRule.machines.set(exportOnly.id, exportOnly);
+      ebfRule.machineByMteId.set(IDS.EBF, exportOnly);
       const alone = both(ebfRule, IDS.EBF, { ...smelt, id: 'e2' }, 2);
       expect(alone.build).not.toContain('MTEHatchMuffler');
       expect(alone.build).toEqual(alone.layout);
@@ -499,7 +503,7 @@ describe('structure cells that need nothing placed', () => {
 describe('itemPrices', () => {
   it('memoizes prices per pricing context', async () => {
     const pack = miniGt();
-    const keys = buildKeys(pack, [...pack.machines.values()]);
+    const keys = buildKeys(pack, allMachines(pack));
     const first = itemPrices(pack, lv, ctx, keys);
     const line: PlanSettings = { ...lv, target: 't:iron_plate@0', amount: 60, mode: 'makeN', logistics: 'ae2', buildHorizonHours: null };
     expect(itemPrices(pack, line, ctx, [...keys].reverse())).toBe(first);
@@ -529,7 +533,7 @@ describe('itemPrices', () => {
     const pack = miniWith({
       id: 'make-151', map: 'crafting', in: [['t:hull_lv@0', 1], { any: [['t:iron_plate@0', 1], ['t:titanium_plate@0', 1]] }], out: [['machine:151@0', 1]],
     });
-    const keys = buildKeys(pack, [...pack.machines.values()]);
+    const keys = buildKeys(pack, allMachines(pack));
     const project: PlanSettings = { ...lv, target: 't:iron_dust@0', optionChoice: { 'make-151#1': 't:titanium_plate@0' } };
     const first = itemPrices(pack, project, ctx, keys);
     // Hull 9 + iron plate 1; pinned to the titanium plate it would have no price.

@@ -7,6 +7,7 @@
 // stays an ordinary recipe). `deriveSupply` is pure and deterministic; the loader (load.ts `addDerivedRecipes`) and the
 // planner tests' `packFromSpec` put what it returns into the pack, before the indices are built.
 
+import type { MachineId } from '../../shared/ids.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Ingredient, Machine, Pack, Recipe, RecipeMapInfo } from '../../shared/types/pack.ts';
 import { FREE_KEYS } from '../../shared/types/plan.ts';
@@ -123,7 +124,7 @@ function fillsWithFreeFluid(r: Recipe, fluidContainers: FluidContainers): boolea
  * Nothing of the input is changed.
  */
 export function deriveSupply(input: {
-  recipes: readonly Recipe[]; machines: ReadonlyMap<number, Machine>; maps: ReadonlyMap<string, RecipeMapInfo>;
+  recipes: readonly Recipe[]; machines: ReadonlyMap<MachineId, Machine>; maps: ReadonlyMap<string, RecipeMapInfo>;
   fluidContainers: FluidContainers;
 }): { recipes: Recipe[]; pumpMap: RecipeMapInfo | null; pumpMachines: number[]; flagged: string[] } {
   const derived = new Map<string, Recipe>();

@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { benchToolSpec, gizmoSpec, SINGLE_USE_FILE } from '../../helpers/build-fixtures.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
+import { allMachines } from '../../../src/server/pack/lookup.ts';
 import { benchLine, benchRefusal } from '../../../src/server/planner/benches.ts';
 import { buildKeys, itemPrices } from '../../../src/server/planner/build-cost.ts';
 import { machineOptions, type MachineOptionEnv } from '../../../src/server/planner/machine-options.ts';
@@ -32,7 +33,7 @@ function variantOf(pack: Pack, id: string): Recipe | undefined {
 
 /** The options' environment at LV with every machine of `pack` priced, crafting automated unless `more` says otherwise. */
 async function lvEnv(pack: Pack, more: Partial<MachineOptionEnv> = {}): Promise<MachineOptionEnv> {
-  const prices = await itemPrices(pack, lv, ctx, buildKeys(pack, [...pack.machines.values()]));
+  const prices = await itemPrices(pack, lv, ctx, buildKeys(pack, allMachines(pack)));
   return { groupTier: 1, coilHeat: 1801, owned: new Map(), prices, automateCrafting: true, ...more };
 }
 
@@ -71,7 +72,7 @@ describe('GGFab single-use variants of tool recipes', () => {
     // a craft wears the tool out of the grid's match: no bench option, so the step is crafted by hand
     expect(machineOptions(pack, recipeOf(pack, 'rod-file'), 'crafting', env)).toEqual([]);
     expect(machineOptions(pack, recipeOf(pack, 'mash-mortar'), 'crafting', env)).toEqual([]);
-    expect(machineOptions(pack, variantOf(pack, 'rod-file')!, 'crafting', env).map((o) => o.mteId)).toEqual([31091]);
+    expect(machineOptions(pack, variantOf(pack, 'rod-file')!, 'crafting', env).map((o) => o.id)).toEqual(['gt:31091']);
     expect(benchRefusal(pack, recipeOf(pack, 'mash-mortar'), {})).toBe('needs a Mortar, which an Auto Workbench cannot keep using');
     expect(benchRefusal(pack, recipeOf(pack, 'rod-file'), {})).toBe('needs a File, which an Auto Workbench cannot keep using');
     expect(benchRefusal(pack, variantOf(pack, 'rod-file')!, {})).toBeUndefined();
@@ -152,7 +153,7 @@ describe('the cap rule on Project Red and EnderIO lines', () => {
     const gizmo = recipeOf(pack, 'gizmo');
     const env = await lvEnv(pack);
     // one craft needs all nine input slots: AE2 pushes one whole set behind its Locking Card, machine to machine fills it by hand
-    expect(machineOptions(pack, gizmo, 'crafting', env).map((o) => o.mteId)).toEqual([31091]);
+    expect(machineOptions(pack, gizmo, 'crafting', env).map((o) => o.id)).toEqual(['gt:31091']);
     expect(machineOptions(pack, gizmo, 'crafting', { ...env, benchCapBy: 'Project Red' })).toEqual([]);
     expect(benchRefusal(pack, gizmo, { capBy: 'EnderIO' }))
       .toBe('needs 9 input slots of an Auto Workbench for its stock, more than the 8 an EnderIO line fills safely');

@@ -14,6 +14,8 @@ import type { Plan, PlanFlow } from '../../shared/types/plan.ts';
 import type { Note, Project, ProjectOp } from '../../shared/types/project.ts';
 import { findBase, type WorldScan, type WorldSource } from '../../shared/types/world.ts';
 import { messageOf } from '../api/client.ts';
+import { Figs } from '../components/Figs.tsx';
+import { Skeleton } from '../components/Skeleton.tsx';
 import { localTime } from '../format.ts';
 import { worldApi } from '../map/api.ts';
 import { FoundPanel } from '../map/FoundPanel.tsx';
@@ -27,6 +29,7 @@ import { tileCache } from '../map/tile-cache.ts';
 import type { MapMarker, MapOverlay, MapViewport } from '../map/types.ts';
 import { followLink } from '../router.ts';
 import { focusPin, usePinFocus } from '../state/pin-focus.ts';
+import { showToast } from '../state/toasts.ts';
 import { useLayout, type LayoutState } from '../state/use-layout.ts';
 import { MapView } from './MapView.tsx';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -253,7 +256,8 @@ function WorldPicker(props: { project: Project; scans: WorldScanListItem[] | nul
 
 interface Pick { dim: number; x: number; y: number; z: number }
 
-function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCancel(): void }): ReactElement {
+/** The dialog that pins a note to the block clicked on the map, titled with its position (exported for its markup test). */
+export function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCancel(): void }): ReactElement {
   const { pin, onSave, onCancel } = props;
   const [text, setText] = useState('');
   const where = `${pin.x}, ${pin.y}, ${pin.z}`;
@@ -264,8 +268,8 @@ function NoteDialog(props: { pin: Pick; onSave(text: string): void; onCancel(): 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
       {/* The accessible name avoids the word "note": the text field is the one thing labelled "Note" (ruling M-R5). */}
-      <form className="modal" role="dialog" aria-modal="true" aria-label={`Pin at ${where}`} onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
-        <h2>{`Add note at ${where}`}</h2>
+      <form className="modal" role="dialog" aria-modal="true" aria-label={`Pin at ${where}`} onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && !e.nativeEvent.defaultPrevented && onCancel()}>
+        <h2><Figs text={`Add note at ${where}`} /></h2>
         <label className="field">
           <span>Note</span>
           <textarea autoFocus rows={3} maxLength={MAX_NOTE_LENGTH} value={text} onChange={(e) => setText(e.currentTarget.value)} />
@@ -399,6 +403,7 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
     const note: Omit<Note, 'by' | 'at'> = { id: newNoteId(), text, pin: { dim: pick.dim, x: pick.x, y: pick.y, z: pick.z } };
     send([{ op: 'addNote', note }]);
     setPick(null);
+    showToast('Note added');
   };
 
   return (
@@ -465,7 +470,10 @@ function ScanMap(props: { project: Project; scan: WorldScan; scans: WorldScanLis
   );
 }
 
-/** The project's world scan, loaded; while it loads or when it cannot be loaded, the scan can still be changed. */
+/**
+ * The project's world scan, loaded; while it loads or when it cannot be loaded, the scan can still be changed. While it loads, a skeleton of
+ * the map follows the status box (Phase 2 spec §11.1), outside it, so the box stays as it is.
+ */
 function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanListItem[] | null; send: Send } & LineProps): ReactElement {
   const { project, scanId, scans, send, plan, line, focusedPin } = props;
   const loaded = useScan(scanId);
@@ -473,21 +481,24 @@ function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanL
     return <ScanMap project={project} scan={loaded.scan} scans={scans} send={send} plan={plan} line={line} focusedPin={focusedPin} />;
   }
   return (
-    <div className="map-tab map-tab-status">
-      {loaded.error === null ? <p className="muted">Loading the world scan…</p> : <p className="error">{`Could not load the world scan: ${loaded.error}`}</p>}
-      {loaded.error !== null && (
-        <>
-          <ScanSelect
-            scans={scans}
-            value={scanId}
-            current={{ id: scanId, label: scanId }}
-            emptyLabel="None: plan without the world"
-            onChange={(id) => send(worldOps(project, id === '' ? null : id, id === '' ? null : project.world.baseId))}
-          />
-          <WorldLink />
-        </>
-      )}
-    </div>
+    <>
+      <div className="map-tab map-tab-status">
+        {loaded.error === null ? <p className="muted">Loading the world scan…</p> : <p className="error">{`Could not load the world scan: ${loaded.error}`}</p>}
+        {loaded.error !== null && (
+          <>
+            <ScanSelect
+              scans={scans}
+              value={scanId}
+              current={{ id: scanId, label: scanId }}
+              emptyLabel="None: plan without the world"
+              onChange={(id) => send(worldOps(project, id === '' ? null : id, id === '' ? null : project.world.baseId))}
+            />
+            <WorldLink />
+          </>
+        )}
+      </div>
+      {loaded.error === null && <Skeleton shape="scene" />}
+    </>
   );
 }
 

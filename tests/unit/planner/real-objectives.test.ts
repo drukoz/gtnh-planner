@@ -18,6 +18,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { openDb } from '../../../src/server/db/db.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { TREE_FARM_MAP } from '../../../src/server/pack/recipes.ts';
 import { buildCostCounts } from '../../../src/server/planner/basis.ts';
 import { isAutoWorkbench } from '../../../src/server/planner/benches.ts';
@@ -184,7 +185,7 @@ describe.skipIf(!local)('planning modes, farms and surplus on the real export (a
   const rubberGoods = (plan: Plan): StuffKey[] => [...rawKeys(plan)].filter((key) => farmGood(key) || coalType(key)).sort();
   /** Its crafting-table steps on an Auto Workbench, where they run with crafting automated (architecture §11.39). */
   const benchSteps = (plan: Plan): string[] =>
-    plan.steps.filter((st) => st.mapId === CRAFTING_MAP && isAutoWorkbench(pack.machines.get(st.machine.mteId))).map((st) => st.id);
+    plan.steps.filter((st) => st.mapId === CRAFTING_MAP && isAutoWorkbench(machineByMteId(pack, st.machine.mteId))).map((st) => st.id);
 
   beforeAll(async () => {
     pack = await loadPack(activeExportDir(loadConfig()));

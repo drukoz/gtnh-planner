@@ -40,6 +40,9 @@ export function revokeQuestion(label: string): string {
   return `Revoke "${label}"? Anyone using it loses the ghosts until they get a new token.`;
 }
 
+/** Said aloud on the panel's polite line when a revoke went through, which has no toast (Phase 2 spec §12.1; ledger ruling P2-R68). */
+export const TOKEN_REVOKED = 'Token revoked';
+
 /** Shown, with the command selected, when the browser does not let the page copy it. */
 export const COPY_HINT = 'Press Ctrl+C (Cmd+C on a Mac) to copy';
 

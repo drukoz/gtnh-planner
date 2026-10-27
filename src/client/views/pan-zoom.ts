@@ -1,7 +1,8 @@
 // Pan and zoom for a picture drawn in an svg, with the flow diagram's limits and feel (the Connections tab uses it; a
 // later cleanup can move FlowView onto it). A view puts the picture's top left at (x, y) in the svg's screen pixels and
 // zooms it by k: the picture's group has the transform `translate(x y) scale(k)`, so a drag adds what the pointer moved
-// to x and y at any zoom. When the svg changes size the view is fitted again or keeps its middle (`resizeView`).
+// over the svg (`pointIn`, which the flow diagram and the map use too) to x and y at any zoom. When the svg changes size
+// the view is fitted again or keeps its middle (`resizeView`).
 
 /** Where the picture's top left is (screen px) and its zoom. */
 export interface View { x: number; y: number; k: number }
@@ -13,8 +14,22 @@ export const MAX_ZOOM = 3;
 /** Wheel zoom per pixel of scroll, and the pixels a line of scroll counts for. */
 export const WHEEL_ZOOM = 0.0015;
 export const WHEEL_LINE_PIXELS = 16;
-/** A press moves this far (px) before it counts as a drag instead of a click. */
+/**
+ * A press moves this far (px) before it counts as a drag instead of a click: the pointer's own move on the page, so a press stays a click
+ * while something moves the area under a still pointer (ledger ruling P2-R16). Once it is a drag, the drag follows the area (`pointIn`).
+ */
 export const DRAG_THRESHOLD = 4;
+
+/**
+ * Where a pointer event is in the element it was heard on (px from its top left), from where that element is now on the page: a drag that
+ * adds what the pointer moved over its area keeps the spot it grabbed under the pointer even when the area moves on the page meanwhile
+ * (the plan banner's busy line above the tabs comes and goes with every replan; ledger ruling P2-R16). The diagrams' drags and the map's
+ * presses use it.
+ */
+export function pointIn(e: { clientX: number; clientY: number; currentTarget: Element }): [number, number] {
+  const box = e.currentTarget.getBoundingClientRect();
+  return [e.clientX - box.left, e.clientY - box.top];
+}
 
 /** `k` within the zoom limits. */
 export function clampZoom(k: number): number {

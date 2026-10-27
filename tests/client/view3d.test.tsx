@@ -19,6 +19,9 @@ import { LINKS_STORAGE_KEY, loadShowLinks, saveShowLinks } from '../../src/clien
 import { linksNoteText } from '../../src/client/views/View3D.tsx';
 // the review of f82c98c: Focus, the colour legend and the note in each mode's words
 import { FOCUS_STORAGE_KEY } from '../../src/client/views/View3D.tsx';
+// Phase 2 Task 2b's fix round 1 (ruling P2-R15): a picked link's title, from the Connections model, carries its figures in span.fig
+import { connectionSpans, connectionsGraph, spanDetails } from '../../src/client/connections/model.ts';
+import { connLayout, connPlan } from './connections-fixture.ts';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
   maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
@@ -35,6 +38,10 @@ describe('3D tab', () => {
   it('explains itself without WebGL2, while loading and when there is nothing to build', () => {
     expect(shell({ webgl: false })).toContain('The 3D view needs WebGL2 — the block list below still works');
     expect(shell({ layout: null, loading: true })).toContain('Laying out the line…');
+    // Phase 2 Task 8 (spec §11.1): the first layout on its way, beside a skeleton of the scene; but not without WebGL2, where no scene comes
+    expect(shell({ layout: null, loading: true })).toContain('Laying out the line…</p><div class="skeleton skeleton-scene" aria-hidden="true">');
+    expect(shell({ layout: null, loading: true, webgl: false })).toContain('Laying out the line…');
+    expect(shell({ layout: null, loading: true, webgl: false })).not.toContain('class="skeleton');
     expect(shell({ layout: { ...sampleLayout, status: 'empty', blocks: [] } })).toContain('Nothing new to build');
     expect(shell({ info: { title: 'Basic Macerator', lines: ['Facing south'] } })).toContain('data-testid="view3d-info"');
     // a line whose only new machines are farms (add-on 17): no blocks to draw, and it says why rather than nothing
@@ -88,7 +95,7 @@ describe('3D tab: the rules in detail', () => {
     const html = shell({ layout: warned, hover: 'Basic Macerator — programmed circuit 2', info: { title: 'Input Bus (LV)', lines: ['programmed circuit 2'] } });
     expect(html).toMatch(/data-testid="view3d-canvas"[^>]*><canvas/);
     expect(html).toMatch(/<input type="range" aria-label="Layer" min="0" max="2" step="1" value="2"\/>/);
-    for (const text of ['data-testid="view3d-hover"', 'Basic Macerator — programmed circuit 2', 'Input Bus (LV)', 'Pick a world scan and base on the Map tab'])
+    for (const text of ['data-testid="view3d-hover"', 'Basic Macerator — programmed circuit <span class="fig">2</span>', 'Input Bus (LV)', 'Pick a world scan and base on the Map tab'])
       expect(html).toContain(text);
     expect(shell()).not.toContain('data-testid="view3d-hover"');
     expect(shell()).not.toContain('data-testid="view3d-info"');
@@ -353,7 +360,7 @@ describe('3D tab: the Machine GUI chrome', () => {
     expect(html).not.toContain('style=');
     for (const markup of [
       '<div class="view3d" data-testid="view3d"><div class="view3d-body"><div class="view3d-main">',
-      '<div data-testid="view3d-canvas" class="view3d-viewport"><canvas></canvas><p data-testid="view3d-hover" class="view3d-hover">Basic Macerator — programmed circuit 2</p></div>',
+      '<div data-testid="view3d-canvas" class="view3d-viewport"><canvas></canvas><p data-testid="view3d-hover" class="view3d-hover">Basic Macerator — programmed circuit <span class="fig">2</span></p></div>',
       '<div class="row view3d-controls"><label class="check"><input type="range" aria-label="Layer"',
       '<span class="view3d-layer-text">All layers</span>',
       '<p class="muted small">Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>',
@@ -382,5 +389,22 @@ describe('3D tab: the Machine GUI chrome', () => {
     // a class or a title of the shell never names what is off: the legend and Focus are only there while the links are
     const off = shell({ showLinks: false, linksLegend: legend, focus: true, onFocus: () => {} });
     expect([off.includes('Focus'), off.includes('view3d-links-legend')]).toEqual([false, false]);
+  });
+});
+
+// Ruling P2-R15 (Phase 2 Task 2b's fix round 1): a title that can carry a figure writes it through Figs. A picked link's details box is
+// titled with the link's label and rate, as the hover label and the Connections panel are, so its figures are VT323 too; a block's name
+// with no digit is unchanged.
+describe('3D tab: the details box title of a picked link (ruling P2-R15)', () => {
+  it('writes the figures of a picked link\'s title in span.fig, and leaves a name with no digit as it is', () => {
+    const layout = connLayout('enderio');
+    const graph = connectionsGraph(layout, connPlan, 'min');
+    const span = connectionSpans(layout, graph).find((s) => s.edge === 'flow:step:a>step:b:t:dust@0');
+    if (span === undefined) throw new Error('the fixture has no Titanium Dust link');
+    const details = spanDetails(graph, span);
+    if (details === null) throw new Error('the Titanium Dust link has no details');
+    expect(shell({ info: details })).toContain(
+      '<section data-testid="view3d-info" aria-live="polite" class="view3d-box view3d-details"><h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>');
+    expect(shell({ info: { title: 'Input Bus (LV)', lines: [] } })).toContain('<h3>Input Bus (LV)</h3>');
   });
 });

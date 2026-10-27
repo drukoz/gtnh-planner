@@ -14,6 +14,7 @@ import { ignoredByBlocking } from '../../../src/server/layout/modes/ae2.ts';
 import { stepItemInputs, stepItemOutputs } from '../../../src/server/layout/modes/mode.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { stepOneOffs } from '../../../src/server/planner/bom.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { isFluidKey, type StuffKey } from '../../../src/shared/keys.ts';
@@ -88,7 +89,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding fix on the research
     // Multi Stack Input off on every basic machine fed two kinds, Limiting mode on on every input bus fed two
     const crowded = live.filter((b) => b.role === 'machine' && b.stepId !== undefined && stepItemInputs(plan, b.stepId).length >= 2);
     for (const b of crowded) {
-      const kind = pack.machines.get(b.block.mteId ?? -1)?.kind;
+      const kind = machineByMteId(pack, b.block.mteId ?? -1)?.kind;
       if (kind === 'basic' || kind === 'steam') expect(b.config?.multiStack, `${b.label} Multi Stack Input`).toBe(false);
     }
     for (const bus of live.filter((b) => b.hatch === 'input_bus' && b.stepId !== undefined && stepItemInputs(plan, b.stepId).length >= 2)) {
@@ -169,7 +170,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the feeding fix on the research
         expect(b.feed?.exportBus?.keys, `${b.label} export bus feed`).toEqual(b.covers!.find((c) => c.settings.mode === 'me_export')!.filter);
       }
       // a machine whose piped fluid another machine waits for, and whose pattern no job of the line runs, is warned about
-      const kindOf = (id: string | undefined) => /^basicmachine\.([a-z_]+)\.tier/.exec(pack.machines.get(stepOf(id)?.machine.mteId ?? -1)?.metaName ?? '')?.[1];
+      const kindOf = (id: string | undefined) => /^basicmachine\.([a-z_]+)\.tier/.exec(machineByMteId(pack, stepOf(id)?.machine.mteId ?? -1)?.metaName ?? '')?.[1];
       const short = layout.warnings.filter((w) => w.code === 'ae2_fluid_short').map((w) => [kindOf(w.stepId), w.key]);
       const expected = FLUID_SHORT[name];
       if (expected === undefined) expect(short, 'machines AE2 runs too seldom for their piped fluids').toEqual([]);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MapTab, NO_BASES_TEXT, worldOps } from '../../src/client/views/MapTab.tsx';
+import { MapTab, NO_BASES_TEXT, NoteDialog, worldOps } from '../../src/client/views/MapTab.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Project } from '../../src/shared/types/project.ts';
@@ -72,5 +72,13 @@ describe('MapTab world ops', () => {
     expect(worldOps(placed, null, null)).toEqual([{ op: 'world', scanId: null, baseId: null }, { op: 'clearPlacement' }]);
     expect(worldOps(placed, 'S2', '0:0:0')).toEqual([{ op: 'world', scanId: 'S2', baseId: '0:0:0' }]);   // a rescan of the same base keeps it
     expect(worldOps(projectWithWorld('S1', '0:0:0'), 'S1', '0:1:1')).toEqual([{ op: 'world', scanId: 'S1', baseId: '0:1:1' }]);
+  });
+});
+
+// Phase 2 spec §25: the note dialog's title writes the pin's position as figures, VT323 in span.fig, among Pixelify words.
+describe('MapTab note dialog', () => {
+  it('titles the dialog with the pin\'s position, its figures in span.fig', () => {
+    const html = renderToStaticMarkup(<NoteDialog pin={{ dim: 0, x: 4, y: 63, z: 5 }} onSave={() => {}} onCancel={() => {}} />);
+    expect(html).toContain('<h2>Add note at <span class="fig">4</span>, <span class="fig">63</span>, <span class="fig">5</span></h2>');
   });
 });
