@@ -277,6 +277,8 @@ describe('a MIP with a cutoff (release gate round 2, G1: the lite start)', () =>
   it('says its limits stopped it where it found no whole solution, and only with a cutoff', async () => {
     const capped = { ...exact, ...limits, maxIterations: 1 };
     expect(await solveLp({ ...capped, objectiveBound: 1e9 })).toMatchObject({ status: 'error', stop: 'limit', x: [] });
+    // the build MIP's 50 nodes, which HiGHS reports as its solution limit (no iteration cap here)
+    expect(await solveLp({ ...exact, ...limits, objectiveBound: 1e9 })).toMatchObject({ status: 'error', stop: 'limit', x: [], nodes: 50 });
     const plain = await solveLp(capped);
     expect(plain.status).toBe('error');
     expect(plain.stop).toBeUndefined();
