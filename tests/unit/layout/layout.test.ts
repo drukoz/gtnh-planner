@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { layoutLine, emptyScan } from '../../../src/server/layout/layout.ts';
-import { overlaps } from '../../../src/server/layout/arrange.ts';
+import { overlaps, unitsFromPlan, placeUnits } from '../../../src/server/layout/arrange.ts';
+import { routeInternal, fluidNets, headWidthFor, supplyRunLoss } from '../../../src/server/layout/internal.ts';
+import { tierGroups, transformerStages, hookupAllowanceVolts } from '../../../src/server/layout/power.ts';
+import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { tierName } from '../../../src/shared/gt/tiers.ts';
 import { OPPOSITE, rotateFacing, step } from '../../../src/shared/layout/geometry.ts';
@@ -110,12 +113,97 @@ describe('layoutLine', () => {
   });
 
   it('counts the banks, the line\'s own cables and the hookup in the power need', async () => {
-    // banks 4 A out × 1 EU; LV: 2 macerators × 2 A × 4 V; MV from the hookup's landing cell (z 4): assembler 2 A × 14,
-    // bank 2 A × 3; hookup 6 cables × 4 A × 1 V
+    // RUK-120: the hookup lands on the run cell that loses least in total (here z 2, a tie won by the earlier candidate):
+    // banks 4 A out × 1 EU; LV: 2 macerators × 2 A × 4 V; MV from the landing cell (z 2): assembler 2 A × 12, bank 2 A × 1;
+    // hookup 8 cables × 4 A × 1 V
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
     expect(layout.power!.detail).toBe('Needs 258 EU/t on average (180 + 78 loss); 900 EU/t spare');
     expect(layout.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
-      .toBe('Run 6× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 122 V');
+      .toBe('Run 8× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 120 V');
+  });
+});
+
+// RUK-120: the power hookup lands on the supply-run cell that minimises the line's total loss, ties going to the
+// earlier candidate and today's all-cells search last.
+describe('layoutLine: the power landing cell', () => {
+  const DIRS: Array<[number, number, number]> = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
+  const key = (p: readonly number[]) => p.join();
+  const adjacent = (a: readonly number[], b: readonly number[]) => DIRS.some((d) => key([a[0]! + d[0], a[1]! + d[1], a[2]! + d[2]]) === key(b));
+  const twentyLV = () => makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 20, euPerTick: 30 }]);
+  // the tap sits north of the line's middle, so a landing cell at either end pays both a longer hookup and a longer run
+  const lvTap: [number, number, number] = [35, 64, 26];
+  const lvScan = () => makeScan({
+    base: { center: lvTap, bbox: { minX: 33, minY: 64, minZ: 24, maxX: 37, maxY: 65, maxZ: 28 } },
+    power: [{ voltageTier: 1, average: 2000, loadEUt: 100, storedEU: 10_000_000, taps: [{ pos: lvTap, freeAmps: 64, cableAmps: 64 }] }],
+  });
+  const lvGround = () => ({ readArea: areaReader(flatVoxels({
+    origin: [-20, 50, -20], size: [90, 30, 90], groundY: 63,
+    boxes: [{ from: lvTap, to: lvTap, block: { id: 'gregtech:gt.blockmachines', meta: 0, mteId: IDS.TIN_4X } }],
+  })) });
+  const project = () => makeProject({ placement: { origin: [30, 64, 30], rotation: 0 } });
+  /** The supply-tier cable cell the hookup's path ends beside. */
+  const landing = (layout: Layout, cable: string) => {
+    const last = layout.hookups.find((h) => h.kind === 'power')!.path.at(-1)!;
+    const cell = layout.blocks.find((b) => b.role === 'cable' && b.hookup === undefined && b.label === cable && adjacent(last, b.pos));
+    expect(cell, 'the hookup ends beside a supply cable').toBeDefined();
+    return cell!;
+  };
+
+  it('lands a long line\'s hookup in the middle of the run, not at its far end', async () => {
+    const pack = layoutPack(), plan = twentyLV();
+    const layout = await layoutLine(pack, plan, lvScan(), project(), lvGround());
+    expect([layout.status, layout.hookups.find((h) => h.kind === 'power')!.found]).toEqual(['ok', true]);
+    const run = layout.blocks.filter((b) => b.role === 'cable' && b.hookup === undefined && b.label === '4x Tin Cable');
+    expect(run.length).toBeGreaterThan(2);
+    const landed = landing(layout, '4x Tin Cable');
+    const xs = run.map((b) => b.pos[0]!);
+    expect(landed.pos[0]!).toBeGreaterThan(Math.min(...xs));
+    expect(landed.pos[0]!).toBeLessThan(Math.max(...xs));
+    // the route the old code priced (the run's first cell) is measured with the same loss formula: `buildLocal`'s
+    // internal route, mirrored, prices every landing cell, and the hookup loss is amps × blocks × lossPerBlock
+    const parts = resolveParts(pack);
+    const { units } = unitsFromPlan(pack, plan, { primitive: false });
+    const stages = transformerStages(tierGroups(units.filter((u) => u.electric)), 1);
+    const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: PORT_SPACING.direct, ...(stages === null ? {} : { supplyTier: stages.supplyTier }) });
+    const modeResult = buildMode('direct', { pack, plan, parts, placement, network: null });
+    const r = routeInternal({
+      pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages,
+      fluids: modeResult.ownsFluids === true ? [] : fluidNets(pack, plan, placement), tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
+      supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
+    });
+    expect(r.supplyRun.length).toBe(run.length);
+    const losses = r.supplyRun.map((_, i) => supplyRunLoss(r.supply, i).lossEUt);
+    const local = landed.pos.map((v, i) => v - layout.origin[i]!) as [number, number, number];
+    const chosen = r.supplyRun.findIndex((c) => key(c) === key(local));
+    expect(chosen).toBeGreaterThan(-1);
+    const amps = stages!.supplyAmps;
+    const totalLoss = layout.power!.averageEUt - plan.power.averageEUt;
+    // everything the landing cell does not change, read off the layout; the first cell's total is then its own run
+    // loss plus a hookup no shorter than the straight line from the tap to it — and the chosen total beats even that
+    const shared = totalLoss - losses[chosen]! - amps * layout.hookups.find((h) => h.kind === 'power')!.path.length;
+    const straight = r.supplyRun[0]!.reduce((s, v, i) => s + Math.abs(v + layout.origin[i]! - lvTap[i]!), 0);
+    expect(totalLoss).toBeLessThan(shared + losses[0]! + amps * straight);
+  });
+
+  it('picks the same landing cell on every run', async () => {
+    const once = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
+    const twice = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
+    expect(JSON.stringify(twice.hookups)).toBe(JSON.stringify(once.hookups));
+    expect(twice.power!.detail).toBe(once.power!.detail);
+  });
+
+  it('keeps the short line\'s hookup path pinned', async () => {
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
+    expect(layout.hookups.find((h) => h.kind === 'power')!.path)
+      .toEqual([[16, 64, 29], [16, 64, 28], [16, 64, 27], [16, 64, 26], [16, 64, 25], [16, 64, 24], [16, 64, 23], [16, 64, 22]]);
+  });
+
+  it('draws a dashed guide to the run when the terrain was never scanned', async () => {
+    const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject());
+    const power = layout.hookups.find((h) => h.kind === 'power')!;
+    expect([power.found, power.path.length > 0]).toEqual([false, true]);
+    const run = new Set(layout.blocks.filter((b) => b.role === 'cable' && b.hookup === undefined && b.label === '2x Annealed Copper Cable').map((b) => key(b.pos)));
+    expect(DIRS.some((d) => power.path.length > 0 && run.has(key([power.path.at(-1)![0]! + d[0], power.path.at(-1)![1]! + d[1], power.path.at(-1)![2]! + d[2]])))).toBe(true);
   });
 });
 
@@ -429,7 +517,7 @@ describe('layoutLine: mixed-tier lines', () => {
         expect([plan.steps[0]!.id, mode, pipeProblems(layout, plan, pack), powerProblems(layout, plan, pack, supply)]).toEqual([plan.steps[0]!.id, mode, [], []]);
       }
     }
-  });
+  }, 20_000); // 600 layouts, each searching the power hookup's landing cell: seconds under a full-suite load
 
   it('pipes every fluid of random LV, MV and HV lines in every mode, but a second fluid at a basic machine\'s one port', async () => {
     // 150 chained plans of 2–4 steps, each 1–3 machines of a random tier on an MV or HV network; now and then a step makes
@@ -478,7 +566,7 @@ describe('layoutLine: mixed-tier lines', () => {
     }
     expect(mixed).toBe(51);                                                           // the seed fixes this count
     expect({ failed: failed.length, first: failed.slice(0, 5) }).toEqual({ failed: 0, first: [] });
-  });
+  }, 20_000); // 450 layouts, each searching the power hookup's landing cell: seconds under a full-suite load
 });
 
 
