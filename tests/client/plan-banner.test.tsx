@@ -82,6 +82,10 @@ describe('plan banner', () => {
       + 'is full, and one more would cost more than the raw material it saves.');
     // Unmarked, the same split is a problem.
     expect(text(html({ ...split, deliberate: undefined, warnings: [] }))).toContain('This plan does not add up: 1 good is made two ways');
+    // The drawer's status counts what the banner counts: the note, in the server's words or the client's, is no problem.
+    expect(drawerStatus(split, null, null, false)).toBe('No problems');
+    expect(drawerStatus({ ...split, warnings: [] }, null, null, false)).toBe('No problems');
+    expect(drawerStatus({ ...split, deliberate: undefined, warnings: [] }, null, null, false)).toBe('The plan has 1 problem');
   });
   it('shows the first problem in the flow', () => {
     vi.stubGlobal('location', { hash: '#materials' });

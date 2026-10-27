@@ -164,7 +164,7 @@ function bannerItems(plan: Plan | null): BannerItems {
  * which the drawer, the item search in it focused, is there to answer (plan ruling drawer-status-count), and never their words, which other
  * specs find by text; else, for a plan that runs, that it has no problems, so an update is heard to end as it was heard to start (ledger
  * ruling P2-R52); else nothing (no plan yet, or one with nothing to make). What the plan uses beyond its line (a farm, another project's
- * surplus) is no problem.
+ * surplus) is no problem, nor is a good a build-cost plan makes two ways on purpose (the banner's notes, plan 12's final review).
  */
 export function drawerStatus(plan: Plan | null, storeError: string | null, planError: string | null, planLoading: boolean): string {
   if (storeError !== null) return storeError;
