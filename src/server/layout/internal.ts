@@ -22,7 +22,7 @@ import { fmtInt, joinNames } from '../../shared/layout/format.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
-import type { Plan, PlanWarning } from '../../shared/types/plan.ts';
+import type { Plan, PlanWarning, BomLine } from '../../shared/types/plan.ts';
 import { handRunSurroundings, placedStepIds, unitSteps, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
 import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
 import { coverRateWarning, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
@@ -53,8 +53,8 @@ export interface InternalResult {
    * of `placement.size`), sorted by x, y, z. `SupplyLoss.consumers[].blocks` is indexed by this list.
    */
   supplyRun: Vec3[];
-  /** Tier descending. */
-  cables: Array<{ tier: number; cable: Machine; cells: number }>;
+  /** Tier descending. `cells` the cells the layout lays (one run); `runs` the parallel runs the amps need (the build list prices `runs × cells`). */
+  cables: Array<{ tier: number; cable: Machine; cells: number; runs: number }>;
   fluidPipes: Array<{ key: StuffKey; name: string; pipe: Machine; cells: number }>;
   warnings: PlanWarning[];
   /**
@@ -377,8 +377,8 @@ function tierGraph(run: Run, tree: Tree | undefined): Map<string, string[]> {
 
 interface Sizing {
   stages: Stages;
-  /** The cable of each rated run's tier and whether it is short of amps (parallel runs needed). */
-  cables: Map<number, { cable: Machine; ampsShort: boolean; amps: number }>;
+  /** The cable of each rated run's tier, whether it is short of amps (parallel runs needed) and the runs that needs. */
+  cables: Map<number, { cable: Machine; ampsShort: boolean; runs: number; amps: number }>;
   /** Transformer rows per bank, by stage index. */
   rows: Array<{ first: number; placed: number }>;
   /** Volts each unit's packets lose inside the line (not counting the hookup's allowance), by electric unit index. */
@@ -581,10 +581,10 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
       headWarnings.add({ code: 'no_cable', text: `No cable for ${tierName(run.tier)} in this export` });
       continue;
     }
-    const { cable, ampsShort, amps } = chosen;
+    const { cable, ampsShort, runs, amps } = chosen;
     if (ampsShort) {
       headWarnings.add({ code: 'cable_amps',
-        text: `No cable carries ${fmtInt(amps)} A at ${tierName(run.tier)}: run ${Math.ceil(amps / cable.cable!.amps)} parallel ${cable.name} lines` });
+        text: `No cable carries ${fmtInt(amps)} A at ${tierName(run.tier)}: run ${fmtInt(runs)} parallel ${cable.name} lines` });
     }
     for (const c of run.cells) grid.lay(c, cable, 'cable', cable.name);
     for (let z = 0; z + 1 < length; z++) grid.links.push([run.cells[z]!, run.cells[z + 1]!]);
@@ -802,6 +802,17 @@ function pumpCovers(input: InternalInput, plans: readonly FluidPlan[], pipeAt: R
 }
 
 /**
+ * The build-list lines for the parallel cable runs a tier's amps need beyond the one the layout lays: for each entry of
+ * `cables` with `runs > 1`, `(runs − 1) × cells` of the tier's cable, the `why` naming the parallel runs. Tier order as
+ * `cables`; the layed run is priced by `bomFromBlocks`, so these are only the extra runs.
+ */
+export function parallelRunParts(cables: InternalResult['cables']): BomLine[] {
+  return cables.filter((c) => c.runs > 1).map((c): BomLine => ({
+    key: c.cable.itemKey, amount: (c.runs - 1) * c.cells, why: `power run (${fmtInt(c.runs)} parallel)`, group: 'power',
+  }));
+}
+
+/**
  * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
  * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
  * `stages` (no electric unit) nothing is wired.
@@ -842,7 +853,7 @@ export function routeInternal(input: InternalInput): InternalResult {
     supplyRun = landingCells;
     for (const run of head.runs) {
       const chosen = sizing.cables.get(run.tier);
-      if (chosen !== undefined) cables.push({ tier: run.tier, cable: chosen.cable, cells: laid.cells.get(run.tier) ?? run.cells.length });
+      if (chosen !== undefined) cables.push({ tier: run.tier, cable: chosen.cable, cells: laid.cells.get(run.tier) ?? run.cells.length, runs: chosen.runs });
     }
     keepAway = keepAwayCells(input, stages.supplyTier, head, trees, grid);
   }

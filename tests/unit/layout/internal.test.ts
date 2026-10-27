@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { routeInternal, fluidNets, headWidthFor, runX, supplyRunLoss } from '../../../src/server/layout/internal.ts';
+import { routeInternal, fluidNets, headWidthFor, runX, supplyRunLoss, parallelRunParts } from '../../../src/server/layout/internal.ts';
 import { unitsFromPlan, placeUnits, type LocalBlock, type Placement, type Unit } from '../../../src/server/layout/arrange.ts';
 import { hookupAllowanceVolts, tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
@@ -72,6 +72,9 @@ describe('internal routing', () => {
     expect(r.supplyRun).toEqual([[0, 0, 0], [0, 0, 1], [0, 0, 2], [0, 0, 3], [0, 0, 4], [0, 1, 0], [0, 2, 0], [1, 2, 0], [2, 2, 0], [3, 2, 0], [4, 2, 0],
       [5, 0, 0], [5, 1, 0], [5, 2, 0]]);
     expect(r.cables.map((c) => [c.tier, c.cable.mteId])).toEqual([[2, IDS.ANNEALED_2X], [1, IDS.TIN_4X]]);
+    // the MV run needs 2 parallel 2x Annealed lines (its cable_amps warning), so the build list prices one extra run
+    expect(r.cables.map((c) => [c.tier, c.cells, c.runs])).toEqual([[2, 14, 2], [1, 7, 1]]);
+    expect(parallelRunParts(r.cables)).toEqual([{ key: 'gregtech:gt.blockmachines@1387', amount: 14, why: 'power run (2 parallel)', group: 'power' }]);
     // the assembler gets 114 V from the supply run's far end (2 A) and the bank takes 2 A for its 4 A out: no MV cable of the pack carries 4 A
     expect(r.stages).toMatchObject({ supplyAmps: 4, stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 2, ampsOut: 4 }] });
     expect(r.warnings).toEqual([
