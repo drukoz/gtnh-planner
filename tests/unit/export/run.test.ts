@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { getPriority, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -34,7 +34,10 @@ describe('runExport', () => {
     expect(r).toMatchObject({ ok: true, marker: 'EXPORT_OK', exitCode: 0, timedOut: false, aborted: false });
     const lines = (await readFile(argsFile, 'utf8')).trim().split('\n');
     expect(lines[0]).toBe(await realpath(dir));
-    expect(lines[1]).toBe('nice=10');
+    // `nice -n 10` adds to the parent's niceness rather than setting it, and macOS clamps the result at 20. This
+    // process is not always at niceness 0 — a backgrounded job under zsh's default BG_NICE sits at 5 — so derive the
+    // expected value from our own priority instead of hard-coding it.
+    expect(lines[1]).toBe(`nice=${Math.min(20, getPriority() + 10)}`);
     expect(lines.slice(2)).toEqual([...opts.args]);
     expect(await readFile(opts.logFile, 'utf8')).toContain('fake server starting');
   });
