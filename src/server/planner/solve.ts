@@ -134,8 +134,9 @@ export const BY_HAND_FLOOR_CHARGE = 0.02;
  * The build stage solves the lite start (`liteLine`, `buildStage`) only where the leanest line's MIP has at least this many
  * whole columns. Measured on the user's live projects (release gate round 2, G1): Duty plate's has 4,019, and from S1
  * rounded up (600 σ against its 128.8) it spends 7.5 s at its root and 10.6 s in all, 4.9 s from a start within 0.003 %;
- * HV Circuit's has 587, test's 379 and Circuit's 436, whose leanest lines take about a second from S1 and HV Circuit's
- * 2.4 s from the lite plan (its root runs longer), so the lite start would only cost them time.
+ * HV Circuit's has 587, test's 379 and Circuit's 436, whose leanest lines take about a second from S1. With the lite
+ * start on them too, HV Circuit's plan takes 4.12 s against 3.72 s warm (its leanest line 2.4 s from the lite plan, its
+ * root runs longer), test's 1.85 s against 2.07 s and Circuit's the same; below the gate their plans stay as they were.
  */
 export const LITE_MIN_INTEGERS = 2000;
 /** In the step-charge MIP a step recipe runs at most this many times the largest run count of S1 (its big-M). */
