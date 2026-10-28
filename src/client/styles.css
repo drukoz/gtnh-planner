@@ -1354,7 +1354,18 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
    shared `.badge` rule in amber, colour only, after that rule as the missing marker. */
 .mat-made { flex-basis: 100%; overflow-wrap: anywhere; }
 .mat-swap { flex-basis: 100%; }
-.mat-swap summary { cursor: pointer; }
+/* The recipe swap (add-on 14) is a third inline disclosure of a row: the stock's and the why's pixel caret before its text, turned down
+   while it is open, in rules of its own beside theirs (the controller's ruling after the merge of main). */
+.mat-swap summary { cursor: pointer; list-style: none; }
+.mat-swap summary::-webkit-details-marker { display: none; }
+.mat-swap summary::before {
+  content: ''; width: 9px; height: 9px; background: currentColor;
+  clip-path: polygon(2px 0px, 3px 0px, 3px 1px, 4px 1px, 4px 2px, 5px 2px, 5px 3px, 6px 3px, 6px 4px, 7px 4px, 7px 5px,
+    6px 5px, 6px 6px, 5px 6px, 5px 7px, 4px 7px, 4px 8px, 3px 8px, 3px 9px, 2px 9px);
+  transition: transform var(--dur-fast) var(--ease-out);
+  display: inline-block; margin-right: 6px; vertical-align: -1px;
+}
+.mat-swap[open] summary::before { transform: rotate(90deg); }
 .unmade-badge { color: #ffaa00; }
 .step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
 .step-list li::marker { font-family: var(--font-digits); font-size: 16px; line-height: 20.3px; font-size-adjust: cap-height 0.56; }
@@ -1950,6 +1961,7 @@ details.mat-needed[open]::details-content { block-size: auto; }
   :where(input[type=checkbox], input[type=radio])::before { background: Highlight; }
   details.settings-section > summary::before, details.disclosure > summary::before { background: ButtonText; }
   button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before { background: CanvasText; }
+  .mat-swap summary::before { background: CanvasText; }
   :where(input[type=range])::-webkit-slider-runnable-track { border: 1px solid ButtonText; }
   :where(input[type=range])::-moz-range-track { border: 1px solid ButtonText; }
   :where(progress)::-webkit-progress-value { background: Highlight; }

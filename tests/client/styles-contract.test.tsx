@@ -1088,6 +1088,13 @@ const CARETS = 'button.mat-toggle::before, .mat-have summary::before, .mat-neede
 const CARETS_DOWN = "button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before";
 const INLINE_SUMMARY = '.mat-have summary, .mat-needed summary';
 const INLINE_CARET = '.mat-have summary::before, .mat-needed summary::before';
+/**
+ * Add-on 14's recipe swap of a made build part, a third inline disclosure of a Materials row (the controller's ruling after
+ * the merge of main: the same pixel caret, in rules of its own beside the two pinned above).
+ */
+const SWAP_SUMMARY = '.mat-swap summary';
+const SWAP_CARET = '.mat-swap summary::before';
+const SWAP_CARET_DOWN = '.mat-swap[open] summary::before';
 /** Phase 2 Task 6b (spec §3.3, ruling R16): the two inline disclosures, which fold as a settings section does. */
 const MAT_DISCLOSURES = 'details.mat-have, details.mat-needed';
 /** The rules of that fold: one for the pair, then a rule of its own for each content box and for each open one (R28: no pseudo-element in a list). */
@@ -1242,6 +1249,23 @@ describe('the Machine GUI Materials & steps tab', () => {
     // inline: not the full-width Minecraft button of a settings section (no button face, no bevel, no height of its own)
     for (const property of ['background', 'border', 'box-shadow', 'min-height', 'display']) {
       expect(declared(INLINE_SUMMARY, property), `${INLINE_SUMMARY} { ${property} }`).toBeUndefined();
+    }
+  });
+
+  it('gives the recipe swap of a build row the caret of the inline disclosures, inline, before its text', () => {
+    // add-on 14 (the controller's ruling after the merge of main): the swap's summary is inline text that opens, as the stock and the why
+    expectDeclared([
+      [SWAP_SUMMARY, 'cursor', 'pointer'], [SWAP_SUMMARY, 'list-style', 'none'], [`${SWAP_SUMMARY}::-webkit-details-marker`, 'display', 'none'],
+      [SWAP_CARET, 'display', 'inline-block'], [SWAP_CARET, 'margin-right', '6px'], [SWAP_CARET, 'vertical-align', '-1px'],
+      [SWAP_CARET_DOWN, 'transform', 'rotate(90deg)'],
+    ]);
+    // the same pixel caret as the toggle's and the two disclosures' shared rule
+    for (const property of ['content', 'width', 'height', 'background', 'clip-path', 'transition']) {
+      expect(declared(SWAP_CARET, property), `${SWAP_CARET} { ${property} }`).toBe(declared(CARETS, property));
+    }
+    expect(position(SWAP_CARET_DOWN)).toBeGreaterThan(position(SWAP_CARET));
+    for (const property of ['background', 'border', 'box-shadow', 'min-height', 'display']) {
+      expect(declared(SWAP_SUMMARY, property), `${SWAP_SUMMARY} { ${property} }`).toBeUndefined();
     }
   });
 
@@ -2400,6 +2424,8 @@ describe('the Machine GUI in forced colours', () => {
   it('draws the carets in the text colour of what they sit on: a summary\'s button, the materials list', () => {
     expect(inQuery(FORCED, SUMMARY.replace(/summary/g, 'summary::before'))).toEqual([['background', 'ButtonText']]);
     expect(inQuery(FORCED, CARETS)).toEqual([['background', 'CanvasText']]);
+    // add-on 14's recipe swap, in a rule of its own (the controller's ruling after the merge of main)
+    expect(inQuery(FORCED, SWAP_CARET)).toEqual([['background', 'CanvasText']]);
   });
 
   it('edges a slider\'s track and fills a progress bar in the Highlight, with a rule per engine', () => {
@@ -2442,7 +2468,7 @@ describe('the Machine GUI in forced colours', () => {
       TICK, ':where(input[type=checkbox])::before', ':where(input[type=radio])::before', SUMMARY.replace(/summary/g, 'summary::before'), CARETS,
       ':where(input[type=range])::-webkit-slider-runnable-track', ':where(input[type=range])::-moz-range-track',
       ':where(progress)::-webkit-progress-value', ':where(progress)::-moz-progress-bar', ...FAILED_FILLS, ':where(select)',
-      ':where(input[type=search])::-webkit-search-cancel-button', SELECTED, ACTIVE_HIT, PICKED_ROW,
+      ':where(input[type=search])::-webkit-search-cancel-button', SELECTED, ACTIVE_HIT, PICKED_ROW, SWAP_CARET,
       // Phase 2 Task 6a: the inventory grid's slot, its tick, its meter's fill and the pressed Grid / List (spec §9.3)
       'button.mat-slot', '.mat-slot-tick::before', '.mat-meter-fill', ".mat-view-toggle button[aria-pressed='true']",
     ];
