@@ -499,10 +499,11 @@ describe('farms in the line', () => {
       [CROP_STICKS, 2, 'Resin Cane farm'], [DIRT, 2, 'Resin Cane farm'], ['t:cane_seed@0', 2, 'Resin Cane farm'],
     ]);
     // the final review (T4-a): the sticks and soil are planted round the Crop Manager and the seeds come from the seed
-    // bank, so none of them "stays in the machine"
+    // bank, so none of them "stays in the machine"; add-on 14 (architecture §11 entry 41 (5)): a part the build list
+    // makes is a make step that says how, so the crop sticks, crafted from planks, say what they are for in brackets
     const craft = (key: string) => plan.buildSteps.find((b) => b.id === `craft:${key}`);
     expect([CROP_STICKS, DIRT, 't:cane_seed@0'].map((key) => [craft(key)?.kind, craft(key)?.text])).toEqual([
-      ['craft', 'Make 2× Crop Sticks to plant in the Resin Cane farm'],
+      ['craft', 'Craft 2× Crop Sticks (to plant in the Resin Cane farm) from 1× Oak Planks at a crafting table'],
       ['craft', 'Get 2× Dirt as soil for the Resin Cane farm'],
       ['craft', 'Take 2× Resin Cane Seeds from your seed bank for the Resin Cane farm'],
     ]);
@@ -529,7 +530,10 @@ describe('farms in the line', () => {
     expect(plan.status).toBe('ok');
     expect(farmStep(plan, 'tgs')).toMatchObject({ count: 1, owned: 0 });
     expect(plan.buildList.filter((l) => l.group === 'one-off').map((l) => [l.key, l.amount, l.why])).toEqual([['t:rubber_sapling@0', 1, 'Rubber Sapling farm']]);
-    expect(plan.buildSteps.find((b) => b.id === 'craft:t:rubber_sapling@0')?.text).toBe('Make 1× Rubber Sapling (stays in the machine)');
+    // add-on 14 (architecture §11 entry 41 (2), (5)): only the export's fake tree-farm rows make a sapling, so the build
+    // list cannot make it here and its step says to import it, still in the machine
+    expect(plan.buildSteps.find((b) => b.id === 'craft:t:rubber_sapling@0')?.text)
+      .toBe('Get 1× Rubber Sapling (stays in the machine): nothing at HV can make it, so import it (mark it "we already make this")');
   });
 
   it("words a new farm with the project's own farm settings, not the defaults", async () => {
