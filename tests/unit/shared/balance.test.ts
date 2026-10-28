@@ -126,6 +126,41 @@ describe('indexPlan', () => {
     expect(issueText(both, twice)).toBe('Iron Ingot is both bought (60%) and made by Furnace.');
   });
 
+  it('gives a good the plan makes two ways, or buys beside its makers, on purpose as a note with its reason', () => {
+    // Plan 12's final review: with build cost counted the build stage may make a good two ways on purpose (one maker's
+    // machines full, or the raw cap reached) and says so on the plan (`Plan.deliberate`); the index then gives the
+    // finding as a note, not as an integrity issue, and its words say why.
+    const solid = step('solid', 'Fluid Solidifier', 't:iron_plate@0', 0.6, [], [per('t:iron_plate@0', 1)]);
+    const saw = step('saw', 'Cutting Saw', 't:iron_plate@0', 0.4, [], [per('t:iron_plate@0', 1)]);
+    const asm = step('asm', 'Assembler', 't:circuit@0', 1, [per('t:iron_plate@0', 1)], [per('t:circuit@0', 1)]);
+    const split = planOf([asm, saw, solid], [flow('asm', 'out', 't:circuit@0', 1), flow('saw', 'asm', 't:iron_plate@0', 0.4), flow('solid', 'asm', 't:iron_plate@0', 0.6)]);
+    const full = { ...split, deliberate: [{ key: 't:iron_plate@0', code: 'multi-producer' as const, why: 'full' as const, full: ['saw'] }] };
+    const index = indexPlan(full);
+    expect(index.issues).toEqual([]);
+    expect(index.notes).toMatchObject([{ code: 'multi-producer', key: 't:iron_plate@0', stepId: 'solid', stepIds: ['solid', 'saw'], deliberate: { why: 'full', full: ['saw'] } }]);
+    expect(issueText(index.notes[0] as PlanIssue, full)).toBe('Iron Plate is made 2 ways: Fluid Solidifier (60%) and Cutting Saw (40%). The Cutting Saw is '
+      + 'full, and one more would cost more than the raw material it saves.');
+    const capped = { ...split, deliberate: [{ key: 't:iron_plate@0', code: 'multi-producer' as const, why: 'raw-cap' as const }] };
+    expect(issueText(indexPlan(capped).notes[0] as PlanIssue, capped)).toBe('Iron Plate is made 2 ways: Fluid Solidifier (60%) and Cutting Saw (40%). '
+      + 'The plan uses all the raw material its raw cap allows: more of it the way that uses more would pass the cap.');
+    // A mark of the other code, or of another good, leaves the issue an issue; without marks the index has no notes.
+    expect(codes(indexPlan({ ...split, deliberate: [{ key: 't:iron_plate@0', code: 'bought-and-made', why: 'full', full: ['saw'] }] }).issues)).toEqual(['multi-producer']);
+    expect(codes(indexPlan({ ...split, deliberate: [{ key: 't:circuit@0', code: 'multi-producer', why: 'raw-cap' }] }).issues)).toEqual(['multi-producer']);
+    expect(indexPlan(split).notes).toEqual([]);
+    // A purchase beside a full maker: the furnace makes a quarter of the ingots, the line buys the rest.
+    const bought = planOf(
+      [step('bend', 'Bending Machine', 't:iron_plate@0', 1, [per('t:iron_ingot@0', 1)], [per('t:iron_plate@0', 1)]),
+       step('smelt', 'Furnace', 't:iron_ingot@0', 0.25, [], [per('t:iron_ingot@0', 1)])],
+      [flow('bend', 'out', 't:iron_plate@0', 1), flow('raw', 'bend', 't:iron_ingot@0', 0.75), flow('smelt', 'bend', 't:iron_ingot@0', 0.25)],
+      [raw('t:iron_ingot@0', 0.75)],
+    );
+    const marked = { ...bought, deliberate: [{ key: 't:iron_ingot@0', code: 'bought-and-made' as const, why: 'full' as const, full: ['smelt'] }] };
+    const purchase = indexPlan(marked);
+    expect([purchase.issues, codes(purchase.notes)]).toEqual([[], ['bought-and-made']]);
+    expect(issueText(purchase.notes[0] as PlanIssue, marked)).toBe('Iron Ingot is both bought (75%) and made by Furnace. The Furnace is full, and one '
+      + 'more would cost more than buying the rest.');
+  });
+
   it('sorts issues by code, then key, then step', () => {
     const plan = planOf(
       [step('a', 'Mixer', 't:pa@0', 1, [per('fluid:y', 1), per('fluid:x', 1)], [per('t:pa@0', 1)]),

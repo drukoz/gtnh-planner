@@ -1,7 +1,9 @@
 // Real-data regression (GTNH_LOCAL=1, fix spec §7.2 and complaint 1): a line planned per hour is the same line as per
 // minute, only slower, and every good a step takes is made by a step or bought. On cd6fcce the hourly Electronic Circuit
 // took Polyvinyl Acetate and Methyl Acetate Cells from nowhere (HiGHS's absolute tolerances at 1e-8..1e-4 per second).
-// Skipped everywhere else; nothing game-derived is read or written otherwise.
+// Skipped everywhere else; nothing game-derived is read or written otherwise. Plan 12 (Task 8): with build cost counted
+// (the default) the objective weighs machines against the rate, so the same line per hour and per minute is checked on
+// the settings with build cost ignored, plan 09's scale-free objective; the build-cost plans' differences are logged.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
@@ -55,7 +57,13 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('rates on the real 2.9 export', 
     expect(hourly.status).toBe('ok');
     expect(orphans(hourly)).toEqual([]);
     expect(worstImbalance(hourly, EC, 1 / 3600)).toBeLessThan(1e-6);
-    expect(hourly.steps.map((s) => s.recipeId)).toEqual(perMinute.steps.map((s) => s.recipeId));
+    const ids = (p: Plan): string[] => p.steps.map((s) => s.recipeId);
+    const hourIgnoring = await plan({ target: EC, amount: 1, per: 'hour', tier: 2, buildHorizonHours: null });
+    const minuteIgnoring = await plan({ target: EC, amount: 1, per: 'min', tier: 2, buildHorizonHours: null });
+    expect(ids(hourIgnoring)).toEqual(ids(minuteIgnoring));
+    console.log(`real-rate: with build cost per hour ${hourly.steps.length} steps, per minute ${perMinute.steps.length}; `
+      + `per hour only ${ids(hourly).filter((id) => !ids(perMinute).includes(id)).join(' ') || 'none'}, `
+      + `per minute only ${ids(perMinute).filter((id) => !ids(hourly).includes(id)).join(' ') || 'none'}`);
     // Molten polyethylene and copper plates each come from one recipe at most (they came from two: a bought PE bar beside the
     // chemical reactor, a cutting saw beside the fluid solidifier).
     const makers = (key: string): string[] => hourly.steps.filter((s) => s.outputs.some((o) => o.key === key)).map((s) => s.recipeId);

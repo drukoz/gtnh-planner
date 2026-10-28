@@ -188,7 +188,9 @@ test('a good lit in one project is not lit in the next project opened', async ({
 
 test('(7) Make it here instead on Iron Ingot says what changed: the new furnace step', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Make iron', LV_CIRCUITS);
+  // No raw cap (fix wave 3 (A)): at the default +25 % some plates come from a Basic Bending Machine, a fourth step with
+  // an Iron Ingot import of its own.
+  await createProject(page, 'Make iron', { ...LV_CIRCUITS, rawCap: null });
   await expect(page.locator('svg.flow-canvas [data-step-id]')).toHaveCount(3);
   await page.getByRole('button', { name: 'Fit' }).click();
   await page.locator('[data-node-id^="import:t:iron_ingot@0@"]').click();

@@ -2,23 +2,25 @@
 // and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), the
 // checks an amount or a cost must pass before anything is sent, the avoid list's suggestions, labels and changes, the
 // planning modes of "Plan for" (add-on 17, architecture §11.45 (1)), the "Machines vs raw material" presets (fix spec §3;
-// ruling S17), the build horizon's presets and the choices of the tier new machines are built at and of when to build a
-// multiblock (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in words (fix spec §6.4), the
-// "Machines we have" list's machines, counts and changes (architecture §11.29), and the farm settings: the farms the
-// planner may build or reuse and those the group runs (add-on 17, architecture §11.45 (2)).
+// ruling S17) and the raw cap's ("Raw material for fewer machines", fix wave 3 (A)), the build horizon's presets and the
+// choices of the tier new machines are built at and of when to build a multiblock (plan 12 Task 7, the user's ruling
+// 224), the pinned ingredient options in words (fix spec §6.4), the "Machines we have" list's machines, counts and
+// changes (architecture §11.29), the start and changes of "Only these come in" (fix wave 3 (B)), and the farm settings:
+// the farms the planner may build or reuse and those the group runs (add-on 17, architecture §11.45 (2)).
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import {
-  MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_CROP_STAT, MAX_FARM_PER_MINUTE, MAX_NAME_LENGTH, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES,
-  MAX_RUNNING_FARMS, MAX_STEP_CHARGE,
+  MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_CROP_STAT, MAX_FARM_PER_MINUTE, MAX_INPUTS_ONLY, MAX_NAME_LENGTH, MAX_OWNED_MANUAL_COUNT,
+  MAX_OWNED_MANUAL_ENTRIES, MAX_RUNNING_FARMS, MAX_STEP_CHARGE,
 } from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
 import {
   defaultFarmSettings, FARM_KINDS, FERTILIZER_CHOICES, type FarmKind, type FarmSettings, type RunningFarm, type TgsMode,
 } from '../../shared/types/farm.ts';
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_OBJECTIVE, DEFAULT_STEP_CHARGE, type Plan, type PlanObjective, type PlanSettings, type ReachableDim,
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_OBJECTIVE, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, FREE_KEYS, type Plan, type PlanObjective, type PlanSettings,
+  type ReachableDim,
 } from '../../shared/types/plan.ts';
 import { formatNumber } from '../format.ts';
 
@@ -259,6 +261,35 @@ export function stepChargePatch(value: string): Partial<PlanSettings> | null {
 }
 
 /**
+ * "Raw material for fewer machines" (fix wave 3 (A), the user's answer of 2026-10-22): the presets of `PlanSettings.rawCap`,
+ * how much more raw material than the leanest line (what "Least raw material" plans) the plan may use to build fewer
+ * machines — at most +10, +25 (the default) or +50 %, or no limit.
+ */
+export const RAW_CAP_PRESETS: ReadonlyArray<{ value: string; cap: number | null; label: string }> = [
+  { value: '0.1', cap: 0.1, label: 'At most +10 %' },
+  { value: '0.25', cap: 0.25, label: 'At most +25 %' },
+  { value: '0.5', cap: 0.5, label: 'At most +50 %' },
+  { value: 'off', cap: null, label: 'No limit' },
+];
+
+/** The raw cap a project plans with: its own, else the default (a project stored before the setting). */
+export function rawCapOf(settings: PlanSettings): number | null {
+  return settings.rawCap === undefined ? DEFAULT_RAW_CAP : settings.rawCap;
+}
+
+/** A raw cap in words: its preset's name, else `At most +<n> %` (`custom` in the select). */
+export function rawCapChoice(cap: number | null): { value: string; label: string } {
+  const preset = RAW_CAP_PRESETS.find((p) => p.cap === cap);
+  return preset === undefined ? { value: 'custom', label: `At most +${formatNumber((cap ?? 0) * 100)} %` } : { value: preset.value, label: preset.label };
+}
+
+/** The patch for a value picked in that select: its preset's cap; nothing for `custom` or any other value. */
+export function rawCapPatch(value: string): Partial<PlanSettings> {
+  const preset = RAW_CAP_PRESETS.find((p) => p.value === value);
+  return preset === undefined ? {} : { rawCap: preset.cap };
+}
+
+/**
  * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
  * weighed against, in the modes that count it (cheapest, best multi-output). 24 hours is the default. "Ignore build cost"
  * is no horizon any more: it is the mode "Least raw material" (add-on 17, architecture §11.45 (1)).
@@ -398,6 +429,22 @@ export function ownedWith(owned: readonly OwnedEntry[], mteId: number, count: nu
   }
   if (entry.count >= MAX_OWNED_MANUAL_COUNT) return { error: `The list already counts ${formatNumber(MAX_OWNED_MANUAL_COUNT)} of this machine` };
   return { owned: owned.map((e) => (e === entry ? { mteId, count: Math.min(MAX_OWNED_MANUAL_COUNT, e.count + count) } : e)) };
+}
+
+/**
+ * "Use this plan's raw inputs" (fix wave 3 (B)): the keys of the plan's raw inputs without the free inputs (`FREE_KEYS`),
+ * once each, sorted, at most `MAX_INPUTS_ONLY`: where "Only these come in" starts from.
+ */
+export function inputsOnlyFromPlan(plan: Pick<Plan, 'rawInputs'>): StuffKey[] {
+  // A plan from before `rawInputs` (or a test's partial one) has none.
+  const keys = new Set((plan.rawInputs ?? []).map((r) => r.key).filter((key) => !FREE_KEYS.includes(key)));
+  return [...keys].sort(byString).slice(0, MAX_INPUTS_ONLY);
+}
+
+/** "Only these come in" with `key` put in (`on`) or taken out, sorted; null when it would hold more than `MAX_INPUTS_ONLY`. */
+export function inputsOnlyPatch(settings: PlanSettings, key: StuffKey, on: boolean): Partial<PlanSettings> | null {
+  const inputsOnly = toggleList(settings.inputsOnly ?? [], key, on);
+  return inputsOnly.length > MAX_INPUTS_ONLY ? null : { inputsOnly };
 }
 
 /** `owned` without machine `mteId`. */

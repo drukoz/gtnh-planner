@@ -5,16 +5,17 @@
 // ingredient option it does (pin another), the free input it supplies or the supporting line it belongs to, the group's
 // machines it reuses and where they stand (those of other tiers, and the steps a machine is shared with, included), the
 // machine tier it runs at (pin another, plan 12), its overclock math, every way to make its product (swap its
-// recipe, or import the product instead) and its warnings. A raw material's panel: what kind of import it is and what
-// the line takes of it from a farm the group runs or another project (add-on 17), which steps use it, what a bought one
-// stands for, and making it in the line instead. Every choice sends one `settings` op with whole field values.
+// recipe, or import the product instead), its notes (a good the plan makes two ways, or buys beside its makers, on
+// purpose: plan 12's final review) and its warnings. A raw material's panel: what kind of import it is and what the line
+// takes of it from a farm the group runs or another project (add-on 17), which steps use it, what a bought one stands
+// for, and making it in the line instead. Every choice sends one `settings` op with whole field values.
 // A step's panel opens on one run of its recipe as NEI draws it (Phase 2 spec §8: the slots, the progress arrow, the
 // power, the readouts and the overclock chips; hovering a slot lights its good as a row does).
 
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { tierName, V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { indexPlan, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
+import { indexPlan, NOTE_CODES, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
 import { stepNameIn } from '../../shared/plan/pools.ts';
 import {
   FREE_KEYS, type LeafClass, type MachineWhere, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption,
@@ -808,7 +809,11 @@ export function StepPanel(props: {
   const nameOf = namesOf(plan);
   const patch = settingsSender(send);
   const index = indexPlan(plan);
-  const warnings = [...new Set([...step.warnings, ...plan.warnings.filter((w) => w.stepId === step.id).map((w) => w.text)])];
+  // a good the plan makes two ways, or buys beside its makers, on purpose is a plain note, not a warning (plan 12's final review)
+  const noteCodes: ReadonlySet<string> = new Set(Object.values(NOTE_CODES));
+  const own = plan.warnings.filter((w) => w.stepId === step.id);
+  const notes = [...new Set(own.filter((w) => noteCodes.has(w.code)).map((w) => w.text))];
+  const warnings = [...new Set([...step.warnings, ...own.filter((w) => !noteCodes.has(w.code)).map((w) => w.text)])];
   const machines = step.count === 1 ? '1 machine' : `${step.count} machines`;
   const shared = sharedMachineText(step, plan);
   return (
@@ -843,6 +848,14 @@ export function StepPanel(props: {
       </section>
       <SwapSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
       <StopSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
+      {notes.length > 0 && (
+        <section className="flow-panel-section">
+          <h4 className="flow-panel-title">Notes</h4>
+          <ul className="notes">
+            {notes.map((text) => <li key={text}>{text}</li>)}
+          </ul>
+        </section>
+      )}
       {warnings.length > 0 && (
         <section className="flow-panel-section">
           <h4 className="flow-panel-title">Warnings</h4>

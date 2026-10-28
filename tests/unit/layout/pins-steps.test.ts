@@ -3,9 +3,10 @@ import { makePins, pinNumber, findReuse, siteText, powerText, logisticsText } fr
 import { layoutSteps, bomFromBlocks, assignBuildSteps, type StepsInput } from '../../../src/server/layout/steps.ts';
 import { coverText, configTexts } from '../../../src/shared/layout/configure-text.ts';
 import { unitsFromPlan, placeUnits } from '../../../src/server/layout/arrange.ts';
-import { layoutPack, makePlan, makeScan, IDS, STONE } from '../../helpers/layout-fixtures.ts';
+import { AUTO_WORKBENCH, craftingRecipe, layoutPack, makePlan, makeScan, IDS, STONE, withAutoWorkbench } from '../../helpers/layout-fixtures.ts';
 import { primitivePack, STEAM } from '../../helpers/primitive-fixtures.ts';
 import type { Hookup, LayoutBlock } from '../../../src/shared/types/layout.ts';
+import type { LogisticsMode } from '../../../src/shared/types/plan.ts';
 
 const GT = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
 const PUMP = 'gregtech:gt.metaitem.01@32610';
@@ -111,6 +112,36 @@ describe('pins', () => {
     expect(chainPins.map((p) => [p.pos, p.text])).toEqual([[[2, 64, 2], 'Reuse your 2× Basic Macerator (shared by 3 steps)']]);
     expect(layoutSteps(base({ status: 'empty', pins: chainPins, reuse: chain })).map((s) => [s.id, s.text])).toEqual([['layout:reuse:s1',
       "Hook your 2× Basic Macerator at pin 1 into the line's logistics; it serves 3 steps: t:out_s1@0, t:out_s2@0, t:out_s3@0"]]);
+  });
+
+  it("gives an owned Auto Workbench's hook step its grid and the cap its line's logistics put on each ingredient", () => {
+    // Plan 12's final review (controller rulings 188 and 181, item (5) of the Auto Workbench ruling): the layout lays
+    // nothing beside an owned bench and no configure step names its grid, so its hook step says what to set, in the words
+    // of a placed bench's configure steps; a crafted Resistor a second: Resin, Fine Wire, Resin in the top row
+    const pack = withAutoWorkbench(layoutPack());
+    for (const [key, name] of [['t:a@0', 'Resin'], ['t:b@0', 'Fine Wire'], ['t:r@0', 'Resistor']] as const) pack.items.set(key, { key, id: key.slice(0, -2), meta: 0, name, oreDict: [] });
+    pack.recipeById.set('r', craftingRecipe('r', 3, ['t:a@0', 't:b@0', 't:a@0'], ['t:r@0', 1]));
+    const plan = makePlan([{ id: 'r', mteId: AUTO_WORKBENCH, count: 1, owned: 1, tier: 2, inputs: [['t:a@0', 2], ['t:b@0', 1]], outputs: [['t:r@0', 1]] }]);
+    plan.steps[0]!.runsPerSecond = 1;
+    const scan = makeScan({ machines: [{ pos: [4, 64, 4], mteId: AUTO_WORKBENCH }] });
+    const hook = (mode?: LogisticsMode): string[] => {
+      const finds = findReuse(pack, plan, scan, scan.bases[0]!, [0, 64, 0], mode);
+      const pins = makePins({ dim: 0, site: null, power: null, logistics: null, reuse: finds, warnings: [] });
+      return layoutSteps(base({ status: 'empty', pins, reuse: finds })).map((s) => s.text);
+    };
+    const hooked = "Hook your 1× Auto Workbench (MV) at pin 1 into the line's logistics; set it to mode Normal Crafting Table (the bottom-left button; its "
+      + 'tooltip names the mode); grid, top row first: Resin, Fine Wire, Resin / empty, empty, empty / empty, empty, empty; leave the top-left button on '
+      + 'its first state';
+    expect(hook('ae2')).toEqual([`${hooked}; on the ME Interface you hook it to: 1 processing pattern; pattern 2× Resin + 1× Fine Wire → 1× Resistor; `
+      + 'blocking mode off; Locking Card, Lock Crafting: Until crafting result is returned']);
+    // a Stock Keeper keeps 5 s of crafts, at least two, of each ingredient (research §3.6)
+    expect(hook('routed')).toEqual([`${hooked}; on the routed interface pipe you hook it with, chips: Item Stock Keeper Chip (when missing): Resin 10, `
+      + 'Fine Wire 5 + Item Extractor Chip (whitelist: Resistor), and no Item Responder Chip: it takes any item it is sent']);
+    expect(hook('enderio')).toEqual([`${hooked}; on the item conduit face to it, In / Out: insert with a Limited Item Filter (whitelist, 2 of 10 slots: `
+      + 'Resin 6 and Fine Wire 3, each count with its cells in the crafting grid; match meta, ignore NBT), extract Resistor']);
+    expect(hook('direct')).toEqual([`${hooked}; fill it by hand: machine-to-machine lines cannot cap its ingredients yet`]);
+    // not told the line's logistics, the find carries nothing to set
+    expect(hook()).toEqual(["Hook your 1× Auto Workbench (MV) at pin 1 into the line's logistics"]);
   });
 
   it('maps planner units onto the machines nearest the site', () => {

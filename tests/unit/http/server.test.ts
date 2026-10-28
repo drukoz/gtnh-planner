@@ -248,7 +248,7 @@ describe('createApp', () => {
     first.db.updateProject({ ...row, state: JSON.stringify(state) });
     first.db.close();
     const again = createApp(config);
-    expect(again.projects.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, stepCharge: 0.5, settingsVersion: 3 } });
+    expect(again.projects.get(id)).toMatchObject({ rev: 1, settings: { routeDerived: true, stepCharge: 0.5, rawCap: 0.25, settingsVersion: 4 } });
     again.db.close();
     const third = createApp(config);
     expect(third.projects.get(id)?.rev).toBe(1);

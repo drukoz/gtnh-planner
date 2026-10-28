@@ -1,13 +1,15 @@
 // The plan index (fix spec R11, D16, D20): what flows into and out of every step's ports, who makes each good, and the
 // integrity issues a plan carries — an input nothing supplies or supplies short, a good two steps make as their main
 // output, a good both bought and made — with their texts (§6.4). `planLine` adds one warning per issue; the client runs
-// the same functions as a guard and prefers the server's texts.
+// the same functions as a guard and prefers the server's texts. A good a build-cost plan makes two ways, or buys beside
+// its makers, on purpose (`Plan.deliberate`, plan 12's final review) is a note instead (`PlanIndex.notes`), with its own
+// warning code (`NOTE_CODES`): it adds up.
 // Pure TypeScript shared by server and browser: nothing from node:* and no DOM.
 
 import { formatPercent, formatRate } from '../format.ts';
 import { isFluidKey, type StuffKey } from '../keys.ts';
 import type { Product } from '../types/pack.ts';
-import type { Plan } from '../types/plan.ts';
+import type { DeliberateSplit, Plan, PlanFlow, PlanStep, PlanWarning, RawInput } from '../types/plan.ts';
 
 /** An input that gets at most this share of what its step needs has no source in the plan (`orphan-input`). */
 export const ORPHAN_REL = 1e-6;
@@ -23,6 +25,20 @@ export type PlanIssueCode = 'orphan-input' | 'short-input' | 'multi-producer' | 
  */
 export interface PlanIssue {
   code: PlanIssueCode; key: StuffKey; stepId?: string; stepIds?: string[]; share?: number[]; needPerSecond?: number; gotPerSecond?: number;
+  // optional addition (plan 12's final review)
+  /** On a note (`PlanIndex.notes`): why the plan makes the good this way on purpose (`Plan.deliberate`). */
+  deliberate?: Pick<DeliberateSplit, 'why' | 'full'>;
+}
+
+/**
+ * The warning code of a note (`PlanIndex.notes`) by the issue it would otherwise be: a good made two ways, or bought
+ * beside its makers, on purpose. Not an integrity code: the plan adds up.
+ */
+export const NOTE_CODES: Readonly<Record<DeliberateSplit['code'], string>> = { 'multi-producer': 'deliberate-split', 'bought-and-made': 'deliberate-purchase' };
+
+/** The code of a note's warning (`NOTE_CODES` of its issue code); its good and step are the issue's. */
+export function noteWarningCode(note: Pick<PlanIssue, 'code'>): string {
+  return note.code === 'multi-producer' || note.code === 'bought-and-made' ? NOTE_CODES[note.code] : note.code;
 }
 /** What flows through one port of a step: the total per second and where it comes from or goes to, largest first. */
 export interface PortSide { perSecond: number; peers: Array<{ node: string /* step id | 'raw' | 'out' | 'sink' */; perSecond: number }> }
@@ -35,6 +51,20 @@ export interface PlanIndex {
   producers: Map<StuffKey, Array<{ stepId: string; perSecond: number; share: number; main: boolean }>>;
   /** Sorted by code, then key, then step id. */
   issues: PlanIssue[];
+  // addition (plan 12's final review)
+  /**
+   * The `multi-producer` and `bought-and-made` findings of goods the plan makes so on purpose (`Plan.deliberate`), each
+   * with its `deliberate` reason, sorted as `issues`: notes, not integrity issues.
+   */
+  notes: PlanIssue[];
+}
+
+/** What the index reads of a plan (any `Plan` is one). */
+export interface IndexedPlan {
+  readonly steps: readonly PlanStep[]; readonly flows: readonly PlanFlow[]; readonly warnings: readonly PlanWarning[];
+  readonly deliberate?: readonly DeliberateSplit[];
+  /** Its raw inputs, which say what it takes from supplies (`RawInput.from`, add-on 17); absent: none. */
+  readonly rawInputs?: readonly RawInput[];
 }
 
 /** The flow end of what the line buys. */
@@ -76,12 +106,14 @@ function portSide(peers: ReadonlyMap<string, number> | undefined): PortSide {
  * its inputs is a port it needs nothing of. Issues: `orphan-input` (need > 0, got ≤ ORPHAN_REL × need), `short-input`
  * (got < SHORT_INPUT_SHARE × need), `multi-producer` (the main output of 2+ steps), `bought-and-made` (a good the line
  * buys that is some step's main output). A good several steps make only beside their main output is no issue, nor is
- * the shortfall of a good a Make N batch's `batch-short` warning covers (its `keys`): it says what to have ready.
+ * the shortfall of a good a Make N batch's `batch-short` warning covers (its `keys`): it says what to have ready. A
+ * `multi-producer` or `bought-and-made` finding of a good the plan marks as made so on purpose (`Plan.deliberate`, the
+ * same code and key) is a note (`notes`, with the mark's reason), not an issue.
  * Add-on 17: what the line buys of a good is only the bought share of its `raw` flows — those less its raw inputs taken
  * from a farm the group runs or another project (`RawInput.from`), at least 0, and above ORPHAN_REL of them, as the flows
  * and rows each keep 9 digits — so a capped supply topped up by a step is no `bought-and-made` issue.
  */
-export function indexPlan(plan: Plan): PlanIndex {
+export function indexPlan(plan: IndexedPlan): PlanIndex {
   const into: FlowsByNode = new Map();
   const outOf: FlowsByNode = new Map();
   const fromRaw = new Map<StuffKey, number>();
@@ -91,7 +123,7 @@ export function indexPlan(plan: Plan): PlanIndex {
     if (f.from === RAW) fromRaw.set(f.key, (fromRaw.get(f.key) ?? 0) + f.perSecond);
   }
   const supplied = new Map<StuffKey, number>();
-  for (const input of plan.rawInputs) if (input.from !== undefined) supplied.set(input.key, (supplied.get(input.key) ?? 0) + input.perSecond);
+  for (const input of plan.rawInputs ?? []) if (input.from !== undefined) supplied.set(input.key, (supplied.get(input.key) ?? 0) + input.perSecond);
   /** What the line buys of `key` a second: its `raw` flows less what it takes from supplies, when that is more than rounding. */
   const boughtOf = (key: StuffKey): number => {
     const raw = fromRaw.get(key) ?? 0;
@@ -143,22 +175,35 @@ export function indexPlan(plan: Plan): PlanIndex {
       .sort((a, b) => b.perSecond - a.perSecond || byString(a.stepId, b.stepId))
       .map(({ stepId, perSecond, share, main }) => ({ stepId, perSecond, share, main })));
   }
+  const marks = new Map((plan.deliberate ?? []).map((d) => [`${d.code}|${d.key}`, d]));
+  const notes: PlanIssue[] = [];
+  /** An issue, or with the plan's mark a note carrying its reason. */
+  const found = (issue: PlanIssue): void => {
+    const mark = marks.get(`${issue.code}|${issue.key}`);
+    if (mark === undefined) {
+      issues.push(issue);
+      return;
+    }
+    notes.push({ ...issue, deliberate: mark.full === undefined ? { why: mark.why } : { why: mark.why, full: [...mark.full] } });
+  };
   for (const [key, list] of producers) {
     const mains = list.filter((p) => p.main);
     const largest = mains[0];
     if (largest === undefined) continue;
     if (mains.length >= 2) {
-      issues.push({ code: 'multi-producer', key, stepId: largest.stepId, stepIds: mains.map((p) => p.stepId), share: mains.map((p) => p.share) });
+      found({ code: 'multi-producer', key, stepId: largest.stepId, stepIds: mains.map((p) => p.stepId), share: mains.map((p) => p.share) });
     }
     const buys = boughtOf(key);
     if (buys > 0) {
       let makesTotal = 0;
       for (const p of list) makesTotal += p.perSecond;
-      issues.push({ code: 'bought-and-made', key, stepId: largest.stepId, stepIds: mains.map((p) => p.stepId), share: [buys / (buys + makesTotal)] });
+      found({ code: 'bought-and-made', key, stepId: largest.stepId, stepIds: mains.map((p) => p.stepId), share: [buys / (buys + makesTotal)] });
     }
   }
-  issues.sort((a, b) => byString(a.code, b.code) || byString(a.key, b.key) || byString(a.stepId ?? '', b.stepId ?? ''));
-  return { inputs, outputs, producers, issues };
+  const order = (a: PlanIssue, b: PlanIssue): number => byString(a.code, b.code) || byString(a.key, b.key) || byString(a.stepId ?? '', b.stepId ?? '');
+  issues.sort(order);
+  notes.sort(order);
+  return { inputs, outputs, producers, issues, notes };
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -168,9 +213,12 @@ function listed(parts: readonly string[]): string {
 
 /**
  * The words of an issue (spec §6.4): goods by `plan.names`, a step as its machine and the name of its main output,
- * rates per hour and shares as `formatPercent` writes them.
+ * rates per hour and shares as `formatPercent` writes them. A note (`deliberate`, plan 12's final review) adds why the
+ * plan makes the good so: `The Basic Bending Machine is full, and one more would cost more than the raw material it
+ * saves.` (a purchase: `… than buying the rest.`), or `The plan uses all the raw material its raw cap allows: more of it
+ * the way that uses more would pass the cap.`
  */
-export function issueText(issue: PlanIssue, plan: Plan): string {
+export function issueText(issue: PlanIssue, plan: Pick<Plan, 'names' | 'steps'>): string {
   const name = (key: StuffKey): string => plan.names?.[key] ?? key;
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
   const machine = (id: string): string => steps.get(id)?.machine.name ?? id;
@@ -178,6 +226,14 @@ export function issueText(issue: PlanIssue, plan: Plan): string {
   const stepWords = (id: string): string => {
     const main = steps.get(id)?.mainOutput;
     return main === undefined ? machine(id) : `${machine(id)} (${name(main)})`;
+  };
+  /** Why a note's good is made so, after `than` for the machine it would take (`full`). */
+  const because = (than: string): string => {
+    const d = issue.deliberate;
+    if (d === undefined) return '';
+    if (d.why === 'raw-cap') return ' The plan uses all the raw material its raw cap allows: more of it the way that uses more would pass the cap.';
+    const full = [...new Set((d.full ?? []).map(machine))];
+    return ` ${listed(full.map((m, i) => `${i === 0 ? 'The' : 'the'} ${m}`))} ${full.length === 1 ? 'is' : 'are'} full, and one more would cost more ${than}.`;
   };
   const good = name(issue.key);
   const at = issue.stepId ?? '';
@@ -192,10 +248,12 @@ export function issueText(issue: PlanIssue, plan: Plan): string {
     }
     case 'multi-producer': {
       const ids = issue.stepIds ?? [];
-      return `${good} is made ${ids.length} ways: ${listed(ids.map((id, i) => `${machine(id)} (${formatPercent(issue.share?.[i] ?? 0)})`))}.`;
+      return `${good} is made ${ids.length} ways: ${listed(ids.map((id, i) => `${machine(id)} (${formatPercent(issue.share?.[i] ?? 0)})`))}.`
+        + because('than the raw material it saves');
     }
     case 'bought-and-made':
       // Two reactor recipes read "made by Large Chemical Reactor", once.
-      return `${good} is both bought (${formatPercent(issue.share?.[0] ?? 0)}) and made by ${listed([...new Set((issue.stepIds ?? [at]).map(machine))])}.`;
+      return `${good} is both bought (${formatPercent(issue.share?.[0] ?? 0)}) and made by ${listed([...new Set((issue.stepIds ?? [at]).map(machine))])}.`
+        + because('than buying the rest');
   }
 }

@@ -16,7 +16,7 @@ import { compareMachineId, isPseudoMachineId, type MachineId } from '../../share
 import { machineOf } from '../pack/lookup.ts';
 import { solveLp, type LpRow } from './lp.ts';
 import type { BuildModel, OwnedPools } from './machine-options.ts';
-import type { Solution } from './solve.ts';
+import { BEYOND_STOCK_FACTOR, stockShare, type Solution, type SolveOptions } from './solve.ts';
 
 export interface MakeNResult {
   steps: PlanStep[]; buys: Map<StuffKey, number>; leftovers: Product[]; totalSeconds: number;
@@ -134,19 +134,30 @@ const MIP_SECONDS = 2;
 /**
  * Whole runs for a batch (spec §3.2), exactly: the recipes the LP runs, as a small integer program over the LP's own
  * rows (`Σ a·x + buy − leftover = demand` per good, purchases only of buyable goods) with whole runs and whole
- * purchases, the least raw material first and then the fewest runs. A batch needs no top-up heuristic then: loops of
- * cells, catalysts and refinery fractions close by themselves, and nothing comes out short. When the program has no
- * answer within 2 s (or none at all: the LP relied on something whole runs cannot do), `greedyWholeRuns` decides, and
- * its `short` says what the batch would lack.
+ * purchases, the least raw material first and then the fewest runs. With the group's stock (`stock`, the solve's
+ * `SolveOptions.stock`: Make N spreads it over the batch) a byproduct-only good is bought as the LP buys it (solve.ts
+ * `mainLp`, fix wave 3 (C)): at its price up to the stock and beyond it at BEYOND_STOCK_FACTOR × that price, so the whole
+ * runs keep the LP's split and never buy past the stock what the LP made another way. A batch needs no top-up heuristic
+ * then: loops of cells, catalysts and refinery fractions close by themselves, and nothing comes out short. When the
+ * program has no answer within 2 s (or none at all: the LP relied on something whole runs cannot do), `greedyWholeRuns`
+ * decides, and its `short` says what the batch would lack.
  */
-export async function wholeRuns(graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>): Promise<WholeRuns> {
+export async function wholeRuns(
+  graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>, stock?: SolveOptions['stock'],
+): Promise<WholeRuns> {
   const recipes = graph.recipes.filter((r) => (sol.runs.get(r.id) ?? 0) > 0);
   if (recipes.length === 0) return greedyWholeRuns(graph, sol, demand);
   const keys = new Set<StuffKey>(demand.keys());
   for (const r of recipes) for (const [key] of r.coeffs) keys.add(key);
   const goods = [...keys].sort();
   const rowOf = new Map(goods.map((key, g) => [key, g]));
-  const buyKeys = goods.filter((key) => graph.goods.get(key)?.buyable === true);
+  const buyable = goods.filter((key) => graph.goods.get(key)?.buyable === true);
+  // The batch's demand is not scaled, so a good's share of the stock is its whole stock spread over `stock.over` (1).
+  const share = stockShare(stock, 1);
+  // A byproduct-only good's purchase beyond the group's stock, after every plain purchase (as in `mainLp`).
+  const beyond = share === undefined ? [] : buyable.filter((key) => graph.goods.get(key)?.leafClass === 'byproduct');
+  const beyondAt = new Map(beyond.map((key, i) => [key, buyable.length + i]));
+  const buyKeys = [...buyable, ...beyond];
   const firstBuy = recipes.length;
   const firstSink = firstBuy + buyKeys.length;
   const width = firstSink + goods.length;
@@ -164,10 +175,14 @@ export async function wholeRuns(graph: CandidateGraph, sol: Solution, demand: Re
     colCost[j] = RUN_WEIGHT;
   });
   buyKeys.forEach((key, i) => {
-    colCost[firstBuy + i] = (graph.goods.get(key)?.cost ?? 0) + BUY_WEIGHT;
+    colCost[firstBuy + i] = (graph.goods.get(key)?.cost ?? 0) * (i < buyable.length ? 1 : BEYOND_STOCK_FACTOR) + BUY_WEIGHT;
+  });
+  const colUpper = new Array<number>(width).fill(Infinity);
+  buyable.forEach((key, i) => {
+    if (share !== undefined && beyondAt.has(key)) colUpper[firstBuy + i] = share(key);
   });
   const result = await solveLp({
-    sense: 'min', colCost, colLower: new Array<number>(width).fill(0), colUpper: new Array<number>(width).fill(Infinity), rows,
+    sense: 'min', colCost, colLower: new Array<number>(width).fill(0), colUpper, rows,
     integer: Array.from({ length: width }, (_, j) => j < firstSink), timeLimit: MIP_SECONDS,
   });
   if (result.status !== 'optimal') return greedyWholeRuns(graph, sol, demand);
@@ -177,9 +192,11 @@ export async function wholeRuns(graph: CandidateGraph, sol: Solution, demand: Re
     const n = Math.round(result.x[j] ?? 0);
     if (n > 0) runs.set(r.id, n);
   });
+  // Per good, in key order: its plain purchase and what it buys beyond the stock.
   const buys = new Map<StuffKey, number>();
-  buyKeys.forEach((key, i) => {
-    const n = Math.round(result.x[firstBuy + i] ?? 0);
+  buyable.forEach((key, i) => {
+    const at = beyondAt.get(key);
+    const n = Math.round(result.x[firstBuy + i] ?? 0) + (at === undefined ? 0 : Math.round(result.x[firstBuy + at] ?? 0));
     if (n > 0) buys.set(key, n);
   });
   const leftovers: Product[] = [];
@@ -316,7 +333,8 @@ function fillSeconds(graph: CandidateGraph, runs: ReadonlyMap<string, number>, p
  * each step of a shared type says so: swap circuits or molds between batches, or on an Auto Workbench set its crafting
  * grid (controller ruling 177).
  * Pseudo machines (hand-crafting, crafting table, furnace) are never added. `totalSeconds` = the busiest machine type
- * (Σ work ÷ its machines) plus the fill time.
+ * (Σ work ÷ its machines) plus the fill time. The whole runs (`wholeRuns`) buy byproduct-only goods against `opts.stock`,
+ * the group's stock the solve priced them against.
  */
 export async function makeN(
   pack: Pack, graph: CandidateGraph, sol: Solution, demand: ReadonlyMap<StuffKey, number>,
@@ -326,10 +344,12 @@ export async function makeN(
     value?: Pick<StepLine, 'valueOf' | 'empties'>;
     /** The line's build model (plan 12): its owned pools. */
     build?: BuildModel;
+    /** The group's stock the solve priced byproduct-only goods against (`SolveOptions.stock`, fix wave 3 (C)); absent: none. */
+    stock?: SolveOptions['stock'];
   },
 ): Promise<MakeNResult> {
   const { settings, groupTier, coilHeat, ctx, multiblocks } = opts;
-  const whole = await wholeRuns(graph, sol, demand);
+  const whole = await wholeRuns(graph, sol, demand, opts.stock);
   const pools: OwnedPools = opts.build?.pools ?? ownedPools(ctx, settings);
   const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const picked = pickStepMachines(pack, graph, whole.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });

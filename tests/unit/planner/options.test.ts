@@ -176,7 +176,9 @@ describe('ingredient options', () => {
     // With build cost counted ("Fewest machines", the default) the slot takes the lead the line allows back for the weight,
     // rather than add a tin extractor: its warning says so, where the weight's and the lead extractor's say nothing avoids
     // it (the controller's ruling after the verify of 5e3820f, (b); a per-consumer allowance is a later follow-up).
-    const built = await planLine(packFromSpec(withBuildRecipes(spec)), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'], buildHorizonHours: 24 }), emptyContext());
+    // ("No limit" on the raw cap: its subject is the avoid list's wording, and at the default +25 % the line adds the tin
+    // extractor instead; fix wave 3 (A).)
+    const built = await planLine(packFromSpec(withBuildRecipes(spec)), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'], buildHorizonHours: 24, rawCap: null }), emptyContext());
     expect(built.status).toBe('ok');
     expect(ids(built)).toEqual(['ca', 'cast-weight', 'x-lead']);
     expect(circuitStep(built).inputs).toContainEqual({ key: LEAD, amount: 288, chance: 1 });

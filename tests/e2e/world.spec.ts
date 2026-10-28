@@ -49,7 +49,8 @@ test('smart upload of the sample world sends only trimmed regions; scan, pick th
   // exact: the settings panel's tier select also has "world scan" in its label (its "From world (LV until a world scan
   // exists)" option), and a substring match would pick that one before the Map tab has rendered, or both after
   await page.getByLabel('World scan', { exact: true }).selectOption(scanId);
-  await page.getByLabel('Base').selectOption({ label: 'Overworld base (4, 5)' });   // the smart upload keeps claim files local, so the base has no team ("Alpha") name
+  // exact again: the settings panel's "Only these come in" search is labelled "Add a base material"
+  await page.getByLabel('Base', { exact: true }).selectOption({ label: 'Overworld base (4, 5)' });   // the smart upload keeps claim files local, so the base has no team ("Alpha") name
   await page.getByRole('button', { name: 'Use this base' }).click();
 
   const panel = page.getByTestId('found-panel');

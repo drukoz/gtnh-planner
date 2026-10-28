@@ -7,13 +7,23 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import { defaultFarmSettings } from '../../../src/shared/types/farm.ts';
 import { FREE_KEYS, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 
 /** No free input (water, air, cobblestone, lava) above this many litres or items a minute: the old plans ran on millions. */
 const SANE_FREE_PER_MINUTE = 100_000;
 const FREE: ReadonlySet<string> = new Set(FREE_KEYS);
+/**
+ * A plan with build cost counted at a step charge above 0, as every plan here: such a plan also solves the raw cap's
+ * leanest line and plan 09's plan (fix wave 3 (E), controller OQ1 (A): "each real-data file keeps its own bound for
+ * build-cost plans with a step charge, which Task 13 sets to the next whole second above 1.25 x the slowest quiet-host
+ * median"). The slowest, 2 Good Electronic Circuits a minute at HV (the file's first HV plan), took 12.85 s, the median
+ * of three on 2026-10-24 (each run started at a 1-minute load under 4): 1.25 × 12.85 = 16.06.
+ */
+const BUILD_COST_PLAN_SECONDS = 17;
 
 let pack: Pack;
 /** The GregTech item of this name (several mods name an item "Steel Ingot"). */
@@ -60,7 +70,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
     const { plan, seconds } = await timed('Electronic Circuit 60/h MV', { target: circuit!.key, amount: 60, per: 'hour', tier: 2 });
     expectSane(plan, 120);
     expect(plan.rawInputs.map((r) => pack.nameOf(r.key))).not.toContain('GregTech Sensor Card');
-    expect(seconds).toBeLessThan(5);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
   }, 300_000);
 
   // With supporting lines (plan 09's default) an LV line makes its steel too, and LV makes steel only in Bricked Blast
@@ -69,7 +79,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
   it('plans 10 LV Machine Hulls a minute at LV from ordinary materials', async () => {
     const { plan, seconds } = await timed('LV Machine Hull 10/min LV', { target: gt('LV Machine Hull'), amount: 10, per: 'min', tier: 1, routeDerived: false });
     expectSane(plan, 40);
-    expect(seconds).toBeLessThan(5);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
   }, 300_000);
 
   /**
@@ -85,13 +95,30 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
     const { plan, seconds } = await timed('Steel Ingot 10/min MV', { target: gt('Steel Ingot'), amount: 10, per: 'min', tier: 2, routeDerived: false });
     expectSane(plan, STEEL_MV_MAX_MACHINES);
     expect(plan.rawInputs.map((r) => pack.nameOf(r.key)).filter((name) => /Steel/.test(name))).toEqual([]);
-    expect(seconds).toBeLessThan(5);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
   }, 300_000);
 
   it('plans 2 Good Electronic Circuits a minute at HV without endgame multiblocks', async () => {
     const { plan, seconds } = await timed('Good Electronic Circuit 2/min HV', { target: gt('Good Electronic Circuit'), amount: 2, per: 'min', tier: 3 });
     expectSane(plan, 200);
-    expect(seconds).toBeLessThan(5);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
+  }, 300_000);
+
+  it('keeps the farm walk from growing the candidate graph (add-on 12 x 17 integration, F2)', async () => {
+    // Plan 12's second estimate pass ran for every leaf a farm of the line could make and kept the union of both passes'
+    // producers: 1,543 recipes against 941 with farms off (Good Electronic Circuits at HV), 1,352 against 625, 381 against 88.
+    const lines: Array<[string, Partial<PlanSettings>]> = [
+      ['Good Electronic Circuit 2/min HV', { target: gt('Good Electronic Circuit'), amount: 2, per: 'min', tier: 3 }],
+      ['Electronic Circuit 1/min MV', { target: gt('Electronic Circuit'), amount: 1, per: 'min', tier: 2 }],
+      ['Steel Ingot 10/min MV', { target: gt('Steel Ingot'), amount: 10, per: 'min', tier: 2 }],
+    ];
+    for (const [label, s] of lines) {
+      const settings: PlanSettings = { ...defaultSettings(), ...s };
+      const on = (await linePricing(pack, settings, emptyContext()))!.graph.recipes.length;
+      const off = (await linePricing(pack, { ...settings, farms: { ...defaultFarmSettings(), kinds: [] } }, emptyContext()))!.graph.recipes.length;
+      console.log(`real-pack graph ${label}: ${on} recipes with farms, ${off} without`);
+      expect(on, label).toBeLessThanOrEqual(off + 64);
+    }
   }, 300_000);
 
   it('says what unlocks a titanium part at LV instead of planning one', async () => {
@@ -101,7 +128,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
     expect(plan.unlocks.length).toBeGreaterThan(0);
     expect(plan.unlocks[0]?.text).toMatch(/^Titanium .*: needs .*(reachable at|machines)/);
     expect(plan.warnings.filter((w) => w.code === 'graph-too-big')).toEqual([]);
-    expect(seconds).toBeLessThan(5);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
   }, 300_000);
 
   it('makes 64 LV Machine Hulls in a sane time with nothing short', async () => {
@@ -111,6 +138,6 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('the active export', () => {
     expect(plan.warnings.filter((w) => w.code === 'batch-short')).toEqual([]);
     expect(plan.makeN?.totalSeconds).toBeGreaterThan(0);
     expect(plan.makeN?.totalSeconds).toBeLessThan(24 * 3600);
-    expect(seconds).toBeLessThan(5);
+    expect(seconds).toBeLessThan(BUILD_COST_PLAN_SECONDS);
   }, 300_000);
 });

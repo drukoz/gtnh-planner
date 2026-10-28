@@ -42,6 +42,14 @@ import { makeProject } from '../../helpers/layout-fixtures.ts';
 
 /** The two live projects' targets and modes, re-planned with `defaultSettings()`. */
 const TARGETS: ReadonlyArray<readonly [StuffKey, LogisticsMode]> = [['IC2:itemPartCircuit@0', 'routed'], ['fluid:ethylene', 'direct']];
+/**
+ * The targets planned with "Reuse machines we have" off (`reuseOwned: false`), as if the group owned none. These views
+ * test the 3D blocks' coverage, not the planner's choices (the controller's ruling G2 at the integration's release gate,
+ * round 2): with farms on (add-on 17), the ethylene line runs wholly on the base's owned machines and an owned Basic Crop
+ * Manager, so with nothing new to build its layout is empty and lays out no GT pipe. Planned new, it builds GT pipes again.
+ * The IC2 circuit line likewise reuses the owned machines its ProjectRed pipes fed, so it lays out no RC5 block.
+ */
+const NO_REUSE: ReadonlySet<StuffKey> = new Set<StuffKey>(['IC2:itemPartCircuit@0', 'fluid:ethylene']);
 // Reviewed: none. The plan's 11 block items whose registry name names their item icon in items/ (vanilla's
 // items/hopper.png, etfuturum's modern lanterns, chain, brewing stand, ...) are all block ids, which never take an
 // items/ file by name (architecture §11.43 (a)), so they keep their block face like every other block item.
@@ -197,7 +205,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
 
     const lines: string[] = [];
     for (const [target, logistics] of TARGETS) {
-      const settings = { ...defaultSettings(), target, logistics };
+      const settings = { ...defaultSettings(), target, logistics, ...(NO_REUSE.has(target) ? { reuseOwned: false } : {}) };
       const plan = await planLine(pack, settings, contextFromScan(scan, pack, base.id, logistics));
       expect(plan.status ?? 'ok', `${target}: ${plan.warnings.map((w) => w.code).join(' ')}`).toBe('ok');
       const project = { ...makeProject({ logistics, scanId: scan.id, baseId: base.id }), settings };
@@ -207,7 +215,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
       const resolved = resolveBlocks(src, [...refs.values()]);
       plans.set(target, plan);
       layouts.set(target, { layout, faces: new Map([...refs.keys()].map((key, i) => [key, resolved[i]!])) });
-      lines.push(`${target} ${logistics}: ${plan.steps.length} steps; layout ${layout.status}, ${fmt(layout.blocks.length)} blocks, ${fmt(refs.size)} distinct`);
+      lines.push(`${target} ${logistics}${NO_REUSE.has(target) ? ' (no reuse)' : ''}: ${plan.steps.length} steps; layout ${layout.status}, ${fmt(layout.blocks.length)} blocks, ${fmt(refs.size)} distinct`);
     }
     show(`export ${exportId} (exporter ${dump.exporterVersion}), scan ${scan.id}, base ${base.id}`, [
       `${fmt(index.size)} extracted files, ${fmt(nei!.size)} NEI icons; ${fmt(pack.items.size)} items (${fmt(plainKeys.length)} without NBT), ${fmt(pack.fluids.size)} fluids`,
@@ -332,9 +340,10 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('real coverage', { timeout: 300_
     // rc5(t): the ProjectRed pipes, AE2 cables and ForgeMultipart ghosts, each drawn from its model sheet's crops (39 and 0 at 340dad8)
     expect(TARGETS.map(([t]) => withPipe(rc5(t)).length)).toEqual(TARGETS.map(([t]) => rc5(t).length));
     expect(rc5('IC2:itemPartCircuit@0').length).toBeGreaterThan(0);
-    // vertical(t): the blocks other than cables and pipes whose front faces up or down (18 and 37 at 340dad8), each keeping its hull
+    // vertical(t): the blocks other than cables and pipes whose front faces up or down (18 and 37 at 340dad8; 5 and 0 planned
+    // new, G2), each keeping its hull
     expect(TARGETS.map(([t]) => vertical(t).filter(hullKept).length)).toEqual(TARGETS.map(([t]) => vertical(t).length));
-    expect(vertical('fluid:ethylene').length).toBeGreaterThan(0);
+    expect(vertical('IC2:itemPartCircuit@0').length).toBeGreaterThan(0);
   });
 
   it("the user's reports and the named rules", () => {

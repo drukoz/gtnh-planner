@@ -63,6 +63,30 @@ describe('plan banner', () => {
     expect(out).toContain('Nothing supplies Resin to Mixer (Glue): it needs 1,800/h and the plan neither makes nor buys it.');
     expect(out).toContain('Plate is made 2 ways: Fluid Solidifier (99.9%) and Cutting Machine (0.1%).');
   });
+  it('shows a good a build-cost plan makes two ways on purpose as a plain note, not as a problem (plan 12 final review)', () => {
+    // The raw cap keeps 40 % of the plates on one full machine and the rest on the other way: the plan marks the split
+    // (`Plan.deliberate`), so the banner shows its note plainly, once, in the server's words, else the client's.
+    const plate = (id: string, name: string, runsPerSecond: number) => step({ id, machine: { mteId: 521, name, tier: 1 }, mainOutput: 't:plate@0', runsPerSecond,
+      utilization: 1, outputs: [{ key: 't:plate@0', amount: 1, chance: 1 }] });
+    const split = planOf({
+      steps: [plate('solid', 'Fluid Solidifier', 0.6), plate('saw', 'Cutting Machine', 0.4)],
+      flows: [{ from: 'solid', to: 'out', key: 't:plate@0', perSecond: 0.6 }, { from: 'saw', to: 'out', key: 't:plate@0', perSecond: 0.4 }],
+      names: { 't:plate@0': 'Plate' }, deliberate: [{ key: 't:plate@0', code: 'multi-producer', why: 'full', full: ['saw'] }],
+      warnings: [{ code: 'deliberate-split', key: 't:plate@0', stepId: 'solid', text: 'Plates come two ways on purpose (as the server says it).' }],
+    });
+    const out = text(html(split));
+    expect(out).not.toContain('does not add up');
+    expect(out.split('Plates come two ways on purpose').length).toBe(2);
+    expect(findAll(banner(split), (e) => e.type === 'ul' && e.props.className === 'banner-notes')).toHaveLength(1);
+    expect(text(html({ ...split, warnings: [] }))).toContain('Plate is made 2 ways: Fluid Solidifier (60%) and Cutting Machine (40%). The Cutting Machine '
+      + 'is full, and one more would cost more than the raw material it saves.');
+    // Unmarked, the same split is a problem.
+    expect(text(html({ ...split, deliberate: undefined, warnings: [] }))).toContain('This plan does not add up: 1 good is made two ways');
+    // The drawer's status counts what the banner counts: the note, in the server's words or the client's, is no problem.
+    expect(drawerStatus(split, null, null, false)).toBe('No problems');
+    expect(drawerStatus({ ...split, warnings: [] }, null, null, false)).toBe('No problems');
+    expect(drawerStatus({ ...split, deliberate: undefined, warnings: [] }, null, null, false)).toBe('The plan has 1 problem');
+  });
   it('shows the first problem in the flow', () => {
     vi.stubGlobal('location', { hash: '#materials' });
     const [show] = findAll(banner(broken), (e) => e.type === 'button' && e.props.children === 'Show in the flow');
@@ -138,6 +162,13 @@ describe('plan banner', () => {
     expect(text(html(costly, S({ stepCharge: 0.07 })))).toContain('(Machines vs raw material: Custom (7%))');
     expect(html(planOf({ rawCost: { perSecond: 1, leastPerSecond: 1 } }))).toBe('');
     expect(html(planOf({ rawCost: { perSecond: 0, leastPerSecond: 0 } }))).toBe('');
+  });
+  it('measures against the leanest line where build cost counts, and names the raw cap (fix wave 3 (A))', () => {
+    const capped = planOf({ rawCost: { perSecond: 1.2, leastPerSecond: 0.5, leanestPerSecond: 1 } });
+    expect(text(html(capped))).toContain('Uses 20% more raw material than the leanest line to save machines (Machines vs raw material: Fewest machines; at most +25 %)');
+    expect(text(html(capped, S({ rawCap: null })))).toContain('(Machines vs raw material: Fewest machines; no limit)');
+    // The poly line: 135 × the least, but the leanest line itself (its machines paid for), so nothing to say.
+    expect(html(planOf({ rawCost: { perSecond: 0.000987654322, leastPerSecond: 0.0000072965006, leanestPerSecond: 0.000987654322 } }))).toBe('');
   });
   it('says what the plan costs to run and to build (plan 12)', () => {
     const costed = planOf({ cost: { runPerHour: 5400, build: 182, horizonHours: 24 } });

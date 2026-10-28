@@ -1,6 +1,7 @@
 // The static feeding rules (architecture §11 entry 51; research docs/research/machine-feeding.md §7 "Static rules", with
 // add-on 21's rule table and words, its R1–R9 and R12; R10, benches, and R11, shared machines, are add-on 12's, which
-// so far reads a shared machine's every step and an Auto Workbench's own feed into R1, R5a, R5d and R9): what
+// reads a shared machine's every step and an Auto Workbench's own feed into R1, R5a, R5d and R9, and has R10 check a
+// Project Red bench's ingredients that something pushes into a Terminator's inventory): what
 // a laid-out routed, AE2 or EnderIO line leaves that can overfill or deadlock a machine, read from the layout itself — its
 // machines and buses, their settings, and the structured chips and patterns of `LayoutBlock.feed` — so the warnings say
 // what the build steps and the 3D view show. Each rule raises the feeding checker's code: `feed_crowded`,
@@ -258,6 +259,19 @@ function routedRules(line: Line, n: Node, raise: Raise): void {
     if (c.filter?.mode === 'whitelist' && c.filter.keys.every((k) => makes.includes(k))) continue;
     raise('feed_starved', `The Item Broadcaster Chip on ${n.label} offers its inputs too: an order for one of them fails and is dropped`);
   }
+  // R10 (plan 12's final review): an Auto Workbench orders what it takes with its Item Stock Keeper Chip, so an item of
+  // it that an Item Extractor Chip elsewhere sends on as soon as it is made ends in each inventory whose Item Terminator
+  // Chip takes it, and reaches the bench only where an Item Broadcaster Chip at that inventory offers it back
+  if (!bench) return;
+  for (const key of sorted(n.steps.flatMap((x) => stepItemInputs(plan, x.id)))) {
+    if (!others.some((p) => p.chips.some((c) => c.kind === 'extractor' && passes(c.filter, key)))) continue;
+    const caught = others.filter((p) => p.chips.some((c) => c.kind === 'terminator' && passes(c.filter, key))).flatMap((p) => p.targets);
+    for (const inv of [...new Set(caught)].sort((a, b) => comparePos(a.pos, b.pos))) {
+      if (pipesAt(line, [inv]).some((p) => p.chips.some((c) => c.kind === 'broadcaster' && passes(c.filter, key)))) continue;
+      raise('feed_starved', `${n.label} may never get ${nameOf(key)}: an Item Extractor Chip sends it on as soon as it is made, and the Item Terminator `
+        + `Chip on ${where(inv)} takes it in with no Item Broadcaster Chip there to fill the bench's orders`, key);
+    }
+  }
 }
 
 /** R8, R9, R12: the patterns of the ME interfaces that serve a machine, their blocking mode, and what else they touch. */
@@ -314,7 +328,9 @@ function ae2Rules(line: Line, n: Node, raise: Raise): void {
  * a controller without it reads all its buses together); on routed lines R5a an item it makes that no Extractor Chip takes out,
  * R5b an item it takes that its Extractor lists, R5c an Extractor on an input bus, R5d an item it takes from outside the
  * line that the input chest's Extractor keeps in, R6 an item it makes that nothing on the network takes, R7 a
- * Broadcaster that offers more than its outputs; on AE2 lines R8 a pattern AE2 cannot encode (a fluid, a fraction, a
+ * Broadcaster that offers more than its outputs, R10 an item an Auto Workbench takes that an Extractor elsewhere sends
+ * into an inventory whose Terminator takes it with no Broadcaster there to offer it back (plan 12's final review); on
+ * AE2 lines R8 a pattern AE2 cannot encode (a fluid, a fraction, a
  * held item), R9 blocking mode toward a held item blocking mode does not ignore or toward an Auto Workbench, and R12 an
  * interface beside two inventories. A shared machine (plan 12, `LayoutBlock.stepIds`) is read with every step it runs;
  * an Auto Workbench's ingredients leave their makers and the input chest through Broadcaster Chips, which R5a and R5d

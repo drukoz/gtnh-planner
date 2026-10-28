@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { withBuildRecipes } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
-import { packFromSpec, type PackSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
+import { packFromSpec, type IngredientSpec, type PackSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { resolveAvoid } from '../../../src/server/planner/basis.ts';
 import { emptyContext, planLine, settingsHash } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
@@ -438,5 +438,44 @@ describe('planLine with a derived material made from an avoided one (final revie
     expect(least.steps.map((s) => s.id)).toEqual(['tin-gear', 'tin-plate', 'tin-rod']);
     expect(least.avoided).toEqual([{ key: 't:tin_ingot@0', name: 'Tin Ingot', unavoidable: true }]);
     expect(avoidWarnings(least).map((w) => [w.code, w.key, w.stepId])).toEqual([['avoid-unavoidable', 't:tin_ingot@0', 'tin-plate']]);
+  });
+});
+
+describe('planLine with an allowed-back good a step could do without (plan 12 final review)', () => {
+  /**
+   * A Gadget is assembled from a Copper Ingot or a Widget (one ore-dictionary slot); with `alone`, also from a Copper
+   * Ingot in a slot of its own and a 1x Copper Wire. A Widget is bent from 2 Tin Ingots. With Copper Ingot and Tin Ingot
+   * avoided nothing at LV makes a Gadget, so the line allows copper back.
+   */
+  const gadgets = (alone: boolean): Pack => extended({
+    items: [{ key: 't:gadget@0', name: 'Gadget' }, { key: 't:widget@0', name: 'Widget' }],
+    recipes: [
+      { id: 'gadget', map: 'gt.recipe.assembler', eut: 16, dur: 100, out: [['t:gadget@0', 1]],
+        in: [{ any: [['t:copper_ingot@0', 1], ['t:widget@0', 1]] }, ...(alone ? [['t:copper_ingot@0', 1], ['t:copper_wire@0', 1]] satisfies IngredientSpec[] : [])] },
+      { id: 'widget', map: 'gt.recipe.metalbender', in: [['t:tin_ingot@0', 2]], out: [['t:widget@0', 1]], eut: 16, dur: 100 },
+    ],
+  });
+  const settings = S({ target: 't:gadget@0', tier: 1, avoid: ['t:copper_ingot@0', 't:tin_ingot@0'] });
+
+  it('says only that the line allows the good back where every step that takes it could do without it', async () => {
+    // The Widget takes the copper's place in the one slot that takes copper, so no step needs it: "no recipe at LV avoids
+    // it" would be false, and no step to name needs it.
+    const plan = await planLine(gadgets(false), settings, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => s.id)).toEqual(['gadget']);
+    expect(plan.avoided).toEqual([{ key: 't:copper_ingot@0', name: 'Copper Ingot', unavoidable: true }]);
+    expect(avoidWarnings(plan)).toEqual([
+      { code: 'avoid-unavoidable', key: 't:copper_ingot@0', stepId: 'gadget', text: 'Basic Assembler uses Copper Ingot, which the line allows back' }]);
+  });
+
+  it('says a step needs the good where another of its slots takes nothing else, not that it is allowed back for others', async () => {
+    // The Gadget's own copper slot has no other option: the assembler needs copper as the wiremill does.
+    const plan = await planLine(gadgets(true), settings, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => s.id)).toEqual(['gadget', 'wire']);
+    expect(avoidWarnings(plan).map((w) => [w.stepId, w.text])).toEqual([
+      ['gadget', 'Basic Assembler uses Copper Ingot — no recipe at LV avoids it'],
+      ['wire', 'Basic Wiremill uses Copper Ingot — no recipe at LV avoids it'],
+    ]);
   });
 });

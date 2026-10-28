@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { miniGt } from '../../helpers/mini-gt.ts';
 import { twinSpec } from '../../helpers/build-fixtures.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
-import { solveLine, findBlockers, standaloneCosts, twinMoves, withTwinsMoved, type Solution } from '../../../src/server/planner/solve.ts';
+import {
+  chainRecipes, solveLine, findBlockers, standaloneCosts, standalonePrices, twinMoves, withTwinsMoved, type Solution,
+} from '../../../src/server/planner/solve.ts';
 import {
   buildCandidates, type CandidateGraph, type GoodInfo, type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from '../../../src/server/planner/candidates.ts';
@@ -19,6 +21,44 @@ function graphFor(pack: Pack, target: string, tier: number, leaf?: LeafOracle) {
   return buildCandidates(pack, defaultSettings(), env, l, [target]);
 }
 const one = (k: string) => new Map([[k, 1]]);
+
+const RANDOM_AMOUNTS = [1, 1, 1, 1, 2, 2, 3, 4, 8, 9, 16, 0.5, 0.25];
+/**
+ * A random recipe graph, one per seed (fix wave 3 (D), the Task 2 review's generator): `goods` goods `g000@0`…, each
+ * bought with chance 0.2 at 0.01–100, and `recipes` recipes `r0000`…, each taking one to three goods and making one or two
+ * (a good drawn again is skipped), every amount drawn from RANDOM_AMOUNTS.
+ */
+function randomGraph(seed: number, goods: number, recipes: number): CandidateGraph {
+  let state = seed;
+  const random = (): number => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 2 ** 32;
+  };
+  const keyOf = (g: number): string => `g${String(g).padStart(3, '0')}@0`;
+  const info = new Map<string, GoodInfo>();
+  for (let g = 0; g < goods; g++) {
+    const buyable = random() < 0.2;
+    const cost = buyable ? Math.round((0.01 + random() * 100) * 1000) / 1000 : 0;
+    info.set(keyOf(g), { key: keyOf(g), buyable, cost, leafClass: buyable ? 'direct' : null, virtual: false });
+  }
+  const list: LpRecipe[] = [];
+  for (let r = 0; r < recipes; r++) {
+    const inputs = 1 + Math.floor(random() * 3);
+    const outputs = 1 + Math.floor(random() * 2);
+    const coeffs = new Map<string, number>();
+    for (let k = 0; k < inputs + outputs; k++) {
+      const key = keyOf(Math.floor(random() * goods));
+      if (coeffs.has(key)) continue;
+      const amount = RANDOM_AMOUNTS[Math.floor(random() * RANDOM_AMOUNTS.length)] as number;
+      coeffs.set(key, k < inputs ? -amount : amount);
+    }
+    list.push({
+      id: `r${String(r).padStart(4, '0')}`, kind: 'recipe', mapId: 'gt.recipe.macerator', euPerRun: 0, nonConsumed: [], needsCleanroom: false,
+      coeffs: [...coeffs].sort(([a], [b]) => (a < b ? -1 : 1)),
+    });
+  }
+  return { targets: [], recipes: list, goods: info, blocked: new Map(), warnings: [] };
+}
 
 describe('solveLine', () => {
   it('uses the least raw material at LV', async () => {
@@ -78,6 +118,56 @@ describe('solveLine', () => {
       ['magnetic@0', { cost: 2, steps: 2, free: 0, recipes: ['magnetize', 'smelt'], top: 'magnetize' }], ['nowhere@0', undefined]]);
     expect((await standaloneCosts(g, ['magnetic@0'], ['steel@0'])).get('magnetic@0')).toEqual({ cost: Infinity, steps: 0, free: 0, recipes: [] });
   });
+  it('prices each good on its own, whatever else is asked, on the recipes its chain can use (fix wave 3 (D))', async () => {
+    // One split of raw (1) makes A and B; C is made from B and a second raw (3); T takes two A and a C.
+    const p = packFromSpec({ machines: [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }], recipes: [
+      { id: 'split', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['a@0', 1], ['b@0', 1]], eut: 2 },
+      { id: 'b-to-c', map: 'gt.recipe.macerator', in: [['b@0', 1], ['raw2@0', 1]], out: [['c@0', 1]], eut: 2 },
+      { id: 'use', map: 'gt.recipe.macerator', in: [['a@0', 2], ['c@0', 1]], out: [['t@0', 1]], eut: 2 }] });
+    const raws: Record<string, number> = { 'raw@0': 1, 'raw2@0': 3 };
+    const leaf: LeafOracle = (k) => (Object.hasOwn(raws, k)
+      ? { buyable: true, cost: raws[k] as number, leafClass: 'direct' } : { buyable: false, cost: 0, leafClass: null });
+    const g = graphFor(p, 't@0', 1, leaf);
+    expect(chainRecipes(g, ['c@0']).map((r) => r.id)).toEqual(['b-to-c', 'split']);
+    expect(chainRecipes(g, ['t@0']).map((r) => r.id)).toEqual(['b-to-c', 'split', 'use']);
+    // A: one split, its B sunk; C: a split's B and the second raw, its A sunk; T: two splits and the second raw.
+    const prices = { 'a@0': 1, 'c@0': 4, 't@0': 5, 'nowhere@0': Infinity };
+    const keys = Object.keys(prices);
+    expect(Object.fromEntries(await standalonePrices(g, keys))).toEqual(prices);
+    expect(Object.fromEntries(await standalonePrices(g, [...keys].reverse()))).toEqual(prices);
+    for (const [key, price] of Object.entries(prices)) expect((await standalonePrices(g, [key])).get(key)).toBe(price);
+  });
+  it('gives each good of a random graph one price, alone, with every good and in reverse (fix wave 3 (D))', async () => {
+    // Priced in one series of hot-started solves on one model (e6e0a36), g015@0 read 0.453210938 forward and 0.453210937
+    // reversed here, and g026@0 2.71926563 alone and 2.71926562 with every good.
+    const g = randomGraph(3, 80, 120);
+    const keys = [...g.goods.keys()];
+    const all = await standalonePrices(g, keys);
+    expect([...all.values()].filter((price) => Number.isFinite(price))).toHaveLength(72);
+    expect(Object.fromEntries(await standalonePrices(g, [...keys].reverse()))).toEqual(Object.fromEntries(all));
+    const alone = new Map<string, number | undefined>();
+    for (const key of keys) alone.set(key, (await standalonePrices(g, [key])).get(key));
+    expect(Object.fromEntries(alone)).toEqual(Object.fromEntries(all));
+  });
+  it('never makes a good through a dead end, however little of it the chain needs (fix wave 3 (D))', async () => {
+    // X made `made` a run from 0.05 Y, Y made `made2` a run from 0.05 Z, and nothing makes Z: one X takes 1.7e-8 Z at
+    // 144 and 1,000, 6.25e-12 at 20,000 and 20,000, both within HiGHS's feasibility tolerance of none (e6e0a36 priced X
+    // at 0 in both graphs). With `raw`, X is also made from a raw at 1.
+    const recipe = (id: string, coeffs: Array<[string, number]>): LpRecipe =>
+      ({ id, kind: 'recipe', mapId: 'gt.recipe.macerator', coeffs, euPerRun: 0, nonConsumed: [], needsCleanroom: false });
+    const good = (key: string, cost?: number): [string, GoodInfo] =>
+      [key, { key, buyable: cost !== undefined, cost: cost ?? 0, leafClass: cost === undefined ? null : 'direct', virtual: false }];
+    const deadEnd = (made: number, made2: number, raw: boolean): CandidateGraph => ({
+      targets: ['x@0'],
+      recipes: [recipe('q', [['y@0', made2], ['z@0', -0.05]]), recipe('r', [['x@0', made], ['y@0', -0.05]]),
+                ...(raw ? [recipe('s', [['raw@0', -1], ['x@0', 1]])] : [])],
+      goods: new Map([good('x@0'), good('y@0'), good('z@0'), ...(raw ? [good('raw@0', 1)] : [])]),
+      blocked: new Map(), warnings: [],
+    });
+    expect((await standalonePrices(deadEnd(144, 1000, false), ['x@0'])).get('x@0')).toBe(Infinity);
+    expect((await standalonePrices(deadEnd(20000, 20000, true), ['x@0'])).get('x@0')).toBe(1);
+  });
+
   it('names the chemistry behind a fluid, not the canner that empties its cells (fix spec R7)', async () => {
     // A reactor makes Gas Cells (1,000 L each) from 2 raw; a canner empties them; another canner fills cells again.
     const p = packFromSpec({
@@ -170,6 +260,26 @@ describe('solveLine', () => {
     const lv = await solveLine(graphFor(mini, 't:titanium_plate@0', 1), one('t:titanium_plate@0'), { probe: true });
     expect(lv.status).toBe('infeasible');
   });
+  it('sinks a by-product itself, never through an ore-dictionary slot it could fill (12 x 17 F7b)', async () => {
+    // make: raw -> t + s; other takes v, an ore-dictionary slot that 8 s fill (a farm's saplings into `alt:…Saplings*8` on
+    // real data). S4's least runs, purchases and sinks sank 1/8 v through the conversion instead of 1 s, so `byproducts`,
+    // which leaves virtual goods out, lost the sapling while its flow went to sink.
+    const conv: LpRecipe = { id: 'convert:v@0:s@0', kind: 'convert', mapId: null, coeffs: [['s@0', -8], ['v@0', 1]], euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: 'v@0' };
+    const rec = (id: string, coeffs: Array<[string, number]>, main: string): LpRecipe =>
+      ({ id, kind: 'recipe', mapId: 'gt.recipe.macerator', coeffs, euPerRun: 0, nonConsumed: [], needsCleanroom: false, main });
+    const info = (key: string, buyable: boolean, cost: number, virtual = false): [string, GoodInfo] =>
+      [key, { key, buyable, cost, leafClass: buyable ? 'direct' : null, virtual }];
+    const graph: CandidateGraph = {
+      targets: ['t@0'],
+      recipes: [conv, rec('make', [['raw@0', -1], ['s@0', 1], ['t@0', 1]], 't@0'), rec('other', [['u@0', 1], ['v@0', -1]], 'u@0')],
+      goods: new Map([info('raw@0', true, 1), info('t@0', false, 0), info('s@0', false, 0), info('u@0', false, 0), info('v@0', false, 0, true)]),
+      blocked: new Map(), warnings: [],
+    };
+    const s = await solveLine(graph, one('t@0'));
+    expect(s.status).toBe('ok');
+    expect([...s.runs.keys()]).toEqual(['make']);
+    expect([...s.sinks]).toEqual([['s@0', 1]]);
+  });
 });
 
 describe('loop guard and blockers', () => {
@@ -177,6 +287,12 @@ describe('loop guard and blockers', () => {
   const loop = (): RecipeSpec[] => [{ id: 'loop-a', map: 'gt.recipe.macerator', in: [['x@0', 1]], out: [['y@0', 2]], eut: 2 },
                                     { id: 'loop-b', map: 'gt.recipe.macerator', in: [['y@0', 1]], out: [['x@0', 1]], eut: 2 }];
   const machines = [{ mteId: 1, name: 'M', maps: ['gt.recipe.macerator'], tier: 1 }];
+  it('prices a good only a loop with no way in makes at Infinity, as the makeable goods say (fix wave 3 (D))', async () => {
+    // The LP alone would run the loop (one X makes two Y, one Y makes one X) for nothing.
+    const g = graphFor(packFromSpec({ machines, recipes: loop() }), 'y@0', 1, rawOnly);
+    expect(g.recipes.map((r) => r.id)).toEqual(['loop-a', 'loop-b']);
+    expect(await standalonePrices(g, ['x@0', 'y@0'])).toEqual(new Map([['x@0', Infinity], ['y@0', Infinity]]));
+  });
   it('bans only the loop, not the recipes that use its output', async () => {
     const p = packFromSpec({ machines, recipes: [...loop(),
       { id: 'honest', map: 'gt.recipe.macerator', in: [['raw@0', 1]], out: [['y@0', 1]], eut: 2 },
@@ -205,6 +321,37 @@ describe('loop guard and blockers', () => {
     expect(s.status).toBe('ok');
     expect(Object.fromEntries(s.runs)).toEqual({ breaker: 1 });
     expect(s.warnings).toEqual([]);
+  });
+  it('takes a farm recipe for a source, not a loop (add-on 12 x 17 integration, F1)', async () => {
+    // A Crop Manager (`LpRecipe.farm`) takes water, which the line can also get back from the farm's wood (on real data a
+    // centrifuge, methane, hydrogen and distilled water): with the farm a source, as a pump is, the line runs the farm route
+    // at no raw material; the guard took the cycle for a data loop and banned the farm, the water chain and the heater.
+    const step = (id: string, coeffs: Array<[string, number]>, more: Partial<LpRecipe> = {}): LpRecipe => ({
+      id, kind: 'recipe', mapId: 'gt.recipe.macerator', euPerRun: 0, nonConsumed: [], needsCleanroom: false,
+      main: coeffs.find(([, c]) => c > 0)?.[0], coeffs: [...coeffs].sort(([a], [b]) => (a < b ? -1 : 1)), ...more,
+    });
+    const good = (key: string, buyable: boolean, cost: number, leafClass: LeafDecision['leafClass']): [string, GoodInfo] =>
+      [key, { key, buyable, cost, leafClass, virtual: false }];
+    const graph: CandidateGraph = {
+      targets: ['t@0'],
+      recipes: [
+        step('dry', [['wood@0', -1], ['fluid:water', 200]]),
+        step('farm', [['fluid:water', -100], ['wood@0', 1]], { farm: true }),
+        step('from-wood', [['wood@0', -10], ['t@0', 1]]),
+        step('heat', [['fluid:water', -6], ['steam@0', 960]]),
+        step('honest', [['raw@0', -1], ['steam@0', -1000], ['t@0', 1]]),
+        step('pump', [['fluid:water', 1000]], { supply: true }),
+      ],
+      goods: new Map([good('fluid:water', true, 0, 'free'), good('raw@0', true, 1, 'direct'), good('wood@0', false, 0, null),
+        good('t@0', false, 0, null), good('steam@0', false, 0, null)]),
+      blocked: new Map(), warnings: [],
+    };
+    const s = await solveLine(graph, one('t@0'));
+    expect(s.status).toBe('ok');
+    expect(s.banned ?? []).toEqual([]);
+    expect(s.warnings.map((w) => w.code)).not.toContain('free-loop');
+    expect(s.runs.has('farm')).toBe(true);
+    expect(s.rawCost).toBe(0);
   });
   it('names what blocks a target only a loop makes', async () => {
     const s = await solveLine(graphFor(packFromSpec({ machines, recipes: loop() }), 'y@0', 1, rawOnly), one('y@0'));

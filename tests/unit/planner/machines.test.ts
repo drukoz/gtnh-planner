@@ -73,6 +73,35 @@ describe('planSteps and buildFlows', () => {
       ['bend-plate', 'circuit-lv', 't:iron_plate@0', 0.5], ['circuit-lv', 'out', 't:circuit@0', 0.5], ['raw', 'bend-plate', 't:iron_ingot@0', 0.5],
       ['raw', 'circuit-lv', 't:redstone@0', 0.5], ['raw', 'wire', 't:copper_ingot@0', 0.5], ['wire', 'circuit-lv', 't:copper_wire@0', 1]]);
   });
+
+  it('sinks a farm\'s share of a good first and feeds the line from its own maker (12 x 17 F5)', () => {
+    // farm: 1 run -> 6 wood + 0.2 resin; centrifuge: 6 wood -> 6 resin; press: 4 resin -> 1 target. Resin sunk: 2.2. Split pro
+    // rata the farm's resin went in and out at once: the layout lists it on both chests and EnderIO moves it between them.
+    const recipes = [
+      { id: 'centrifuge', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', 6], ['t:wood@0', -6]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:resin@0' },
+      { id: 'farm', kind: 'recipe', mapId: 'f', coeffs: [['t:resin@0', 0.2], ['t:wood@0', 6]], euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: 't:wood@0', farm: true },
+      { id: 'press', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', -4], ['t:target@0', 1]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:target@0' },
+    ];
+    const graph = { targets: ['t:target@0'], recipes, goods: new Map(), blocked: new Map(), warnings: [] } as never;
+    const sol = { status: 'ok', runs: new Map([['centrifuge', 1], ['farm', 1], ['press', 1]]), buys: new Map(), sinks: new Map([['t:resin@0', 2.2]]),
+      rawCost: 0, leastRawCost: 0, blockers: [], warnings: [] } as never;
+    const resin = buildFlows(graph, sol, ['t:target@0']).filter((f) => f.key === 't:resin@0').map((f) => [f.from, f.to, Number(f.perSecond.toFixed(6))]);
+    expect(resin).toEqual([['centrifuge', 'press', 4], ['centrifuge', 'sink', 2], ['farm', 'sink', 0.2]]);
+  });
+
+  it('feeds the line what a farm makes beyond what the line throws away (12 x 17 F5)', () => {
+    // farm 3 resin, centrifuge 2, press takes 4, 1 sunk: the farm's 1 to sink, its other 2 and the centrifuge's 2 to the press.
+    const recipes = [
+      { id: 'centrifuge', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', 2], ['t:wood@0', -6]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:resin@0' },
+      { id: 'farm', kind: 'recipe', mapId: 'f', coeffs: [['t:resin@0', 3], ['t:wood@0', 6]], euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: 't:wood@0', farm: true },
+      { id: 'press', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', -4], ['t:target@0', 1]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:target@0' },
+    ];
+    const graph = { targets: ['t:target@0'], recipes, goods: new Map(), blocked: new Map(), warnings: [] } as never;
+    const sol = { status: 'ok', runs: new Map([['centrifuge', 1], ['farm', 1], ['press', 1]]), buys: new Map(), sinks: new Map([['t:resin@0', 1]]),
+      rawCost: 0, leastRawCost: 0, blockers: [], warnings: [] } as never;
+    const resin = buildFlows(graph, sol, ['t:target@0']).filter((f) => f.key === 't:resin@0').map((f) => [f.from, f.to, Number(f.perSecond.toFixed(6))]);
+    expect(resin).toEqual([['centrifuge', 'press', 2], ['farm', 'press', 2], ['farm', 'sink', 1]]);
+  });
 });
 
 describe('more machine and flow cases', () => {

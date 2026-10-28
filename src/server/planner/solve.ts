@@ -8,11 +8,14 @@ import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { compareMachineId } from '../../shared/ids.ts';
 import type { PlanWarning } from '../../shared/types/plan.ts';
 import {
-  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_TIME_LIMIT_SECONDS, buildMip, laterRoom, roundUp, scaleOf, stepWeight, type BuildDecision,
-  type BuildMipInput, type LaterRoom, type StepMachines, type StepWeights,
+  BUILD_MIP_MAX_LP_ITERATIONS, BUILD_MIP_MAX_NODES, BUILD_MIP_RETRY_TOLERANCE, BUILD_MIP_TIME_LIMIT_SECONDS, LEAN_BASE_ABOVE, buildMip, laterRoom,
+  oneMakerGood, ownedOnlyMip, roundUp, scaleOf, stepWeight, type BuildDecision, type BuildMipInput, type LaterRoom, type StepMachines,
+  type StepWeights,
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
-import { solveLp, type LpModel, type LpResult, type LpRow } from './lp.ts';
+import {
+  solveBuildRuns, solveBuildRunsAside, solveLp, wholeBuild, type BuildRunsJob, type LpModel, type LpResult, type LpRow,
+} from './lp.ts';
 import { buildCounts, type BuildModel, type MachineOption } from './machine-options.ts';
 import { sourceWeight } from './objective.ts';
 import { sig9 } from './round.ts';
@@ -33,6 +36,12 @@ export interface SolveOptions {
    * crafted by hand: HAND_STEP_WEIGHT in rate mode (`solveOptions`), else 1 (absent: 1).
    */
   byHandWeight?: number;
+  // optional addition (add-on 12 x 17 integration, U2)
+  /**
+   * With crafting automated and no step charge: the least charge on one block a crafting-table step no Auto Workbench runs
+   * pays in the build MIP (BY_HAND_FLOOR_CHARGE, `solveOptions`), so a by-hand step never costs nothing; absent: none.
+   */
+  byHandFloor?: number;
   /** S1 only: whether the line plans and its least-raw solution (avoid trials, below). */
   probe?: boolean;
   // optional additions (plan 12: build cost, architecture §11.39)
@@ -76,6 +85,29 @@ export interface SolveOptions {
    * byproduct of the line's own runs of each good is shared among its needs in this order (`Solution.credited`).
    */
   credits?: readonly CreditColumn[];
+  // optional addition (fix wave 3 (A))
+  /**
+   * The raw cap (`PlanSettings.rawCap`): where build cost counts and the step charge is above 0 the build stage keeps the
+   * plan's raw material within (1 + rawCap) × the leanest line's (`leanestLine`); null or absent: no cap. Plan 09's stages
+   * never read it.
+   */
+  rawCap?: number | null;
+  // optional additions (release gate round 2, G1: the build stage's lite start)
+  /** The fewest whole columns of the leanest line's MIP on which the build stage solves the lite start (default LITE_MIN_INTEGERS; tests). */
+  liteMinIntegers?: number;
+  /** With the lite start, solve the build MIP after the leanest line instead of beside it: the same plan, later (tests). */
+  sequentialLean?: boolean;
+  // optional addition (fix wave 3 (C), controller OQ2)
+  /**
+   * The group's stock of the goods a line may buy, and what it is spread over: `planLine` fills it on every production
+   * solve (`groupStock`, plan.ts). Each byproduct-only good the line may buy (`GoodInfo.leafClass` 'byproduct': no ore,
+   * mob, farm or free supply yields it directly) is then bought on two columns in every stage (`mainLp`): at its plain
+   * price up to `total(key)` spread over `over`, the demand's time it is to last (the build horizon's seconds in rate
+   * mode, 24 hours where build cost is ignored; 1 in Make N, whose demand is the batch), and beyond that at
+   * BEYOND_STOCK_FACTOR × that price. Absent (machine prices, the price graph, a line solved on its own in a test): one
+   * column at its plain price.
+   */
+  stock?: { over: number; total(key: StuffKey): number };
 }
 
 /** A capped free supply (add-on 17): a farm the group runs (`farm:<index>:<key>`) or another project's surplus (`project:<from>:<key>`). */
@@ -85,8 +117,31 @@ export interface CreditColumn { id: string; key: StuffKey; perSecond: number }
 
 /** The step charge never lets total raw material go above (1 + this) × the least (S1) (fix spec §3). */
 export const STEP_CHARGE_CAP = 0.25;
+/**
+ * Fix wave 3 (C), controller OQ2: a byproduct-only good the line buys beyond the group's stock spread over the build
+ * horizon (`SolveOptions.stock`) costs this many times its price — a constant, not a setting. Priced like ore at any
+ * rate, the user's MV circuit line bought 3,600 Phosphate Dust a day for its oxygen against 164 in storage, where an
+ * electrolyzer of free water would do.
+ */
+export const BEYOND_STOCK_FACTOR = 10;
 /** A crafting-table step weighs this many steps in a running line with crafting not automated (fix spec D7). */
 export const HAND_STEP_WEIGHT = 3;
+/**
+ * The least step charge a crafting-table step crafted by hand pays where crafting is automated and the project's step
+ * charge is 0 (the controller's U2 ruling on the user's "crafting always automated"): the "Some machines" preset.
+ */
+export const BY_HAND_FLOOR_CHARGE = 0.02;
+/**
+ * The build stage solves the lite start (`liteLine`, `buildStage`) only where the leanest line's MIP has at least this many
+ * whole columns. Measured (release gate round 2, G1), warm: Duty plate's has 4,019, and from S1 rounded up (600 σ against
+ * its 128.8) it spends 7.5 s at its root and 10.6 s in all, 4.9 s from a start within 0.003 %; with the lite start the
+ * plan takes 7.3 s against 21.3 s, and on its farms-off line (3,768) the build MIP 2.9 s against 11.8 s. Electronic Circuit
+ * LV on Project Red with two of every machine owned has 2,439: with the lite start it planned in 9.9 s against 8.6 s, 31
+ * steps against 28 and 2 % dearer by the MIP's measure. The user's HV Circuit (587), test (379) and Circuit (436) plan in
+ * a few seconds: HV Circuit's in 4.12 s against 3.72 s with the lite start, test's in 1.85 s against 2.07 s, Circuit's the
+ * same. Below the gate every line plans as it did.
+ */
+export const LITE_MIN_INTEGERS = 3000;
 /** In the step-charge MIP a step recipe runs at most this many times the largest run count of S1 (its big-M). */
 export const STEP_BIG_M = 100;
 /** The step-charge MIP stops after its root node: a node limit, never a time limit, so the plan is deterministic. */
@@ -100,7 +155,7 @@ export const CANON_RANK_S3 = 1e-6;
 export const CANON_RANK_S4 = 1e-3;
 
 export interface Blocker {
-  key: StuffKey; reason: 'unavailable' | 'rejected' | 'no-recipe'; needTier?: number;
+  key: StuffKey; reason: 'unavailable' | 'rejected' | 'no-recipe' | 'outside-inputs'; needTier?: number;
   // optional addition (plan 12, controller ruling OQ5 a)
   /** With reason `rejected`: why a machine its recipes need cannot be built here (`<machine> cannot be built here (<why>)`). */
   machine?: string;
@@ -116,7 +171,10 @@ export interface Solution {
   runs: Map<string, number>;
   buys: Map<StuffKey, number>;
   sinks: Map<StuffKey, number>;
-  /** Σ cost × buy. */
+  /**
+   * Σ cost × buy; with the group's stock (`SolveOptions.stock`), what a byproduct-only good is bought beyond it at
+   * BEYOND_STOCK_FACTOR × its cost (fix wave 3 (C)), and so `leastRawCost` too.
+   */
   rawCost: number;
   /** The least raw material any plan of this graph needs (S1), never above `rawCost`: what the later stages trade. */
   leastRawCost: number;
@@ -145,6 +203,35 @@ export interface Solution {
    */
   buildStats?: {
     seconds: number; nodes: number; status: LpResult['status'] | 'skipped'; stop?: 'time' | 'limit'; approx: boolean; objective?: number; bound?: number;
+    // optional additions (fix wave 3 (F))
+    /** Its root LP relaxation did not solve at MIP_FEASIBILITY_TOLERANCE, so it ran again at BUILD_MIP_RETRY_TOLERANCE (`pickBuild`). */
+    retried?: true;
+    /** The decision is an earlier incumbent than HiGHS's last, cheaper by `exactCost` (`pickBuild`). */
+    earlier?: true;
+    // optional addition (add-on 12 x 17 integration, F4)
+    /**
+     * The solve ended at the root on its start after its root LP relaxation solved, so it ran once more without it
+     * (`pickBuild`): `kept` when that gave a whole solution (a pick candidate beside the start), `stalled` when not (the
+     * plan then carries `build-cost-approx`).
+     */
+    bare?: 'kept' | 'stalled';
+    // optional addition (release gate round 2, G1)
+    /**
+     * With the lite start (`buildStage`), the build MIP solved beside the leanest line at the lite plan's raw material to 9
+     * significant digits: `kept` where the leanest line's was the same (the MIP of the true cap, from the same starts),
+     * `re-solved` where it was not and the MIP ran again at the leanest line's.
+     */
+    beside?: 'kept' | 're-solved';
+    // optional addition (fix wave 3 (A), controller ruling 187)
+    /**
+     * Plan 09's plan of this graph ("Ignore build cost", `finish`) rounded up, by the measure of `objective` (`rounded`:
+     * every machine at its true build), where it is within the raw cap, leaves no step short and, on an AE2 line
+     * (`BuildModel.share`), makes each item good one way: the plan controller ruling 187 holds the build stage's plan to.
+     * Where the decision comes from a whole MIP solution (`approx` false), `objective` is never above it (`cheaperPlan`).
+     * Absent where plan 09's plan is beyond the cap, leaves a step short or, on an AE2 line, makes an item good two ways,
+     * which the build stage may not take (12 x 17 F6, ruling R9).
+     */
+    ignoredObjective?: number;
   };
   // optional additions (add-on 17, architecture §11.45 (3), (4); ruling R14)
   /** Per supply column (`SolveOptions.supplies`) the plan takes from, what it takes: per second, ids sorted, above TINY. */
@@ -166,6 +253,22 @@ export interface Solution {
    * recipe or that LP fails.
    */
   farmFree?: { raw: number; sources: number };
+  // optional addition (fix wave 3 (A))
+  /**
+   * With build cost counted: the raw material of the leanest line (the build stage's plan at step charge 0, S1 when that
+   * has none; at step charge 0 the plan's own MIP decision), scaled like `rawCost`; the raw cap and the step charge are
+   * measured against it. Absent at No limit where the leanest line cannot change the step charge (controller OQ1 (D):
+   * its MIP's start costs at most LEAN_BASE_ABOVE, so it is not solved).
+   */
+  leanRawCost?: number;
+  // optional addition (plan 12's final review)
+  /**
+   * With build cost counted and a raw cap: the build stage's decision uses all the raw material the cap allows (its runs
+   * within S3_TOLERANCE of `(1 + rawCap)` × the leanest line's), so the cap, not the build cost alone, set how far the line
+   * trades raw material for fewer machines; `planLine` reads it for the goods it makes two ways on purpose
+   * (`Plan.deliberate`).
+   */
+  atRawCap?: true;
 }
 
 /**
@@ -200,14 +303,19 @@ function pushTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
  * The main LP (prior-art §3.4 step 3). Columns: one run count per recipe by id, then one purchase per buyable good by
  * key, then one sink per good by key, then (add-on 17) one per capped free supply; one row per good by key,
  * `Σ a_rg·x_r + buy_g + supply_g − sink_g = demand_g`. The goods are the whole graph's, so banning a recipe drops only its
- * column.
+ * column. With the group's stock (fix wave 3 (C), `SolveOptions.stock`) a byproduct-only good's purchase is bounded by
+ * its share of the stock (`upper`) and a second purchase of it, beyond the stock at BEYOND_STOCK_FACTOR × its price,
+ * follows the others: `buyKeys` then names that good twice, in key order each time.
  */
 export interface MainLp {
   recipes: LpRecipe[]; buyKeys: StuffKey[]; goods: StuffKey[];
   firstBuy: number; firstSink: number; rows: LpRow[];
   /**
    * Per column, its upper bound in every stage: Infinity, but for a step recipe that can only run on owned machines that
-   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do.
+   * cannot be built here (plan 12, `BuildModel.ownedOnly`, rate mode) the runs per unit of demand they do (with build cost
+   * ignored, where plan 09's plan needs more whole machines of them than the group has, what its share of them does:
+   * `boundOwnedWhole`, 12 x 17 F-A), for a byproduct-only good's first purchase with the group's stock (fix wave 3 (C))
+   * its share of that stock per unit of demand, and 0 for the sink of a virtual good (an ore-dictionary slot, 12 x 17 F7b).
    */
   upper: number[];
   /**
@@ -235,15 +343,26 @@ export interface MainLp {
   firstSupply: number; supplies: SupplyColumn[];
 }
 
+/**
+ * The main LP of `recipes` over `graph`'s goods for `demand`; with `stock` (fix wave 3 (C): `stockShare`) each
+ * byproduct-only good bought up to `stock(key)` per unit of demand at its price and beyond that on a second purchase at
+ * BEYOND_STOCK_FACTOR × it (`MainLp`); with `supplied` (add-on 17) one capped free supply column each, at most its rate
+ * over `demandScale`.
+ */
 function mainLp(
   graph: CandidateGraph, recipes: readonly LpRecipe[], demand: ReadonlyMap<StuffKey, number>, supplied: readonly SupplyColumn[] = [], demandScale = 1,
+  stock?: (key: StuffKey) => number,
 ): MainLp {
   const keys = new Set<StuffKey>([...graph.goods.keys(), ...demand.keys()]);
   for (const r of graph.recipes) for (const [key] of r.coeffs) keys.add(key);
   const goods = [...keys].sort(byString);
   const rowOf = new Map(goods.map((key, g) => [key, g]));
   const sorted = [...recipes].sort((a, b) => byString(a.id, b.id));
-  const buyKeys = goods.filter((key) => graph.goods.get(key)?.buyable === true);
+  const buyable = goods.filter((key) => graph.goods.get(key)?.buyable === true);
+  const byproduct = (key: StuffKey): boolean => graph.goods.get(key)?.leafClass === 'byproduct';
+  // A byproduct-only good's purchase beyond the group's stock (fix wave 3 (C)), after every plain purchase.
+  const beyond = stock === undefined ? [] : buyable.filter(byproduct);
+  const buyKeys = [...buyable, ...beyond];
   const firstBuy = sorted.length;
   const firstSink = firstBuy + buyKeys.length;
   const firstSupply = firstSink + goods.length;
@@ -269,7 +388,7 @@ function mainLp(
 
   const rawCost = new Array<number>(width).fill(0);
   buyKeys.forEach((key, i) => {
-    rawCost[firstBuy + i] = graph.goods.get(key)?.cost ?? 0;
+    rawCost[firstBuy + i] = (graph.goods.get(key)?.cost ?? 0) * (i < buyable.length ? 1 : BEYOND_STOCK_FACTOR);
   });
   const power = new Array<number>(width).fill(0);
   sorted.forEach((r, j) => {
@@ -298,6 +417,16 @@ function mainLp(
     canonical[j] = (canonical[j] as number) + CANON_RANK_S4 * n;
   });
   const upper = new Array<number>(width).fill(Infinity);
+  // A virtual good (an ore-dictionary slot, ruling R6) is never sunk: a good the line throws away goes to sink itself, so
+  // `Plan.byproducts` lists it and its flow to sink carries it (12 x 17 F7b: a farm's spare saplings).
+  goods.forEach((key, g) => {
+    if (graph.goods.get(key)?.virtual === true) upper[firstSink + g] = 0;
+  });
+  if (stock !== undefined) {
+    buyable.forEach((key, i) => {
+      if (byproduct(key)) upper[firstBuy + i] = Math.max(0, stock(key));
+    });
+  }
   // Add-on 17: a supply costs nothing in any stage, up to its rate at unit demand.
   supplies.forEach((s, i) => {
     canonical[firstSupply + i] = 0;
@@ -459,13 +588,18 @@ function lockRow(cost: readonly number[], value: number): LpRow[] {
   return entries.length === 0 ? [] : [{ lower: -Infinity, upper: value, entries }];
 }
 
-/** The values of `keys` (columns from `first` on) above TINY, to 9 significant digits; the keys are already in sorted order. */
+/**
+ * The values of `keys` (columns from `first` on) above TINY, to 9 significant digits; the keys are already in sorted
+ * order. A key named twice (a byproduct-only good's purchase within and beyond the group's stock, `MainLp`) is the sum
+ * of its columns.
+ */
 function kept(keys: readonly string[], x: readonly number[], first: number): Map<string, number> {
-  const out = new Map<string, number>();
+  const sums = new Map<string, number>();
   keys.forEach((key, i) => {
-    const value = x[first + i] ?? 0;
-    if (value > TINY) out.set(key, sig9(value));
+    sums.set(key, (sums.get(key) ?? 0) + (x[first + i] ?? 0));
   });
+  const out = new Map<string, number>();
+  for (const [key, value] of sums) if (value > TINY) out.set(key, sig9(value));
   return out;
 }
 
@@ -519,19 +653,20 @@ export function firstBalanced<T extends { x: readonly number[] }>(stages: readon
 /**
  * The source columns, never part of a loop: recipes that consume nothing (rock breakers, pumps, ponds, farms), and
  * supply recipes (`LpRecipe.supply`, fix spec R2) such as the compressor that fills with air the cells a canner empties,
- * so a line that runs on free inputs alone (Nitrogen from air) keeps them.
+ * so a line that runs on free inputs alone (Nitrogen from air) keeps them, and add-on 17's synthetic farm recipes
+ * (`LpRecipe.farm`), which take water or soil but are no loop.
  */
 function sourceColumns(lp: MainLp): Set<number> {
   const sources = new Set<number>();
   lp.recipes.forEach((r, j) => {
-    if (r.supply === true || r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
+    if (r.supply === true || r.farm === true || r.coeffs.every(([, c]) => c >= 0)) sources.add(j);
   });
   return sources;
 }
 
 /**
  * The loop guard. A line that needs no raw material at all either runs on sources (`sourceColumns`: recipes that consume
- * nothing and supply recipes, and the goods made from them) or on a loop in the data that makes matter from nothing
+ * nothing, supply and farm recipes, and the goods made from them) or on a loop in the data that makes matter from nothing
  * (x → 2 y, y → x). It is a loop when the demand can still be met with every purchase and every source fixed to 0; then
  * the loop is the least-runs steady state that, again without purchases or sources and with no demand, leaves any
  * surplus at all: only the loop's own recipes, not the recipes that turn its output into the target, nor recipes that
@@ -773,12 +908,13 @@ async function consolidated(
  * a line's copper ingots while the line bought the rest (plan 09 Task 8). A purchase the base does not use stays shut;
  * one it uses, when an LP without it is not dearer. Goods in key order; free goods (no raw cost) are left alone.
  *
- * In the build stage (`room`: plan 12, `laterRoom`) every LP stays within the machines the decision bought, and a step
- * that makes the good may also run on machines that cost nothing more — owned ones the decision leaves idle — taking
- * whole machines of them (`LaterRoom.widen`, then `trim` to what it uses): making the rest there costs no more raw
- * material, no machine to build and no machine block, so buying it beside the step is only the power or canonical
- * tie-break's choice. A new machine always costs a block's step charge (fix wave 2 (a)), so a tie that needs one is the
- * build MIP's to weigh. `locks` are the rows the later stages keep (none without `room`).
+ * In the build stage (`room`: plan 12, `laterRoom`) every LP stays within the machines the decision bought, and at step
+ * charge 0 a step that makes the good may also run on machines that cost nothing more — owned ones the decision leaves
+ * idle — taking whole machines of them (`LaterRoom.widen`, then `trim` to what it uses): making the rest there costs no
+ * more raw material, no machine to build and no machine block, so buying it beside the step is only the power or
+ * canonical tie-break's choice. A new machine always costs a block's step charge (fix wave 2 (a)), and with a step
+ * charge an owned one OWNED_STEP_SHARE of it (ledger 265), so a tie that needs another machine is the build MIP's to
+ * weigh. `locks` are the rows the later stages keep (none without `room`).
  */
 async function withoutTiedPurchases(
   lp: MainLp, start: Set<number>, from: LpResult, room?: LaterRoom,
@@ -931,14 +1067,21 @@ export interface TwinRules {
   plan?: Pick<Solution, 'runs' | 'buys'>;
   /** Rule (c): how players stock a good (`SolveOptions.formRank`); absent, every good ranks alike. */
   formRank?: (key: StuffKey) => number;
+  // optional addition (fix wave 3 (C))
+  /**
+   * The stages priced byproduct-only goods beyond the group's stock higher (`SolveOptions.stock`), so buying one weighs
+   * what the plan buys of it: such a good is never swapped for another.
+   */
+  beyondStock?: true;
 }
 
 /**
  * Twin step recipes (the plan 12 fix wave 2 review): two step recipes that differ only in which of two goods they
  * consume, the same amount of it, both goods bought at the same price and with the same weights there (raw cost and
- * canonical rank; never a derived leaf, a free input, a gathered block the line may also make or a demanded good), on the
- * same map, power, held items, cleanroom and outputs and, with a build model, the same options, eligible options, pin
- * fallback and sharing key (never a step only owned machines can run). Every stage rates them alike, so the solver takes
+ * canonical rank; never a derived leaf, a free input, a gathered block the line may also make or a demanded good, nor a
+ * byproduct-only good the stages priced beyond the group's stock, `TwinRules.beyondStock`), on the same map, power, held
+ * items, cleanroom and outputs and, with a build model, the same options, eligible options, pin fallback and sharing key
+ * (never a step only owned machines can run). Every stage rates them alike, so the solver takes
  * one or the other by its numerics: on the 2.9 export the Fluid Extractor makes Molten Tin from Tin Dust or from a Tin
  * Ingot, and the user's reference line ran the ingot's at a 2 % step charge and the dust's at 50 %. A plan that runs a
  * twin whose good no column of `recipes` makes (it is only ever bought) does exactly as well with the other twin, buying
@@ -967,6 +1110,7 @@ export function twinMoves(
     const good = graph.goods.get(key);
     if (good === undefined || !good.buyable || good.virtual || good.alsoMade === true || demand.has(key)) return undefined;
     if (good.leafClass === 'derived' || good.leafClass === 'free' || !Number.isFinite(good.cost)) return undefined;
+    if (rules.beyondStock === true && good.leafClass === 'byproduct') return undefined;
     return `${good.cost}|${canonicalRank(key)}`;
   };
   type Member = { r: LpRecipe; key: StuffKey; amount: number };
@@ -1129,7 +1273,10 @@ function infeasibleLine(warnings: PlanWarning[]): Solution {
 /**
  * Rate mode with a build model (controller ruling OQ5 a, Amendment OQ3, ruling P2): each step recipe that can only run
  * on owned machines that cannot be built here (`BuildModel.ownedOnly`) runs at most what they do — `D·x_j ≤
- * runsPerSecond` as its column's upper bound in every stage. Returns the columns it bounds.
+ * runsPerSecond` as its column's upper bound in every stage. Returns the columns it bounds. Each column counts on all of
+ * those machines, so two such steps of one type may each count on the same ones: the build MIP gives every step whole
+ * machines itself, and with build cost ignored `boundOwnedWhole` bounds them by their share of whole machines where
+ * plan 09's plan would leave one short (12 x 17 F-A).
  */
 function boundOwnedOnly(lp: MainLp, model: BuildModel, demandScale: number): number[] {
   const bounded: number[] = [];
@@ -1140,6 +1287,25 @@ function boundOwnedOnly(lp: MainLp, model: BuildModel, demandScale: number): num
     bounded.push(j);
   });
   return bounded;
+}
+
+/**
+ * 12 x 17 Task 11 (F-A): the steps of `bounded` (`boundOwnedOnly`) on whole owned machines — each step on a line that
+ * shares none its own, each sharing pool its own on AE2, as `roundUp` sizes them — where their column bounds let two of
+ * them count on the same machines (the user's Electronic Circuit in least raw material, one Tree Growth Simulator owned:
+ * S1 ran it on a Blood Sapling, plan 09's later stages on a Rubber Tree Sapling too, and sizing gave it to the rubber
+ * one, first by id, and ended the line).
+ * The least raw material on whole machines (`ownedOnlyMip`) decides which steps run on them, and each step's bound in
+ * `lp.upper` becomes what its share of them does (`bounds`), never above its bound before. False, and `lp` unchanged,
+ * where no whole count of those machines plans the line within OWNED_MIP_MAX_NODES.
+ */
+async function boundOwnedWhole(lp: MainLp, model: BuildModel, demandScale: number, bounded: readonly number[]): Promise<boolean> {
+  const mip = ownedOnlyMip(lp, model, demandScale, bounded);
+  if (mip === undefined) return false;
+  const result = await solveLp(mip.model);
+  if (result.status !== 'optimal' && result.status !== 'feasible') return false;
+  for (const [j, upper] of mip.bounds(result.x)) lp.upper[j] = Math.min(lp.upper[j] ?? Infinity, upper);
+  return true;
 }
 
 /**
@@ -1273,7 +1439,7 @@ function buildInput(lp: MainLp, s1: LpResult, s1g: number, demandScale: number, 
   const input: BuildMipInput = {
     lp, x1: s1.x, s1: s1.objective, s1g, columnCost: s1.objective > TINY ? relativeCosts(lp, s1) : [], derived: pricedDerived(lp),
     demandScale, model, stepCharge: Number.isFinite(charge) && charge > 0 ? charge : 0, handWeight: opts.handWeight ?? 1,
-    byHandWeight: opts.byHandWeight ?? 1,
+    byHandWeight: opts.byHandWeight ?? 1, ...(opts.byHandFloor === undefined ? {} : { byHandFloor: opts.byHandFloor }),
   };
   const planting = model.mode === 'rate' ? model.planting : undefined;
   const plantings = planting === undefined ? [] : lp.recipes.flatMap((r, j) => {
@@ -1294,34 +1460,32 @@ function sourcesApprox(): PlanWarning {
   return { code: 'sources-approx', text: 'Finding the fewest different raw materials took too long; this plan may need more of them than it could' };
 }
 
-/** `result` when it is a whole solution the build stage keeps: optimal, or feasible and not stopped by the time guard. */
-function wholeOf(result: LpResult | undefined): LpResult | undefined {
-  return result !== undefined && (result.status === 'optimal' || (result.status === 'feasible' && result.stop !== 'time')) ? result : undefined;
+/** A build MIP of the build stage: its model as solved, its result (none when skipped), wall time and `pickBuild`'s marks. */
+interface SolvedMip {
+  mip: ReturnType<typeof buildMip>; model: LpModel; result?: LpResult; seconds: number;
+  picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier' | 'bare'>;
 }
 
-/** A build MIP of the build stage: its model as solved, and its result (none when skipped) and wall time. */
-interface SolvedMip { mip: ReturnType<typeof buildMip>; model: LpModel; result?: LpResult; seconds: number }
-
 /**
- * The build MIP of `input` solved as the build stage does: started from the cheaper by its own objective of its start
- * (`buildMip`'s `start`) and `sparse` rounded up (`startAt`; none when both leave a step short), a model with source
- * binaries bounded by the start it uses (`modelAt`, ruling S10), within the node and simplex-iteration limits that decide
- * it and the far time guard (skipped when `buildTimeLimit` is not above 0).
+ * The build MIP of `input` solved as the build stage does: started from the cheapest by its own objective of its start
+ * (`buildMip`'s `start`: S1 rounded up or, in best multi-output, the cheapest pre-solve's plan; on an AE2 line S1's
+ * rounding only where it makes each item good one way, 12 x 17 F6) and `others` rounded up, among those within the raw
+ * cap and, on an AE2 line, making each item good one way (`cheapestStart`, ruling R8; none when all leave a step short
+ * or split a good), a model with source binaries bounded by the start it uses (`modelAt`, add-on 17 ruling S10; with
+ * none, `modelAt(Infinity)`: every source counted, as a start the MIP does not use bounds no purchase), solved and
+ * picked by `pickBuild` within the node and simplex-iteration limits that decide it and the far time guard `limit`
+ * (skipped when `limit` is not above 0).
  */
-async function solvedMip(input: BuildMipInput, sparse: readonly number[] | null, opts: SolveOptions): Promise<SolvedMip> {
+async function solvedMip(
+  lp: MainLp, input: BuildMipInput, others: ReadonlyArray<readonly number[] | null | undefined>, limit: number, opts: SolveOptions,
+  lite?: readonly number[] /* the lite plan (`liteStaged`): where it is the start, the MIP never restarts its root */,
+): Promise<SolvedMip> {
   const mip = buildMip(input);
-  const alternative = sparse === null ? undefined : mip.startAt(sparse);
-  const sparser = alternative !== undefined && alternative.cost < mip.startCost;
-  const start = sparser ? alternative.start : mip.start;
-  const model = sparser ? mip.modelAt(alternative.cost) : mip.model;
-  const limit = opts.buildTimeLimit ?? BUILD_MIP_TIME_LIMIT_SECONDS;
-  if (!(limit > 0)) return { mip, model, seconds: 0 };
-  const began = performance.now();
-  const result = await solveLp({
-    ...model, ...(start === undefined ? {} : { start }),
-    maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS, timeLimit: limit,
-  });
-  return { mip, model, result, seconds: (performance.now() - began) / 1000 };
+  const chosen = cheapestStart(lp, mip, input.rawBound, input.model.share, others);
+  const at = mip.modelAt(chosen?.cost ?? Infinity);
+  const model = lite === undefined || chosen?.from !== lite ? at : { ...at, allowRestart: false };
+  const { result, seconds, picked } = await runBuildMip(mip, chosen?.start, limit, opts, solveLp, model);
+  return { mip, model, ...(result === undefined ? {} : { result }), seconds, picked };
 }
 
 /** The steps of `bounded` (`boundOwnedOnly`) that `x` runs. */
@@ -1330,12 +1494,79 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
 }
 
 /**
+ * The build MIP's solve and its pick (fix wave 3 (F), ledger 248): robust and still decided by node and simplex-iteration
+ * limits only. One solve from `start` — BUILD_MIP_MAX_NODES nodes without strong branching (whose iterations escape the
+ * iteration cap) within BUILD_MIP_MAX_LP_ITERATIONS — that stops itself when its root LP relaxation does not solve at
+ * MIP_FEASIBILITY_TOLERANCE (`stopOnRootLpFailure`) and then runs again at BUILD_MIP_RETRY_TOLERANCE from the same
+ * start. When the last solve stopped on its limits at the root (`nodes` 0) after its root LP relaxation solved (its
+ * `bound` above TINY) with nothing better than `start`, it solves once more at BUILD_MIP_RETRY_TOLERANCE without the
+ * start (`bare`: `kept` when that gave a whole solution, which joins the pick beside the start; `stalled` when not); one
+ * its iteration cap stopped inside that relaxation, before the heuristics a start costs, is left as it is (a solve
+ * without the start would only spend the cap again at its root). The decision is the cheapest by `exactCost` (every
+ * machine at its true build) of the whole solutions HiGHS reported on the way (`keepImproving`), of every solve: HiGHS
+ * ranks them by the model, whose light steps are off by less than a machine each, and on 2 of 66 measured lines an
+ * earlier one is cheaper; ties keep HiGHS's last. A solve the time guard stops gives nothing: when the last solve is no
+ * plan, `buildStage` falls back as before. The result is the last solve's, with `x` the pick. `model` is the model
+ * solved: `mip.model`, or one a caller derived from it for `start`; `solver` solves it (`solveLp`), or `'aside'`: every
+ * solve of it on the solver thread, one after another, as one job (`solveBuildRunsAside`, which gives the same result).
+ */
+export async function pickBuild(
+  mip: ReturnType<typeof buildMip>, start: number[] | undefined, opts: SolveOptions, limit: number, model: LpModel = mip.model,
+  solver: ((model: LpModel) => Promise<LpResult>) | 'aside' = solveLp, cutoff = false,
+): Promise<{ result: LpResult; retried?: true; earlier?: true; bare?: 'kept' | 'stalled' }> {
+  // The solves (`solveBuildRuns`, lp.ts, whose rules are the ones above), then the pick among their whole solutions.
+  // `cutoff`: the start's objective is the solves' cutoff in place of the start (release gate round 2, G1: the lite
+  // start), and the start the plan where they find none below it, as a start nothing beat would be.
+  let objective = 0;
+  if (cutoff && start !== undefined) model.colCost.forEach((c, j) => {
+    objective += c * (start[j] ?? 0);
+  });
+  const job: BuildRunsJob = {
+    model: {
+      ...model, maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS,
+      timeLimit: limit, strongBranching: false, keepImproving: true,
+    },
+    ...(start === undefined ? {} : cutoff ? { cutoff: objective } : { start }), retryTolerance: BUILD_MIP_RETRY_TOLERANCE, tiny: TINY,
+  };
+  const { runs, retried: again, bare: stall } = solver === 'aside' ? await solveBuildRunsAside(job) : await solveBuildRuns(job, solver);
+  const bare = stall === undefined ? {} : { bare: stall };
+  const last = runs[runs.length - 1] as LpResult;
+  const retried = again === true ? { retried: true as const } : {};
+  const given = job.cutoff !== undefined && start !== undefined ? start : undefined;
+  // With a cutoff and no whole solution below it, the start: none is (`infeasible`), its limits stopped it first, or it
+  // reports one no better as its answer (`optimal` or `feasible`: HiGHS's LP solves stop at the cutoff, but its
+  // heuristics may still find such a solution), which HiGHS never counts among `improving`, so that one is no pick
+  // candidate below. Not where the time guard stopped it or HiGHS failed: no plan, as from a start.
+  const beaten = wholeBuild(last) && last.objective < objective;
+  const kept = given !== undefined && !beaten
+    && (wholeBuild(last) || last.status === 'infeasible' || (last.status === 'error' && last.stop === 'limit'));
+  const result: LpResult = kept
+    ? { status: 'feasible', objective, x: given, stop: 'limit', ...(last.nodes === undefined ? {} : { nodes: last.nodes }), improving: [] }
+    : last;
+  if (!wholeBuild(result)) return { result, ...retried, ...bare };
+  let best = { x: result.x, cost: mip.exactCost(result.x) };
+  if (given !== undefined && given !== result.x) {
+    const cost = mip.exactCost(given);
+    if (cost < best.cost * (1 - 1e-9) - 1e-12) best = { x: given, cost };
+  }
+  for (const r of runs) {
+    for (const x of r.improving ?? []) {
+      const cost = mip.exactCost(x);
+      if (cost < best.cost * (1 - 1e-9) - 1e-12) best = { x, cost };
+    }
+  }
+  return { result: { ...result, x: best.x }, ...retried, ...bare, ...(best.x !== result.x ? { earlier: true as const } : {}) };
+}
+
+/**
  * The build stage (plan 12 Task 4), when the model counts build cost, in place of R3's stages 2–4 (the charge MIP, its
  * fallback and consolidation; or plan 09's fewest recipes when S1 needs no raw material): S1g, then the build-cost MIP
- * started from the cheaper by its own objective of `roundUp` of S1 and of plan 09's sparse plan (none when both leave a
- * step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start: `buildMip`), which
- * its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES, BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard
- * only backs up. A
+ * started from the cheapest by its own objective of `roundUp` of S1, of plan 09's sparse plan and, where the raw cap
+ * bounds the MIP, of plan 09's plan of the line ("Ignore build cost", `finish`), among those within the cap (none when
+ * all leave a step short; without S1's the MIP has no derived-purchase binaries, whose bound comes from that start:
+ * `buildMip`),
+ * solved and picked by `pickBuild`, which its node and simplex-iteration limits decide (BUILD_MIP_MAX_NODES,
+ * BUILD_MIP_MAX_LP_ITERATIONS) and a far time guard only backs up. A
  * MIP that ends without a whole solution, or that the guard stops (or `buildTimeLimit ≤ 0`), gives way to the cheapest
  * by the MIP's objective (`rounded`) of plan 09's plan of the line ("Ignore build cost", `finish`), its LP relaxation
  * and S1, each rounded up to whole machines (the relaxation's at its options of most new capacity, the others at each
@@ -1349,41 +1580,112 @@ function ownedOnlyRuns(bounded: readonly number[], x: readonly number[]): number
  * (`withoutTiedPurchases`, plan 09's one source at a tie: the `base`), power and the canonical form with the raw material
  * locked at the base's, the latest that balances — the decision's own columns last, never S1 (which may run steps past
  * the machines it bought). A tie that needs a new machine (its build and the step charge on its block) is the build
- * MIP's to weigh.
+ * MIP's to weigh. With a step charge the build MIP at step charge 0 runs first (the leanest line, `leanestLine`, on the
+ * solver thread while plan 09's plan solves here: `solveBuildRunsAside`); its raw
+ * material is the raw cap's measure (`SolveOptions.rawCap`) and, where it is more than LEAN_BASE_ABOVE × σ, the step
+ * charge's base, and its plan is kept where it costs less than the MIP's (fix wave 3 (A), (B2)); at No limit it is not
+ * solved where its start costs at most LEAN_BASE_ABOVE, as it could then change nothing (controller OQ1 (D)). Plan 09's
+ * plan is solved at every cap and kept the same way (`cheaperPlan`, within the cap; controller ruling 187 as the
+ * controller restated it for fix wave 3), so the plan is never dearer by the MIP's measure than plan 09's plan of this
+ * graph where that is within the cap (`buildStats.ignoredObjective`): a pick candidate at every cap, a start under the
+ * raw cap only, as a start at No limit moved the 50-node search both ways (Advanced Circuit HV 1/min 22.295 -> 22.416,
+ * 1/h 33.562 -> 34.522, with supporting lines 27.700 -> 28.258; on AE2 2 Good Electronic Circuits a minute at HV 16.074
+ * -> 15.917).
  *
  * Add-on 17: S1g leaves the synthetic farm recipes out too (`leastDug`), and S1f is measured (`leastWithoutFarms`,
  * `Solution.farmFree`). Best multi-output (`opts.multiOutput`, architecture §11.45 (3); rulings R14, S10): the build MIP is
  * first solved as cheapest solves it, then again with a binary per raw source (`multiOutputSources`), started from the
- * best by its own objective of S1 rounded up, the sparse plan rounded up and the cheapest pre-solve's whole solution
+ * best by its own objective of S1 rounded up, the starts above rounded up and the cheapest pre-solve's whole solution
  * (`BuildMipInput.start`), so it is never worse in its objective than cheapest's decision; the purchases it drops
  * (`BuildDecision.dropped`) stay out of stage 5, as stage 5 would buy a dropped source back where that is less raw
  * material, and its fallback also weighs the pre-solve's plan rounded up and carries `sources-approx`. `buildStats` adds
- * up both MIPs' seconds and nodes and keeps the multi-output MIP's status, stop, objective and bound.
+ * up both MIPs' seconds and nodes and keeps the multi-output MIP's status, stop, objective, bound and pick marks.
+ *
+ * Add-on 12 x 17 integration, F6 (the controller's ruling): on an AE2 line (`BuildModel.share`) the build MIP, the
+ * leanest line's too, makes each item good one way (build-mip.ts's one-maker rows), and no start (`buildMip` takes no
+ * rounding of S1 that makes one two ways, so best multi-output still starts from the cheapest pre-solve's plan; and
+ * `cheapestStart`, ruling R8), kept plan (`cheaperPlan`) or fallback candidate that makes one two ways (`oneMakerEach`,
+ * farms aside: ruling R7) brings the split back, but S1 as the fallback's last resort; nor is such a plan 09 plan the
+ * yardstick (ruling R9).
+ *
+ * Release gate round 2, G1 (the user's Duty plate in about main's time): under the raw cap, in rate mode without
+ * sharing, where the leanest line's MIP has at least LITE_MIN_INTEGERS whole columns, the build stage first solves the
+ * lite relaxation of the leanest line (`liteLine`) beside plan 09's plan, whose plan rounded up is one more start of the
+ * leanest line (its cutoff where it is the cheapest) and of the build MIP (which then never restarts); the build MIP solves beside
+ * the leanest line at the lite plan's raw material to 9 digits and is kept where the leanest line's is the same, the plan
+ * the same as solving it after the leanest line (`liteStaged`). The leanest line is still the build MIP at step charge 0
+ * with its pseudo steps at the project's charge (U1, U2), fix wave 3 (F)'s solves and pick and plan 09's plan as a start
+ * and a pick candidate (ruling 187) stand, the build MIP's F4 too; F4's solve without the start, which a start's lost
+ * root heuristics call for, has no cause in the leanest line's, whose start is its cutoff.
  */
 async function buildStage(
   graph: CandidateGraph, lp: MainLp, s1: LpResult, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number,
   bounded: readonly number[],
 ): Promise<Solution> {
-  const input = buildInput(lp, s1, await leastDug(graph, lp, s1), demandScale, model, opts);
+  const plain = buildInput(lp, s1, await leastDug(graph, lp, s1), demandScale, model, opts);
   const farmFree = await leastWithoutFarms(lp, s1, opts.upkeep);
-  // The MIP's start: S1 rounded up, or plan 09's sparse plan within the step charge's cap (`sparseWithin`) rounded up
-  // when that costs less in the MIP's own objective — S1 runs every step of the least raw material, the most a plan of
-  // the line has, so the sparse one is far closer to what the MIP plans.
+  // Plan 09's sparse plan within the step charge's cap (`sparseWithin`): a start beside S1 rounded up — S1 runs every
+  // step of the least raw material, the most a plan of the line has, so the sparse one is far closer to what the MIP plans.
   const sparse = await sparseWithin(lp, (1 + STEP_CHARGE_CAP) * s1.objective);
-  const cheapest = await solvedMip(input, sparse, opts);
+  const limit = opts.buildTimeLimit ?? BUILD_MIP_TIME_LIMIT_SECONDS;
+  // Fix wave 3 (A), (B2): with a step charge, the leanest line before the MIP — the same MIP at step charge 0, what
+  // "Least raw material" plans — whose raw material bounds the plan (the raw cap) and is the step charge's base where it
+  // is more than σ (`scaleOf`); at No limit none where it could not change the charge (controller OQ1 (D), `leanestLine`).
+  // Plan 09's plan ("Ignore build cost", `finish`) too, at every cap, No limit included (the controller's ruling of
+  // 2026-10-23 on fix wave 3): the build-cost plan is never to be dearer than it by the MIP's measure where it is within
+  // the project's cap (controller ruling 187), which the MIP alone misses (fix wave 3 review, with (F), under the cap:
+  // Good Electronic Circuit HV 736,585 against 685,884, Electronic Circuit LV on Project Red 439,305 against 438,825; at
+  // No limit Electronic Circuit LV, two of every machine owned, 93,864 against 77,699). It is within STEP_CHARGE_CAP of
+  // S1, so within any cap of +25 % or more. Neither reads the other, so the leanest line's MIP solves on the solver
+  // thread (`solveBuildRunsAside`) while plan 09's plan solves here: each is what it is alone, and the stage waits for the
+  // longer of the two, not their sum (controller OQ1: the user's MV lines under 5 s warm; on them plan 09's plan took
+  // 0.6-1.3 s beside the leanest line's 1.6-2.0 s).
+  const cap = opts.rawCap;
+  const uncapped = cap === undefined || cap === null;
+  const leanMip = plain.stepCharge > 0 ? buildMip({ ...plain, stepCharge: 0, pseudoCharge: plain.stepCharge }) : undefined;
+  // Release gate round 2, G1: under the cap, in rate mode without sharing, where the leanest line's MIP is large, the
+  // lite start, the leanest line from it and the build MIP beside it (`liteStaged`).
+  const lite = leanMip !== undefined && !uncapped && limit > 0 && plain.model.mode === 'rate' && !plain.model.share
+    && wholeColumns(leanMip.model) >= (opts.liteMinIntegers ?? LITE_MIN_INTEGERS)
+    ? await liteStaged(lp, s1, plain, leanMip, sparse, cap, limit, opts) : undefined;
+  const [lean, ignoredPlan] = lite !== undefined ? [lite.lean, lite.ignoredPlan] : await Promise.all([
+    leanMip !== undefined ? leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, uncapped) : undefined,
+    finish(lp, s1, [], opts),
+  ]);
+  const input: BuildMipInput = lite?.input ?? (lean === undefined ? plain : {
+    ...plain, leanRaw: lean.raw, ...(uncapped ? {} : { rawBound: (1 + cap) * lean.raw }),
+  });
+  // The MIP's start: the cheapest in its own objective of S1, the sparse plan and, where the raw cap bounds the MIP, plan
+  // 09's plan, each rounded up, among those within the cap (S1 always is). Plan 09's plan is a pick candidate at every
+  // cap and a start under the raw cap only: as a start at "No limit" it moved HiGHS's 50-node search both ways (Advanced
+  // Circuit HV 1/min 22.295 -> 22.416, 1/h 33.562 -> 34.522, with supporting lines 27.700 -> 28.258; on AE2 2 Good
+  // Electronic Circuits a minute at HV 16.074 -> 15.917), so with no cap (and at step charge 0) the MIP is the one fix
+  // wave 3's pick pins measured. Nor is the leanest line's plan a start, for the same reason (Advanced Circuit HV 1/min
+  // with supporting lines 27.70 -> 28.10 at "No limit"); it is a pick candidate below.
+  const others = lite?.others ?? (input.rawBound === undefined ? [sparse] : [sparse, ignoredPlan.x]);
+  const cheapest = lite?.cheapest ?? await solvedMip(lp, input, others, limit, opts);
+  // Add-on 17, best multi-output: the same MIP again with a binary per raw source, from the cheapest pre-solve's plan too.
   const sources = opts.multiOutput === true ? multiOutputSources(lp, input, farmFree, opts.upkeep) : undefined;
-  const pre = sources === undefined ? undefined : wholeOf(cheapest.result);
+  const pre = sources === undefined || !wholePlan(cheapest.result) ? undefined : cheapest.result;
   const run = sources === undefined ? cheapest
-    : await solvedMip({ ...input, sources, ...(pre === undefined ? {} : { start: pre.x }) }, sparse, opts);
+    : await solvedMip(lp, { ...input, sources, ...(pre === undefined ? {} : { start: pre.x }) }, others, limit, opts);
   const { mip, result } = run;
   const notes = [...warnings];
+  // F4: even the bare re-solve found nothing, so the plan is its start's, rounded up from an estimate.
+  if (run.picked.bare === 'stalled' && wholePlan(result)) notes.push(buildCostApprox());
   let decision: BuildDecision;
   let from: readonly number[];
   let approx = false;
-  const whole = wholeOf(result);
-  if (whole !== undefined) {
-    decision = mip.decode(whole.x);
-    from = whole.x;
+  let keptCost: number | undefined;
+  if (wholePlan(result)) {
+    decision = mip.decode(result.x);
+    from = result.x;
+    // Fix wave 3 (A): the leanest line's plan and plan 09's plan, each rounded up, where one costs less than the MIP's
+    // answer, all with every machine at its true build (`exactCost`, `rounded`): the MIP's model prices light steps within
+    // a machine of the truth, so the plan is never dearer by the MIP's measure than either where it is within the cap
+    // (ruling 187; the leanest line's always is). On an AE2 line only one that makes each item good one way (12 x 17 F6).
+    const better = cheaperPlan(lp, mip, input.rawBound, input.model.share, mip.exactCost(result.x), [lean?.x, ignoredPlan.x]);
+    if (better !== undefined) ({ decision, from, cost: keptCost } = better);
   } else {
     approx = true;
     notes.push(buildCostApprox());
@@ -1398,7 +1700,7 @@ async function buildStage(
     // costs over runs far below one machine's, so its rounding can build machines a plan of fewer steps does without.
     // Add-on 17: in best multi-output the cheapest pre-solve's plan is one more (after plan 09's), which the binaries'
     // relaxation never sees.
-    const ignored = await finish(lp, s1, [], opts);
+    const ignored = ignoredPlan;   // solved above, at every cap
     const candidates: Array<{ decision: BuildDecision; cost: number; from: readonly number[] }> = [
       { ...mip.rounded(ignored.x), from: ignored.x },
       ...(pre === undefined ? [] : [{ ...mip.rounded(pre.x), from: pre.x }]),
@@ -1406,7 +1708,12 @@ async function buildStage(
       { ...mip.rounded(s1.x), from: s1.x },
     ];
     let kept: (typeof candidates)[number] | undefined;
-    for (const c of candidates) if (c.decision.short === undefined && (kept === undefined || c.cost < kept.cost)) kept = c;
+    // Fix wave 3 (A): only candidates within the raw cap (S1's rounding always is). 12 x 17 F6: on an AE2 line only those
+    // that make each item good one way (plan 09's plan, the relaxation and S1 can split one; S1 stays the last resort).
+    for (const c of candidates) {
+      if (c.decision.short === undefined && withinCap(lp, input.rawBound, c.from) && (!input.model.share || oneMakerEach(lp, c.from))
+        && (kept === undefined || c.cost < kept.cost)) kept = c;
+    }
     // When none covers the steps on owned machines, any of them ends the line below the same way: S1's.
     kept ??= candidates[candidates.length - 1] as (typeof candidates)[number];
     decision = kept.decision;
@@ -1414,12 +1721,20 @@ async function buildStage(
   }
   const nodes = (cheapest.result?.nodes ?? 0) + (run === cheapest ? 0 : (run.result?.nodes ?? 0));
   const seconds = cheapest.seconds + (run === cheapest ? 0 : run.seconds);
-  const buildStats: NonNullable<Solution['buildStats']> = { seconds, nodes, status: result?.status ?? 'skipped', approx };
+  const buildStats: NonNullable<Solution['buildStats']> = {
+    seconds, nodes, status: result?.status ?? 'skipped', approx, ...run.picked, ...(lite?.beside === undefined ? {} : { beside: lite.beside }),
+  };
   if (result?.stop !== undefined) buildStats.stop = result.stop;
   if (result !== undefined && result.x.length > 0) {
     buildStats.objective = mip.exactCost(result.x);
     if (result.bound !== undefined) buildStats.bound = result.bound;
   }
+  if (keptCost !== undefined) buildStats.objective = keptCost;
+  // Ruling 187's yardstick: plan 09's plan rounded up, where it is within the raw cap, leaves no step short and, on an AE2
+  // line, makes each item good one way (12 x 17 F6, ruling R9: a plan the build stage may not take holds it to nothing).
+  const yardstick = withinCap(lp, input.rawBound, ignoredPlan.x) && (!input.model.share || oneMakerEach(lp, ignoredPlan.x))
+    ? mip.rounded(ignoredPlan.x).cost : Infinity;
+  if (Number.isFinite(yardstick)) buildStats.ignoredObjective = yardstick;
   if (decision.short !== undefined) {
     const sol = infeasibleLine([...warnings, ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
     sol.buildStats = buildStats;
@@ -1461,7 +1776,215 @@ async function buildStage(
   sol.cleanroom = decision.cleanroom;
   sol.buildStats = buildStats;
   sol.farmFree = farmFree;
+  // The leanest line's raw material: its own where it was solved, the plan's own decision at step charge 0 (whose MIP is
+  // the leanest line); none where controller OQ1 (D) did not solve it.
+  if (lean !== undefined) sol.leanRawCost = sig9(lean.raw);
+  else if (!(plain.stepCharge > 0)) sol.leanRawCost = sig9(ownRaw);
+  // The decision at its raw cap (plan 12's final review): the cap, not a tie, set how much each way of a good makes.
+  if (input.rawBound !== undefined && ownRaw >= input.rawBound * (1 - S3_TOLERANCE) - TINY) sol.atRawCap = true;
   return sol;
+}
+
+/** Σ rawCost × runs over the main columns of `x` (per unit of demand). */
+function rawOf(lp: MainLp, x: readonly number[]): number {
+  let raw = 0;
+  lp.rawCost.forEach((c, j) => {
+    raw += c * (x[j] ?? 0);
+  });
+  return raw;
+}
+
+/** Whether the runs `x` use at most `bound` raw material per unit of demand (the raw cap; S3_TOLERANCE's slack); any without one. */
+function withinCap(lp: MainLp, bound: number | undefined, x: readonly number[]): boolean {
+  return bound === undefined || rawOf(lp, x) <= bound * (1 + S3_TOLERANCE) + TINY;
+}
+
+/** Whether the build MIP gave an answer that is a plan (`wholeBuild`: its optimum, or a whole solution its node or iteration limit stopped). */
+function wholePlan(result: LpResult | undefined): result is LpResult {
+  return result !== undefined && wholeBuild(result);
+}
+
+/**
+ * The build MIP from `start`, solved and picked by `pickBuild` (fix wave 3 (F): its node and simplex-iteration limits,
+ * the far time guard `limit`), with its seconds and `pickBuild`'s `retried`/`earlier`/`bare`; no result when `limit` ≤ 0
+ * (the fallback's tests). `solver` and `model` as `pickBuild`'s.
+ */
+async function runBuildMip(
+  mip: ReturnType<typeof buildMip>, start: number[] | undefined, limit: number, opts: SolveOptions,
+  solver: ((model: LpModel) => Promise<LpResult>) | 'aside' = solveLp, model: LpModel = mip.model, cutoff = false,
+): Promise<{ result: LpResult | undefined; seconds: number; picked: Pick<NonNullable<Solution['buildStats']>, 'retried' | 'earlier' | 'bare'> }> {
+  if (!(limit > 0)) return { result: undefined, seconds: 0, picked: {} };
+  const began = performance.now();
+  const { result, ...picked } = await pickBuild(mip, start, opts, limit, model, solver, cutoff);
+  return { result, seconds: (performance.now() - began) / 1000, picked };
+}
+
+/**
+ * The MIP's start: its own (`mip.start`: S1 rounded up, or the cheapest pre-solve's plan) or one of `others` (runs, main
+ * columns first) rounded up, whichever costs least in the MIP's own objective among those whose raw material is within
+ * `bound` (fix wave 3 (A)) and, on an AE2 line (`share`), that make each item good one way (`oneMakerEach`: the MIP's
+ * one-maker rows make any other start infeasible; 12 x 17 F6, ruling R8), with that cost (add-on 17's `modelAt` bounds
+ * its source binaries by it); undefined when none is a plan.
+ */
+function cheapestStart(
+  lp: MainLp, mip: ReturnType<typeof buildMip>, bound: number | undefined, share: boolean,
+  others: ReadonlyArray<readonly number[] | null | undefined>,
+): { start: number[]; cost: number; from?: readonly number[] } | undefined {
+  let best: { start: number[]; cost: number; from?: readonly number[] } | undefined = mip.start === undefined
+    || (share && !oneMakerEach(lp, mip.start)) ? undefined : { start: mip.start, cost: mip.startCost };
+  for (const x of others) {
+    if (x === null || x === undefined || !withinCap(lp, bound, x) || (share && !oneMakerEach(lp, x))) continue;
+    const at = mip.startAt(x);
+    if (at !== undefined && (best === undefined || at.cost < best.cost)) best = { ...at, from: x };
+  }
+  return best;
+}
+
+/**
+ * Fix wave 3 (A): the cheapest of `plans` (runs, main columns first) rounded up (`rounded`: every machine at its true
+ * build, by the MIP's objective), among those within the raw cap `bound` that leave no step short and, on an AE2 line
+ * (`share`), make each item good one way (`oneMakerEach`, 12 x 17 F6), where it costs less than `cost` (the MIP's own
+ * answer by `exactCost`); the first on a tie; undefined when none does.
+ */
+function cheaperPlan(
+  lp: MainLp, mip: ReturnType<typeof buildMip>, bound: number | undefined, share: boolean, cost: number,
+  plans: ReadonlyArray<readonly number[] | undefined>,
+): { decision: BuildDecision; from: readonly number[]; cost: number } | undefined {
+  let best: { decision: BuildDecision; from: readonly number[]; cost: number } | undefined;
+  for (const x of plans) {
+    if (x === undefined || !withinCap(lp, bound, x)) continue;
+    if (share && !oneMakerEach(lp, x)) continue;
+    const r = mip.rounded(x);
+    if (r.decision.short === undefined && r.cost < (best?.cost ?? cost)) best = { decision: r.decision, from: x, cost: r.cost };
+  }
+  return best;
+}
+
+/**
+ * 12 x 17 F6: at most one running step makes each item good as its main output (an AE2 job feeds one pattern), of the
+ * makers the build MIP's one-maker rows bind (build-mip.ts `oneMakerGood`: farm columns left out, 12 x 17 ruling R7).
+ */
+function oneMakerEach(lp: MainLp, x: readonly number[]): boolean {
+  const seen = new Set<StuffKey>();
+  for (let j = 0; j < lp.recipes.length; j++) {
+    const g = oneMakerGood(lp.recipes[j] as LpRecipe);
+    if (g === undefined || !((x[j] ?? 0) > TINY)) continue;
+    if (seen.has(g)) return false;
+    seen.add(g);
+  }
+  return true;
+}
+
+/** The whole (integer) columns of a model. */
+function wholeColumns(model: LpModel): number {
+  return model.integer?.filter(Boolean).length ?? 0;
+}
+
+/**
+ * Release gate round 2, G1: the lite plan — the runs (main columns) of the lite relaxation of the leanest line's MIP
+ * (`BuildMipInput.lite` of `plain` at step charge 0, its pseudo steps at the project's charge), solved on the solver
+ * thread within the build MIP's node and simplex-iteration limits and the time guard `limit`, without a start (it gives
+ * the same answer in less time without S1's); undefined where it ends without a whole solution. Its answer is the start
+ * the leanest line and the build MIP lack on a large line: on Duty plate (4,019 whole columns) it solves in 1.7-2.0 s to
+ * 128.771, and its runs rounded up cost the leanest line 128.777 where S1's cost 600.47 and the line's answer is 128.774.
+ */
+async function liteLine(lp: MainLp, plain: BuildMipInput, limit: number, opts: SolveOptions): Promise<readonly number[] | undefined> {
+  const lite = buildMip({ ...plain, stepCharge: 0, pseudoCharge: plain.stepCharge, lite: true });
+  const job: BuildRunsJob = {
+    model: {
+      ...lite.model, maxNodes: opts.buildMaxNodes ?? BUILD_MIP_MAX_NODES, maxIterations: opts.buildMaxIterations ?? BUILD_MIP_MAX_LP_ITERATIONS,
+      timeLimit: limit, strongBranching: false,
+    },
+    retryTolerance: BUILD_MIP_RETRY_TOLERANCE, tiny: TINY,
+  };
+  const { runs } = await solveBuildRunsAside(job);
+  const last = runs[runs.length - 1] as LpResult;
+  return wholeBuild(last) ? last.x.slice(0, lp.rawCost.length) : undefined;
+}
+
+/**
+ * Release gate round 2, G1: the build stage's leanest line and build MIP under the raw cap `cap` with the lite start
+ * (`buildStage`). The lite plan (`liteLine`, on the solver thread) beside plan 09's plan (`finish`, here); then the
+ * leanest line from the cheapest of S1, the sparse plan and the lite plan rounded up (`leanestLine`, on the solver thread)
+ * beside the build MIP at the lite plan's raw material, both to 9 significant digits (`sig9`, the figure the plan reports
+ * as `leanRawCost`): its cap (1 + cap) × that and the step charge's base (`leanRaw`), from the cheapest of S1, the sparse
+ * plan, plan 09's plan and the lite plan rounded up (`solvedMip`, here). Where the lite plan is the leanest line's
+ * cheapest start, the leanest line, whose answer bounds the cap, takes it as its cutoff, not as its incumbent
+ * (`pickBuild`'s `cutoff`): on Duty plate from the lite plan as an incumbent it took 5-7 s, as the cutoff 4.3 s alone and
+ * 6.0 s on the board (10.6 s and 11.1 s from S1). Where the lite plan is the build MIP's cheapest start, the build MIP
+ * keeps it as its incumbent, fix wave 3 (F)'s solve, but never restarts its root (`allowRestart`):
+ * measured on the user's live board, from the lite plan with restarts its 50 nodes ended where the board's supply
+ * columns moved them and the board fell into a 2-cycle (Duty plate 41 steps at 11.58 raw a minute, then 38 at 10.36);
+ * with the lite plan as its cutoff instead the board settled but real-board's A3 (b) did not hold (10.36 against 11.11 on
+ * the board x 0.999); without restarts both held. Where another start costs no more, each MIP takes it as without the
+ * lite start, as its incumbent with restarts allowed: from the sparse plan as its cutoff the leanest line of Electronic
+ * Circuit MV on Project Red with two of every machine owned found nothing below it (1.032 against 0.884 as the
+ * incumbent, its root LP relaxation unsolved within the iteration cap), its raw material 13 % above. The build MIP is
+ * still not exactly the one off the lite path there: wherever the lite gives a plan, its cap and step charge's base come
+ * from a raw material to 9 significant digits (`sig9`), where off the lite path they come from the leanest line's
+ * unrounded figure, which differs from about the 10th digit on (well within BIG_M_SLACK and S3_TOLERANCE); only off the
+ * lite path (below LITE_MIN_INTEGERS, say) and where the lite gives no plan do both MIPs solve exactly as before. Where
+ * the leanest line's raw material to 9 digits is the lite plan's, that MIP is the build MIP of the true cap, from the
+ * same starts, so it is kept (`beside`: `kept`): the plan is the one `sequentialLean` solves after the leanest line;
+ * else it is solved again at the leanest line's
+ * (`re-solved`). The 9 digits make the two match where the leanest line keeps the lite plan's recipes but moves its
+ * machines (Duty plate: 9.64027777777862 against 9.640277777777778). Where the lite gives no plan, or fails (its model
+ * or its solve throws), the leanest line and the build MIP run as without it. Every decision reads the solves' results
+ * only, never their timing.
+ */
+async function liteStaged(
+  lp: MainLp, s1: LpResult, plain: BuildMipInput, leanMip: ReturnType<typeof buildMip>, sparse: readonly number[] | null, cap: number,
+  limit: number, opts: SolveOptions,
+): Promise<{
+  lean: { raw: number; x?: readonly number[] }; ignoredPlan: Awaited<ReturnType<typeof finish>>; input: BuildMipInput;
+  others: ReadonlyArray<readonly number[] | null | undefined>; cheapest: SolvedMip; beside?: 'kept' | 're-solved';
+}> {
+  // A lite that fails (its model or its solve) is a lite without a plan: the line plans as without the lite start.
+  const [liteX, ignoredPlan] = await Promise.all([liteLine(lp, plain, limit, opts).catch(() => undefined), finish(lp, s1, [], opts)]);
+  if (liteX === undefined) {
+    const lean = await leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false) ?? { raw: s1.objective };
+    const input: BuildMipInput = { ...plain, leanRaw: lean.raw, rawBound: (1 + cap) * lean.raw };
+    const others = [sparse, ignoredPlan.x];
+    return { lean, ignoredPlan, input, others, cheapest: await solvedMip(lp, input, others, limit, opts) };
+  }
+  const at = (raw: number): BuildMipInput => ({ ...plain, leanRaw: raw, rawBound: (1 + cap) * raw });
+  const others = [sparse, ignoredPlan.x, liteX];
+  const guess = sig9(Math.max(rawOf(lp, liteX), s1.objective));
+  // Both awaited together: a failure of either fails this plan only, and the other's later failure has a handler too.
+  const [leaning, early] = await Promise.all([
+    leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false, liteX),
+    opts.sequentialLean === true ? undefined : solvedMip(lp, at(guess), others, limit, opts, liteX),
+  ]);
+  const lean = leaning ?? { raw: s1.objective };
+  const raw = sig9(lean.raw);
+  const input = at(raw);
+  if (early !== undefined && raw === guess) return { lean, ignoredPlan, input, others, cheapest: early, beside: 'kept' };
+  const cheapest = await solvedMip(lp, input, others, limit, opts, liteX);
+  return { lean, ignoredPlan, input, others, cheapest, ...(early === undefined ? {} : { beside: 're-solved' as const }) };
+}
+
+/**
+ * Fix wave 3 (A), (B2): the leanest line — `mip`, the build MIP of `plain` at step charge 0, its by-hand and other pseudo
+ * steps still at the project's charge (`pseudoCharge`, the controller's U2 ruling: crafting always automated), from the
+ * cheapest of S1, `sparse` and `lite` (the lite plan, `liteStaged`: where it is the cheapest, it is the cutoff, `pickBuild`)
+ * rounded up: the least raw material over the horizon plus the build of its machines, what "Least raw
+ * material" plans — its raw material per unit of demand and its runs (main columns); S1's when that MIP gives no plan
+ * (its time guard, or `limit` ≤ 0), so the cap is then measured against the least raw material, never looser.
+ * `uncapped` (No limit, controller OQ1 (D)): none, and no MIP solved, where that start costs at most LEAN_BASE_ABOVE in
+ * the MIP's objective (σ units) — the line's raw material over the horizon is at most that, so it could not re-base the
+ * step charge (`scaleOf`), and with no cap nothing else reads it. Its MIP solves on the solver thread (`solveBuildRunsAside`,
+ * the same result as here), so `buildStage` solves plan 09's plan meanwhile.
+ */
+async function leanestLine(
+  lp: MainLp, s1: LpResult, plain: BuildMipInput, mip: ReturnType<typeof buildMip>, sparse: readonly number[] | null, limit: number,
+  opts: SolveOptions, uncapped: boolean, lite?: readonly number[],
+): Promise<{ raw: number; x?: readonly number[] } | undefined> {
+  const start = cheapestStart(lp, mip, undefined, plain.model.share, [sparse, lite]);
+  if (uncapped && start !== undefined && start.cost <= LEAN_BASE_ABOVE) return undefined;
+  const { result } = await runBuildMip(mip, start?.start, limit, opts, 'aside', mip.model, lite !== undefined && start?.from === lite);
+  if (!wholePlan(result)) return { raw: s1.objective };
+  const x = result.x.slice(0, lp.rawCost.length);
+  return { raw: Math.max(rawOf(lp, x), s1.objective), x };
 }
 
 /**
@@ -1477,22 +2000,41 @@ function planPick(options: readonly MachineOption[]): number | undefined {
 }
 
 /**
- * "Ignore build cost" with a model (ruling P2): plan 09's plan, whose stages kept the owned-only bounds, gets its
- * machines from `roundUp` of its columns with plan 09's pick (`planPick`) for new ones; a step it leaves short ends the
- * line with the `owned-only` warnings of the bounded steps S1 runs. No build MIP, so no `buildStats`.
+ * "Ignore build cost" with a model (ruling P2): plan 09's plan (`plan`, its stages from S1 `s1` within the owned-only
+ * bounds) gets its machines from `roundUp` of its columns with plan 09's pick (`planPick`) for new ones; undefined where
+ * that leaves a step short. No build MIP, so no `buildStats`.
  */
 function sized(
-  lp: MainLp, s1: LpResult, plan: { sol: Solution; x: readonly number[] }, warnings: PlanWarning[], opts: SolveOptions, model: BuildModel,
-  demandScale: number, bounded: readonly number[],
-): Solution {
+  lp: MainLp, s1: LpResult, plan: { sol: Solution; x: readonly number[] }, opts: SolveOptions, model: BuildModel, demandScale: number,
+): Solution | undefined {
   const input = buildInput(lp, s1, s1.objective, demandScale, model, opts);
   const decision = roundUp(input, plan.x, (j) => planPick(model.options(lp.recipes[j]?.id ?? '')));
-  if (decision.short !== undefined) return infeasibleLine([...warnings, ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
+  if (decision.short !== undefined) return undefined;
   const { sol } = plan;
   sol.machines = decision.machines;
   sol.pools = decision.pools;
   sol.cleanroom = decision.cleanroom;
   return sol;
+}
+
+/**
+ * "Ignore build cost" with a model: plan 09's plan sized (`sized`). Where that leaves a step short — the steps only owned
+ * machines that cannot be built can run, each bounded by all of them, counted on the same ones (12 x 17 Task 11, F-A) —
+ * those steps are bounded by their share of whole owned machines (`boundOwnedWhole`, the least raw material on them) and
+ * plan 09's stages run again from the least raw material within those bounds; a line still short ends with the
+ * `owned-only` warnings of the bounded steps S1 runs. `warnings` gives the solve's warnings, a fresh list each call.
+ */
+async function ignoringBuild(
+  lp: MainLp, s1: LpResult, warnings: () => PlanWarning[], opts: SolveOptions, model: BuildModel, demandScale: number, bounded: readonly number[],
+): Promise<Solution> {
+  const plan = sized(lp, s1, await finish(lp, s1, warnings(), opts), opts, model, demandScale);
+  if (plan !== undefined) return plan;
+  if (bounded.length > 0 && await boundOwnedWhole(lp, model, demandScale, bounded)) {
+    const whole = await minimize(lp, lp.rawCost, []);
+    const again = whole.status === 'optimal' ? sized(lp, whole, await finish(lp, whole, warnings(), opts), opts, model, demandScale) : undefined;
+    if (again !== undefined) return again;
+  }
+  return infeasibleLine([...warnings(), ...ownedOnlyWarnings(lp, model, ownedOnlyRuns(bounded, s1.x))]);
 }
 
 /**
@@ -1541,8 +2083,9 @@ function cappedList(ids: readonly string[]): string {
  * cannot be built is bounded by them in every stage (`boundOwnedOnly`); when that makes S1 infeasible and S1 without
  * the bounds solves, the line is infeasible with an `owned-only` warning for each such step that S1 runs past its bound.
  * When the model counts build cost (`buildCounts`) the build stage replaces R3's stages 2–4 (`buildStage`); with build
- * cost ignored plan 09's stages run and their plan's machines are sized (`sized`). Machine counts are absolute (the
- * build stage works with the demand scale), so they are not scaled back.
+ * cost ignored plan 09's stages run and their plan's machines are sized (`sized`), where that leaves a step short again
+ * on whole owned machines (`ignoringBuild`, 12 x 17 F-A). Machine counts are absolute (the build stage works with the
+ * demand scale), so they are not scaled back.
  */
 export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, number>, opts: SolveOptions = {}): Promise<Solution> {
   let scale = 0;
@@ -1554,12 +2097,23 @@ export async function solveLine(graph: CandidateGraph, demand: ReadonlyMap<Stuff
   const scaled: Solution = {
     ...sol, runs: times(sol.runs), buys: times(sol.buys), sinks: times(sol.sinks),
     rawCost: sig9(sol.rawCost * scale), leastRawCost: sig9(sol.leastRawCost * scale),
+    ...(sol.leanRawCost === undefined ? {} : { leanRawCost: sig9(sol.leanRawCost * scale) }),
   };
   if (sol.supplied !== undefined) scaled.supplied = times(sol.supplied);
   if (sol.credited !== undefined) scaled.credited = times(sol.credited);
   // S1f is no plan figure (it only weighs the multi-output sources): scaled, not rounded to 9 digits.
   if (sol.farmFree !== undefined) scaled.farmFree = { raw: sol.farmFree.raw * scale, sources: sol.farmFree.sources };
   return scaled;
+}
+
+/**
+ * Fix wave 3 (C): the most of a byproduct-only good a line buys at its plain price per unit of demand (`MainLp.upper`),
+ * from the group's stock (`SolveOptions.stock`) at demand scale `D`; undefined without a stock (or with none to spread
+ * it over). Make N's whole runs (make-n.ts `wholeRuns`) read it at the batch's own demand (`D` 1).
+ */
+export function stockShare(stock: SolveOptions['stock'], D: number): ((key: StuffKey) => number) | undefined {
+  if (stock === undefined || !(stock.over > 0)) return undefined;
+  return (key) => Math.max(0, stock.total(key)) / (stock.over * D);
 }
 
 /**
@@ -1579,7 +2133,7 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
   const model = opts.build;
   for (let round = 0; ; round++) {
     const recipes = graph.recipes.filter((r) => !bannedSet.has(r.id));
-    const lp = mainLp(graph, recipes, demand, opts.supplies, demandScale);
+    const lp = mainLp(graph, recipes, demand, opts.supplies, demandScale, stockShare(opts.stock, demandScale));
     const bounded = model !== undefined && model.mode === 'rate' ? boundOwnedOnly(lp, model, demandScale) : [];
     const s1 = await minimize(lp, lp.rawCost, []);
     if (s1.status === 'error') throw new Error('rate solver: the raw-material LP failed');
@@ -1601,13 +2155,13 @@ async function solveUnit(graph: CandidateGraph, demand: ReadonlyMap<StuffKey, nu
       let done: Solution;
       if (opts.probe === true) done = probed(lp, s1, loopWarnings());
       else if (model !== undefined && buildCounts(model)) done = await buildStage(graph, lp, s1, loopWarnings(), opts, model, demandScale, bounded);
-      else {
-        const plan = await finish(lp, s1, loopWarnings(), opts);
-        done = model === undefined ? plan.sol : sized(lp, s1, plan, loopWarnings(), opts, model, demandScale, bounded);
-      }
+      else if (model !== undefined) done = await ignoringBuild(lp, s1, loopWarnings, opts, model, demandScale, bounded);
+      else done = (await finish(lp, s1, loopWarnings(), opts)).sol;
       // Of two twins every stage rates alike, the plan runs the same one whichever the solver met (`twinMoves`).
       if (done.status === 'ok') {
-        done = withTwinsMoved(done, twinMoves(graph, recipes, demand, { model, pinned: opts.pinnedRecipes, plan: done, formRank: opts.formRank }));
+        done = withTwinsMoved(done, twinMoves(graph, recipes, demand, {
+          model, pinned: opts.pinnedRecipes, plan: done, formRank: opts.formRank, ...(opts.stock === undefined ? {} : { beyondStock: true as const }),
+        }));
         // Add-on 17: the final plan's raw sources, and in best multi-output the byproducts credited to other projects.
         done.sources = sourcesOf(graph, done.buys, opts.upkeep);
         if (opts.multiOutput === true && (opts.credits?.length ?? 0) > 0) done.credited = creditedOf(recipes, done, opts.credits ?? [], demandScale);
@@ -1738,10 +2292,83 @@ export async function standaloneCosts(
 }
 
 /**
+ * The recipes of `graph` that the chains of `keys` can use: each recipe that makes one of them, then each recipe that
+ * makes a good one of those takes, and so on. A recipe outside them makes only goods none of those recipes take, so the
+ * least raw material that makes one of `keys` is the same on them as on the whole graph.
+ */
+export function chainRecipes(graph: CandidateGraph, keys: readonly StuffKey[]): LpRecipe[] {
+  return chainOf(graph, producersIn(graph), keys);
+}
+
+/** `chainRecipes` with the producers of each good given (`producersIn(graph)`), so that many chains share one map. */
+function chainOf(graph: CandidateGraph, producers: ReadonlyMap<StuffKey, readonly LpRecipe[]>, keys: readonly StuffKey[]): LpRecipe[] {
+  const seen = new Set<StuffKey>(keys);
+  const queue = [...seen];
+  const used = new Set<LpRecipe>();
+  while (queue.length > 0) {
+    for (const r of producers.get(queue.pop() as StuffKey) ?? []) {
+      if (used.has(r)) continue;
+      used.add(r);
+      for (const [key, c] of r.coeffs) {
+        if (c < 0 && !seen.has(key)) {
+          seen.add(key);
+          queue.push(key);
+        }
+      }
+    }
+  }
+  return graph.recipes.filter((r) => used.has(r));
+}
+
+/** `graph` cut down to `recipes`, the goods they touch and `key`: its main LP (`mainLp`) has rows for only those. */
+function chainGraph(graph: CandidateGraph, recipes: LpRecipe[], key: StuffKey): CandidateGraph {
+  const goods: CandidateGraph['goods'] = new Map();
+  const add = (k: StuffKey): void => {
+    const good = graph.goods.get(k);
+    if (good !== undefined) goods.set(k, good);
+  };
+  add(key);
+  for (const r of recipes) for (const [k] of r.coeffs) add(k);
+  return { ...graph, recipes, goods };
+}
+
+/**
+ * The least raw material that makes one unit of each of `keys` on its own in `graph` (fix wave 3 (D)), to 9
+ * significant digits (`sig9`): `standaloneCosts`' LP without its barred inputs and its chain details, on the key's own
+ * chain alone — the main LP of the recipes its chain can use (`chainRecipes`) and the goods they touch
+ * (`chainGraph`), that one demand at 1, every byproduct sunk — solved cold by `solveLp`: a fresh HiGHS model per key,
+ * presolve on, which drops a route through a dead end however little of the dead end that route needs. So a price is
+ * a function of `graph`, its leaf costs and the key, whatever else is asked, in whatever order and whatever was priced
+ * before; on one graph a cheaper leaf never raises a key's least raw material, which the 9-digit price follows except
+ * for one unit at an exact 10th-digit tie. Infinity, without an LP, for a key that is no good of `graph` or that it
+ * cannot make (`makeableGoods`), and for one whose LP does not end optimal.
+ */
+export async function standalonePrices(graph: CandidateGraph, keys: readonly StuffKey[]): Promise<Map<StuffKey, number>> {
+  const out = new Map<StuffKey, number>();
+  if (keys.length === 0) return out;
+  const made = makeableGoods(graph);
+  const producers = producersIn(graph);
+  for (const key of new Set(keys)) {
+    if (!made.has(key)) {
+      out.set(key, Infinity);
+      continue;
+    }
+    const recipes = chainOf(graph, producers, [key]);
+    const lp = mainLp(chainGraph(graph, recipes, key), recipes, new Map([[key, 1]]));
+    const width = lp.rawCost.length;
+    const result = await solveLp({
+      sense: 'min', colCost: [...lp.rawCost], colLower: new Array<number>(width).fill(0), colUpper: new Array<number>(width).fill(Infinity), rows: lp.rows,
+    });
+    out.set(key, result.status === 'optimal' ? sig9(Math.max(0, result.objective)) : Infinity);
+  }
+  return out;
+}
+
+/**
  * Forward fixpoint: buyable goods (and `given` ones) are makeable; a recipe fires once every good it consumes is; its
  * outputs then are.
  */
-function makeableGoods(graph: CandidateGraph, given: readonly StuffKey[] = []): Set<StuffKey> {
+export function makeableGoods(graph: CandidateGraph, given: readonly StuffKey[] = []): Set<StuffKey> {
   const makeable = new Set<StuffKey>();
   const queue: StuffKey[] = [];
   const add = (key: StuffKey): void => {
@@ -1778,12 +2405,13 @@ function makeableGoods(graph: CandidateGraph, given: readonly StuffKey[] = []): 
 /**
  * Why `key` blocks: out of reach (`unavailable`), its recipes cannot run here (`rejected`, with the lowest tier one of
  * them names and, plan 12, the first reason by recipe id that a machine one needs cannot be built here), else none
- * makes it (`no-recipe`).
+ * makes it (`no-recipe`, or `outside-inputs` for a good only "Only these come in" keeps the line from buying: plan 12
+ * fix wave 3 (B)).
  */
 function blockerFor(graph: CandidateGraph, key: StuffKey): Blocker {
   if (graph.goods.get(key)?.leafClass === 'unavailable') return { key, reason: 'unavailable' };
   const rejected = graph.blocked.get(key);
-  if (rejected === undefined) return { key, reason: 'no-recipe' };
+  if (rejected === undefined) return { key, reason: graph.goods.get(key)?.outsideInputs === true ? 'outside-inputs' : 'no-recipe' };
   const tiers = rejected.flatMap((b) => (b.needTier === undefined ? [] : [b.needTier]));
   const blocker: Blocker = tiers.length > 0 ? { key, reason: 'rejected', needTier: Math.min(...tiers) } : { key, reason: 'rejected' };
   const machine = [...rejected].sort((a, b) => byString(a.recipeId, b.recipeId)).find((b) => b.machine !== undefined)?.machine;

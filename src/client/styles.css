@@ -1193,8 +1193,13 @@ fieldset.flow-panel-section > legend.flow-panel-title { float: left; width: 100%
 .flow-panel .ports, .flow-panel .oc-lines, .flow-panel .warnings, .flow-panel .sources, .flow-panel .used-by, .flow-panel .also-made {
   margin: 0; padding: 6px 10px 6px 26px; background: var(--screen); box-shadow: var(--bevel-well); font-size: 0.9rem;
 }
-.oc-lines li, .flow-panel .sources li { overflow-wrap: anywhere; }
+.oc-lines li, .flow-panel .sources li, .flow-panel .notes li { overflow-wrap: anywhere; }
 .flow-panel .warnings { color: var(--ink-error); }
+/* A step's notes (plan 12: a good made two ways on purpose) are such a well too, a list, not the Notes view's column (`.notes`). */
+.flow-panel .notes {
+  display: block; max-width: none; margin: 0; padding: 6px 10px 6px 26px; background: var(--screen); box-shadow: var(--bevel-well);
+  font-size: 0.9rem;
+}
 .swap-option { align-items: flex-start; }
 .swap-option input { margin-top: 2px; }
 .swap-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }

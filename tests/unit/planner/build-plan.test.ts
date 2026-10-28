@@ -7,7 +7,7 @@
 // crafting-table steps by hand (HAND_STEP_WEIGHT 3), while the Auto Workbench is the default (the controller's ruling).
 
 import { describe, it, expect } from 'vitest';
-import { centrifugeDustSpec, fluidCellsSpec, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { centrifugeDustSpec, fluidCellsSpec, gasSpec, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
@@ -339,9 +339,12 @@ describe('build cost in Make N', () => {
     expect(ids(many)).toEqual(['bend-plate', 'circuit-lv', 'wire']);
     expect(many.cost).toMatchObject({ build: 50, batch: 192, horizonHours: null });
     expect(many.cost?.runPerHour).toBe(sig9((192 * 3600) / many.makeN!.totalSeconds));
-    const few = await planLine(pack, S({ mode: 'makeN', amount: 8 }), emptyContext());
+    const few = await planLine(pack, S({ mode: 'makeN', amount: 8, rawCap: null }), emptyContext());
     expect(ids(few)).toEqual(['circuit-lv', 'hammer-plate', 'wire']);
     expect(few.cost).toMatchObject({ build: 33, batch: 32 });
+    const capped = await planLine(pack, S({ mode: 'makeN', amount: 8 }), emptyContext());
+    expect(ids(capped)).toEqual(['bend-plate', 'circuit-lv', 'wire']);   // the default cap: the leanest line charges the hammer step (U2, F3b)
+    expect(capped.cost).toMatchObject({ build: 50, batch: 24 });
   });
 
   it('tells the steps that share an Auto Workbench in a batch to set its grid between batches (controller ruling 177)', async () => {
@@ -502,26 +505,7 @@ describe('machines of supply steps and machines that cannot be built', () => {
 });
 
 describe('one source at a tie', () => {
-  /**
-   * Mini-GT plus plan 09 Task 8's tie in build mode: `burn` (Basic Centrifuge 161, 16 EU/t × `dur` t) splits a Raw Dust into a
-   * Copper Ingot and 1,000 L Gas, and `make-thing` (assembler, 2 EU/t) takes 2 copper ingots and 1,000 L gas. Copper is also
-   * mined, so burning a second dust (its gas left over) costs the raw material that buying the other ingot does. The
-   * centrifuge is crafted from `from` (nothing: it builds for free).
-   */
-  const gasSpec = (dur: number, from: ReadonlyArray<[string, number]> = []): PackSpec => {
-    const spec = structuredClone(MINI_GT);
-    const vein = { name: 'ore.mix.raw', dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
-      materials: { primary: 'Raw', secondary: 'Raw', between: 'Raw', sporadic: 'Raw' } };
-    return withBuildRecipes({
-      ...spec,
-      items: [...(spec.items ?? []), { key: 't:raw_dust@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 't:thing@0', name: 'Thing' }],
-      fluids: [...(spec.fluids ?? []), { key: 'fluid:gas', name: 'Gas' }],
-      recipes: [...(spec.recipes ?? []),
-        { id: 'burn', map: 'gt.recipe.centrifuge', in: [['t:raw_dust@0', 1]], out: [['t:copper_ingot@0', 1], ['fluid:gas', 1000]], eut: 16, dur },
-        { id: 'make-thing', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 2], ['fluid:gas', 1000]], out: [['t:thing@0', 1]], eut: 2 }],
-      worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), vein] },
-    }, [161], from);
-  };
+  // `gasSpec` (build-fixtures.ts): plan 09 Task 8's tie in build mode, a centrifuge's copper beside bought copper.
   const thing = (p: Partial<PlanSettings> = {}): PlanSettings => S({ target: 't:thing@0', amount: 6, per: 'min', ...p });
 
   it('makes all of a good a step of the line makes rather than buy the rest, where its machines have room', async () => {
@@ -564,17 +548,36 @@ describe('one source at a tie', () => {
     }
   });
 
-  it('makes the rest on owned machines the build stage left idle, in every mode', async () => {
-    // Four owned centrifuges (each 0.05 runs a second, priced at an iron ingot): the build MIP needed two of them for the
-    // gas and broke the raw-material tie towards buying the other ingot, two owned machines idle. Owned machines cost
-    // nothing, so the tie stage may run burn on them: all four, no copper bought, nothing new built (ignore mode's answer).
+  it('makes the rest on owned machines the build stage left idle at step charge 0, in every mode', async () => {
+    // Four owned centrifuges (each 0.05 runs a second, priced at an iron ingot): the gas takes two of them, all of the
+    // copper four, at the same raw material. At step charge 0 ("Least raw material") an owned machine costs nothing, so
+    // where the build MIP broke the tie towards buying the other ingot, the tie stage may run burn on the idle ones: all
+    // four, no copper bought, nothing new built (ignore mode's answer).
     for (const logistics of ['direct', 'enderio', 'ae2', 'routed'] as const) {
       for (const buildHorizonHours of [24, null]) {
-        const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours }), owning({ mteId: 161, count: 4 }));
+        const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours, stepCharge: 0 }), owning({ mteId: 161, count: 4 }));
         expect(plan.status).toBe('ok');
         expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.2, 4, 4], ['make-thing', 0.1, 1, 0]]);
         expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
       }
+    }
+  });
+
+  it('buys the rest rather than run more owned machines at Fewest machines, where each owned block pays its share', async () => {
+    // Ledger 265 (controller OQ24): a step on an owned machine counts toward Fewest machines, each owned block paying
+    // OWNED_STEP_SHARE of the step charge, though it costs no build. The build MIP runs burn on two of the four owned
+    // centrifuges and buys the other ingot, and the tie stage no longer grows the step by the two it left idle (as fix
+    // wave 2 (a) stopped it growing by new machines that build for nothing). With build cost ignored there are no machines
+    // to weigh, and plan 09's one source makes all of it on the four.
+    for (const logistics of ['direct', 'enderio', 'ae2', 'routed'] as const) {
+      const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics }), owning({ mteId: 161, count: 4 }));
+      expect(plan.status).toBe('ok');
+      expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.1, 2, 2], ['make-thing', 0.1, 1, 0]]);
+      expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:copper_ingot@0', 0.1], ['t:raw_dust@0', 0.1]]);
+      expect(plan.cost?.build).toBe(16);   // the assembler's: the owned centrifuges build for nothing
+      const ignored = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours: null }), owning({ mteId: 161, count: 4 }));
+      expect(ignored.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.2, 4, 4], ['make-thing', 0.1, 1, 0]]);
+      expect(ignored.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
     }
   });
 

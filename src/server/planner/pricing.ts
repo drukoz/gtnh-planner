@@ -47,6 +47,18 @@ export interface LinePricing {
   pack?: Pack;
   /** The farms the line may use (`farmSetup`) and the price of each tool its tree farms wear, by item: upkeep. */
   farm?: { setup: FarmSetup; tools: ReadonlyMap<StuffKey, number> };
+  /**
+   * The leaf oracle the build list and the layout's parts break down with (plan 12 fix wave 3 (B); both read it from
+   * the line's plain pricing, without `unbuildable`): the line's oracle without the project's "Only these come in",
+   * which only the line's own graphs read (machine prices never do). With an empty list it is `leaf` itself. With a list
+   * and supporting lines on (`routeDerived`) it is this pricing's oracle with the list taken out, exact there: no
+   * derived base item is a leaf, so that oracle never reads the derived prices of the pricing rounds. With a list and
+   * supporting lines off it is the `leaf` of the line's plain pricing without the list (`linePricing` asks for it): the
+   * listed rounds price only the derived leaves the listed graph buys, so a derived material the line buys without the
+   * list, at its own chain's cost, would break down at its plain price instead, or as a leaf where only a chain through
+   * the target makes it.
+   */
+  buildLeaf: LeafOracle;
 }
 
 /**
@@ -228,7 +240,7 @@ async function computeCore(pack: Pack, settings: PlanSettings, ctx: PlanContext,
 
 async function computePricing(
   pack: Pack, settings: PlanSettings, ctx: PlanContext, target: StuffKey, pinAvoid: ReadonlySet<StuffKey>,
-  unbuildable: ReadonlyMap<string, string> | undefined, core: Promise<PricingCore>,
+  unbuildable: ReadonlyMap<string, string> | undefined, core: Promise<PricingCore>, unlisted?: Promise<LinePricing>,
 ): Promise<LinePricing> {
   await yieldToEventLoop();
   const shared = await core;
@@ -250,10 +262,16 @@ async function computePricing(
   // uses (sand from rock-breaker cobblestone), beside digging them; the cost model, machine prices and build-material
   // breakdowns keep them plain leaves.
   const gatheredRecipes = gatheredRecipesOn(settings);
+  // Fix wave 3 (B): "Only these come in" holds for the line's own graphs. The build list and the layout's parts break
+  // down without it (`LinePricing.buildLeaf`): with supporting lines on, this oracle without the list, which is exact
+  // there (no derived base item is a leaf, so `priced` goes unread); with them off, the oracle of `unlisted`, the line's
+  // plain pricing without the list, as these rounds price only the derived leaves the listed graph buys.
+  const inputsOnly: ReadonlySet<StuffKey> = new Set(settings.inputsOnly ?? []);
   /** Add-on 17: what the line's farm recipes make (walked beside buying it) and the tools they wear, at their price. */
   let farmed: { farmMade: ReadonlySet<StuffKey>; fixed: ReadonlyMap<StuffKey, number> } | undefined;
-  const leafWith = (): LeafOracle => makeLeafOracle(
-    pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key), { supplied: basis.supplied, gatheredRecipes, ...farmed },
+  const leafWith = (only: ReadonlySet<StuffKey> = inputsOnly): LeafOracle => makeLeafOracle(
+    pack, settings, basis.avail, basis.prices, stopCost, (key) => priced.get(key),
+    { supplied: basis.supplied, gatheredRecipes, inputsOnly: only, ...farmed },
   );
   // Plan 12 (controller ruling OQ5 a): the step recipes no machine can run here are left out of every walk of the line;
   // and with crafting automated (controller ruling 214) its walks offer the Auto Workbench's single-use tool variants and
@@ -299,7 +317,8 @@ async function computePricing(
   const stops = [...graph.goods.values()].filter((g) => g.leafClass === 'stop' && g.buyable).map((g) => g.key);
   const chains = new Map(priced);
   for (const [key, made] of await derivedCosts(pack, settings, shared, target, stops)) chains.set(key, made);
-  const pricing: LinePricing = { target, basis, model, leaf, graph, chains, ...farms };
+  const buildLeaf = inputsOnly.size === 0 ? leaf : unlisted === undefined ? leafWith(new Set()) : (await unlisted).leaf;
+  const pricing: LinePricing = { target, basis, model, leaf, graph, chains, buildLeaf, ...farms };
   if (unbuildable !== undefined) pricing.unbuildable = unbuildable;
   return pricing;
 }
@@ -352,7 +371,13 @@ function memoOf<T>(map: WeakMap<Pack, Map<string, T>>, pack: Pack): Map<string, 
  * and walked without it, unless it covers an option they pin. `opts.unbuildable` (plan 12, controller ruling OQ5 a):
  * step recipes no machine can run here, with why (`BuildModel.blocked`), which the line's graph is walked without
  * (`CandidateOptions.unbuildable`), so producers that can run take their place. A line's farm pack prices as the export
- * pack it was made from (`exportPack`).
+ * pack it was made from (`exportPack`). "Only these come in" (fix wave 3 (B))
+ * keys each pricing but not its core: no part of `PricingCore` reads the list (`planBasis`, the cost model and derived
+ * costs never pass it to `makeLeafOracle`), so a listed line's core is the same line's without the list. With a non-empty
+ * list and supporting lines off (`routeDerived` false), every pricing of the line also asks for the line's plain pricing
+ * without the list (an empty list, no `unbuildable`; memoized here like any other, on the same core), whose `leaf` is
+ * its `buildLeaf`, the oracle the build list and the layout's parts break down with (`LinePricing.buildLeaf`); with
+ * supporting lines on, or an empty list, it asks for none.
  */
 export function linePricing(
   pack: Pack, settings: PlanSettings, ctx: PlanContext, opts?: { unbuildable?: ReadonlyMap<string, string> },
@@ -364,13 +389,19 @@ export function linePricing(
   const pinAvoid = avoidedPins(base, settings, target);
   const unbuildable = opts?.unbuildable !== undefined && opts.unbuildable.size > 0 ? opts.unbuildable : undefined;
   const blockedIds = unbuildable === undefined ? '' : `|unbuildable:${JSON.stringify([...unbuildable.keys()].sort())}`;
-  const line = `${pricingHash(open)}|${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}`;
+  const context = `${basisContextKey(ctx)}${pinAvoid.length === 0 ? '' : `|${JSON.stringify(pinAvoid)}`}`;
+  const line = `${pricingHash(open)}|${context}`;
+  const listed = (settings.inputsOnly ?? []).length > 0;
+  const plain: PlanSettings = listed ? { ...open, inputsOnly: [] } : open;
+  const coreLine = listed ? `${pricingHash(plain)}|${context}` : line;
   const farms = `|farms:${JSON.stringify(ownedFarmMachines(base, ctx))}`;
   const blocked = unbuildable === undefined ? undefined : new Map(unbuildable);
   return remembered(memoOf(MEMOS, base), `${line}${farms}${blockedIds}`, () => {
-    // Every pricing of the line, whatever it walks without, shares its basis, cost model and derived costs (`PricingCore`).
-    const core = remembered(memoOf(CORES, base), line, () => computeCore(base, open, ctx, target));
-    return computePricing(base, open, ctx, target, new Set(pinAvoid), blocked, core);
+    // Every pricing of the line, whatever it walks without (and with or without its list), shares its basis, cost model
+    // and derived costs (`PricingCore`).
+    const core = remembered(memoOf(CORES, base), coreLine, () => computeCore(base, plain, ctx, target));
+    const unlisted = listed && !settings.routeDerived ? linePricing(base, { ...settings, inputsOnly: [] }, ctx) ?? undefined : undefined;
+    return computePricing(base, open, ctx, target, new Set(pinAvoid), blocked, core, unlisted);
   });
 }
 
@@ -381,6 +412,6 @@ export function linePricing(
 export async function lineLeaf(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promise<Pick<PlanBasis, 'env' | 'leaf'>> {
   const pricing = linePricing(pack, settings, ctx);
   if (pricing === null) return planBasis(exportPack(pack), settings, ctx);
-  const { basis, leaf } = await pricing;
-  return { env: basis.env, leaf };
+  const { basis, buildLeaf } = await pricing;
+  return { env: basis.env, leaf: buildLeaf };
 }
