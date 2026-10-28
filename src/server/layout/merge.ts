@@ -32,7 +32,7 @@ export function isOptional(line: BomLine): boolean {
 interface Draft {
   key: StuffKey; amount: number; whys: string[]; have?: BomLine['have']; children?: BomLine[]; group?: BomLine['group'];
   neededFor: Map<StuffKey, number> | null;
-  made?: BomLine['made']; unmade?: BomLine['unmade'];
+  made?: BomLine['made']; unmade?: BomLine['unmade']; seedBank?: true;
 }
 
 function draftOf(line: BomLine): Draft {
@@ -57,6 +57,11 @@ function addTo(draft: Draft, line: BomLine): void {
     if (line.made !== undefined) draft.made = line.made;
     else if (line.unmade !== undefined) draft.unmade = line.unmade;
   }
+  // a part from the seed bank is no import (architecture §11 entry 41 (10)): that mark wins over an unmade line of its key
+  if (line.seedBank === true) {
+    draft.seedBank = true;
+    delete draft.unmade;
+  }
 }
 
 function lineOf(d: Draft): BomLine {
@@ -67,7 +72,8 @@ function lineOf(d: Draft): BomLine {
     ...(d.group === undefined ? {} : { group: d.group }),
     ...(d.neededFor === null ? {} : { neededFor: [...d.neededFor].map(([key, amount]) => ({ key, amount })) }),
     ...(d.made === undefined ? {} : { made: d.made }),
-    ...(d.unmade === undefined ? {} : { unmade: d.unmade }),
+    ...(d.unmade === undefined || d.seedBank === true ? {} : { unmade: d.unmade }),
+    ...(d.seedBank === true ? { seedBank: true as const } : {}),
   };
 }
 
@@ -79,7 +85,7 @@ function lineOf(d: Draft): BomLine {
  * keeps `neededFor` (architecture §11.36): the build lines that need it, by key in the order first seen, each one's
  * amounts summed, so they still add up to the merged amount; it is left out when one of the merged lines has none. A
  * line keeps how it is made (`made`) or why it cannot be (`unmade`, architecture §11 entry 41 (1)–(2)), as the first
- * line that says has it.
+ * line that says has it; one a line marks from the seed bank (`seedBank`, entry 41 (10)) keeps that mark and no `unmade`.
  */
 export function mergeBom(a: readonly BomLine[], b: readonly BomLine[]): BomLine[] {
   const drafts = new Map<StuffKey, Draft>();

@@ -9,7 +9,7 @@ import type { AppContext } from '../app.ts';
 import { planForProject } from '../http/routes/projects.ts';
 import { worldService } from '../http/routes/world.ts';
 import { allMachines } from '../pack/lookup.ts';
-import { expandBomLines, fromSeedBank, partName, seedBankParts, type BomMake } from '../planner/bom.ts';
+import { expandBomLines, fromSeedBank, partName, seedBankKeys, type BomMake } from '../planner/bom.ts';
 import { bomBuildCost } from '../planner/build-cost.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
 import { linePricing } from '../planner/pricing.ts';
@@ -68,8 +68,8 @@ export interface LayoutServiceDeps {
   // optional addition (add-on 14 × add-on 17)
   /**
    * The pack a placed line's build steps are worded on, as `planLine` words the plan's own: the line's farm pack
-   * (`LinePricing.pack`), whose farm recipes say what its crop farms plant (`partSteps`) and what the group takes from its
-   * seed bank, no import (`seedBankParts`); without it, or where the line has no farms, the export pack.
+   * (`LinePricing.pack`), whose farm recipes say what its crop farms plant (`partSteps`); without it, or where the line has
+   * no farms, the export pack.
    */
   linePack?(pack: Pack, project: Project): Promise<Pack>;
 }
@@ -194,8 +194,8 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       const expansion = await expansionOf(entry, pack, layout, project, plan);
       const cost = costOf(entry, pack, layout, project);
       const stepsPack = deps.linePack === undefined ? pack : await deps.linePack(pack, project);
-      // what the group takes from its seed bank is no import (`seedBankParts`, on the line's farm pack), as in the plan's own
-      const bank = new Set(seedBankParts(stepsPack, plan.steps).keys());
+      // what the group takes from its seed bank is no import, as the plan's breakdown decided it (its `seedBank` lines)
+      const bank = seedBankKeys(plan.buildList);
       const lines = fromSeedBank(expansion.lines, bank);
       const totals = fromSeedBank(expansion.totals, bank);
       const bom = { lines, totals, makes: expansion.makes ?? [] };

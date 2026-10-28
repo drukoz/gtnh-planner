@@ -133,12 +133,21 @@ export interface BuildRow {
   made?: { text: string; recipeId: string; alternatives: Alternative[] };
   /** A part the line cannot buy and the breakdown cannot make here, and why (`BomLine.unmade`, entry 41 (2)): the row says to import it. */
   unmade?: 'no-recipe' | 'own-chain';
+  /** A part the group takes from its own seed bank (`BomLine.seedBank`, entry 41 (10)): the row says so, never to import it. */
+  seedBank?: true;
 }
 
 const NONE: ReadonlySet<StuffKey> = new Set();
 
 /** What the avoid marker says of a good the line uses although the avoid list covers it: its title in the List, a line of its slot's tip in the grid. */
 export const AVOID_NOTE = 'On the avoid list or made from it, but no recipe at this tier avoids it';
+/** Why a build part must be imported (`BomLine.unmade`, architecture §11 entry 41 (2)): its marker's title and its slot's tip. */
+export const UNMADE_NOTES: Readonly<Record<NonNullable<BomLine['unmade']>, string>> = {
+  'no-recipe': 'Nothing at this tier makes it: import it, or mark it "we already make this"',
+  'own-chain': 'Every recipe for it here needs a part of its own chain: swap the recipe of a part it goes into, or import it',
+};
+/** A part the group takes from its own seed bank (`BomLine.seedBank`, entry 41 (10)): its marker's title and its slot's tip. */
+export const SEED_BANK_NOTE = 'Take it from your seed bank: no part to import';
 
 /** The goods the plan uses although the avoid list covers them, as nothing at its tier avoids them (spec §3.3). */
 export function unavoidableKeys(plan: Plan): Set<StuffKey> {
@@ -209,6 +218,7 @@ export function buildRows(
     const text = madeText(line, names);
     if (line.made !== undefined && text !== undefined) row.made = { text, recipeId: line.made.recipeId, alternatives: alternatives?.[line.key] ?? [] };
     if (line.unmade !== undefined) row.unmade = line.unmade;
+    if (line.seedBank === true) row.seedBank = true;
     rows.push(row);
     if (expanded.has(path)) for (const child of children) visit(child, path, depth + 1, group);
   };
@@ -271,6 +281,9 @@ export interface SlotItem {
   why: string; have?: string; where?: string[];
   /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
   avoid?: true;
+  /** A part to import, and why (`BomLine.unmade`), or one from the seed bank (`BomLine.seedBank`), as the List's row marks it. */
+  unmade?: NonNullable<BomLine['unmade']>;
+  seedBank?: true;
   fluid: boolean;
 }
 
@@ -294,6 +307,8 @@ function slotItem(line: BomLine, group: BuildGroup, names: Record<string, string
     stacks: fluid ? [1] : stackSplit(line.amount), stackCount: fluid ? 1 : stackCount(line.amount), why: line.why, ...stockOf(line.have), fluid,
   };
   if (unavoidable.has(line.key)) item.avoid = true;
+  if (line.unmade !== undefined) item.unmade = line.unmade;
+  if (line.seedBank === true) item.seedBank = true;
   return item;
 }
 
@@ -318,13 +333,16 @@ export function stillNeeded(items: readonly SlotItem[], marks: Readonly<Record<s
 
 /**
  * A slot's tip after its name (Phase 2 spec §9.4): what the build needs, and what the scanned world holds; why; the avoid marker's words,
- * for a good nothing at the tier avoids; and who marked the row, and when (`when` writes the time).
+ * for a good nothing at the tier avoids; a part to import and why, or one from the seed bank, as the List's row marks it (add-on 14);
+ * and who marked the row, and when (`when` writes the time).
  */
 export function slotTipLines(item: SlotItem, mark: Mark | undefined, when: (iso: string) => string): string[] {
   return [
     item.have === undefined ? `need ${item.amount}` : `need ${item.amount} · ${item.have}`,
     item.why,
     ...(item.avoid === true ? [AVOID_NOTE] : []),
+    ...(item.unmade === undefined ? [] : [`import it: ${UNMADE_NOTES[item.unmade]}`]),
+    ...(item.seedBank === true ? [SEED_BANK_NOTE] : []),
     ...(mark === undefined ? [] : [`✓ ${mark.by}, ${when(mark.at)}`]),
   ];
 }

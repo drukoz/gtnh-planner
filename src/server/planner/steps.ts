@@ -13,7 +13,7 @@ import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
 import { machineByMteId } from '../pack/lookup.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
-import { cleanroomMachine, partName, seedBankParts, stepOneOffs, stepProductName, stepTools, type Bom, type BomMake } from './bom.ts';
+import { cleanroomMachine, partName, stepOneOffs, stepProductName, stepTools, type Bom, type BomMake } from './bom.ts';
 import { structureParts } from './build-cost.ts';
 import type { HeldAvoid } from './candidates.ts';
 import { plantingParts, soilWork, type PlantingPart } from './farms/recipes.ts';
@@ -182,11 +182,12 @@ function plantingText(amount: string, planted: Planted): string {
 }
 
 /**
- * What a crop farm's part that the build list makes is for (add-on 14 × 17), as its make step's note in brackets: its
- * crop sticks or seeds `to plant in the <crop> farm`, its soil `as soil for the <crop> farm`.
+ * What a crop farm's part that the build list makes is for (add-on 14 × 17), as its make step's note in one bracket: its
+ * crop sticks or seeds `to plant in the <crop> farm`, its soil `as soil for the <crop> farm; hoe it into Farmland`.
  */
 function plantedFor(planted: Planted): string {
-  const farms = joinNames(planted.farms);
+  // a farm's name may end with what to do to its soil, " (hoe it into Farmland)": in a bracket of its own it goes after "; "
+  const farms = joinNames(planted.farms.map((farm) => farm.replace(/ \((.+)\)$/, '; $1')));
   return planted.part === 'soil' ? `as soil for ${farms}` : `to plant in ${farms}`;
 }
 
@@ -208,9 +209,10 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
  * order alone. The cleanroom line's own step, made or not, says to build it around the steps that need it. A top-level
  * one-off says what it is for: a hand-crafting tool, what a crop farm plants (add-on 17: a made one says
  * `(to plant in the <crop> farm)`, one not made is worded as `plantingText` words it), else that it stays in the machine;
- * what the group takes from its seed bank (`seedBankParts`: a crop's seeds, a new tree farm's sapling) is no import: one
- * nothing here makes reads `Take <n>× <seeds> from your seed bank for the <crop> farm` or `Take <n>× <sapling> (stays in
- * the machine) from your seed bank for the <sapling> farm` (the controller's ruling after the merge of main).
+ * what the breakdown marked `seedBank` (bom.ts `seedBankParts`: a crop's seeds, a new tree farm's sapling) is no import:
+ * its total is gathered with the others, and its top-level line, made nowhere here, reads `Take <n>× <seeds> from your seed
+ * bank for the <crop> farm` or `Take <n>× <sapling> (stays in the machine) from your seed bank for the <sapling> farm`
+ * (the controller's ruling after the merge of main).
  */
 export function partSteps(
   pack: Pack, input: { steps: readonly PlanStep[]; bom: { lines: BomLine[]; totals: BomLine[]; makes?: readonly BomMake[] }; tier: number; avoid?: HeldAvoid },
@@ -232,7 +234,6 @@ export function partSteps(
   // Add-on 17: one that only crop farms plant (no step keeps it in a machine or crafts with it) is worded as planting.
   const plantings = farmPlantings(pack, steps);
   const plantedOf = (key: StuffKey): Planted | undefined => (machineParts.has(key) || tools.has(key) ? undefined : plantings.get(key));
-  const bank = seedBankParts(pack, steps, avoid);
   const firstTop = new Map<StuffKey, BomLine>();
   /** What all the top-level lines of a key ask for: a bought part's one step names every group's amount. */
   const topAmount = new Map<StuffKey, number>();
@@ -286,9 +287,6 @@ export function partSteps(
   }
   for (const t of bom.totals) {
     if (t.unmade === undefined || nodes.has(t.key)) continue;
-    // what the group takes from its seed bank is no import (a caller's breakdown may still mark it unmade): its top-level
-    // line's step, below, says to take it from there
-    if (firstTop.get(t.key)?.group === 'one-off' && bank.has(t.key)) continue;
     const what = `${qty(t.key, t.amount)}${suffix(t.key)}`;
     const text = (t.unmade === 'own-chain'
       ? `Get ${what}: every recipe for it here needs a part of its own chain, so swap the recipe of a part it goes into, or import it (mark it "we already make this")`
@@ -300,10 +298,9 @@ export function partSteps(
     const group = l.group ?? 'machines';
     const amount = qty(l.key, topAmount.get(l.key) ?? l.amount);
     const planted = plantedOf(l.key);
-    const banked = bank.get(l.key);
     const text = group === 'one-off' && toolsOnly.has(l.key) ? `Make ${amount} (a tool for hand-crafting)`
       : group === 'one-off' && planted !== undefined ? plantingText(amount, planted)
-      : group === 'one-off' && banked?.part === 'sapling' ? `Take ${amount} (stays in the machine) from your seed bank for ${joinNames(banked.farms)}`
+      : group === 'one-off' && l.seedBank === true ? `Take ${amount} (stays in the machine) from your seed bank for the ${partName(pack, l.key)} farm`
       : group === 'one-off' ? `Make ${amount} (stays in the machine)`
       : group === 'machines' && l.key === roomKey ? `Build a cleanroom (${partName(pack, l.key)}) around the steps that need it`
       : `Craft ${amount}`;

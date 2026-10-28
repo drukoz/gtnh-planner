@@ -188,8 +188,8 @@ export interface SeedBankPart { part: 'seed' | 'sapling'; farms: string[] }
  * (`plantingParts`) and each new Tree Growth Simulator's sapling, which stays in its controller, with the farms they are
  * for, in step order (`the <crop> farm`, `the <sapling> farm`); none a step keeps in a machine or crafts with. `pack` is
  * the line's farm pack, whose farm recipes say it (the export pack knows none). Nothing imports them (the controller's
- * ruling after the merge of main into add-on 14): the build list marks none of them `unmade` (`fromSeedBank`) and the
- * build steps say to take them from the seed bank (steps.ts `partSteps`).
+ * ruling after the merge of main into add-on 14): `buildBom` decides it here, once, marking them `seedBank` and never
+ * `unmade` (`fromSeedBank`); the build steps, the Materials page and a finished plan read that mark.
  */
 export function seedBankParts(pack: Pack, steps: readonly PlanStep[], avoid?: HeldAvoid): Map<StuffKey, SeedBankPart> {
   const kept = new Set(steps.flatMap((s) => [...stepOneOffs(pack, s, avoid).map((o) => o.key), ...stepTools(pack, s, avoid)]));
@@ -211,13 +211,21 @@ export function seedBankParts(pack: Pack, steps: readonly PlanStep[], avoid?: He
   return out;
 }
 
-/** `lines` (a build tree or its totals) with no node of a key in `keys` marked `unmade`: what the seed bank holds is no import. */
+/**
+ * `lines` (a build tree or its totals) with every node of a key in `keys` marked `seedBank` and never `unmade`: what the
+ * group takes from its seed bank is no import (architecture §11 entry 41 (10)).
+ */
 export function fromSeedBank(lines: readonly BomLine[], keys: ReadonlySet<StuffKey>): BomLine[] {
   return lines.map((line) => {
     const { unmade: _unmade, ...kept } = line;
-    const own: BomLine = keys.has(line.key) ? kept : line;
+    const own: BomLine = keys.has(line.key) ? { ...kept, seedBank: true } : line;
     return line.children === undefined ? own : { ...own, children: fromSeedBank(line.children, keys) };
   });
+}
+
+/** The keys a plan's breakdown marked `seedBank` (`fromSeedBank`) among `lines`, a build list. */
+export function seedBankKeys(lines: readonly BomLine[]): Set<StuffKey> {
+  return new Set(lines.filter((line) => line.seedBank === true).map((line) => line.key));
 }
 
 /**
@@ -321,7 +329,7 @@ export async function buildBom(
     .map((d) => ({ key: d.key, amount: round9(d.amount), why: d.whys.join('; '), group: d.group }))
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || byString(a.key, b.key));
   const expanded = await expandWith(base, lines, { ...opts, steps });
-  // what the group takes from its seed bank is no import (`seedBankParts`, on the line's farm pack)
+  // what the group takes from its seed bank is no import: decided here, once (`seedBankParts`, on the line's farm pack)
   const bank = new Set(seedBankParts(pack, steps, opts.avoid).keys());
   return {
     lines: fromSeedBank(expanded.lines, bank), totals: fromSeedBank(expanded.totals, bank), warnings: [...warnings, ...expanded.warnings],

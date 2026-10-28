@@ -3,7 +3,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys, missingRows, madeText, withLinePlaced,
-  gatheredStacks, groupBuildSlots, MAX_STACKS_SHOWN, slotTipLines, stackCount, stackSplit, stillNeeded,
+  gatheredStacks, groupBuildSlots, MAX_STACKS_SHOWN, slotTipLines, stackCount, stackSplit, stillNeeded, SEED_BANK_NOTE, UNMADE_NOTES,
 } from '../../src/client/views/materials-model.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
 import { MaterialsView, UsedByChips } from '../../src/client/views/MaterialsView.tsx';
@@ -325,6 +325,27 @@ describe('how the build parts are made', () => {
       expect(single).toContain(coilText);
       expect(single).not.toContain('mat-swap');
     }
+  });
+  it('marks a part from the seed bank as such, never as one to import, in the List and in the Grid', () => {
+    // the controller's ruling after the merge of main (add-on 14 × 17): what the breakdown marks `seedBank` (a crop's seeds, a new tree
+    // farm's sapling) is no import: its row says it comes from the seed bank, as its step does
+    const seeds: BomLine = { key: 't:cane_seed@0', amount: 2, why: 'Resin Cane farm', group: 'one-off', seedBank: true };
+    const ebf: BomLine = { key: 'machine:1000@0', amount: 1, why: '1× Electric Blast Furnace', unmade: 'no-recipe' };
+    const banked = { ...plan, buildList: [ebf, seeds], buildTotals: [...plan.buildTotals!, seeds] } as Plan;
+    const rows = buildRows(banked.buildList, names, new Set());
+    expect(rows.map((r) => [r.key, r.unmade, r.seedBank])).toEqual([['machine:1000@0', 'no-recipe', undefined], ['t:cane_seed@0', undefined, true]]);
+    const html = view(banked);
+    const seedRow = row(html, 'build:t:cane_seed@0');
+    expect(seedRow).toContain(`<span class="badge seed-badge" title="${SEED_BANK_NOTE}">seed bank</span>`);
+    expect(seedRow).not.toContain('unmade-badge');
+    const totals = /<section[^>]*aria-labelledby="build-totals-title"[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? '';
+    expect(row(totals, 'build:t:cane_seed@0')).toContain('seed-badge');
+    // the Grid's slot tip says the same: what to import and why, what comes from the seed bank
+    const tips = groupBuildSlots(banked.buildList, names).flatMap((g) => g.items).map((item) => [item.key, slotTipLines(item, undefined, () => '')]);
+    expect(tips).toEqual([
+      ['machine:1000@0', ['need 1×', '1× Electric Blast Furnace', `import it: ${UNMADE_NOTES['no-recipe']}`]],
+      ['t:cane_seed@0', ['need 2×', 'Resin Cane farm', SEED_BANK_NOTE]],
+    ]);
   });
 });
 

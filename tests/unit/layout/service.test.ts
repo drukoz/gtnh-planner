@@ -195,7 +195,7 @@ describe('layout service', () => {
     // controller's ruling after the merge of main): no line or total of theirs is unmade
     const seeds = [...nodes(done.buildList), ...(done.buildTotals ?? [])].filter((l) => l.key === 't:cane_seed@0');
     expect(seeds.length).toBeGreaterThan(0);
-    expect(seeds.map((l) => l.unmade)).toEqual(seeds.map(() => undefined));
+    expect(seeds.map((l) => [l.unmade, l.seedBank])).toEqual(seeds.map(() => [undefined, true]));
     // without the dep, the export pack's words
     expect(text(await finish({}), 'craft:minecraft:dirt@0')).toBe('Make 2× Dirt (stays in the machine)');
   });

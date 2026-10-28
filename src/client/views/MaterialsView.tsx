@@ -9,7 +9,8 @@
 // nothing at the tier avoids carries a small "avoid" marker (spec §3.3). "To build (once)" can also be shown as an
 // inventory grid (Phase 2 spec §9, MaterialsGrid.tsx), a choice of this browser's; the List stays the default.
 // A made build part says how it is made and, with a choice of recipes, opens the flow view's recipe swap; a part nothing
-// here can make says to import it; and once the build counts the placed line's parts, its headings say so (§11 entry 41).
+// here can make says to import it, one from the seed bank says so (the List's row and the Grid's slot tip alike); and once the
+// build counts the placed line's parts, its headings say so (§11 entry 41).
 
 import { Fragment, useMemo, useState, type ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -28,8 +29,8 @@ import { useMaterialsView } from '../state/materials-view.ts';
 import { makeHerePatch } from './flow-model.ts';
 import { BuildGrid, GatherMeter, ViewToggle } from './MaterialsGrid.tsx';
 import {
-  amountText, AVOID_NOTE, buildRows, gatheredStacks, groupBuildRows, groupBuildSlots, missingRows, quantity, runRows, takenRows, unavoidableKeys,
-  withLinePlaced, type BuildRow, type MissingRow, type RunRow, type TakenRow, type UsedBy,
+  amountText, AVOID_NOTE, buildRows, gatheredStacks, groupBuildRows, groupBuildSlots, missingRows, quantity, runRows, SEED_BANK_NOTE, takenRows,
+  unavoidableKeys, UNMADE_NOTES, withLinePlaced, type BuildRow, type MissingRow, type RunRow, type TakenRow, type UsedBy,
 } from './materials-model.ts';
 import { buildTotalLine } from './plan-cost.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -65,15 +66,14 @@ function AvoidMarker(): ReactElement {
   return <span className="badge avoid-badge" title={AVOID_NOTE}>avoid</span>;
 }
 
-/** Why a build part must be imported (`BuildRow.unmade`, architecture §11 entry 41 (2)), on its badge's hover. */
-const UNMADE_TITLES: Readonly<Record<NonNullable<BuildRow['unmade']>, string>> = {
-  'no-recipe': 'Nothing at this tier makes it: import it, or mark it "we already make this"',
-  'own-chain': 'Every recipe for it here needs a part of its own chain: swap the recipe of a part it goes into, or import it',
-};
-
-/** The marker of a build part the line cannot buy and nothing here can make (`BuildRow.unmade`): import it. */
+/** The marker of a build part the line cannot buy and nothing here can make (`BuildRow.unmade`): import it, why on its hover. */
 function UnmadeMarker(props: { cause: NonNullable<BuildRow['unmade']> }): ReactElement {
-  return <span className="badge unmade-badge" title={UNMADE_TITLES[props.cause]}>import it</span>;
+  return <span className="badge unmade-badge" title={UNMADE_NOTES[props.cause]}>import it</span>;
+}
+
+/** The marker of a part the group takes from its own seed bank (`BuildRow.seedBank`, entry 41 (10)): no import. */
+function SeedBankMarker(): ReactElement {
+  return <span className="badge seed-badge" title={SEED_BANK_NOTE}>seed bank</span>;
 }
 
 /** The have-count; when the scan says where the stock sits, it opens to one line per storage block. */
@@ -131,6 +131,7 @@ function BuildItem(props: { row: BuildRow; names: Record<string, string>; marks:
       <Tick row={row.row} mark={marks[row.row]} label={row.name} onToggle={marker(send, row.row)}>
         <span className="mat-amount">{quantity(row.key, row.amount)}</span>
         {row.unmade !== undefined && <UnmadeMarker cause={row.unmade} />}
+        {row.seedBank === true && <SeedBankMarker />}
         {row.avoid === true && <AvoidMarker />}
         <NeededFor row={row} />
         <Stock have={row.have} where={row.where} />

@@ -412,6 +412,12 @@ export interface BomLine {
   // optional addition
   /** A good the line cannot buy and the breakdown cannot make here, and why (architecture §11 entry 41 (2)). */
   unmade?: 'no-recipe' | 'own-chain';
+  // optional addition (architecture §11 entry 41 (10))
+  /**
+   * The group takes it from its own seed bank (add-on 17: a crop farm's seeds, a new Tree Growth Simulator's sapling), so it
+   * is no part to import: set by the plan's breakdown on every node and total of such a good, never with `unmade`.
+   */
+  seedBank?: true;
 }
 
 // 'make' is an optional addition (architecture §11 entry 41 (5)): a build part made in a machine
