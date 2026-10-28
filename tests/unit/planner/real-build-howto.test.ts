@@ -38,8 +38,14 @@ import type { Machine, Pack } from '../../../src/shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type BuildStep, type Plan, type PlanSettings } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
 
-/** Plan 09's bound on a plan with a warm pack (real-user-project.test.ts keeps its own; ruling 102). */
-const PLAN_SECONDS = 5;
+/**
+ * The bound on a plan with a warm pack, re-timed when add-on 14 met main's add-on 12 (controller ruling, 2026-10-27; plan
+ * 09's 5 s, ruling 102, predates build-cost planning). Measured as this test plans, a fresh process each, at load 16-23:
+ * this line 10.9 / 11.2 s against main's 8.3 / 8.4 s (1.32x-1.33x, accepted: "we already make this" priced at what making
+ * it costs, and the recycling rule's prices, each about 1.14x; the speed work is fix wave 4's). 1.5x the line's median.
+ * real-user-project.test.ts keeps its own bound.
+ */
+const PLAN_SECONDS = 17;
 const STATE = 'docs/local/ec-state.json';
 const LEDGER = 'docs/local/plan-14-ledger';
 const AUDIT = `${LEDGER}/audit.txt`;
