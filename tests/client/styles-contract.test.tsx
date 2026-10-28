@@ -1083,15 +1083,16 @@ const SLOT_VEIL = '.item-icon::after';
 const LIT_SLOT = '.item-icon:hover::after, .search-hit.active .item-icon::after';
 const FLOW_SLOT = 'svg .item-icon';
 const ACTIVE_HIT = ".search-hit.active, .search-hit[aria-selected='true']";
-/** The pixel caret of the build toggle and of the two inline disclosures, which share one rule, and the same three turned down. */
-const CARETS = 'button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before';
-const CARETS_DOWN = "button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before";
-const INLINE_SUMMARY = '.mat-have summary, .mat-needed summary';
-const INLINE_CARET = '.mat-have summary::before, .mat-needed summary::before';
 /**
- * Add-on 14's recipe swap of a made build part, a third inline disclosure of a Materials row (the controller's ruling after
- * the merge of main: the same pixel caret, in rules of its own beside the two pinned above).
+ * The pixel caret of the build toggle and of the inline disclosures, which share one rule, and the same turned down. Add-on 14's recipe
+ * swap of a made build part joins the stock and the why (the controller's ruling after the merge of main: the same caret).
  */
+const CARETS = 'button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before, .mat-swap summary::before';
+const CARETS_DOWN = "button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before, "
+  + '.mat-swap[open] summary::before';
+const INLINE_SUMMARY = '.mat-have summary, .mat-needed summary, .mat-swap summary';
+const INLINE_CARET = '.mat-have summary::before, .mat-needed summary::before, .mat-swap summary::before';
+/** Add-on 14's recipe swap of a made build part, the third inline disclosure of a Materials row: its summary and caret. */
 const SWAP_SUMMARY = '.mat-swap summary';
 const SWAP_CARET = '.mat-swap summary::before';
 const SWAP_CARET_DOWN = '.mat-swap[open] summary::before';
@@ -1252,21 +1253,15 @@ describe('the Machine GUI Materials & steps tab', () => {
     }
   });
 
-  it('gives the recipe swap of a build row the caret of the inline disclosures, inline, before its text', () => {
-    // add-on 14 (the controller's ruling after the merge of main): the swap's summary is inline text that opens, as the stock and the why
-    expectDeclared([
-      [SWAP_SUMMARY, 'cursor', 'pointer'], [SWAP_SUMMARY, 'list-style', 'none'], [`${SWAP_SUMMARY}::-webkit-details-marker`, 'display', 'none'],
-      [SWAP_CARET, 'display', 'inline-block'], [SWAP_CARET, 'margin-right', '6px'], [SWAP_CARET, 'vertical-align', '-1px'],
-      [SWAP_CARET_DOWN, 'transform', 'rotate(90deg)'],
-    ]);
-    // the same pixel caret as the toggle's and the two disclosures' shared rule
-    for (const property of ['content', 'width', 'height', 'background', 'clip-path', 'transition']) {
-      expect(declared(SWAP_CARET, property), `${SWAP_CARET} { ${property} }`).toBe(declared(CARETS, property));
+  it('gives the recipe swap of a build row the caret of the inline disclosures, in their own rules', () => {
+    // add-on 14 (the controller's ruling after the merge of main): the swap's summary joins the stock's and the why's rules, so it is the
+    // same inline text that opens, with the same pixel caret before it, turned down while it is open, and the same forced-colours paint
+    for (const [rule, swap] of [[CARETS, SWAP_CARET], [CARETS_DOWN, SWAP_CARET_DOWN], [INLINE_SUMMARY, SWAP_SUMMARY], [INLINE_CARET, SWAP_CARET]]) {
+      expect(position(rule), rule).toBeGreaterThan(-1);
+      expect(rule.split(', '), rule).toContain(swap);
     }
-    expect(position(SWAP_CARET_DOWN)).toBeGreaterThan(position(SWAP_CARET));
-    for (const property of ['background', 'border', 'box-shadow', 'min-height', 'display']) {
-      expect(declared(SWAP_SUMMARY, property), `${SWAP_SUMMARY} { ${property} }`).toBeUndefined();
-    }
+    // and no rule of its own that could drift from theirs
+    for (const swap of [SWAP_SUMMARY, SWAP_CARET, SWAP_CARET_DOWN]) expect(position(swap), swap).toBe(-1);
   });
 
   it('opens and closes the Materials disclosures with an animated height', () => {
@@ -2424,8 +2419,6 @@ describe('the Machine GUI in forced colours', () => {
   it('draws the carets in the text colour of what they sit on: a summary\'s button, the materials list', () => {
     expect(inQuery(FORCED, SUMMARY.replace(/summary/g, 'summary::before'))).toEqual([['background', 'ButtonText']]);
     expect(inQuery(FORCED, CARETS)).toEqual([['background', 'CanvasText']]);
-    // add-on 14's recipe swap, in a rule of its own (the controller's ruling after the merge of main)
-    expect(inQuery(FORCED, SWAP_CARET)).toEqual([['background', 'CanvasText']]);
   });
 
   it('edges a slider\'s track and fills a progress bar in the Highlight, with a rule per engine', () => {
@@ -2468,7 +2461,7 @@ describe('the Machine GUI in forced colours', () => {
       TICK, ':where(input[type=checkbox])::before', ':where(input[type=radio])::before', SUMMARY.replace(/summary/g, 'summary::before'), CARETS,
       ':where(input[type=range])::-webkit-slider-runnable-track', ':where(input[type=range])::-moz-range-track',
       ':where(progress)::-webkit-progress-value', ':where(progress)::-moz-progress-bar', ...FAILED_FILLS, ':where(select)',
-      ':where(input[type=search])::-webkit-search-cancel-button', SELECTED, ACTIVE_HIT, PICKED_ROW, SWAP_CARET,
+      ':where(input[type=search])::-webkit-search-cancel-button', SELECTED, ACTIVE_HIT, PICKED_ROW,
       // Phase 2 Task 6a: the inventory grid's slot, its tick, its meter's fill and the pressed Grid / List (spec §9.3)
       'button.mat-slot', '.mat-slot-tick::before', '.mat-meter-fill', ".mat-view-toggle button[aria-pressed='true']",
     ];
