@@ -4,11 +4,13 @@
 // each made build part (architecture §11 entry 41 (3)). A pick sends one `settings` patch: the pins
 // (`PlanSettings.recipeChoice`) are shared by the running line and the build list.
 
-import { useId, useState, type ReactElement } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import { formatNumber } from '../format.ts';
 import { importInsteadPatch } from '../views/flow-model.ts';
+import { Figs } from './Figs.tsx';
+import { focusLost, focusOn } from './focus.ts';
 
 type NameOf = (key: string) => string;
 
@@ -92,12 +94,34 @@ export interface SwapRecipeProps {
 /**
  * Every way to make `good` (controller rulings of plan 09): those the group can use with a radio each, the others
  * greyed with why not; the first few, then pages of "more…"; last, importing the good instead — unless it is the line's
- * own target. A pin the plan cannot use is said so.
+ * own target. A pin the plan cannot use is said so. A "more…" that shows the rest goes with its own press: before it goes,
+ * it hands the focus it had to the first way it shows, else to the step panel (the Materials page's swap: to its summary),
+ * never to the body (ledger ruling P2-R124, P2-R57's rule).
  */
 export function SwapRecipe(props: SwapRecipeProps): ReactElement {
   const { good, inUse, alternatives, legend, ways, settings, nameOf, patch } = props;
   const group = useId();
   const [limit, setLimit] = useState(SWAP_SHOWN);
+  const fieldRef = useRef<HTMLFieldSetElement | null>(null);
+  /**
+   * A "more…" that shows the rest was pressed: where the first way it shows stands among the ways shown (null when that way takes no focus:
+   * one the group cannot use), for the focus its button had; undefined otherwise.
+   */
+  const handOn = useRef<number | null | undefined>(undefined);
+  useLayoutEffect(() => {
+    const at = handOn.current;
+    if (at === undefined) return;
+    handOn.current = undefined;
+    // a press made while another element had the focus leaves it there (a pointer's, in Safari or Firefox on macOS, focuses no button); one
+    // made with nothing focused hands it on all the same
+    if (!focusLost()) return;
+    const field = fieldRef.current;
+    const way = at === null ? null : field?.querySelectorAll(':scope > .swap-option')[at]?.querySelector('input') ?? null;
+    if (focusOn(way)) return;
+    // the step panel's swap hands it to the panel; the Materials page's, which no panel holds, to the summary of its disclosure
+    const panel = field?.closest('aside') ?? field?.closest('details')?.querySelector(':scope > summary');
+    focusOn(panel, { preventScroll: true });
+  }, [limit]);
   const choices = settings.recipeChoice;
   const pinned = Object.hasOwn(choices, good) ? choices[good] : undefined;
   const choose = (recipeId: string | null): void => patch(swapPatch(choices, good, recipeId));
@@ -105,10 +129,19 @@ export function SwapRecipe(props: SwapRecipeProps): ReactElement {
   const pinUsable = pinned === undefined || usable.some((a) => a.recipeId === pinned);
   const shown = shownWays(alternatives, limit, inUse, pinned);
   const hidden = alternatives.length - shown.length;
+  const more = (): void => {
+    if (hidden <= SWAP_PAGE) {
+      // the rest comes, and the button goes: the first way it brings takes the focus, a way the group can use (the server sorts those first)
+      const next = shownWays(alternatives, limit + SWAP_PAGE, inUse, pinned);
+      const first = next.findIndex((a) => !shown.includes(a));
+      handOn.current = first >= 0 && next[first]?.unusable === undefined ? first : null;
+    }
+    setLimit((n) => n + SWAP_PAGE);
+  };
   // A product the line imports is counted at the cheapest way the group can make it (the stop item's price).
   const importCost = usable.reduce((least, a) => Math.min(least, a.rawCost), Number.POSITIVE_INFINITY);
   return (
-    <fieldset className="flow-panel-section" data-swap="">
+    <fieldset ref={fieldRef} className="flow-panel-section" data-swap="">
       <legend className="flow-panel-title">{legend}</legend>
       {ways !== undefined && (
         <p className="muted small">{`${ways.total} ${ways.total === 1 ? 'way' : 'ways'} to make ${nameOf(good)}: ${ways.usable} you can use now`}</p>
@@ -130,8 +163,8 @@ export function SwapRecipe(props: SwapRecipeProps): ReactElement {
       )))}
       {hidden > 0 && (
         <div className="row">
-          <button type="button" className="small" onClick={() => setLimit((n) => n + SWAP_PAGE)}>
-            {hidden <= SWAP_PAGE ? `${hidden} more…` : `${SWAP_PAGE} more… (${hidden} not shown)`}
+          <button type="button" className="small" onClick={more}>
+            <Figs text={hidden <= SWAP_PAGE ? `${hidden} more…` : `${SWAP_PAGE} more… (${hidden} not shown)`} />
           </button>
         </div>
       )}

@@ -1,28 +1,35 @@
 // The panel beside the flow diagram (spec §3.9, fix spec §6.3). A step's panel: what it takes and makes and from or to
 // which step (hovering a row lights the item in the diagram, clicking a step selects it), the machine it shares with
-// other steps (plan 12), who else makes its product, why it uses the ingredient option it does (pin another), the free
-// input it supplies or the supporting line it belongs to, the group's machines it reuses and where they stand (those of
-// other tiers, and the steps a machine is shared with, included), the machine tier it runs at (pin another, plan 12),
-// its overclock math, every way to make its product (swap its
-// recipe, or import the product instead) and its warnings. A raw material's panel: what kind of import it is, which
-// steps use it, what a bought one stands for, and making it in the line instead. Every choice sends one `settings` op
-// with whole field values.
+// other steps (plan 12), a farm step's farm (add-on 17: what it plants and holds; its recipe is a synthetic one the
+// export does not have, and the panel asks the pack nothing about it), who else makes its product, why it uses the
+// ingredient option it does (pin another), the free input it supplies or the supporting line it belongs to, the group's
+// machines it reuses and where they stand (those of other tiers, and the steps a machine is shared with, included), the
+// machine tier it runs at (pin another, plan 12), its overclock math, every way to make its product (swap its
+// recipe, or import the product instead), its notes (a good the plan makes two ways, or buys beside its makers, on
+// purpose: plan 12's final review) and its warnings. A raw material's panel: what kind of import it is and what the line
+// takes of it from a farm the group runs or another project (add-on 17), which steps use it, what a bought one stands
+// for, and making it in the line instead. Every choice sends one `settings` op with whole field values.
+// A step's panel opens on one run of its recipe as NEI draws it (Phase 2 spec §8: the slots, the progress arrow, the
+// power, the readouts and the overclock chips; hovering a slot lights its good as a row does).
 
-import { useId, type ReactElement, type ReactNode } from 'react';
-import { tierName } from '../../shared/gt/tiers.ts';
+import { useId, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { tierName, V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { indexPlan, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
+import { indexPlan, NOTE_CODES, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
 import { stepNameIn } from '../../shared/plan/pools.ts';
 import {
   FREE_KEYS, type LeafClass, type MachineWhere, type Plan, type PlanFlow, type PlanSettings, type PlanStep, type RawInput, type SourceInfo, type StepOption,
   type StepTier,
 } from '../../shared/types/plan.ts';
+import { Figs } from '../components/Figs.tsx';
+import { GtArrow } from '../components/GtArrow.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { amountWords, mapName, SwapRecipe } from '../components/SwapRecipe.tsx';
-import { formatNumber, formatPercent, formatRate } from '../format.ts';
+import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
 import {
-  flowEdgeId, haveSupplyPatch, importInsteadPatch, LEAF_WORD, makeHerePatch, ocLines, optionPatch, optionSlotKey, reusePatch, tierText, useOnlyPatch,
+  chanceTag, flowEdgeId, haveSupplyPatch, importInsteadPatch, importWords, LEAF_WORD, machineReadout, makeHerePatch, ocChips, ocLines, optionPatch,
+  optionSlotKey, powerShare, recipeSlots, recipeStats, reusePatch, stackText, tierText, useOnlyPatch, type RecipeSlot,
 } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
@@ -40,6 +47,9 @@ const MAX_REUSED_AT = 3;
 /** The overworld's Minecraft dimension id: a reused machine there is given by its position alone. */
 const OVERWORLD_ID = 0;
 const PORT_ICON_SIZE = 16;
+/** A recipe card's slot: a 32 px item icon is a 36 px slot, its 2 px frame round it (Phase 2 spec §8.1). */
+const SLOT_ICON_SIZE = 32;
+const TICKS_PER_SECOND = 20;
 const RAW = 'raw';
 const OUT = 'out';
 const SINK = 'sink';
@@ -119,7 +129,7 @@ export function PortsSection(props: { step: PlanStep; plan: Plan; per: Per; onSe
   const index = props.index ?? indexPlan(plan);
   const nameOf = namesOf(plan);
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
-  const leafOf = new Map(plan.rawInputs.map((r) => [r.key, r.leafClass]));
+  const imports = importWords(plan);
   // Flows carry net amounts (balance.ts), so a step makes of a good what it makes per run less what it takes of it; a
   // good it takes and hands back in full (a cell, a catalyst) has neither a Takes nor a Makes row.
   const perRun = (products: PlanStep['inputs']): Map<StuffKey, number> => {
@@ -148,8 +158,8 @@ export function PortsSection(props: { step: PlanStep; plan: Plan; per: Per; onSe
       );
     }
     if (node === RAW) {
-      const leaf = leafOf.get(key);
-      return `import${leaf === undefined ? '' : ` (${LEAF_WORD[leaf]})`} ${rate}`;
+      const words = imports.get(key);
+      return `import${words === undefined ? '' : ` (${words})`} ${rate}`;
     }
     if (node === OUT) return `the target ${rate}`;
     if (node === SINK) return `left over ${rate}`;
@@ -216,6 +226,117 @@ export function PortsSection(props: { step: PlanStep; plan: Plan; per: Per; onSe
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * "LV · 32 V", "IV · 8,192 V × 2 A": the tier a step runs at and the most one of its machines draws, its voltage and its amps when more than
+ * one (the overclock inputs', else its tier's voltage at 1 A, as `ocLines` reads them).
+ */
+function tierChipText(step: PlanStep): string {
+  const volts = step.oc?.machineVoltage ?? V[step.machine.tier] ?? 0;
+  const amps = step.oc?.machineAmps ?? 1;
+  return `${tierText(step.machine.tier)} · ${formatNumber(volts)} V${amps > 1 ? ` × ${formatNumber(amps)} A` : ''}`;
+}
+
+/**
+ * A recipe slot's accessible name (ledger ruling P2-R32, which extends P2-D39): its good; then what a run takes or makes of it when that is
+ * not one, a fluid's litres always (its slot always draws them); then its chance when below 100 %; then that the line does not supply it in
+ * full. The count and the chance tag a slot draws are aria-hidden and the slot takes no focus, so its name says them. A tool a tree farm
+ * wears keeps the tool's name (plan ruling farm-step-card).
+ */
+function slotLabel(good: string, s: RecipeSlot, worn: boolean, short: boolean): string {
+  const parts = [good];
+  if (!worn) {
+    if (isFluidKey(s.key)) parts.push(`${formatNumber(s.amount)} L per run`);
+    else if (s.amount !== 1) parts.push(`${formatNumber(s.amount)} per run`);
+    if (s.chance < 1) parts.push(`${formatPercent(s.chance)} chance`);
+  }
+  if (short) parts.push('not supplied in full');
+  return parts.join(', ');
+}
+
+/**
+ * One run of a step's recipe as NEI draws it (Phase 2 spec §8): the tier it runs at on a chip (none by hand or on a crafting table or a
+ * furnace, which have no voltage tier: plan ruling pseudo-tier-chip) and "One run"; in a recess of the panel, what a run takes and makes as
+ * 36 px slots with their stack counts (none for one item) and chance tags, the GT progress arrow between them, and at the right the energy
+ * bar, filled to what one machine draws of what it can, beside the run's time and power; the machines, how busy, and the power each and in
+ * all as readouts; and what overclocking did as chips. A slot is named by its good, what a run takes or makes of it, its chance and whether
+ * the line supplies it in full (`slotLabel`), and its tip says what a run takes or makes of it, the chance of it and its rate in the line
+ * (P2-D39); a chance tag is short enough for its slot (`chanceTag`), the tip and the name saying the whole chance; hovering one lights the
+ * good in the diagram, as a port row does. A farm step's card is a machine's (plan ruling farm-step-card): a crop farm's harvest below one
+ * item comes at that chance, and a tree farm's tool is worn a use a run, where the others come by chance. No hooks: the tests call it as a
+ * plain function.
+ */
+export function RecipeCard(props: { step: PlanStep; plan: Plan; index: PlanIndex; per: Per }): ReactElement {
+  const { step, plan, index, per } = props;
+  const nameOf = namesOf(plan);
+  const ins = recipeSlots(step.inputs);
+  const outs = recipeSlots(step.outputs);
+  const tools = new Set(step.farm?.tools ?? []);
+  const tier = machineReadout(step).tier;
+  const share = powerShare(step);
+  const time = step.durationTicks > 0 ? formatDuration(step.durationTicks / TICKS_PER_SECOND) : null;
+  const power = step.euPerTick > 0 ? `${formatNumber(step.euPerTick)} EU/t` : null;
+  const chips = ocChips(step);
+  const slot = (side: 'in' | 'out', s: RecipeSlot, i: number): ReactElement => {
+    const taken = side === 'in' ? index.inputs.get(step.id)?.get(s.key) : undefined;
+    const port = side === 'in' ? taken : index.outputs.get(step.id)?.get(s.key);
+    const short = taken !== undefined && taken.needPerSecond > 0 && taken.perSecond < SHORT_INPUT_SHARE * taken.needPerSecond;
+    const worn = side === 'in' && tools.has(s.key);
+    const count = stackText(s.key, s.amount);
+    // a good a run takes and gives back in full (a cell, a catalyst) has ports with no flow and no need: nothing true to say of the line; an input
+    // the line does not supply keeps its 0/min, beside "not supplied in full" (the final fix wave, FW-13)
+    const idle = port === undefined || (port.perSecond === 0 && (taken === undefined || taken.needPerSecond === 0));
+    const rate = idle ? [] : [`${rateOf(port.perSecond, per, s.key)} in the line`];
+    const tip = worn
+      ? [`wears 1 of its ${formatNumber(Math.round(1 / s.chance))} uses per run`, ...rate]
+      : [`${amountWords(s.key, s.amount, nameOf)} per run`, ...(s.chance < 1 ? [`${formatPercent(s.chance)} chance`] : []), ...rate];
+    return (
+      <li
+        key={`${side}:${i}:${s.key}`}
+        className={short ? 'recipe-slot slot-short' : 'recipe-slot'}
+        data-recipe-key={s.key}
+        onMouseEnter={() => hoverFlowFocus({ kind: 'item', key: s.key })}
+        onMouseLeave={endHoverFlowFocus}
+      >
+        <ItemIcon itemKey={s.key} size={SLOT_ICON_SIZE} name={nameOf(s.key)} label={slotLabel(nameOf(s.key), s, worn, short)} tip={tip} />
+        {count !== '' && <span className="stack-count" aria-hidden="true">{count}</span>}
+        {s.chance < 1 && !worn && <span className="slot-chance" aria-hidden="true"><Figs text={chanceTag(s.chance)} /></span>}
+      </li>
+    );
+  };
+  return (
+    <div className="recipe-card" role="group" aria-label={`${mapName(step.mapId, nameOf)} recipe, one run`}>
+      <div className="recipe-head">
+        {tier !== null && <span className={`badge tier-chip tier-${tier.slug}`}><Figs text={tierChipText(step)} /></span>}
+        <span className="recipe-caption">One run</span>
+      </div>
+      {(ins.length > 0 || outs.length > 0) && (
+        <div className="recipe-strip">
+          {ins.length > 0 && <ul className="recipe-slots" aria-label="Takes per run">{ins.map((s, i) => slot('in', s, i))}</ul>}
+          <GtArrow tone="panel" still={step.durationTicks <= 0} />
+          {outs.length > 0 && <ul className="recipe-slots" aria-label="Makes per run">{outs.map((s, i) => slot('out', s, i))}</ul>}
+          {(share !== null || time !== null || power !== null) && (
+            <span className="recipe-power">
+              {share !== null && (
+                <span className="energy-bar" aria-hidden="true"><span className="energy-fill" style={{ '--share': share } as CSSProperties} /></span>
+              )}
+              {(time !== null || power !== null) && <span className="recipe-time">{time}{time !== null && power !== null && <br />}{power}</span>}
+            </span>
+          )}
+        </div>
+      )}
+      <dl className="recipe-stats">
+        {recipeStats(step).map((s) => <div key={s.label} className="readout"><dt>{s.label}</dt><dd>{s.value}</dd></div>)}
+      </dl>
+      {chips.length > 0 && (
+        <ul className="oc-chips" aria-label="Overclock">
+          {/* the tone's class is `oc-now` or `oc-note`: a bare `note` is the Notes tab's card, its panel, edge and bevel */}
+          {chips.map((c) => <li key={c.text} className={`badge oc-chip oc-${c.tone}`}><Figs text={c.text} /></li>)}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -298,7 +419,7 @@ function OptionSlot(props: { step: PlanStep; slot: StepOption; settings: PlanSet
           <input type="radio" name={group} checked={pin === c.key} onChange={() => choose(c.key)} />
           <span className="choice-text">
             {`${choiceText(c)} `}
-            <span className={c.share > 0 ? 'badge' : 'badge muted'}>{use(c.share)}</span>
+            <span className={c.share > 0 ? 'badge' : 'badge muted'}><Figs text={use(c.share)} /></span>
           </span>
         </label>
       ) : (
@@ -556,11 +677,15 @@ export function StepPanel(props: {
   const nameOf = namesOf(plan);
   const patch = settingsSender(send);
   const index = indexPlan(plan);
-  const warnings = [...new Set([...step.warnings, ...plan.warnings.filter((w) => w.stepId === step.id).map((w) => w.text)])];
+  // a good the plan makes two ways, or buys beside its makers, on purpose is a plain note, not a warning (plan 12's final review)
+  const noteCodes: ReadonlySet<string> = new Set(Object.values(NOTE_CODES));
+  const own = plan.warnings.filter((w) => w.stepId === step.id);
+  const notes = [...new Set(own.filter((w) => noteCodes.has(w.code)).map((w) => w.text))];
+  const warnings = [...new Set([...step.warnings, ...own.filter((w) => !noteCodes.has(w.code)).map((w) => w.text)])];
   const machines = step.count === 1 ? '1 machine' : `${step.count} machines`;
   const shared = sharedMachineText(step, plan);
   return (
-    <aside className="flow-panel" aria-label={`Step: ${step.machine.name}`}>
+    <aside className="flow-panel" aria-label={`Step: ${step.machine.name}`} tabIndex={-1}>
       <PanelHead
         itemKey={step.mainOutput ?? null} title={step.machine.name} onClose={onClose}
         itemName={step.mainOutput === undefined ? undefined : nameOf(step.mainOutput)}
@@ -569,7 +694,14 @@ export function StepPanel(props: {
         {[machines, ...(step.mainOutput === undefined ? [] : [`makes ${nameOf(step.mainOutput)}`]), ...(step.handCraft ? ['by hand'] : [])].join(' · ')}
       </p>
       {shared !== null && <p>{shared}</p>}
+      <RecipeCard step={step} plan={plan} index={index} per={per} />
       <PortsSection step={step} plan={plan} per={per} index={index} onSelect={onSelect} />
+      {step.farm !== undefined && (
+        <section className="flow-panel-section">
+          <h4 className="flow-panel-title">Farm</h4>
+          <p>{step.farm.text}</p>
+        </section>
+      )}
       <AlsoMadeBySection step={step} plan={plan} index={index} settings={settings} nameOf={nameOf} patch={patch} />
       <SupplySection step={step} plan={plan} settings={settings} nameOf={nameOf} patch={patch} />
       <LineSection step={step} settings={settings} patch={patch} />
@@ -584,6 +716,14 @@ export function StepPanel(props: {
       </section>
       <SwapSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
       <StopSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
+      {notes.length > 0 && (
+        <section className="flow-panel-section">
+          <h4 className="flow-panel-title">Notes</h4>
+          <ul className="notes">
+            {notes.map((text) => <li key={text}>{text}</li>)}
+          </ul>
+        </section>
+      )}
       {warnings.length > 0 && (
         <section className="flow-panel-section">
           <h4 className="flow-panel-title">Warnings</h4>
@@ -619,11 +759,15 @@ function pricedViaText(input: RawInput, nameOf: NameOf): string | null {
   return `${head}: usually made by ${mapName(via.mapId, nameOf)}${from} (${via.steps} ${via.steps === 1 ? 'recipe' : 'recipes'})`;
 }
 
+/** Where a raw input taken from beyond the line comes from, in words (add-on 17). */
+const TAKEN_FROM: Record<NonNullable<RawInput['from']>['kind'], string> = { project: "another project's surplus", farm: 'a farm the group runs' };
+
 /**
- * The panel of a raw-material box (fix spec §6.3): what kind of import it is and how much, which steps use it (hovering
- * one lights its arrow, clicking selects the step), what a bought one stands for, where it comes from and what is in
- * storage; for a base material "Make it here instead" (greyed when nothing at the tier makes it), for a free input the
- * group said it supplies "Plan its generator again".
+ * The panel of a raw-material box (fix spec §6.3): what kind of import it is and how much, and how much the line takes
+ * of it from a farm the group runs or another project (add-on 17: "From Rubber line, another project's surplus · 15/min"),
+ * which steps use it (hovering one lights its arrow, clicking selects the step), what a bought one stands for, where it
+ * comes from (when the line buys some) and what is in storage; for a base material "Make it here instead" (greyed when
+ * nothing at the tier makes it), for a free input the group said it supplies "Plan its generator again".
  */
 export function RawPanel(props: {
   itemKey: StuffKey; plan: Plan; settings: PlanSettings; per: Per; send: Send; onClose(): void; onSelect?(stepId: string): void;
@@ -633,7 +777,10 @@ export function RawPanel(props: {
   const patch = settingsSender(send);
   const name = nameOf(itemKey);
   const fluid = isFluidKey(itemKey);
-  const input: RawInput | undefined = plan.rawInputs.find((r) => r.key === itemKey);
+  const rows = plan.rawInputs.filter((r) => r.key === itemKey);
+  // What the line buys of it (its row without `from`), and what it takes from farms the group runs or other projects.
+  const input: RawInput | undefined = rows.find((r) => r.from === undefined);
+  const takenFrom = rows.flatMap((r) => (r.from === undefined ? [] : [{ from: r.from, perSecond: r.perSecond }]));
   const sources = input?.sources ?? [];
   const leaf = input?.leafClass;
   const steps = new Map(plan.steps.map((s) => [s.id, s]));
@@ -644,7 +791,7 @@ export function RawPanel(props: {
   const kind = leaf !== undefined ? LEAF_WORD[leaf] : input === undefined || input.available ? 'base material' : LEAF_WORD.unavailable;
   const via = input === undefined ? null : pricedViaText(input, nameOf);
   return (
-    <aside className="flow-panel" aria-label={`Import: ${name}`}>
+    <aside className="flow-panel" aria-label={`Import: ${name}`} tabIndex={-1}>
       <PanelHead itemKey={itemKey} itemName={name} title={name} onClose={onClose} />
       {input !== undefined && (
         <p className="muted">
@@ -652,6 +799,9 @@ export function RawPanel(props: {
           {input.total !== undefined && ` · ${formatNumber(input.total)}${fluid ? ' L' : ''} for the whole batch`}
         </p>
       )}
+      {takenFrom.map(({ from, perSecond }) => (
+        <p key={`${from.kind}:${from.id}`} className="muted">{`From ${from.name}, ${TAKEN_FROM[from.kind]} · ${formatRate(perSecond, per, { fluid })}`}</p>
+      ))}
       {leaf !== undefined && <p>{LEAF_TEXT[leaf]}</p>}
       {input !== undefined && !input.available && leaf !== 'unavailable' && <p className="error">{LEAF_TEXT.unavailable}</p>}
       {via !== null && <p>{via}</p>}
@@ -676,23 +826,26 @@ export function RawPanel(props: {
           </ul>
         </section>
       )}
-      <section className="flow-panel-section">
-        <h4 className="flow-panel-title">Sources</h4>
-        {sources.length === 0 ? (
-          <p className="muted">No known source in the pack.</p>
-        ) : (
-          <ul className="sources">
-            {sources.map((source, i) => (
-              <li key={`${source.kind}:${i}`}>
-                {sourceText(source, plan.names)}
-                {source.foundAt !== undefined && source.foundAt.length > 0 && (
-                  <span className="muted small">{` · ${foundText(source.foundAt, plan.names)}`}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* Where a bought good comes from: nothing to say of one the line only takes from a farm or another project. */}
+      {(input !== undefined || takenFrom.length === 0) && (
+        <section className="flow-panel-section">
+          <h4 className="flow-panel-title">Sources</h4>
+          {sources.length === 0 ? (
+            <p className="muted">No known source in the pack.</p>
+          ) : (
+            <ul className="sources">
+              {sources.map((source, i) => (
+                <li key={`${source.kind}:${i}`}>
+                  {sourceText(source, plan.names)}
+                  {source.foundAt !== undefined && source.foundAt.length > 0 && (
+                    <span className="muted small">{` · ${foundText(source.foundAt, plan.names)}`}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {canExpand && (
         <section className="flow-panel-section">
           <p className="muted small">Plan its own recipe in this line instead of importing it.</p>

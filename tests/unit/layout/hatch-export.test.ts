@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { unitsFromPlan, type Unit, type UnitCell } from '../../../src/server/layout/arrange.ts';
 import { exportedCells, exportedPower, grownCells, type ExportedCells } from '../../../src/server/layout/hatch-export.ts';
 import { elementMap, hatchRuleFor, hatchRulesOf, ruleFits, rulePower } from '../../../src/server/layout/hatch-rules.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import type { ExportHatchKind } from '../../../src/shared/gt/hatch-kinds.ts';
 import { posKey, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { HatchKind } from '../../../src/shared/types/layout.ts';
@@ -27,7 +28,7 @@ const ebfStep: StepSpec = { id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTic
 
 /** Gives machine `mteId` of `pack` these elements, on its own structure or on `structure`; returns the machine. */
 function giveElements(pack: Pack, mteId: number, specs: readonly ElementSpec[], structure?: StructureInfo): Machine {
-  const m = pack.machines.get(mteId)!;
+  const m = machineByMteId(pack, mteId)!;
   m.structure = withElements(structure ?? m.structure!, specs);
   return m;
 }
@@ -55,7 +56,7 @@ function ebfElements(top: ExportHatchKind[]): ElementSpec[] {
 
 /** The EBF with a fifth layer of casings on top (3×5×3), which its row does not fit: its bottom takes all six, the rest nothing. */
 function tallEbf(pack: Pack): Machine {
-  const st = pack.machines.get(IDS.EBF)!.structure!;
+  const st = machineByMteId(pack, IDS.EBF)!.structure!;
   const roof = [0, 1, 2].flatMap((z) => [0, 1, 2].map((x) => ({ pos: [x, 4, z] as Vec3, block: { id: 'gregtech:gt.blockcasings', meta: 11 } })));
   return giveElements(pack, IDS.EBF, [{ ch: 'b', hatches: [...ALL_SIX], where: (p) => p[1] === 0 }, { ch: 'z', hatches: [], where: () => true }],
     { ...st, size: [3, 5, 3], blocks: [...st.blocks, ...roof] });
@@ -63,7 +64,7 @@ function tallEbf(pack: Pack): Machine {
 
 /** The cracker as GT's check takes its cells (gt-mechanics §5.5, bullet 11): either fluid hatch on each side, its inputs in the middle. */
 function crackerWithElements(pack: Pack): Machine {
-  const cracker = pack.machines.get(HATCH_IDS.CRACKER)!;
+  const cracker = machineByMteId(pack, HATCH_IDS.CRACKER)!;
   const side: ExportHatchKind[] = ['input_hatch', 'output_hatch', 'energy', 'maintenance'];
   return giveElements(pack, HATCH_IDS.CRACKER, rowElements(cracker, { l: side, r: side, m: ['input_bus', 'input_hatch', 'energy', 'maintenance'], c: [] }));
 }
@@ -149,7 +150,7 @@ describe("hatches by the export's rules", () => {
     expect(grown.takes).toEqual(tower.takes);
     expect(grownCells(tower, 0)).toBe(tower);
     // a structure under 3 high grows no layer, as growLayers grows none
-    const box = exportedCells({ ...hatchExportPack().machines.get(FRONT_BOX_ID)!, structure: withElements(FRONT_BOX_STRUCTURE, FRONT_BOX_ELEMENTS) })!;
+    const box = exportedCells({ ...machineByMteId(hatchExportPack(), FRONT_BOX_ID)!, structure: withElements(FRONT_BOX_STRUCTURE, FRONT_BOX_ELEMENTS) })!;
     expect(grownCells(box, 2)).toBe(box);
   });
 
@@ -217,7 +218,7 @@ describe("hatches by the export's rules", () => {
 
   it('keeps the muffler GregTech requires on its cell', () => {
     const pack = hatchExportPack();
-    const st = pack.machines.get(IDS.EBF)!.structure!;
+    const st = machineByMteId(pack, IDS.EBF)!.structure!;
     const muffled: StructureInfo = { ...st, blocks: st.blocks.map((b) => (posKey(b.pos) === '1,3,1'
       ? { pos: b.pos, block: { id: 'gregtech:gt.blockmachines', meta: 3, mteId: IDS.MUFFLER } } : b)) };
     giveElements(pack, IDS.EBF, ebfElements(['output_hatch']), muffled);
@@ -245,7 +246,7 @@ describe("hatches by the export's rules", () => {
     // what GT's check takes on the tower's cells (gt-mechanics §5.5, bullet 11): its top centre `c` takes output
     // hatches, which no layer reads
     const pack = hatchExportPack();
-    const dt = pack.machines.get(HATCH_IDS.DT)!;
+    const dt = machineByMteId(pack, HATCH_IDS.DT)!;
     giveElements(pack, HATCH_IDS.DT, rowElements(dt, {
       b: ['input_bus', 'output_bus', 'input_hatch', 'energy', 'maintenance'], l: ['output_hatch', 'energy', 'maintenance'],
       c: ['output_bus', 'output_hatch', 'maintenance'],
@@ -262,7 +263,7 @@ describe("hatches by the export's rules", () => {
   });
 
   it('reads the export elements into layout kinds', () => {
-    const box = hatchExportPack().machines.get(FRONT_BOX_ID)!;
+    const box = machineByMteId(hatchExportPack(), FRONT_BOX_ID)!;
     const cells = exportedCells({ ...box, structure: withElements(FRONT_BOX_STRUCTURE, [
       { ch: 'a', hatches: ['input_bus', 'steam_input_bus', 'energy'], where: (p) => p[1] === 0 },
       { hatches: ['steam_output_bus'], where: (p) => p[1] === 1 },
@@ -279,7 +280,7 @@ describe("hatches by the export's rules", () => {
   });
 
   it('tells the power from the export', () => {
-    const box = hatchExportPack().machines.get(FRONT_BOX_ID)!;
+    const box = machineByMteId(hatchExportPack(), FRONT_BOX_ID)!;
     const power = (hatches: ExportHatchKind[]) => exportedPower(exportedCells({ ...box, structure: withElements(box.structure!, [{ hatches, where: () => true }]) })!);
     expect(power(['input_bus', 'energy', 'maintenance'])).toBe('eu');
     expect(power(['energy_multi'])).toBe('eu');
@@ -307,7 +308,7 @@ describe("hatches by the export's rules", () => {
   it('narrows a fitting row by the export, and names each source', () => {
     // the cracker: each side keeps only the row's hatch of the two GT's adder takes there; its notes stay the row's
     const crackerPack = hatchExportPack();
-    const crackerRow = hatchRuleFor(crackerPack.machines.get(HATCH_IDS.CRACKER)!)!;
+    const crackerRow = hatchRuleFor(machineByMteId(crackerPack, HATCH_IDS.CRACKER)!)!;
     const crackerMachine = crackerWithElements(crackerPack);
     const cracker = hatchRulesOf(crackerMachine)!;
     expect(cracker.source).toBe('both');
@@ -318,7 +319,7 @@ describe("hatches by the export's rules", () => {
     expect(cracker.rule.exported).toEqual(exportedCells(crackerMachine));
     // the EBF: an element the export takes nothing on keeps nothing
     const ebfPack = hatchExportPack();
-    const ebfRow = hatchRuleFor(ebfPack.machines.get(IDS.EBF)!)!;
+    const ebfRow = hatchRuleFor(machineByMteId(ebfPack, IDS.EBF)!)!;
     const ebf = hatchRulesOf(giveElements(ebfPack, IDS.EBF, ebfElements([])))!;
     expect(ebf.source).toBe('both');
     expect(ebf.rule.elements.f).toEqual([]);
@@ -351,10 +352,10 @@ describe("hatches by the export's rules", () => {
     expect(ruleFits(unfit.rule, st.controller, st.size, st.blocks.map((b) => b.pos))).toBe(true);
     // no elements: the row as it is, else nothing
     const plain = hatchExportPack();
-    const table = hatchRulesOf(plain.machines.get(IDS.EBF)!)!;
+    const table = hatchRulesOf(machineByMteId(plain, IDS.EBF)!)!;
     expect([table.source, table.rowUnfit]).toEqual(['table', false]);
-    expect(table.rule).toBe(hatchRuleFor(plain.machines.get(IDS.EBF)!));
-    expect(hatchRulesOf(plain.machines.get(FRONT_BOX_ID)!)).toBeNull();
+    expect(table.rule).toBe(hatchRuleFor(machineByMteId(plain, IDS.EBF)!));
+    expect(hatchRulesOf(machineByMteId(plain, FRONT_BOX_ID)!)).toBeNull();
   });
 
   it('keeps a step that draws EU electric where GregTech took none of the energy hatches the export tried, and says so', () => {

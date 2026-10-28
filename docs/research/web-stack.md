@@ -70,6 +70,9 @@ installed with npm's `--before` flag, so **transitive** dependencies obey the ru
 | fflate | 0.8.3 | 2026-05-16 | MIT | test fixtures only |
 | hono / @hono/node-server | 4.13.12 / 2.1.3 | 2026-09-30 / 09-29 | MIT | evaluated, not recommended |
 | @fastify/busboy | 3.2.2 | 2026-08-21 | MIT | evaluated; keeps the old busboy 0.x API |
+| @fontsource/pixelify-sans | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI restyle (design spec §5): headings, tabs, buttons; weights 400/600/700, bundled by Vite, no CDN; added 2026-10-23 with `--before=2026-10-09`, no transitive dependencies |
+| @fontsource/inter | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI restyle (design spec §5): body text; weights 400/500/600/700; installed with the line above |
+| @fontsource/vt323 | 5.3.0 | 2026-07-19 | OFL-1.1 | Machine GUI Phase 2 (spec §25): figures — readouts, counts, step numbers and the digits in pixel text; weight 400, bundled by Vite, no CDN; added 2026-10-24 at the version of the two rows above, no transitive dependencies |
 
 Evidence:
 ```text
@@ -664,6 +667,10 @@ infeasible case -> infeasible
 - ~2,000 variables is trivial: ~5 ms per solve, and Wasm memory stays flat (21 MB) over 600 solves. Re-solving on every
   edit (recipe swap, cost change) is fine, so run the solver **on the server** next to the shared project state.
   Use a worker thread only if real models get much bigger (§5.4 shows `solve()` inside a worker).
+  As built (plan 12 fix wave 3, architecture §11 entry 39): one solver thread per process (`solveLpAside`, lp.ts, with
+  its own HiGHS runtime) solves the leanest line's build MIP while `buildStage` solves plan 09's plan on the main thread,
+  so a build-cost plan waits for the longer of the two solves, not their sum; the thread starts on first use, holds the
+  process open only while a job is pending, and the main thread solves the model itself wherever the thread cannot.
 - Statuses differ between the two APIs. `model.getModelStatus()` returns a number; compare it with
   `highs.constants.modelStatus.*` (`{"notSet":0,…,"optimal":7,"infeasible":8}`, and `getModelStatus() -> 7 number`).
   The legacy `highs.solve()` returns strings such as `'Optimal'` and `'Infeasible'`.

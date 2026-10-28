@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { emptyFacts, ENERGY_HATCH_RE, packFacts, simpleClassName } from '../../../src/server/world/facts.ts';
 import {
   classifyGtMachine, classifyGtPipe, countsForTopTier, TIER_KINDS, toPlacedMachine, toPlacedPipe, voltageTier,
 } from '../../../src/server/world/classify/gt.ts';
 import { classifyGtStorage, GT_CHEST_IDS, GT_TANK_IDS } from '../../../src/server/world/classify/gtchests.ts';
 import type { RawTe, Vec3 } from '../../../src/server/world/model.ts';
+import { machineIdOfLegacy } from '../../../src/shared/ids.ts';
+import type { Machine } from '../../../src/shared/types/pack.ts';
 import { DEFAULT_ITEM_IDS } from '../../helpers/make-world.ts';
 import { byte, comp, double, int, list, long, parseTag, str, type Tag } from '../../helpers/nbt-write.ts';
 import { packWithout, testFacts, testPack } from '../../helpers/world-facts.ts';
@@ -79,7 +82,9 @@ it('compares class simple names, never the fully qualified cls', () => {
 describe('pack facts', () => {
   it('takes machines without their structure, the dimensions and the batteries of a pack', () => {
     const pack = testPack();
-    pack.machines.set(1000, { ...pack.machines.get(1000)!, structure: { size: [3, 4, 3], controller: [1, 0, 0], blocks: [], air: [] } });
+    const ebf: Machine = { ...machineByMteId(pack, 1000)!, structure: { size: [3, 4, 3], controller: [1, 0, 0], blocks: [], air: [] } };
+    pack.machines.set(ebf.id, ebf);
+    pack.machineByMteId.set(1000, ebf);
     const f = packFacts(pack);
     expect(f).toEqual(testFacts());
     expect(f.machines.get(1000)).not.toHaveProperty('structure');
@@ -98,7 +103,7 @@ describe('pack facts', () => {
   it('packWithout drops one machine and leaves the pack it came from alone', () => {
     const pack = testPack();
     const without = packWithout(pack, 2002);
-    expect([without.machines.has(2002), without.machines.has(2001), pack.machines.has(2002)]).toEqual([false, true, true]);
+    expect([without.machines.has(machineIdOfLegacy(2002)), without.machines.has(machineIdOfLegacy(2001)), machineByMteId(pack, 2002) !== undefined]).toEqual([false, true, true]);
     expect(packFacts(without).machines.has(2002)).toBe(false);
   });
 

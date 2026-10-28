@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ProjectorPanelView, type ProjectorPanelViewProps } from '../../src/client/views/ProjectorPanel.tsx';
-import { loadCommand, urlCommand, lastUsedText, PROJECTOR_COMMANDS, COPY_HINT, revokeQuestion, copyCommand, type CopyTools } from '../../src/client/views/projector-model.ts';
+import { loadCommand, urlCommand, lastUsedText, PROJECTOR_COMMANDS, COPY_HINT, revokeQuestion, copyCommand, TOKEN_REVOKED, type CopyTools } from '../../src/client/views/projector-model.ts';
 import { createToken, listTokens, revokeToken } from '../../src/client/api/projector.ts';
 import type { TokenInfo } from '../../src/shared/types/projector.ts';
 
@@ -119,5 +119,93 @@ describe('projector panel container', () => {
     expect(fetch).toHaveBeenLastCalledWith('/api/projects/p%201/tokens', expect.objectContaining({ method: 'POST', body: JSON.stringify({ label: 'Steve' }) }));
     await expect(revokeToken('p 1', 'T1/a')).resolves.toBeUndefined();
     expect(fetch).toHaveBeenLastCalledWith('/api/projects/p%201/tokens/T1%2Fa', expect.objectContaining({ method: 'DELETE' }));
+  });
+});
+
+// The Machine GUI restyle (restyle plan Phase 1 Task 9): the panel's inline styles are classes of the stylesheet now. The one that stays is
+// the copy hint's top margin (pinned above, byte for byte).
+describe('the Machine GUI projector panel', () => {
+  const created = { token: 'gpt_SECRET', tokenId: 'T1aaaaaaaa', info: tok() };
+
+  it('is a settings panel, with its body, form, command lines and command list drawn by the stylesheet and no inline style', () => {
+    const html = renderToStaticMarkup(<ProjectorPanelView {...props({ created, tokens: [tok()] })} />);
+    expect(html).not.toContain('style=');
+    expect(html).toMatch(/^<details class="settings-section projector-panel"><summary>In-game projector<\/summary><div class="projector-body"><p class="muted small">/);
+    for (const markup of [
+      '<form class="row projector-form"><label class="field"><span>Who is it for?</span><input ',
+      '<div class="command-line"><div class="command-row"><span class="command-text"><code>/planner load P1 gpt_SECRET</code></span><button type="button" class="small">Copy</button></div></div>',
+      '<ul class="small projector-commands"><li><code>/planner layer &lt;y|all&gt;</code> — ',
+    ]) expect(html, markup).toContain(markup);
+    // what the stylesheet reads stays unmarked: the summary, the headings, the alert and the code carry no class
+    expect(renderToStaticMarkup(<ProjectorPanelView {...props({ error: 'boom', tokens: [tok()] })} />)).toContain('<div class="error small"><p role="alert">boom</p></div>');
+    expect(html).toContain('<h4>Tokens</h4>');
+    expect(html).toContain('<h4>Commands</h4>');
+  });
+
+  it('keeps the hint\'s margin as the one inline style of the panel', () => {
+    const url = urlCommand('http://mc.example.org:8765');
+    const byHand = renderToStaticMarkup(<ProjectorPanelView {...props({ created, copied: { text: url, copied: false } })} />);
+    expect(byHand.match(/style="/g)).toHaveLength(1);
+    expect(byHand).toContain('<p class="small" role="status" style="margin-top:4px">');
+  });
+});
+
+// Phase 2 Task 10 (spec §13): Revoke asks in the panel, never in a browser dialog. The question is drawn in the row of the token it would
+// revoke, in place of that row's Revoke button, so no second button there is named with "Revoke" but the confirm's own "Revoke token".
+describe('revoking a token asks in its row', () => {
+  const two = [tok(), tok({ tokenId: 'T2bbbbbbbb', label: 'Alex' })];
+  /** The markup of the row of token `id`. */
+  const rowOf = (html: string, id: string): string => html.slice(html.indexOf(`<li data-token-id="${id}">`)).split('</li>')[0]!;
+
+  it('asks in place of the row\'s Revoke, named by its question, and leaves the other rows as they are', () => {
+    const html = renderToStaticMarkup(<ProjectorPanelView {...props({ asking: 'T1aaaaaaaa', tokens: two })} />);
+    const asking = rowOf(html, 'T1aaaaaaaa');
+    expect(asking).toContain('role="alertdialog"');
+    expect(asking).toContain('Revoke &quot;Steve&quot;? Anyone using it loses the ghosts until they get a new token.');
+    expect(asking).toContain('>Revoke token</button>');
+    expect(asking).not.toContain('>Revoke</button>');
+    expect(asking).toContain('Steve · gpt_AbCd… · by Ann · never used');                // the row still says whose token it is
+    expect(html.match(/data-token-id/g)).toHaveLength(2);                                  // the confirm has no token id of its own
+    expect(html).not.toContain('style=');
+    const other = rowOf(html, 'T2bbbbbbbb');
+    expect(other).toContain('>Revoke</button>');
+    expect(other).not.toContain('alertdialog');
+    expect(html.match(/role="alertdialog"/g)).toHaveLength(1);
+  });
+
+  it('asks nothing while nothing is asked, and the question is the pinned one', () => {
+    for (const asking of [undefined, null, 'T9 gone']) {
+      const html = renderToStaticMarkup(<ProjectorPanelView {...props({ asking, tokens: two })} />);
+      expect(html, String(asking)).not.toContain('alertdialog');
+      expect(html.match(/>Revoke<\/button>/g), String(asking)).toHaveLength(2);
+    }
+    expect(revokeQuestion('Steve')).toBe('Revoke "Steve"? Anyone using it loses the ghosts until they get a new token.');
+  });
+
+  it('says in the confirm why a revoke failed, and nowhere else; while one is on its way Revoke token cannot be pressed again', () => {
+    const failed = renderToStaticMarkup(<ProjectorPanelView {...props({ asking: 'T1aaaaaaaa', tokens: two, revokeError: 'The server is not reachable' })} />);
+    expect(rowOf(failed, 'T1aaaaaaaa')).toContain('<p class="error small" role="alert">The server is not reachable</p>');
+    expect(failed.match(/role="alert"/g)).toHaveLength(1);
+    const busy = renderToStaticMarkup(<ProjectorPanelView {...props({ asking: 'T1aaaaaaaa', tokens: two, busy: true })} />);
+    expect(rowOf(busy, 'T1aaaaaaaa')).toContain('<button type="button" class="small danger" disabled="">Revoke token</button>');
+    expect(rowOf(busy, 'T1aaaaaaaa')).toContain('<button type="button" class="small">Keep it</button>');
+  });
+});
+
+// Task F3 (ledger ruling P2-R68): what the panel did, said aloud on a polite line of its own after the panel, always drawn so that what is put
+// in it is heard: "Copied" inside the open drawer (P2-R56), and a revoke that went through, which has no toast (Phase 2 spec §12.1). Each saying
+// is a new span (its key), so the same words said twice are heard twice.
+describe('the panel\'s polite line', () => {
+  it('says a revoke that went through, and nothing until something is said', () => {
+    expect(TOKEN_REVOKED).toBe('Token revoked');
+    const said = renderToStaticMarkup(<ProjectorPanelView {...props({ tokens: [], said: { key: 2, text: TOKEN_REVOKED } })} />);
+    expect(said).toMatch(/<\/details><p class="visually-hidden" aria-live="polite"><span>Token revoked<\/span><\/p>$/);
+    expect(said.match(/aria-live=/g)).toHaveLength(1);
+    for (const nothing of [undefined, null]) {
+      expect(renderToStaticMarkup(<ProjectorPanelView {...props({ said: nothing })} />)).toMatch(/<\/details><p class="visually-hidden" aria-live="polite"><\/p>$/);
+    }
+    // the panel itself still starts the markup, with no inline style
+    expect(said).toMatch(/^<details class="settings-section projector-panel">/);
+    expect(said).not.toContain('style=');
   });
 });

@@ -16,6 +16,7 @@ import type { LogisticsNetwork } from '../../../shared/types/world.ts';
 import { comparePos } from '../../world/graph.ts';
 import { placedStepIds, unitSteps, type BlockConfig, type HostConfig, type HostCover, type LocalBlock, type PlacedUnit, type Placement, type Unit } from '../arrange.ts';
 import { hasInputSeparation } from '../multiblock-rules.ts';
+import { machineByMteId } from '../../pack/lookup.ts';
 import { coverRateWarning, pickConveyor, type PartId, type Parts } from '../parts.ts';
 import { ae2Mode } from './ae2.ts';
 import { withHandSteps } from './by-hand.ts';
@@ -149,16 +150,27 @@ export function unitItemRate(plan: Plan, of: string | Pick<Unit, 'stepId' | 'ste
   return items / Math.max(1, count);
 }
 
-function rawItemFlows(plan: Plan, placed: ReadonlySet<string>): PlanFlow[] {
-  return itemFlows(plan).filter((f) => f.from === 'raw' && placed.has(f.to));
+/**
+ * Whether a flow comes in as a raw input does: from `raw`, or from a farm step (`PlanStep.farm`, add-on 17), which the
+ * layout never places, so what a farm sends the line goes in through the line's input like a raw input.
+ */
+function fromRaw(plan: Plan): (f: PlanFlow) => boolean {
+  const farms = new Set(plan.steps.filter((s) => s.farm !== undefined).map((s) => s.id));
+  return (f) => f.from === 'raw' || farms.has(f.from);
 }
 
-/** The item keys flowing raw → placed step, sorted. */
+/** The item flows raw → placed step, a farm's into a placed step among them (`fromRaw`). */
+function rawItemFlows(plan: Plan, placed: ReadonlySet<string>): PlanFlow[] {
+  const raw = fromRaw(plan);
+  return itemFlows(plan).filter((f) => raw(f) && placed.has(f.to));
+}
+
+/** The item keys flowing raw → placed step (a farm's included: `rawItemFlows`), sorted. */
 export function rawItemInputs(plan: Plan, placed: ReadonlySet<string>): StuffKey[] {
   return distinctKeys(rawItemFlows(plan, placed));
 }
 
-/** Σ perSecond of the item flows raw → placed step. */
+/** Σ perSecond of the item flows raw → placed step (a farm's included: `rawItemFlows`). */
 export function rawItemRate(plan: Plan, placed: ReadonlySet<string>): number {
   return rawItemFlows(plan, placed).reduce((sum, f) => sum + f.perSecond, 0);
 }
@@ -289,7 +301,7 @@ export function feedSettings(pack: Pack, plan: Plan, placement: Placement): Host
     const own = placement.blocks.filter((b) => b.stepId === u.stepId && inBox(b.pos, u.at, u.size));
     if (!u.multiblock) {
       const machine = own.find((b) => b.role === 'machine');
-      if (kinds >= 2 && machine !== undefined && MULTI_STACK_KINDS.has(pack.machines.get(u.mteId)?.kind ?? 'other')) {
+      if (kinds >= 2 && machine !== undefined && MULTI_STACK_KINDS.has(machineByMteId(pack, u.mteId)?.kind ?? 'other')) {
         out.push({ pos: [...machine.pos], config: { multiStack: false } });
       }
       continue;
@@ -297,7 +309,7 @@ export function feedSettings(pack: Pack, plan: Plan, placement: Placement): Host
     // only a controller that has the setting (on when built); one without it reads all its buses together
     const controller = own.find((b) => b.role === 'machine');
     const buses = u.cells.filter((c) => c.hatch === 'input_bus').length;
-    if (controller !== undefined && buses >= 2 && hasInputSeparation(pack.machines.get(u.mteId))) {
+    if (controller !== undefined && buses >= 2 && hasInputSeparation(machineByMteId(pack, u.mteId))) {
       out.push({ pos: [...controller.pos], config: { inputSeparation: false } });
     }
     if (kinds >= 2) for (const bus of own.filter((b) => b.hatch === 'input_bus')) out.push({ pos: [...bus.pos], config: { limited: true } });
@@ -376,14 +388,16 @@ export function conveyorCover(input: ModeInput, at: { pos: Vec3; side: number },
 /**
  * The items a shared spine pipe carries that a placed step's machine could take although they are not its inputs: a
  * machine with its Input Filter on still takes any item one of its recipes uses (research §3.8). The spine carries
- * every item key of the flows raw → placed, placed → placed and placed → out/sink. A step's inputs are the item keys
- * of the flows into it, or its `step.inputs` item keys when no item flows into it (ruling R4). Key k conflicts with
- * step j when a recipe consuming k shares a map with j's machine (its maps and the step's own non-empty `mapId`).
- * Steps in `placed` order (unit order from `placedStepIds`), keys sorted, steps without conflicts left out.
+ * every item key of the flows raw → placed (a farm's into a placed step among them, which come in through the input
+ * chest: `fromRaw`), placed → placed and placed → out/sink. A step's inputs are the item keys of the flows into it, or
+ * its `step.inputs` item keys when no item flows into it (ruling R4). Key k conflicts with step j when a recipe
+ * consuming k shares a map with j's machine (its maps and the step's own non-empty `mapId`). Steps in `placed` order
+ * (unit order from `placedStepIds`), keys sorted, steps without conflicts left out.
  */
 export function spineConflicts(pack: Pack, plan: Plan, placed: ReadonlySet<string>): Array<{ stepId: string; keys: StuffKey[] }> {
   const flows = itemFlows(plan);
-  const onSpine = (f: PlanFlow) => (f.from === 'raw' && placed.has(f.to)) || (placed.has(f.from) && (placed.has(f.to) || isFinal(f.to)));
+  const raw = fromRaw(plan);
+  const onSpine = (f: PlanFlow) => (raw(f) && placed.has(f.to)) || (placed.has(f.from) && (placed.has(f.to) || isFinal(f.to)));
   const carried = distinctKeys(flows.filter(onSpine));
   const consumerMaps = (key: StuffKey): string[] =>
     (pack.consumers.get(key) ?? []).flatMap((i) => pack.recipes[i]?.maps ?? []);
@@ -392,7 +406,7 @@ export function spineConflicts(pack: Pack, plan: Plan, placed: ReadonlySet<strin
     const planStep = plan.steps.find((s) => s.id === stepId);
     if (planStep === undefined) continue;
     const inputs = new Set(stepItemInputs(plan, stepId));
-    const maps = new Set(pack.machines.get(planStep.machine.mteId)?.maps ?? []);
+    const maps = new Set(machineByMteId(pack, planStep.machine.mteId)?.maps ?? []);
     if (planStep.mapId !== '') maps.add(planStep.mapId);
     const keys = carried.filter((k) => !inputs.has(k) && consumerMaps(k).some((m) => maps.has(m)));
     if (keys.length > 0) out.push({ stepId, keys });

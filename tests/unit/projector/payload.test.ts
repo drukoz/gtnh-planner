@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { containerBlock, stepMembership, projectorPayload, payloadVersion } from '../../../src/server/projector/payload.ts';
 import { projectorLayout, projectorPack, projectorProject, CONVEYOR } from '../../helpers/projector-fixtures.ts';
-import type { MachineKind } from '../../../src/shared/types/pack.ts';
+import type { Machine, MachineKind } from '../../../src/shared/types/pack.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import type { BuildStep } from '../../../src/shared/types/plan.ts';
 
 const pack = projectorPack();
@@ -62,9 +63,18 @@ describe('projector payload', () => {
 
   it("says when the checked facing is a single-block machine's output side", () => {
     const withKind = (kind: MachineKind | null) => {
+      const id = gtMachineId(201);
       const machines = new Map(pack.machines);
-      if (kind === null) machines.delete(201); else machines.set(201, { kind });
-      return projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines });
+      const machineByMteId = new Map(pack.machineByMteId);
+      if (kind === null) {
+        machines.delete(id);
+        machineByMteId.delete(201);
+      } else {
+        const m = { ...machines.get(id)!, kind };
+        machines.set(id, m);
+        machineByMteId.set(201, m);
+      }
+      return projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines, machineByMteId });
     };
     // GT front facing = output side on basic and steam machines; a transformer's front is its front
     expect(withKind('steam').blocks[3]).toMatchObject({ facing: 3, facingIsOutput: true });
@@ -83,9 +93,13 @@ describe('projector payload', () => {
     const p = projectorPayload(projectorProject(), projectorLayout(), pack);
     expect([p.blocks[3], p.blocks[4]]).toMatchObject([{ facing: 3, facingIsOutput: true, mainFacing: 4 }, { facing: 3, facingIsOutput: true, mainFacing: 4 }]);
     expect('mainFacing' in p.blocks[2]!).toBe(false);                                   // a transformer has one front
+    const id = gtMachineId(201);
     const machines = new Map(pack.machines);
-    machines.set(201, { kind: 'multiblock' });
-    expect('mainFacing' in projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines }).blocks[3]!).toBe(false);
+    const machineByMteId = new Map(pack.machineByMteId);
+    const m: Machine = { ...machines.get(id)!, kind: 'multiblock' };
+    machines.set(id, m);
+    machineByMteId.set(201, m);
+    expect('mainFacing' in projectorPayload(projectorProject(), projectorLayout(), { ...pack, machines, machineByMteId }).blocks[3]!).toBe(false);
     const noFront = projectorLayout(); delete noFront.blocks[4]!.mainFacing;
     expect('mainFacing' in projectorPayload(projectorProject(), noFront, pack).blocks[4]!).toBe(false);
   });

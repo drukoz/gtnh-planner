@@ -1,15 +1,27 @@
 // What the settings panel shows and sends (spec §3.2–§3.3b, §3.6), as pure functions: the reachable-dimension rows
 // and their labels, the patches the panel sends (each a whole field value, so one `settings` op says everything), the
 // checks an amount or a cost must pass before anything is sent, the avoid list's suggestions, labels and changes, the
-// "Steps vs raw material" presets (fix spec §3), the build horizon's presets and the choices of the tier new machines are
-// built at and of when to build a multiblock (plan 12 Task 7, the user's ruling 224), the pinned ingredient options in
-// words (fix spec §6.4) and the "Machines we have" list's machines, counts and changes (architecture §11.29).
+// planning modes of "Plan for" (add-on 17, architecture §11.45 (1)), the "Machines vs raw material" presets (fix spec §3;
+// ruling S17) and the raw cap's ("Raw material for fewer machines", fix wave 3 (A)), the build horizon's presets and the
+// choices of the tier new machines are built at and of when to build a multiblock (plan 12 Task 7, the user's ruling
+// 224), the pinned ingredient options in words (fix spec §6.4), the "Machines we have" list's machines, counts and
+// changes (architecture §11.29), the start and changes of "Only these come in" (fix wave 3 (B)), and the farm settings:
+// the farms the planner may build or reuse and those the group runs (add-on 17, architecture §11.45 (2)).
 
 import { TIER_NAMES, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_OWNED_MANUAL_COUNT, MAX_OWNED_MANUAL_ENTRIES, MAX_STEP_CHARGE } from '../../shared/project/apply-op.ts';
+import {
+  MAX_AVOID_ENTRIES, MAX_AVOID_ENTRY_LENGTH, MAX_CROP_STAT, MAX_FARM_PER_MINUTE, MAX_INPUTS_ONLY, MAX_NAME_LENGTH, MAX_OWNED_MANUAL_COUNT,
+  MAX_OWNED_MANUAL_ENTRIES, MAX_RUNNING_FARMS, MAX_STEP_CHARGE,
+} from '../../shared/project/apply-op.ts';
 import type { PackInfo } from '../../shared/types/api.ts';
-import { DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type Plan, type PlanSettings, type ReachableDim } from '../../shared/types/plan.ts';
+import {
+  defaultFarmSettings, FARM_KINDS, FERTILIZER_CHOICES, type FarmKind, type FarmSettings, type RunningFarm, type TgsMode,
+} from '../../shared/types/farm.ts';
+import {
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_OBJECTIVE, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, FREE_KEYS, type Plan, type PlanObjective, type PlanSettings,
+  type ReachableDim,
+} from '../../shared/types/plan.ts';
 import { formatNumber } from '../format.ts';
 
 export interface DimRow { key: string; name: string; group: string; state: 'auto' | 'on' | 'off'; reachable: boolean; label: string }
@@ -179,9 +191,40 @@ export function avoidLabel(entry: string, materials: readonly AvoidMaterial[], n
 }
 
 /**
- * The "Steps vs raw material" presets (fix spec §3, architecture §11.34 as entry 39 amends it): with build cost counted
- * the share of the line's least raw material over the horizon one new machine block costs, with it ignored the share
- * one recipe step must save. "Fewest machines" is the default (`DEFAULT_STEP_CHARGE`, the user's answer of 2026-10-20).
+ * The planning modes a project picks under "Plan for" (add-on 17, design spec §3.3, architecture §11.45 (1)), in
+ * `PLAN_OBJECTIVES` order, each with what it counts.
+ */
+export const OBJECTIVE_CHOICES: ReadonlyArray<{ value: PlanObjective; label: string; hint: string }> = [
+  { value: 'least-raw', label: 'Least raw material', hint: 'Raw material per item while the line runs; machines are not counted' },
+  { value: 'cheapest', label: 'Cheapest', hint: 'Raw material over the horizon plus the machines you do not have yet' },
+  { value: 'multi-output', label: 'Best multi-output', hint: 'As few different raw materials as possible: farms and byproducts first, then the cheapest' },
+];
+
+/**
+ * The mode a project plans in, as the planner reads it (`objectiveOf`, src/server/planner/objective.ts): a running line
+ * without a build horizon (add-on 12's "Ignore build cost") plans least raw material whatever `objective` says; else
+ * `objective`, or `DEFAULT_OBJECTIVE` for settings stored before it.
+ */
+export function planningMode(settings: PlanSettings): PlanObjective {
+  if (settings.mode === 'rate' && settings.buildHorizonHours === null) return 'least-raw';
+  return settings.objective ?? DEFAULT_OBJECTIVE;
+}
+
+/**
+ * The patch that picks mode `value`: `{ objective }`, and for the modes that count build cost (cheapest, best
+ * multi-output) on a project without a horizon also `buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS`, as the server's
+ * `withObjectiveRules` would make it.
+ */
+export function objectivePatch(value: PlanObjective, settings: PlanSettings): Partial<PlanSettings> {
+  const countsBuild = value !== 'least-raw';
+  return countsBuild && settings.buildHorizonHours === null ? { objective: value, buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS } : { objective: value };
+}
+
+/**
+ * The "Machines vs raw material" presets (fix spec §3, architecture §11.34 as entry 39 amends it; ruling S17, formerly
+ * "Steps vs raw material"): with build cost counted the share of the line's least raw material over the horizon one new
+ * machine block costs, in least raw material the share one recipe step must save. "Fewest machines" is the default
+ * (`DEFAULT_STEP_CHARGE`, the user's answer of 2026-10-20).
  */
 export const STEP_CHARGE_PRESETS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 0, label: 'Least raw material' },
@@ -204,7 +247,7 @@ export function stepChargeLabel(charge: number): string {
   return STEP_CHARGE_PRESETS.find((p) => p.value === charge)?.label ?? `Custom (${chargePercent(charge)})`;
 }
 
-/** The choices of the "Steps vs raw material" select: each preset as "<name> (<n>%)", then the stored value when it is none of them. */
+/** The choices of the "Machines vs raw material" select: each preset as "<name> (<n>%)", then the stored value when it is none of them. */
 export function stepChargeOptions(charge: number): Array<{ value: string; label: string }> {
   const options = STEP_CHARGE_PRESETS.map((p) => ({ value: String(p.value), label: `${p.label} (${chargePercent(p.value)})` }));
   if (!STEP_CHARGE_PRESETS.some((p) => p.value === charge)) options.push({ value: String(charge), label: stepChargeLabel(charge) });
@@ -218,15 +261,44 @@ export function stepChargePatch(value: string): Partial<PlanSettings> | null {
 }
 
 /**
- * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
- * weighed against, `none` to ignore it (`PlanSettings.buildHorizonHours` null). 24 hours is the default.
+ * "Raw material for fewer machines" (fix wave 3 (A), the user's answer of 2026-10-22): the presets of `PlanSettings.rawCap`,
+ * how much more raw material than the leanest line (what "Least raw material" plans) the plan may use to build fewer
+ * machines — at most +10, +25 (the default) or +50 %, or no limit.
  */
-export const BUILD_HORIZON_PRESETS: ReadonlyArray<{ value: string; hours: number | null; label: string }> = [
+export const RAW_CAP_PRESETS: ReadonlyArray<{ value: string; cap: number | null; label: string }> = [
+  { value: '0.1', cap: 0.1, label: 'At most +10 %' },
+  { value: '0.25', cap: 0.25, label: 'At most +25 %' },
+  { value: '0.5', cap: 0.5, label: 'At most +50 %' },
+  { value: 'off', cap: null, label: 'No limit' },
+];
+
+/** The raw cap a project plans with: its own, else the default (a project stored before the setting). */
+export function rawCapOf(settings: PlanSettings): number | null {
+  return settings.rawCap === undefined ? DEFAULT_RAW_CAP : settings.rawCap;
+}
+
+/** A raw cap in words: its preset's name, else `At most +<n> %` (`custom` in the select). */
+export function rawCapChoice(cap: number | null): { value: string; label: string } {
+  const preset = RAW_CAP_PRESETS.find((p) => p.cap === cap);
+  return preset === undefined ? { value: 'custom', label: `At most +${formatNumber((cap ?? 0) * 100)} %` } : { value: preset.value, label: preset.label };
+}
+
+/** The patch for a value picked in that select: its preset's cap; nothing for `custom` or any other value. */
+export function rawCapPatch(value: string): Partial<PlanSettings> {
+  const preset = RAW_CAP_PRESETS.find((p) => p.value === value);
+  return preset === undefined ? {} : { rawCap: preset.cap };
+}
+
+/**
+ * "Count build cost against" (plan 12 Task 7, design spec §3.3): the hours of running the build cost of new machines is
+ * weighed against, in the modes that count it (cheapest, best multi-output). 24 hours is the default. "Ignore build cost"
+ * is no horizon any more: it is the mode "Least raw material" (add-on 17, architecture §11.45 (1)).
+ */
+export const BUILD_HORIZON_PRESETS: ReadonlyArray<{ value: string; hours: number; label: string }> = [
   { value: '1', hours: 1, label: '1 hour' },
   { value: '8', hours: 8, label: '8 hours' },
   { value: '24', hours: 24, label: '24 hours' },
   { value: '168', hours: 168, label: '1 week' },
-  { value: 'none', hours: null, label: 'Ignore build cost' },
 ];
 
 /** The value of a stored horizon no preset names. */
@@ -234,12 +306,13 @@ const CUSTOM_HORIZON = 'custom';
 
 /**
  * What the horizon select shows for `hours`: its preset, the 24 h one for a project stored without the setting
- * (undefined), else `Custom (<n> h)` under the value `custom`.
+ * (undefined) or without a horizon (null: least raw material, which shows no select; picking a mode that counts build
+ * cost gives it 24 h), else `Custom (<n> h)` under the value `custom`.
  */
 export function horizonChoice(hours: number | null | undefined): { value: string; label: string } {
-  const wanted = hours === undefined ? DEFAULT_BUILD_HORIZON_HOURS : hours;
+  const wanted = hours ?? DEFAULT_BUILD_HORIZON_HOURS;
   const preset = BUILD_HORIZON_PRESETS.find((p) => p.hours === wanted);
-  return preset !== undefined ? { value: preset.value, label: preset.label } : { value: CUSTOM_HORIZON, label: `Custom (${formatNumber(wanted as number)} h)` };
+  return preset !== undefined ? { value: preset.value, label: preset.label } : { value: CUSTOM_HORIZON, label: `Custom (${formatNumber(wanted)} h)` };
 }
 
 /** The patch for a value picked in the horizon select: `{ buildHorizonHours }` of its preset; nothing for any other value. */
@@ -251,10 +324,16 @@ export function horizonPatch(value: string): Partial<PlanSettings> {
 /**
  * The choices of "Build machines at" (the user's ruling 224): `Cheapest tier` (null, the default, under the value '')
  * and each tier from LV up to the project's tier; a stored tier above it (the project's tier was lowered since) last,
- * said to be above it (the planner builds at the project's tier then).
+ * said to be above it (the planner builds at the project's tier then). With the project's tier not known yet (`null`: an
+ * auto tier, which the world scan decides, and no plan yet; the controller's ruling after plan 12 Task 7, (b)), only
+ * the cheapest tier and a stored tier, plainly: the list of tiers waits for the plan.
  */
-export function buildTierOptions(projectTier: number, stored: number | null | undefined): Array<{ value: string; label: string }> {
+export function buildTierOptions(projectTier: number | null, stored: number | null | undefined): Array<{ value: string; label: string }> {
   const options = [{ value: '', label: 'Cheapest tier' }];
+  if (projectTier === null) {
+    if (typeof stored === 'number') options.push({ value: String(stored), label: tierText(stored) });
+    return options;
+  }
   for (let tier = 1; tier <= projectTier; tier++) options.push({ value: String(tier), label: tierText(tier) });
   if (typeof stored === 'number' && stored > projectTier) options.push({ value: String(stored), label: `${tierText(stored)} (above the project’s tier)` });
   return options;
@@ -352,7 +431,124 @@ export function ownedWith(owned: readonly OwnedEntry[], mteId: number, count: nu
   return { owned: owned.map((e) => (e === entry ? { mteId, count: Math.min(MAX_OWNED_MANUAL_COUNT, e.count + count) } : e)) };
 }
 
+/**
+ * "Use this plan's raw inputs" (fix wave 3 (B)): the keys of the plan's raw inputs without the free inputs (`FREE_KEYS`),
+ * once each, sorted, at most `MAX_INPUTS_ONLY`: where "Only these come in" starts from.
+ */
+export function inputsOnlyFromPlan(plan: Pick<Plan, 'rawInputs'>): StuffKey[] {
+  // A plan from before `rawInputs` (or a test's partial one) has none.
+  const keys = new Set((plan.rawInputs ?? []).map((r) => r.key).filter((key) => !FREE_KEYS.includes(key)));
+  return [...keys].sort(byString).slice(0, MAX_INPUTS_ONLY);
+}
+
+/** "Only these come in" with `key` put in (`on`) or taken out, sorted; null when it would hold more than `MAX_INPUTS_ONLY`. */
+export function inputsOnlyPatch(settings: PlanSettings, key: StuffKey, on: boolean): Partial<PlanSettings> | null {
+  const inputsOnly = toggleList(settings.inputsOnly ?? [], key, on);
+  return inputsOnly.length > MAX_INPUTS_ONLY ? null : { inputsOnly };
+}
+
 /** `owned` without machine `mteId`. */
 export function ownedWithout(owned: readonly OwnedEntry[], mteId: number): OwnedEntry[] {
   return owned.filter((e) => e.mteId !== mteId);
+}
+
+// ---- Farms (add-on 17, architecture §11.45 (2)) ----
+
+/** The farm settings a project plans with: its own, or the defaults for a project stored before them. */
+export function farmsOf(settings: PlanSettings): FarmSettings {
+  return settings.farms ?? defaultFarmSettings();
+}
+
+/** The patch carrying the project's farm settings whole (a settings patch replaces records whole) after `change`. */
+export function farmsPatch(settings: PlanSettings, change: (f: FarmSettings) => FarmSettings): Partial<PlanSettings> {
+  return { farms: change(farmsOf(settings)) };
+}
+
+/** `kinds` with `kind` turned on or off, in `FARM_KINDS` order. */
+export function farmKindsWith(kinds: readonly FarmKind[], kind: FarmKind, on: boolean): FarmKind[] {
+  return FARM_KINDS.filter((k) => (k === kind ? on : kinds.includes(k)));
+}
+
+/** The tools a Tree Growth Simulator's input bus may hold, one per mode, with what each harvests (farms.md §1.5). */
+export const TGS_TOOL_CHOICES: ReadonlyArray<{ mode: TgsMode; label: string }> = [
+  { mode: 'log', label: 'Saw (logs)' },
+  { mode: 'sapling', label: 'Branch Cutter (saplings)' },
+  { mode: 'leaves', label: 'Wire Cutter (leaves, ×2)' },
+  { mode: 'fruit', label: 'Knife (fruit)' },
+];
+
+/** What a Crop Manager feeds its crop sticks besides water, in words. */
+export const FERTILIZER_LABELS: Readonly<Record<(typeof FERTILIZER_CHOICES)[number], string>> = {
+  none: 'None', fertilizer: 'Fertilizer', 'bone-meal': 'Bone Meal',
+};
+
+/**
+ * The tiers a farm machine can be picked at: from LV up to the project's tier, at most `max` (a Crop Manager's: UMV), by
+ * name; a stored tier above them last, said to be above the project's tier (the planner plans the farm at that tier
+ * then). With the project's tier not known yet (an auto tier before the plan), only the stored tier.
+ */
+export function farmTierOptions(projectTier: number | null, stored: number, max: number): Array<{ value: string; label: string }> {
+  if (projectTier === null) return [{ value: String(stored), label: tierText(stored) }];
+  const top = Math.min(projectTier, max);
+  const options: Array<{ value: string; label: string }> = [];
+  for (let tier = 1; tier <= top; tier++) options.push({ value: String(tier), label: tierText(tier) });
+  if (stored > top) options.push({ value: String(stored), label: `${tierText(stored)} (above the project’s tier)` });
+  return options;
+}
+
+/** A crop seed's growth, gain or resistance as typed: a whole number from 1 to 31 (validateOp's limits), or why not. */
+export function parseStat(text: string): { value: number } | { error: string } {
+  const trimmed = text.trim();
+  const value = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  return value >= 1 && value <= MAX_CROP_STAT ? { value } : { error: `Enter a whole number from 1 to ${MAX_CROP_STAT}` };
+}
+
+/** What a farm the group runs gives a minute, as typed: above 0 and at most 1,000,000 (validateOp's limits), or why not. */
+export function parsePerMinute(text: string): { value: number } | { error: string } {
+  const trimmed = text.trim();
+  const value = trimmed === '' ? Number.NaN : Number(trimmed);
+  return Number.isFinite(value) && value > 0 && value <= MAX_FARM_PER_MINUTE ? { value } : { error: 'Enter how many a minute (above 0)' };
+}
+
+/** One output of a farm the group runs, as the "Farms we already run" list shows it: `id` is `<farm>:<output>` (indices). */
+export interface RunningFarmRow { id: string; farm: number; output: number; name: string; key: StuffKey; perMinute: number }
+
+/** Every output of the farms the group runs, farm by farm, each with its farm's name. */
+export function runningFarmRows(running: readonly RunningFarm[]): RunningFarmRow[] {
+  return running.flatMap((farm, f) => farm.outputs.map((out, o) => ({
+    id: `${f}:${o}`, farm: f, output: o, name: farm.name, key: out.key, perMinute: out.perMinute,
+  })));
+}
+
+/**
+ * `running` with a farm named `name` (without its outer spaces) giving `perMinute` of `key` a minute added at the end, or
+ * why not: no name, a name longer than a project's, or the list is full (validateOp's limits).
+ */
+export function runningFarmWith(
+  running: readonly RunningFarm[], farm: { name: string; key: StuffKey; perMinute: number },
+): { running: RunningFarm[] } | { error: string } {
+  const name = farm.name.trim();
+  if (name === '') return { error: "Enter the farm's name" };
+  if (name.length > MAX_NAME_LENGTH) return { error: `A farm's name is at most ${MAX_NAME_LENGTH} characters` };
+  if (running.length >= MAX_RUNNING_FARMS) return { error: `The list holds at most ${MAX_RUNNING_FARMS} farms; remove one first` };
+  return { running: [...running, { name, outputs: [{ key: farm.key, perMinute: farm.perMinute }] }] };
+}
+
+/** `running` without output `output` of farm `farm`; a farm left with no output goes too. */
+export function runningFarmWithout(running: readonly RunningFarm[], farm: number, output: number): RunningFarm[] {
+  return running.flatMap((f, i) => {
+    if (i !== farm) return [f];
+    const outputs = f.outputs.filter((_, o) => o !== output);
+    return outputs.length === 0 ? [] : [{ ...f, outputs }];
+  });
+}
+
+/**
+ * Whether the active export has a crop table the planner can offer crop farms from (ruling R10: `manifest.counts.crops`
+ * above 0); null while the pack is not loaded.
+ */
+export function hasCropTable(info: PackInfo | null): boolean | null {
+  if (info === null) return null;
+  const crops = info.manifest?.counts?.crops;
+  return crops !== undefined && crops > 0;
 }

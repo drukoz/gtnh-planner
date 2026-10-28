@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  FACES, rotateFaces, orientFaces, hashColor, KIND_COLORS, partBlockRef, conduitBlockRef, ae2CableBlockRef, regionRect, layerKey,
+  FACES, rotateFaces, orientFaces, fnv1a, hashColor, KIND_COLORS, partBlockRef, conduitBlockRef, ae2CableBlockRef, regionRect, layerKey,
   type Face, type Rect, type Rgb, type TextureLayer,
 } from '../../../src/shared/types/assets.ts';
 
@@ -26,6 +26,14 @@ describe('asset types', () => {
     expect(hashColor('a')).toEqual([192, 89, 123]);
     expect(hashColor('fluid:water')).toEqual([89, 192, 106]);
     expect(hashColor('t:iron_ingot@0')).toEqual([89, 128, 192]);
+  });
+
+  // Phase 2 Task 12, fix round 1 (M4): the one FNV-1a, 32 bits unsigned, which the placeholder colours and the Flow riders' phases share;
+  // these are the hash's own test vectors
+  it('hashes a string with FNV-1a, 32 bits unsigned', () => {
+    expect(fnv1a('')).toBe(0x811c9dc5);
+    expect(fnv1a('a')).toBe(0xe40c292c);
+    expect(fnv1a('foobar')).toBe(0xbf9cf968);
   });
 
   it('has a colour for every machine kind', () => {

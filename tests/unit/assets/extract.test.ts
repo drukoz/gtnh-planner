@@ -1,15 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { crc32 } from 'node:zlib';
+import { snapshot } from '../../helpers/fake-server.ts';
 import { makeJar } from '../../helpers/jar.ts';
 import { makePng } from '../../helpers/png.ts';
-import { extractAssets, textureEntry, pickWinner, ExtractError } from '../../../src/server/assets/extract.ts';
+import { extractAssets, textureEntry, pickWinner, ExtractError, folderEntry, scanFolderPack, copyFromFolder } from '../../../src/server/assets/extract.ts';
+import type { PackSet } from '../../../src/server/assets/resource-packs.ts';
 
 const RED = makePng(16, 16, [255, 0, 0, 255]);
 const BLUE = makePng(16, 16, [0, 0, 255, 255]);
 const GREY = makePng(16, 16, [128, 128, 128, 255]);
+const GREEN = makePng(16, 16, [0, 255, 0, 255]);
 const P = (dir: string, rel: string) => join(dir, 'assets', rel);
 
 async function pack() {
@@ -35,6 +39,42 @@ async function pack() {
   const broken = join(jars, 'broken.jar');
   await writeFile(broken, 'this is not a zip');
   return { dir, jars: [{ path: client, kind: 'client' as const }, ...[gt, core, vn, broken].map((path) => ({ path, kind: 'mod' as const }))] };
+}
+
+/** Writes `data` to `<root>/<rel>`, creating its folder. */
+async function put(root: string, rel: string, data: Uint8Array | string): Promise<void> {
+  await mkdir(dirname(join(root, rel)), { recursive: true });
+  await writeFile(join(root, rel), data);
+}
+
+/**
+ * `pack()`'s jars under two resource packs, lowest first as options.txt lists them: the folder `P1` and the zip
+ * `P2.zip` (`gone` is listed but was not found). `<dir>/assets/nei/` already holds the NEI import.
+ */
+async function withPacks() {
+  const { dir, jars } = await pack();
+  const folder = join(dir, 'resourcepacks', 'P1');
+  await put(folder, 'pack.mcmeta', '{"pack":{"pack_format":1,"description":"v1"}}');
+  await put(folder, 'assets/minecraft/textures/blocks/STONE.png', GREEN);   // the client jar's stone.png in another case
+  await put(folder, 'assets/gregtech/textures/blocks/fluids/fluid.water.png.mcmeta', '{"animation":{}}');
+  await put(folder, 'assets/p/textures/items/only.png', GREEN);
+  await put(folder, 'assets/nei/textures/items/n.png', GREEN);
+  await put(dir, 'outside.png', GREEN);
+  await mkdir(join(folder, 'assets/p/textures/blocks'));
+  await symlink(join(dir, 'outside.png'), join(folder, 'assets/p/textures/blocks/link.png'));
+  const zip = await makeJar(join(dir, 'resourcepacks', 'P2.zip'), {
+    'pack.mcmeta': '{"pack":{"pack_format":1,"description":"v2"}}',
+    'assets/gregtech/textures/blocks/iconsets/OVERLAY_ACCELERATOR.png': makePng(16, 32, [128, 0, 128, 255]),
+    'assets/gregtech/textures/blocks/iconsets/OVERLAY_ACCELERATOR.png.mcmeta': '{"animation":{}}',
+    'assets/minecraft/textures/blocks/Sponge.png': GREEN,   // only the case differs from the jars' sponge.png
+    'assets/gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png': Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(' not a png')]),
+  });
+  const packs: PackSet = {
+    enabled: ['P1', 'gone', 'P2.zip'],
+    packs: [{ name: 'P1', path: folder, format: 'folder', version: 'v1' }, { name: 'P2.zip', path: zip, format: 'zip', version: 'v2' }],
+  };
+  await put(dir, 'assets/nei/index.json', '{}');
+  return { dir, jars, packs, folder };
 }
 
 describe('textureEntry and pickWinner', () => {
@@ -185,5 +225,150 @@ describe('extractAssets edge cases', () => {
     expect(await readFile(P(dir, 'index.json'), 'utf8')).toBe(first);
     expect(existsSync(P(dir, 'nei/index.json'))).toBe(true);
     expect((await readdir(dir)).filter((n) => n.startsWith('assets.'))).toEqual(['assets.old-1000']);
+  });
+});
+
+describe('extractAssets with resource packs', () => {
+  it('packs win over every jar, the last listed first', async () => {
+    const { dir, jars, packs, folder } = await withPacks();
+    const before = await snapshot(folder);
+    const s = await extractAssets({ jars, packs, dataDir: dir });
+    const ix = JSON.parse(await readFile(P(dir, 'index.json'), 'utf8'));
+    expect(ix.files['gregtech/textures/blocks/iconsets/OVERLAY_ACCELERATOR.png']).toEqual({ w: 16, h: 32, frames: 2, jar: 'P2.zip' });
+    expect(ix.files['minecraft/textures/blocks/stone.png']).toEqual({ w: 16, h: 16, jar: 'P1' });
+    expect(ix.files['p/textures/items/only.png'].jar).toBe('P1');
+    expect(ix.files['gregtech/textures/blocks/fluids/fluid.water.png']).toEqual({ w: 16, h: 64, frames: 4, jar: 'gregtech-5.09.54.183.jar' });
+    expect(await readFile(P(dir, 'gregtech/textures/blocks/fluids/fluid.water.png.mcmeta'), 'utf8')).toBe('{"animation":{}}');   // P1's, over the jar's
+    expect(ix.conflicts).toEqual([
+      { path: 'gregtech/textures/blocks/iconsets/OVERLAY_ACCELERATOR.png', winner: 'GTNewHorizonsCoreMod-2.9.76.jar', losers: ['gregtech-5.09.54.183.jar'], rule: 'override-over-home' },
+      { path: 'minecraft/textures/blocks/sponge.png', winner: 'VillageNames-4.jar', losers: ['minecraft-1.7.10-client.jar'], rule: 'mod-over-client' },
+    ]);
+    expect(ix.packs).toEqual({ enabled: ['P1', 'gone', 'P2.zip'], read: [
+      { name: 'P1', format: 'folder', version: 'v1', entries: 3, bytes: expect.any(Number), files: 2 },
+      { name: 'P2.zip', format: 'zip', version: 'v2', entries: 4, bytes: expect.any(Number), files: 1 } ] });
+    expect(ix.sources.map((x: { jar: string }) => x.jar)).not.toContain('P1');
+    expect(s).toMatchObject({ packFiles: 3, packReplaced: 2, caseOnly: 1 });
+    expect(await snapshot(folder)).toEqual(before);
+  });
+
+  it('writes one file per path', async () => {   // Review Focus 1
+    const { dir, jars, packs } = await withPacks();
+    const s = await extractAssets({ jars, packs, dataDir: dir });
+    expect((await readdir(P(dir, 'minecraft/textures/blocks'))).sort()).toEqual(['sponge.png', 'stone.png']);   // the Mac's disk merges case variants, so also:
+    const ix = JSON.parse(await readFile(P(dir, 'index.json'), 'utf8'));
+    const keys = Object.keys(ix.files);
+    expect(new Set(keys.map((k) => k.toLowerCase())).size).toBe(keys.length);
+    expect(ix.files['minecraft/textures/blocks/Sponge.png']).toBeUndefined();
+    expect(ix.files['minecraft/textures/blocks/STONE.png']).toBeUndefined();
+    expect(await readFile(P(dir, 'minecraft/textures/blocks/stone.png'))).toEqual(GREEN);   // P1's STONE.png under the jar's spelling
+    expect(await readFile(P(dir, 'minecraft/textures/blocks/sponge.png'))).toEqual(BLUE);   // VillageNames' as before: the zip's Sponge.png is left out
+    expect(s.caseOnly).toBe(1);   // catches a Sponge.png that was written and then overwritten by the jar's copy
+  });
+
+  it('not a PNG', async () => {   // Review Focus 3
+    const { dir, jars, packs } = await withPacks();
+    const s = await extractAssets({ jars, packs, dataDir: dir });
+    expect(s.notPngInPacks).toEqual([{ pack: 'P2.zip', path: 'gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png' }]);
+    expect(JSON.parse(await readFile(P(dir, 'index.json'), 'utf8')).files['gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png']).toBeUndefined();
+  });
+
+  it('keeps the NEI import and never extracts a pack into nei/ or through a link', async () => {   // Global Constraints: NEI
+    const { dir, jars, packs } = await withPacks();
+    await extractAssets({ jars, packs, dataDir: dir });
+    expect(await readFile(P(dir, 'nei/index.json'), 'utf8')).toBe('{}');
+    expect(existsSync(P(dir, 'nei/textures'))).toBe(false);
+    expect(existsSync(P(dir, 'p/textures/blocks/link.png'))).toBe(false);
+  });
+
+  it('copyFromFolder refuses a file that changed', async () => {   // Review Focus 4
+    const { folder } = await withPacks();
+    const { entries } = await scanFolderPack(folder);
+    const rel = 'p/textures/items/only.png';
+    await writeFile(entries.get(rel)!.file, RED);
+    await expect(copyFromFolder(entries, new Map([[rel, rel]]), await mkdtemp(join(tmpdir(), 'gp-cp-')), new Set()))
+      .rejects.toThrow(/changed during the extraction/);
+  });
+
+  it('copyFromFolder refuses a file edited to the same size', async () => {   // Review Focus 4: only the CRC-32 tells
+    const { folder } = await withPacks();
+    const { entries } = await scanFolderPack(folder);
+    const rel = 'p/textures/items/only.png';
+    await writeFile(entries.get(rel)!.file, Buffer.alloc(GREEN.length));
+    await expect(copyFromFolder(entries, new Map([[rel, rel]]), await mkdtemp(join(tmpdir(), 'gp-cp-')), new Set()))
+      .rejects.toThrow(/changed during the extraction/);
+  });
+
+  it('fails on a zip pack entry that differs from its scan, and keeps the previous textures', async () => {   // Review Focus 4
+    const { dir, jars, packs } = await withPacks();
+    await extractAssets({ jars, packs, dataDir: dir });
+    const first = await readFile(P(dir, 'index.json'), 'utf8');
+    const zip = packs.packs[1]!.path;
+    const bytes = await readFile(zip);
+    const name = Buffer.from('assets/gregtech/textures/blocks/iconsets/OVERLAY_ACCELERATOR.png.mcmeta');   // no other entry name holds it
+    const central = bytes.indexOf(name, bytes.indexOf(name) + 1) - 46;   // its second copy follows its central directory record
+    bytes.writeUInt32LE(bytes.readUInt32LE(central + 16) ^ 1, central + 16);   // the CRC-32 that the scan lists
+    await writeFile(zip, bytes);
+    await expect(extractAssets({ jars, packs, dataDir: dir })).rejects.toThrow(/^P2\.zip: .*OVERLAY_ACCELERATOR\.png\.mcmeta: CRC-32 mismatch/);
+    expect(await readFile(P(dir, 'index.json'), 'utf8')).toBe(first);
+    expect((await readdir(dir)).filter((n) => n.startsWith('assets.'))).toEqual([]);
+  });
+
+  it('folderEntry', () => {
+    expect(folderEntry('assets/gregtech/Textures/Blocks/iconsets/MACHINE_LV_SIDE.PNG')).toBe('gregtech/textures/blocks/iconsets/MACHINE_LV_SIDE.png');
+    expect(folderEntry('assets/gregtech/textures/blocks/a.png.MCMETA')).toBe('gregtech/textures/blocks/a.png.mcmeta');
+    expect(folderEntry('assets/minecraft/textures/entity/chest/Normal.png')).toBe('minecraft/textures/entity/chest/normal.png');
+    for (const bad of ['assets/x/textures/gui/a.png', 'assets/x/textures/blocks/../../a.png', 'pack.mcmeta', 'assets/x/mcpatcher/ctm/glass/0.png',
+      'assets/GregTech/textures/blocks/a.png'])   // 1.7.10 ignores non-lower-case namespaces
+      expect(folderEntry(bad)).toBeNull();
+  });
+
+  it('scanFolderPack reads only the texture files outside nei/; a folder without assets/, or with a link there, holds none', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'gp-fp-'));
+    expect(await scanFolderPack(folder)).toEqual({ entries: new Map(), ignored: 0 });
+    await put(folder, 'assets/x/Textures/Blocks/A.PNG', GREEN);
+    for (const rel of ['assets/x/lang/en_US.lang', 'assets/nei/textures/items/n.png', 'assets/Other/textures/blocks/b.png']) {
+      await put(folder, rel, GREEN);
+      await chmod(join(folder, rel), 0o000);   // a read of any of these would fail the scan
+    }
+    const scan = await scanFolderPack(folder);
+    expect(scan).toEqual({
+      entries: new Map([['x/textures/blocks/A.png', { crc: crc32(GREEN), size: GREEN.length, file: join(folder, 'assets/x/Textures/Blocks/A.PNG') }]]),
+      ignored: 3,
+    });
+    const rel = 'x/textures/blocks/a.png';   // the entry is keyed as the scan spelled it, A.png
+    await expect(copyFromFolder(scan.entries, new Map([[rel, rel]]), await mkdtemp(join(tmpdir(), 'gp-cp-')), new Set())).rejects.toThrow(/was not scanned/);
+    const linked = await mkdtemp(join(tmpdir(), 'gp-fp-'));
+    await symlink(join(folder, 'assets'), join(linked, 'assets'));   // a link inside a pack is never followed, assets/ included
+    expect(await scanFolderPack(linked)).toEqual({ entries: new Map(), ignored: 0 });
+  });
+
+  it('skips a pack it cannot scan or that is named like a jar, and never counts a pack as a mod jar', async () => {
+    const { dir, jars, packs } = await withPacks();
+    const broken = join(dir, 'resourcepacks', 'broken.zip');
+    await writeFile(broken, 'not a zip');
+    const villageNames = jars.find((j) => j.path.endsWith('VillageNames-4.jar'))!.path;
+    const named = await makeJar(join(dir, 'resourcepacks', 'VillageNames-4.jar'), { 'assets/minecraft/textures/blocks/sponge.png': GREEN });
+    const more: PackSet = {
+      enabled: [...packs.enabled, 'broken.zip', 'VillageNames-4.jar'],
+      packs: [...packs.packs, { name: 'broken.zip', path: broken, format: 'zip', version: '' }, { name: 'VillageNames-4.jar', path: named, format: 'zip', version: '' }],
+    };
+    const s = await extractAssets({ jars, packs: more, dataDir: dir });
+    expect(s.skippedJars.map((j) => j.jar)).toEqual(['broken.jar', 'broken.zip', 'VillageNames-4.jar']);
+    expect(s.skippedJars[2]!.error).toBe(`same file name as ${villageNames}`);
+    expect(s.packs).toEqual({ enabled: more.enabled, read: [expect.objectContaining({ name: 'P1' }), expect.objectContaining({ name: 'P2.zip' })] });
+    expect(JSON.parse(await readFile(P(dir, 'index.json'), 'utf8')).packs).toEqual(s.packs);
+    expect(await readFile(P(dir, 'minecraft/textures/blocks/sponge.png'))).toEqual(BLUE);
+    const client = jars.filter((j) => j.kind === 'client');
+    await expect(extractAssets({ jars: client, packs, dataDir: dir })).rejects.toThrow(/^no mod jar could be read: /);
+  });
+
+  it('records packs only when it was given some', async () => {
+    const { dir, jars } = await pack();
+    const s = await extractAssets({ jars, dataDir: dir });
+    expect(s).toMatchObject({ packFiles: 0, packReplaced: 0, caseOnly: 0, notPngInPacks: [], packs: null });
+    expect('packs' in JSON.parse(await readFile(P(dir, 'index.json'), 'utf8'))).toBe(false);
+    const none = await extractAssets({ jars, packs: { enabled: [], packs: [] }, dataDir: dir });
+    expect(none.packs).toEqual({ enabled: [], read: [] });
+    expect(JSON.parse(await readFile(P(dir, 'index.json'), 'utf8')).packs).toEqual({ enabled: [], read: [] });
   });
 });

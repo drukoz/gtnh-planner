@@ -194,6 +194,28 @@ export function withBuildRecipes(spec: PackSpec, mteIds?: readonly number[], fro
   return extended(spec, { recipes: machines.map((mteId) => craft(`make-${mteId}`, [...from], itemOf(mteId))) });
 }
 
+/**
+ * Mini-GT plus plan 09 Task 8's tie in build mode (build-plan.test.ts's "one source at a tie", plan-invariants.test.ts's
+ * purchase beside a full step): `burn` (Basic Centrifuge 161, 16 EU/t × `dur` t) splits a Raw Dust into a Copper Ingot and
+ * 1,000 L Gas, and `make-thing` (assembler, 2 EU/t) takes 2 copper ingots and 1,000 L gas into a Thing. Copper is also
+ * mined, so burning a second dust (its gas left over) costs the raw material that buying the other ingot does. The
+ * centrifuge is crafted from `from` (nothing: it builds for free).
+ */
+export function gasSpec(dur: number, from: ReadonlyArray<[StuffKey, number]> = []): PackSpec {
+  const spec = structuredClone(MINI_GT);
+  const vein = { name: 'ore.mix.raw', dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+    materials: { primary: 'Raw', secondary: 'Raw', between: 'Raw', sporadic: 'Raw' } };
+  return withBuildRecipes({
+    ...spec,
+    items: [...(spec.items ?? []), { key: 't:raw_dust@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 't:thing@0', name: 'Thing' }],
+    fluids: [...(spec.fluids ?? []), { key: 'fluid:gas', name: 'Gas' }],
+    recipes: [...(spec.recipes ?? []),
+      { id: 'burn', map: 'gt.recipe.centrifuge', in: [['t:raw_dust@0', 1]], out: [['t:copper_ingot@0', 1], ['fluid:gas', 1000]], eut: 16, dur },
+      { id: 'make-thing', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 2], ['fluid:gas', 1000]], out: [['t:thing@0', 1]], eut: 2 }],
+    worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), vein] },
+  }, [161], from);
+}
+
 /** GT's display item the rock breaker's recipes list as their input (plan 09 R2: the loader drops it). */
 const ROCK_BREAKER_DISPLAY = 'gregtech:gt.metaitem.02@32765#abcdefabcdef';
 const COBBLE = 'minecraft:cobblestone@0';
@@ -340,7 +362,7 @@ export function gizmoSpec(): PackSpec {
  */
 export function opt(mteId: number, tier: number, perMachine: number, build: number | null, owned = 0, solveBuild = build ?? 0): MachineOption {
   return {
-    mteId, name: `M${mteId}`, tier, kind: 'basic',
+    id: `gt:${mteId}`, name: `M${mteId}`, tier, kind: 'basic',
     oc: { euPerTick: 16, durationTicks: 20 / perMachine, overclocks: 0, heatOverclocks: 0, machineVoltage: V[tier] ?? 0, machineAmps: 1, parallel: 1 },
     perMachine, build, owned, solveBuild, canAdd: true,
   };
@@ -376,6 +398,40 @@ export function solderSpec(): PackSpec {
       { id: 'x-solder', map: EXTRACTOR, in: [['t:solder_ingot@0', 1]], out: [['fluid:molten.solder', 144]], eut: 30, dur: 40 },
       { id: 'alloy-solder', map: ALLOY_SMELTER, in: [['t:tin_ingot@0', 9], ['t:antimony@0', 1]], out: [['t:solder_ingot@0', 10]], eut: 16, dur: 200 },
     ],
+  };
+}
+
+/**
+ * `solderSpec()` as a pack a whole line plans on (Task 8's synthetic horizon flip): its goods with GT data (`t:part@0`
+ * Partium Dust, `t:tin_ingot@0` Tin Ingot, `t:antimony@0` Antimony Dust, `t:iron_ingot@0` Iron Ingot), one overworld
+ * vein `ore.mix.solder` (primary Tin, secondary Antimony, between Partium, sporadic Iron; weight 100, y 10–60, size 32,
+ * density 3) so each is mined at 1 raw, and the crafting recipes that build its machines: `make-121` (16 iron ingots →
+ * the Basic Assembler), `make-131` (12 → the Basic Fluid Extractor) and `make-201` (20 → the Basic Alloy Smelter). The
+ * tin route then builds 28 and the solder route 48.
+ */
+export function solderPackSpec(): PackSpec {
+  const spec = solderSpec();
+  return {
+    ...spec,
+    items: [
+      { key: 't:part@0', name: 'Partium Dust', gt: { prefix: 'dust', material: 'Partium' } },
+      { key: 't:tin_ingot@0', name: 'Tin Ingot', gt: { prefix: 'ingot', material: 'Tin' } },
+      { key: 't:antimony@0', name: 'Antimony Dust', gt: { prefix: 'dust', material: 'Antimony' } },
+      { key: 't:iron_ingot@0', name: 'Iron Ingot', gt: { prefix: 'ingot', material: 'Iron' } },
+    ],
+    maps: [...(spec.maps ?? []), { id: 'crafting', name: 'Crafting' }],
+    recipes: [
+      ...(spec.recipes ?? []),
+      craft('make-121', [['t:iron_ingot@0', 16]], 'machine:121@0'),
+      craft('make-131', [['t:iron_ingot@0', 12]], 'machine:131@0'),
+      craft('make-201', [['t:iron_ingot@0', 20]], 'machine:201@0'),
+    ],
+    worldgen: {
+      veins: [{
+        name: 'ore.mix.solder', dims: ['overworld'], kind: 'vein', weight: 100, minY: 10, maxY: 60, size: 32, density: 3,
+        materials: { primary: 'Tin', secondary: 'Antimony', between: 'Partium', sporadic: 'Iron' },
+      }],
+    },
   };
 }
 
@@ -488,6 +544,34 @@ export function hammerSpec(): PackSpec {
   };
 }
 
+/**
+ * Fix wave 3's poly line in small: a Tank (`t:tank@0`) pressed in one step from a Rubber Log (`t:log@0`, `w-tank`, on the
+ * assembler map), or in three from Raw Ore (`t:ore@0`): `s-grit` (1 ore → 100 grit, forge hammer), `s-paste` (1 grit →
+ * 1 paste, wiremill), `s-tank` (1 paste → 1 tank, bender) — each 16 EU/t × 100 t. With ore and log at 1 a tank takes 0.01
+ * raw the long way (the least raw material, S1) and 1 raw from the log; the walk keeps the log as the simplest producer
+ * (fix spec R4). Machines 121 and 122 (assembler map), 481 (hammer), 351 (wiremill) and 101 (bender), all LV.
+ */
+export function woodSpec(): PackSpec {
+  return {
+    maps: [
+      { id: ASSEMBLER, name: 'Assembler' }, { id: HAMMER, name: 'Forge Hammer' }, { id: WIREMILL, name: 'Wiremill' }, { id: BENDER, name: 'Bending Machine' },
+    ],
+    machines: [
+      { mteId: 121, name: 'Basic Assembler', tier: 1, maps: [ASSEMBLER] },
+      { mteId: 122, name: 'Large Assembler', tier: 1, maps: [ASSEMBLER] },
+      { mteId: 481, name: 'Basic Forge Hammer', tier: 1, maps: [HAMMER] },
+      { mteId: 351, name: 'Basic Wiremill', tier: 1, maps: [WIREMILL] },
+      { mteId: 101, name: 'Basic Bending Machine', tier: 1, maps: [BENDER] },
+    ],
+    recipes: [
+      { id: 'w-tank', map: ASSEMBLER, in: [['t:log@0', 1]], out: [['t:tank@0', 1]], eut: 16, dur: 100 },
+      { id: 's-grit', map: HAMMER, in: [['t:ore@0', 1]], out: [['t:grit@0', 100]], eut: 16, dur: 100 },
+      { id: 's-paste', map: WIREMILL, in: [['t:grit@0', 1]], out: [['t:paste@0', 1]], eut: 16, dur: 100 },
+      { id: 's-tank', map: BENDER, in: [['t:paste@0', 1]], out: [['t:tank@0', 1]], eut: 16, dur: 100 },
+    ],
+  };
+}
+
 /** `fast` (bending map, 301 Fast Press: 1 a → 1 t) and `slow` (wiremill map, 302 Slow Press: 2 a → 1 t), each 16 EU/t × 100 t. */
 export function fastSlowSpec(): PackSpec {
   return {
@@ -555,6 +639,8 @@ interface BuildSetup {
   cleanroom?: BuildModel['cleanroom']; alsoMade?: StuffKey[];
   /** Goods of `leafCosts` bought as derived materials (`leafClass` 'derived', a chain of one recipe): R3's derived purchases. */
   derived?: StuffKey[];
+  /** Add-on 17: per step recipe id, what planting one run a second of it costs (`BuildModel.planting`: a crop farm's). */
+  planting?: Record<string, number>;
 }
 
 /**
@@ -565,7 +651,8 @@ interface BuildSetup {
  * graph recipe's held items (AE2's keys: the Project Red split is `lineBuildModel`'s), `owned` and `pools` come from the
  * options' `owned` (per mteId the largest, units without positions), prices price nothing, nothing is blocked or pinned,
  * and `ownedOnly` is the owned machines of a step none of whose options can add machines; defaults rate mode over 24
- * hours, no sharing, no cleanroom. `runs` = the sorted ids of the step recipes that run.
+ * hours, no sharing, no cleanroom, no planting (`build.planting`, add-on 17). `runs` = the sorted ids of the step recipes
+ * that run.
  */
 export async function solvedWithBuild(
   spec: PackSpec, leafCosts: Record<StuffKey, number>, demand: Array<[StuffKey, number]>, build: BuildSetup, opts?: SolveOptions,
@@ -582,9 +669,9 @@ export async function solvedWithBuild(
   };
   const graph = buildCandidates(pack, defaultSettings(), BUILD_ENV, leaf, demand.map(([key]) => key));
   const optionsOf = (id: string): readonly MachineOption[] => (Object.hasOwn(build.options, id) ? build.options[id] as MachineOption[] : []);
-  const owned = new Map<number, number>();
+  const owned = new Map<import('../../src/shared/ids.ts').MachineId, number>();
   for (const list of Object.values(build.options)) {
-    for (const o of list) if (o.owned > 0) owned.set(o.mteId, Math.max(owned.get(o.mteId) ?? 0, o.owned));
+    for (const o of list) if (o.owned > 0) owned.set(o.id, Math.max(owned.get(o.id) ?? 0, o.owned));
   }
   const held = new Map(graph.recipes.map((r) => [r.id, r.nonConsumed]));
   const model: BuildModel = {
@@ -607,8 +694,9 @@ export async function solvedWithBuild(
       return { runsPerSecond, text: `${first.owned}× ${first.name}, which cannot be built here (${first.unbuildable ?? ''})` };
     },
     pinFallback: () => undefined,
+    planting: (id) => (build.planting !== undefined && Object.hasOwn(build.planting, id) ? build.planting[id] : undefined),
     owned,
-    pools: new Map([...owned].map(([mteId, n]) => [mteId, new Array<null>(n).fill(null)])),
+    pools: new Map([...owned].map(([id, n]) => [id, new Array<null>(n).fill(null)])),
     prices: { cost: () => Infinity, gap: () => ({ kind: 'no-recipe' }) },
     cleanroom: build.cleanroom ?? null,
   };

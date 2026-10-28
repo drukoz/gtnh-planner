@@ -6,6 +6,7 @@
 
 import { elementMap, hatchRuleFor } from '../../src/server/layout/hatch-rules.ts';
 import { posKey, type Vec3 } from '../../src/shared/layout/geometry.ts';
+import { gtMachineId } from '../../src/shared/ids.ts';
 import type { BlockRef, Fluid, Machine, Pack, Recipe, StructureInfo } from '../../src/shared/types/pack.ts';
 import { layoutPack } from './layout-fixtures.ts';
 
@@ -47,11 +48,11 @@ export function dtStructure(): StructureInfo {
 }
 
 function multi(mteId: number, name: string, cls: string, structure: StructureInfo, maps: string[] = []): Machine {
-  return { mteId, metaName: `multimachine.${mteId}`, name, cls: `${MULTI}${cls}`, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'multiblock', maps, structure };
+  return { id: gtMachineId(mteId), mteId, metaName: `multimachine.${mteId}`, name, cls: `${MULTI}${cls}`, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'multiblock', maps, structure };
 }
 
 function hatch(mteId: number, name: string, cls: string): Machine {
-  return { mteId, metaName: `hatch.${mteId}`, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'hatch', tier: 0, maps: [] };
+  return { id: gtMachineId(mteId), mteId, metaName: `hatch.${mteId}`, name, cls, itemKey: `${GT_BLOCK}@${mteId}`, kind: 'hatch', tier: 0, maps: [] };
 }
 
 function fluid(name: string, display: string): Fluid {
@@ -62,7 +63,8 @@ function fluid(name: string, display: string): Fluid {
 export function hatchPack(): Pack {
   const pack = layoutPack();
   const add = (m: Machine): void => {
-    pack.machines.set(m.mteId, m);
+    pack.machines.set(m.id, m);
+    pack.machineByMteId.set(m.mteId, m);
     pack.items.set(m.itemKey, { key: m.itemKey, id: GT_BLOCK, meta: m.mteId, name: m.name, oreDict: [] });
   };
   add(multi(HATCH_IDS.DT, 'Distillation Tower', 'MTEDistillationTower', dtStructure()));

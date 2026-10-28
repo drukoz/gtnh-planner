@@ -6,17 +6,19 @@
 // the plan cache the plan route keys on (architecture §7, §11.8).
 
 import { formatNumber, formatRate } from '../../shared/format.ts';
-import { PSEUDO_IDS, V, tierName } from '../../shared/gt/tiers.ts';
+import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
-import { indexPlan, issueText, type PlanIssue } from '../../shared/plan/balance.ts';
+import { isPseudoMachineId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
+import { machineIdsForMap, machineOf } from '../pack/lookup.ts';
+import { indexPlan, issueText, noteWarningCode, type PlanIssue } from '../../shared/plan/balance.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { DimensionInfo, Ingredient, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_STEP_CHARGE, type BomLine, type LeafClass, type Plan, type PlanContext, type PlanFlow, type PlanSettings,
-  type PlanStep, type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, FREE_KEYS, type BomLine, type DeliberateSplit, type LeafClass, type Plan, type PlanContext,
+  type PlanFlow, type PlanSettings, type PlanStep, type PlanWarning, type PowerSummary, type RawInput, type SourceInfo, type StepOption,
 } from '../../shared/types/plan.ts';
 import { GATHERED_BLOCKS, isBaseItem, unlockText, type Availability } from './availability.ts';
-import { gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
+import { buildCostCounts, gatheredRecipesOn, planBasis, resolveAvoid, settingsHash, type PlanBasis } from './basis.ts';
 import { benchLine, type BenchLine } from './benches.ts';
 import { buildBom, partName, recipeParts, stepProductName } from './bom.ts';
 import { machineBuildCost } from './build-cost.ts';
@@ -25,15 +27,19 @@ import {
   type LeafDecision, type LeafOracle, type LpRecipe, type PlanEnv,
 } from './candidates.ts';
 import { analyzeCosts, moltenMaterial, type CostAnalysis } from './costs.ts';
+import { exportPack } from './farms/pack.ts';
+import { stickCost, unpricedPlantings } from './farms/recipes.ts';
 import { supportingLines } from './lines.ts';
 import { buildCounts, lineBuildModel, type BuildModel } from './machine-options.ts';
 import { buildFlows, emptyContainers, optionShares, planSteps, stepLine, type OptionShare, type StepLine } from './machines.ts';
 import { makeN, wholeRuns, type MakeNResult } from './make-n.ts';
 import { yieldToEventLoop } from './lp.ts';
+import { horizonHoursOf, objectiveOf, runningSupplies, type Need, type Offer } from './objective.ts';
 import { aloneGraph, linePricing, lineWalk, type CostModel, type LinePricing } from './pricing.ts';
 import { sig9 } from './round.ts';
 import {
-  HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type Solution, type SolveOptions, type Standalone,
+  BY_HAND_FLOOR_CHARGE, HAND_STEP_WEIGHT, MAX_NAMED_LOOP_RECIPES, solveLine, standaloneCosts, type CreditColumn, type Solution, type SolveOptions,
+  type Standalone, type SupplyColumn,
 } from './solve.ts';
 import { buildSteps } from './steps.ts';
 
@@ -41,6 +47,13 @@ export { effectiveTier, settingsHash } from './basis.ts';
 
 const SECONDS_PER: Readonly<Record<PlanSettings['per'], number>> = { min: 60, hour: 3600 };
 const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_DAY = 86_400;
+const HOURS_PER_WEEK = 168;
+/**
+ * A byproduct-only good counts as bought beyond the group's stock over the horizon (`beyondStockWarnings`) above the
+ * stock by more than this share of it, plus this much: the line's purchases are 9 significant digits of a rate.
+ */
+const BEYOND_STOCK_SLACK = 1e-6;
 const DEFAULT_CACHE_SIZE = 32;
 /** A machine or amp count this little above a whole number stays whole. */
 const TINY = 1e-9;
@@ -56,19 +69,47 @@ export const PIN_DOMINATED_SHARE = 1.01;
  * How the line's solves trade steps against raw material (fix spec R3): the project's step charge (a project stored
  * before it gets the default), and a crafting-table step weighs HAND_STEP_WEIGHT steps in a running line whose crafting
  * is not automated (fix spec D7; a Make N batch may be crafted by hand), as does one no Auto Workbench runs in a running
- * line whose crafting is (`byHandWeight`, controller ruling 214); with recipe pins, the pinned recipes, which no twin
- * replaces (`twinMoves`, solve.ts).
+ * line whose crafting is (`byHandWeight`, controller ruling 214); with crafting automated and a step charge of 0, a
+ * crafting-table step on no machine still pays BY_HAND_FLOOR_CHARGE a block, in both modes (`byHandFloor`, the
+ * controller's U2 ruling); with recipe pins, the pinned recipes, which no twin replaces (`twinMoves`, solve.ts); wherever
+ * build cost counts, the project's raw cap (fix wave 3 (A): `DEFAULT_RAW_CAP` for a project stored without one, none at
+ * "No limit"). Add-on 17 (architecture §11.45): best multi-output (`objectiveOf`) sets `multiOutput`; `line` adds the
+ * goods its farms wear (`upkeep`) and, in rate mode only, its capped free supplies and the needs it may be credited for
+ * (a Make N batch has no steady rate to cap them by), each only when it has some.
  */
-export function solveOptions(settings: PlanSettings): SolveOptions {
+export function solveOptions(
+  settings: PlanSettings, line?: { upkeep?: ReadonlySet<StuffKey>; supplies?: readonly SupplyColumn[]; credits?: readonly CreditColumn[] },
+): SolveOptions {
   const options: SolveOptions = {
     stepCharge: settings.stepCharge ?? DEFAULT_STEP_CHARGE,
     handWeight: settings.mode === 'rate' && !settings.automateCrafting ? HAND_STEP_WEIGHT : 1,
   };
   // with crafting automated, a crafting-table recipe no Auto Workbench runs is still crafted by hand (controller ruling 214)
   if (settings.mode === 'rate' && settings.automateCrafting) options.byHandWeight = HAND_STEP_WEIGHT;
+  // ...and never costs nothing there (the controller's U2 ruling): at step charge 0 it pays BY_HAND_FLOOR_CHARGE a block
+  if (settings.automateCrafting && !((settings.stepCharge ?? DEFAULT_STEP_CHARGE) > 0)) options.byHandFloor = BY_HAND_FLOOR_CHARGE;
   const pinned = Object.values(settings.recipeChoice);
   if (pinned.length > 0) options.pinnedRecipes = new Set(pinned);
+  // Fix wave 3 (A): the raw cap, wherever build cost counts (the build stage reads it only with a step charge above 0).
+  if (buildCostCounts(settings) && settings.rawCap !== null) options.rawCap = settings.rawCap ?? DEFAULT_RAW_CAP;
+  if (objectiveOf(settings) === 'multi-output') options.multiOutput = true;
+  if (line?.upkeep !== undefined && line.upkeep.size > 0) options.upkeep = line.upkeep;
+  if (settings.mode === 'rate') {
+    if (line?.supplies !== undefined && line.supplies.length > 0) options.supplies = line.supplies;
+    if (line?.credits !== undefined && line.credits.length > 0) options.credits = line.credits;
+  }
   return options;
+}
+
+/**
+ * The group's stock for every production solve of a line (`SolveOptions.stock`, fix wave 3 (C), controller OQ2): what
+ * storage holds of each good (`PlanContext.storage`'s `total`; 0 for a good it holds none of, and without a world scan),
+ * spread over the build horizon in rate mode (24 hours where build cost is ignored: `DEFAULT_BUILD_HORIZON_HOURS`) or
+ * over the batch in Make N, whose demand is the batch itself.
+ */
+export function groupStock(settings: PlanSettings, ctx: PlanContext): NonNullable<SolveOptions['stock']> {
+  const over = settings.mode === 'makeN' ? 1 : (horizonHoursOf(settings) ?? DEFAULT_BUILD_HORIZON_HOURS) * SECONDS_PER_HOUR;
+  return { over, total: (key) => ctx.storage.get(key)?.total ?? 0 };
 }
 
 /**
@@ -116,11 +157,11 @@ export function planCacheKey(hash: string, exportId: string, scanId: string | nu
  *
  * `peakEUt` (rate; plan 12, architecture §11.39): each step's new machines, `count − reused.units.length` at its EU/t —
  * a sharing pool's (`machineGroups`) once, each at the largest EU/t of its steps, as one machine runs one recipe at a
- * time — plus each distinct owned machine (mteId and unit, those of `reused.others` at their own EU/t) once, at the
+ * time — plus each distinct owned machine (id and unit, those of `reused.others` at their own EU/t) once, at the
  * largest EU/t among the steps on it. A step that lists no units counts `count × EU/t`, as before plan 12.
  *
  * `sharedByType` (Make N, where every step of a machine type runs on that type's machines): the peak is instead
- * Σ over machine types (mteId) of the largest count × the largest EU/t among that type's steps, so shared machines
+ * Σ over machine types (id) of the largest count × the largest EU/t among that type's steps, so shared machines
  * are counted once. The average is the same either way, because utilization already divides by the shared count.
  */
 export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean } = {}): PowerSummary {
@@ -136,10 +177,11 @@ export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean }
     }
   }
   if (opts.sharedByType === true) {
-    const byType = new Map<number, { count: number; euPerTick: number }>();
+    const byType = new Map<MachineId, { count: number; euPerTick: number }>();
     for (const step of steps) {
-      const type = byType.get(step.machine.mteId);
-      if (type === undefined) byType.set(step.machine.mteId, { count: step.count, euPerTick: step.euPerTick });
+      const id = machineIdOfLegacy(step.machine.mteId);
+      const type = byType.get(id);
+      if (type === undefined) byType.set(id, { count: step.count, euPerTick: step.euPerTick });
       else {
         type.count = Math.max(type.count, step.count);
         type.euPerTick = Math.max(type.euPerTick, step.euPerTick);
@@ -147,9 +189,9 @@ export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean }
     }
     for (const type of byType.values()) peak += type.count * type.euPerTick;
   } else {
-    const units = new Map<string, number>();   // `<mteId>:<unit>` → the largest EU/t of the steps on that owned machine
-    const onUnit = (mteId: number, unit: number, euPerTick: number): void => {
-      const key = `${mteId}:${unit}`;
+    const units = new Map<string, number>();   // `<id>:<unit>` → the largest EU/t of the steps on that owned machine
+    const onUnit = (id: MachineId, unit: number, euPerTick: number): void => {
+      const key = `${id}:${unit}`;
       units.set(key, Math.max(units.get(key) ?? 0, euPerTick));
     };
     for (const group of machineGroups(steps)) {
@@ -158,10 +200,11 @@ export function powerSummary(steps: PlanStep[], opts: { sharedByType?: boolean }
       for (const step of group) euPerTick = Math.max(euPerTick, step.euPerTick);
       peak += Math.max(0, first.count - (first.reused?.units?.length ?? 0)) * euPerTick;
       for (const step of group) {
-        for (const u of step.reused?.units ?? []) onUnit(step.machine.mteId, u, step.euPerTick);
+        const id = machineIdOfLegacy(step.machine.mteId);
+        for (const u of step.reused?.units ?? []) onUnit(id, u, step.euPerTick);
         for (const o of step.reused?.others ?? []) {
           if (o.units === undefined) peak += o.count * o.euPerTick;
-          else for (const u of o.units) onUnit(o.mteId, u, o.euPerTick);
+          else for (const u of o.units) onUnit(machineIdOfLegacy(o.mteId), u, o.euPerTick);
         }
       }
     }
@@ -294,7 +337,7 @@ function metalOf(pack: Pack, material: string): readonly StuffKey[] {
 
 /** Whether a singleblock machine runs some map of `r` (not only multiblocks). */
 function singleblockMap(pack: Pack, r: Recipe): boolean {
-  return r.maps.some((mapId) => (pack.machinesByMap.get(mapId) ?? []).some((id) => pack.machines.get(id)?.kind === 'basic'));
+  return r.maps.some((mapId) => machineIdsForMap(pack, mapId).some((id) => machineOf(pack, id)?.kind === 'basic'));
 }
 
 /**
@@ -534,10 +577,11 @@ const MAX_VIA = 3;
 
 /**
  * What one unit of an ingredient option costs, the recipes making it on its own runs, their maps by name, why the
- * group cannot get it here, when it cannot, and the goods the line avoids that those recipes cannot run without when no
- * chain around them makes it.
+ * group cannot get it here, when it cannot, the goods the line avoids that those recipes cannot run without when no
+ * chain around them makes it, and when the only chains around them run on a machine that cannot be built here, why
+ * (`<machine> cannot be built here (<why>)`, plan 12).
  */
-interface OptionPrice { cost: number; steps: number; via: string[]; unusable?: string[]; avoided?: StuffKey[] }
+interface OptionPrice { cost: number; steps: number; via: string[]; unusable?: string[]; avoided?: StuffKey[]; unbuildable?: string }
 
 /** The goods of `avoid` the recipes `ids` cannot run without (a slot of avoided options only, as `usesAvoided` reads it). */
 function avoidedBy(pack: Pack, ids: readonly string[], avoid: ReadonlySet<StuffKey> | undefined): StuffKey[] {
@@ -576,11 +620,15 @@ function viaOf(pack: Pack, graph: CandidateGraph, chain: Standalone | undefined)
  * from those options alone (`aloneGraph`), else at its plain price. Those chains ignore the avoid list: one that cannot do
  * without a good of `avoid` (the line's, `avoidedBy`) is chained again over the graph walked from those options alone
  * around `avoid`, as the line would plan a pin of it (a Good Electronic Circuit has a dearer chain without antimony): at
- * its least raw material there (`Standalone.cost`, never below the first price), with that chain's steps and maps. Only
- * one that graph cannot make keeps those goods (`avoided`).
+ * its least raw material there (`Standalone.cost`, never below the first price), with that chain's steps and maps. That
+ * graph is walked as the line is (`plannedLine`, controller ruling OQ5 a; the controller's ruling after the verify of
+ * 5e3820f): without the recipes the line was walked without (`LinePricing.unbuildable`) and, again and again, without
+ * those its build model in `ctx` blocks (`lineBuildModel`'s `blocked` and `blockedAlike`: no machine that runs them can be
+ * built here or is owned). One that graph cannot make keeps those goods (`avoided`), and with them, where the graph
+ * walked with those recipes made it, the reason the first of its chain's recipes cannot run (`unbuildable`).
  */
 async function optionPrices(
-  pack: Pack, settings: PlanSettings, pricing: LinePricing, keys: readonly StuffKey[], avoid?: ReadonlySet<StuffKey>,
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, pricing: LinePricing, keys: readonly StuffKey[], avoid?: ReadonlySet<StuffKey>,
 ): Promise<Map<StuffKey, OptionPrice>> {
   const { model, basis, target, leaf } = pricing;
   const containers = pack.fluidContainers ?? [];
@@ -623,11 +671,29 @@ async function optionPrices(
   const around = [...prices].filter(([, price]) => price.avoided !== undefined).map(([key]) => key);
   if (around.length > 0) {
     await yieldToEventLoop();
-    const alone = aloneGraph(pack, settings, basis, model, around, avoid);
-    for (const [key, chain] of await standaloneCosts(alone, around, [target], containers)) {
-      if (chain === undefined || !Number.isFinite(chain.cost)) continue;
-      const cost = Math.max((prices.get(key) as OptionPrice).cost, chain.cost);
-      prices.set(key, { cost, steps: chain.steps, via: viaOf(pack, alone, chain) });
+    const walked = (unbuildable?: ReadonlyMap<string, string>): CandidateGraph =>
+      aloneGraph(pack, settings, basis, model, around, unbuildable === undefined ? { avoid } : { avoid, unbuildable });
+    const open = walked();
+    const unbuildable = new Map(pricing.unbuildable ?? []);
+    let alone = open;
+    for (;;) {
+      const built = await lineBuildModel(pack, alone, basis, settings, ctx);
+      for (const [id, why] of [...built.blocked, ...(built.blockedAlike ?? [])]) if (!unbuildable.has(id)) unbuildable.set(id, why);
+      if (!alone.recipes.some((r) => unbuildable.has(r.id))) break;
+      await yieldToEventLoop();
+      alone = walked(unbuildable);
+    }
+    const chains = await standaloneCosts(alone, around, [target], containers);
+    const opened = alone === open ? chains : await standaloneCosts(open, around, [target], containers);
+    for (const key of around) {
+      const price = prices.get(key) as OptionPrice;
+      const chain = chains.get(key);
+      if (chain !== undefined && Number.isFinite(chain.cost)) {
+        prices.set(key, { cost: Math.max(price.cost, chain.cost), steps: chain.steps, via: viaOf(pack, alone, chain) });
+        continue;
+      }
+      const reason = opened.get(key)?.recipes.flatMap((id) => unbuildable.get(id) ?? [])[0];
+      if (reason !== undefined) prices.set(key, { ...price, unbuildable: reason });
     }
   }
   return prices;
@@ -639,10 +705,13 @@ async function optionPrices(
  * with what one run would take of it, its share of the slot in this plan (`optionShares` over `line`, the plan's own
  * runs), its raw material per run (amount × `optionPrices`' cost) and the steps and maps of its own chain, or why the
  * group cannot get it here (`unusable`), among it an option the plan does not use that no chain makes without a good the
- * line avoids ("needs Tin Ingot, which is on your avoid list"); cheapest first, then by key. `pinned` names the option
- * `optionChoice` pins when the graph honours it. Priced once per plan.
+ * line avoids: "needs Tin Ingot, which is on your avoid list", or where every such chain runs on a machine that cannot
+ * be built here, "<machine> cannot be built here (<why>)" (plan 12); cheapest first, then by key. `pinned` names the
+ * option `optionChoice` pins when the graph honours it. Priced once per plan, in the plan's context `ctx`.
  */
-async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly PlanStep[], line: StepLine, pricing: LinePricing): Promise<void> {
+async function addOptions(
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, steps: readonly PlanStep[], line: StepLine, pricing: LinePricing,
+): Promise<void> {
   const slotsOf = new Map<PlanStep, Array<{ ing: Ingredient; shares: OptionShare[] }>>();
   const keys = new Set<StuffKey>();
   for (const step of steps) {
@@ -654,7 +723,7 @@ async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly Pl
     for (const { shares } of slots) for (const { option } of shares) keys.add(option.key);
   }
   if (keys.size === 0) return;
-  const prices = await optionPrices(pack, settings, pricing, [...keys].sort(byString), line.avoid);
+  const prices = await optionPrices(pack, settings, ctx, pricing, [...keys].sort(byString), line.avoid);
   for (const [step, slots] of slotsOf) {
     step.options = slots.map(({ ing, shares }): StepOption => {
       const choices = shares.map(({ option, share }): StepOption['choices'][number] => {
@@ -663,6 +732,7 @@ async function addOptions(pack: Pack, settings: PlanSettings, steps: readonly Pl
         const choice: StepOption['choices'][number] = { key: option.key, amount, share, rawPerRun: round6(amount * (price?.cost ?? 0)), steps: price?.steps ?? 0 };
         if (price !== undefined && price.via.length > 0) choice.via = price.via;
         if (price?.unusable !== undefined) choice.unusable = [...price.unusable];
+        else if (share === 0 && price?.unbuildable !== undefined) choice.unusable = [price.unbuildable];
         else if (share === 0 && price?.avoided !== undefined) choice.unusable = price.avoided.map((k) => `needs ${pack.nameOf(k)}, which is on your avoid list`);
         return choice;
       }).sort((a, b) => a.rawPerRun - b.rawPerRun || byString(a.key, b.key));
@@ -684,6 +754,21 @@ function withLines(pack: Pack, basis: PlanBasis, plan: Plan): Plan {
   return plan;
 }
 
+/**
+ * One `stop-outside-inputs` warning per stop item outside the project's non-empty "Only these come in" (plan 12 fix wave
+ * 3 (B)) that is no free input, in list order, whether the line meets it or not: the planner never buys it
+ * (`makeLeafOracle`'s `inputsOnly`). A free input (`FREE_KEYS`) keeps its rules there, so a stopped one is still bought
+ * and gets no warning.
+ */
+function stopsOutsideInputs(pack: Pack, settings: PlanSettings): PlanWarning[] {
+  const only = new Set(settings.inputsOnly ?? []);
+  if (only.size === 0) return [];
+  return settings.stopItems.filter((key) => !only.has(key) && !FREE_KEYS.includes(key)).map((key) => ({
+    code: 'stop-outside-inputs', key,
+    text: `${pack.nameOf(key)} is on “We already make” but not on “Only these come in”, so the planner does not buy it`,
+  }));
+}
+
 /** "<machine> making <product>" for a recipe of the graph (a convert recipe: "any of <product>"). */
 function recipeLabel(pack: Pack, recipe: LpRecipe | undefined, id: string): string {
   if (recipe === undefined) return id;
@@ -697,9 +782,11 @@ function recipeLabel(pack: Pack, recipe: LpRecipe | undefined, id: string): stri
  * A solver warning in names (solve.ts has no pack). `free-loop`: the targets by name and the recipes the loop guard
  * left out as "<machine> making <product>", the same label once, at most MAX_NAMED_LOOP_RECIPES and a count of the
  * rest. `numerics`: the good it could not balance by name. `owned-only` (plan 12, controller ruling OQ5 a): `<good>
- * needs more than your <n>× <machine>, which cannot be built here (<why>)`.
+ * needs more than your <n>× <machine>, which cannot be built here (<why>)`, `The line needs …` for one without a good
+ * (solve.ts keys it by the step's main output, its recipe's first output, which every step recipe of a line's walk has:
+ * exported so the wording of a keyless one is tested all the same, the controller's ruling after plan 12 Task 5).
  */
-function namedSolverWarning(pack: Pack, graph: CandidateGraph, sol: Solution, w: PlanWarning): PlanWarning {
+export function namedSolverWarning(pack: Pack, graph: CandidateGraph, sol: Solution, w: PlanWarning): PlanWarning {
   if (w.code === 'numerics' && w.key !== undefined) {
     return { ...w, text: `The solver could not balance ${pack.nameOf(w.key)} exactly; the plan uses an earlier stage` };
   }
@@ -756,6 +843,8 @@ function blockerWarnings(
       const needs = b.needTier === undefined ? '' : ` (needs ${tierName(b.needTier)})`;
       const machine = b.machine === undefined ? '' : `: ${b.machine}`;
       warnings.push({ code: 'no-recipe', key: b.key, text: `Nothing at ≤ ${tierName(basis.tier)} makes ${name}${needs}${machine}` });
+    } else if (b.reason === 'outside-inputs') {
+      warnings.push({ code: 'no-recipe', key: b.key, text: `Nothing makes ${name} from your base materials` });
     } else {
       warnings.push({ code: 'no-recipe', key: b.key, text: `Nothing in this pack makes ${name}` });
     }
@@ -845,11 +934,12 @@ function canMakeHere(pack: Pack, env: PlanEnv, key: StuffKey, leafClass: LeafCla
  * total), its cost (leaf cost × the amount: per second, or the batch's), sources, stock, leaf class, the chain a bought
  * derived material or stop item stands for (`chains`: its `pricedVia`; a derived one's source then names that chain) and
  * whether the group could make it here (`canMakeHere`, a gathered block judged with `gathered`); the `derived` leaves
- * also get one warning that says how to plan their chains (`derivedLeafWarning`).
+ * also get one warning that says how to plan their chains (`derivedLeafWarning`). A tool a tree farm of the line wears
+ * (`tools`, add-on 17: `LinePricing.farm.tools`) is `upkeep`.
  */
 function rawInputsOf(
   pack: Pack, graph: CandidateGraph, basis: PlanBasis, chains: ReadonlyMap<StuffKey, Standalone>, ctx: PlanContext,
-  buys: ReadonlyMap<StuffKey, number>, batchSeconds: number | null, gathered: boolean,
+  buys: ReadonlyMap<StuffKey, number>, batchSeconds: number | null, gathered: boolean, tools?: ReadonlyMap<StuffKey, number>,
 ): { rawInputs: RawInput[]; warnings: PlanWarning[] } {
   const rawInputs: RawInput[] = [];
   const derived: Array<{ key: StuffKey; detail: string }> = [];
@@ -871,10 +961,47 @@ function rawInputsOf(
       if (leafClass === 'derived') input.sources = [{ kind: 'derived', dims: [], detail: pricedViaText(pack, via) }];
     }
     input.canMake = canMakeHere(pack, basis.env, key, leafClass, gathered);
+    if (tools?.has(key) === true) input.upkeep = true;
     rawInputs.push(input);
     if (leafClass === 'derived') derived.push({ key, detail: input.sources.find((s) => s.kind === 'derived')?.detail ?? 'made from other materials' });
   }
   return { rawInputs, warnings: derivedLeafWarning(pack, derived) };
+}
+
+/**
+ * Fix wave 3 (C), controller OQ2: one `beyond-stock` warning per byproduct-only good (`leafClass` 'byproduct': no ore,
+ * mob, farm or free supply yields it directly) the line buys more of than the group's stock (`groupStock`: storage's
+ * total, 0 without a scan) over the build horizon (24 hours where build cost is ignored; Make N: the batch), keyed to
+ * the good, in key order: `Buys <N> a day of <good>, beyond the <M> in storage` where the stock is spread over a day
+ * (the default 24-hour horizon, and build cost ignored); at any other horizon the purchase over it too, the amount the
+ * warning tests: `Buys <N> a day of <good>, <T> over <horizon>, beyond the <M> in storage` (`<horizon>` as the plan's
+ * cost line says it: `6 h`, `1 week`); in Make N `Buys <N> of <good> for the batch, beyond the <M> in storage`. `buys`
+ * per second, or the batch's in Make N.
+ */
+function beyondStockWarnings(
+  pack: Pack, graph: CandidateGraph, settings: PlanSettings, ctx: PlanContext, buys: ReadonlyMap<StuffKey, number>,
+): PlanWarning[] {
+  const stock = groupStock(settings, ctx);
+  const batch = settings.mode === 'makeN';
+  const warnings: PlanWarning[] = [];
+  for (const [key, amount] of [...buys].sort(([a], [b]) => byString(a, b))) {
+    if (graph.goods.get(key)?.leafClass !== 'byproduct') continue;
+    const have = stock.total(key);
+    if (!(amount * stock.over > have * (1 + BEYOND_STOCK_SLACK) + BEYOND_STOCK_SLACK)) continue;
+    const litres = isFluidKey(key) ? ' L' : '';
+    const overHorizon = stock.over === SECONDS_PER_DAY ? '' : `, ${formatNumber(amount * stock.over)}${litres} over ${horizonWords(stock.over)}`;
+    const bought = batch
+      ? `${formatNumber(amount)}${litres} of ${pack.nameOf(key)} for the batch`
+      : `${formatNumber(amount * SECONDS_PER_DAY)}${litres} a day of ${pack.nameOf(key)}${overHorizon}`;
+    warnings.push({ code: 'beyond-stock', key, text: `Buys ${bought}, beyond the ${formatNumber(have)}${litres} in storage` });
+  }
+  return warnings;
+}
+
+/** A build horizon of `seconds` in the words of the plan's cost line (the client's `horizonText`): `<n> h`, a week `1 week`. */
+function horizonWords(seconds: number): string {
+  const hours = seconds / SECONDS_PER_HOUR;
+  return hours === HOURS_PER_WEEK ? '1 week' : `${formatNumber(hours)} h`;
 }
 
 /** What the line throws away other than the target, per second; virtual ore-dictionary goods are never byproducts. */
@@ -930,6 +1057,11 @@ interface PlanBody {
   cost?: Plan['cost'];
   /** `Plan.buildAlternatives` (architecture §11 entry 41 (3)): the swap lists of the build list's made parts. */
   buildAlternatives?: Plan['buildAlternatives'];
+  /** `Plan.rawSources` and `Plan.credits` (add-on 17): a line that plans; credits only when it is credited for some. */
+  rawSources?: number;
+  credits?: Plan['credits'];
+  /** `Plan.deliberate` (plan 12's final review): a rate line with build cost counted (`deliberateSplits`). */
+  deliberate?: DeliberateSplit[];
 }
 
 function bodyWithout(status: PlanBody['status'], warnings: PlanWarning[], unlocks: Plan['unlocks'] = []): PlanBody {
@@ -945,8 +1077,9 @@ function dimensionOfId(byKey: ReadonlyMap<string, DimensionInfo>, sortedDims: re
 }
 
 /**
- * The English name of every key the plan uses (target, steps with what they supply, their ingredient options and their
- * swap lists with every option of a slot, flows, raw inputs, byproducts, build list with its breakdown, totals, unlocks,
+ * The English name of every key the plan uses (target, steps with what they supply, a farm step's sapling and tools,
+ * their ingredient options and their swap lists with every option of a slot, flows, raw inputs, byproducts, build list
+ * with its breakdown, totals, unlocks,
  * warnings, the avoided goods with what they are made from and the item and fluid entries of the avoid list, ruling
  * R11), `map:<id>` for every recipe map of a step or alternative, `dim:<key>` for every dimension it reaches or a source
  * names, and `dimId:<n>` for every dimension id a found spot or a reused machine stands in; keys in sorted order.
@@ -971,6 +1104,9 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
   for (const step of plan.steps) {
     add(step.mainOutput);
     add(step.supply);
+    // a farm step's sapling, which no input names, and its tools (add-on 17)
+    add(step.farm?.sapling);
+    for (const key of step.farm?.tools ?? []) add(key);
     for (const p of [...step.inputs, ...step.outputs]) add(p.key);
     for (const slot of step.options ?? []) for (const choice of slot.choices) add(choice.key);
     addMap(step.mapId);
@@ -1032,9 +1168,14 @@ function planNames(pack: Pack, plan: Plan, settings: PlanSettings): Record<strin
   return Object.fromEntries([...names].sort(([a], [b]) => byString(a, b)));
 }
 
-/** The warning of an integrity issue (fix spec R11): its code, its §6.4 text, the good and the steps it is about. */
+/**
+ * The warning of an integrity issue (fix spec R11): its code, its §6.4 text, the good and the steps it is about. A note
+ * (`PlanIndex.notes`, plan 12's final review) takes its note code (`noteWarningCode`: `deliberate-split`,
+ * `deliberate-purchase`), not an integrity code, and words why.
+ */
 function integrityWarning(issue: PlanIssue, plan: Plan): PlanWarning {
-  const w: PlanWarning = { code: issue.code, key: issue.key, text: issueText(issue, plan) };
+  const code = issue.deliberate === undefined ? issue.code : noteWarningCode(issue);
+  const w: PlanWarning = { code, key: issue.key, text: issueText(issue, plan) };
   if (issue.stepId !== undefined) w.stepId = issue.stepId;
   if (issue.stepIds !== undefined) w.stepIds = [...issue.stepIds];
   if (issue.share !== undefined) w.share = [...issue.share];
@@ -1043,8 +1184,10 @@ function integrityWarning(issue: PlanIssue, plan: Plan): PlanWarning {
 
 /**
  * The plan of `body`, named (`planNames`), with one warning per integrity issue of its flows (`indexPlan`: an input
- * nothing supplies or supplies short, a good made two ways, a good both bought and made). A correct plan has none; a
- * plan that has one says so instead of reading as if it added up.
+ * nothing supplies or supplies short, a good made two ways, a good both bought and made), then one per note (a good the
+ * plan makes two ways, or buys beside its makers, on purpose: `Plan.deliberate`). A correct plan has no issue; a plan
+ * that has one says so instead of reading as if it added up. Every plan says the mode it was made in (`Plan.objective`,
+ * `objectiveOf`: add-on 17).
  */
 function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: PlanBody): Plan {
   const plan: Plan = {
@@ -1061,9 +1204,14 @@ function assemble(pack: Pack, settings: PlanSettings, basis: PlanBasis, body: Pl
   if (body.targetPerSecond !== undefined) plan.targetPerSecond = body.targetPerSecond;
   if (body.rawCost !== undefined) plan.rawCost = body.rawCost;
   if (body.cost !== undefined) plan.cost = body.cost;
+  plan.objective = objectiveOf(settings);
+  if (body.rawSources !== undefined) plan.rawSources = body.rawSources;
+  if (body.credits !== undefined) plan.credits = body.credits;
+  if (body.deliberate !== undefined && body.deliberate.length > 0) plan.deliberate = body.deliberate;
   plan.names = planNames(pack, plan, settings);
-  const issues = indexPlan(plan).issues;
-  if (issues.length > 0) plan.warnings = [...plan.warnings, ...issues.map((issue) => integrityWarning(issue, plan))];
+  const { issues, notes } = indexPlan(plan);
+  const found = [...issues, ...notes];
+  if (found.length > 0) plan.warnings = [...plan.warnings, ...found.map((issue) => integrityWarning(issue, plan))];
   return plan;
 }
 
@@ -1260,9 +1408,11 @@ async function avoidingLine(
         const avoid = without(back);
         const leaf: LeafOracle = (key) => (!back.has(key) && request.madeFrom(key).length > 0 ? NOT_BOUGHT : pricing.leaf(key));
         await yieldToEventLoop();
-        const walk = lineWalk(pack, settings, pricing.basis,
+        // walked as the line's own graph is: on its farm pack, when it has farms (add-on 17)
+        const on = pricing.pack ?? pack;
+        const walk = lineWalk(on, settings, pricing.basis,
           pricing.unbuildable === undefined ? { avoid, pinAvoid: goods } : { avoid, pinAvoid: goods, unbuildable: pricing.unbuildable });
-        const graph = buildCandidates(pack, settings, pricing.basis.env, leaf, [pricing.target], walk);
+        const graph = buildCandidates(on, settings, pricing.basis.env, leaf, [pricing.target], walk);
         return { graph, sol: await solveLine(graph, demand, { ...options, probe: true }), avoid };
       })();
       trials.set(id, line);
@@ -1419,11 +1569,42 @@ function unavoidableUses(
     const shown = from.length > MAX_LISTED ? `${from.slice(0, MAX_LISTED).join(', ')} and ${from.length - MAX_LISTED} more` : listed(from);
     return `${pack.nameOf(key)} (made from ${shown})`;
   };
+  /**
+   * Whether a use of an allowed-back good of the list is one its step could do without: every slot of its recipe that
+   * takes the good, consumed or held, also takes a good the list does not cover (the step then takes it only because the
+   * line allows it back: plan 12's build cost may pick it over adding the machines of the other option). A step with one
+   * such slot that takes nothing else needs the good (plan 12's final review), as it does a part its machine holds, and a
+   * derived leaf.
+   */
+  const couldAvoid = (use: { stepId: string; key: StuffKey; holds: boolean }): boolean => {
+    const recipe = pack.recipeById.get(stepOf.get(use.stepId)?.recipeId ?? '');
+    const slots = (recipe?.inputs ?? []).filter((ing) => ing.options.some((o) => o.key === use.key));
+    return !use.holds && !derived(use.key) && slots.length > 0 && slots.every((ing) => keptOptions(ing.options, request.goods).length > 0);
+  };
+  /** Per good, the steps that need it: those whose use of it is no `couldAvoid` one. */
+  const neededBy = new Map<StuffKey, string[]>();
+  for (const use of uses.values()) {
+    if (couldAvoid(use)) continue;
+    const step = stepOf.get(use.stepId);
+    if (step !== undefined) neededBy.set(use.key, [...(neededBy.get(use.key) ?? []), stepProductName(pack, step)]);
+  }
   const warnings = [...uses.values()]
     .sort((a, b) => byString(a.stepId, b.stepId) || byString(a.key, b.key))
-    .map(({ stepId, key, machine, holds }): PlanWarning => ({
-      code: 'avoid-unavoidable', key, stepId, text: `${machine} ${holds ? 'needs' : 'uses'} ${named(key)} — no recipe at ${tierName(tier)} avoids it`,
-    }));
+    .map((use): PlanWarning => {
+      const { stepId, key, machine, holds } = use;
+      // the controller's ruling after the verify of 5e3820f, (b): a step that takes the good although it could do
+      // without it says that the line allows it back, for the steps that need it, not that no recipe avoids it; where no
+      // step of the plan needs it (the avoid trial's that did is not in this plan), allowed back by the line alone
+      // (plan 12's final review)
+      if (!couldAvoid(use)) {
+        return { code: 'avoid-unavoidable', key, stepId, text: `${machine} ${holds ? 'needs' : 'uses'} ${named(key)} — no recipe at ${tierName(tier)} avoids it` };
+      }
+      const neededFor = [...new Set(neededBy.get(key) ?? [])].sort(byString);
+      return {
+        code: 'avoid-unavoidable', key, stepId,
+        text: `${machine} uses ${named(key)}, which the line allows back${neededFor.length > 0 ? ` for ${listed(neededFor)}` : ''}`,
+      };
+    });
   const avoided = line.used.map((key): NonNullable<Plan['avoided']>[number] => {
     const entry = { key, name: pack.nameOf(key), unavoidable: inUse.has(key) };
     const from = request.madeFrom(key);
@@ -1436,14 +1617,36 @@ function unavoidableUses(
 /**
  * The raw material to build one machine of a step (plan 12): `machineBuildCost` of its machine at its tier with the
  * step's recipe, so a multiblock carries its hatch set at its hatch tier; null for a pseudo machine and a pricing gap.
+ * `pack` is the line's (a farm step's recipe is in its farm pack only); the build is read from the export pack, as the
+ * build model reads it (add-on 17's ruling S5).
  */
 function unitBuild(pack: Pack, model: BuildModel, step: PlanStep): number | null {
   const recipe = pack.recipeById.get(step.recipeId);
-  return machineBuildCost(pack, model.prices, pack.machines.get(step.machine.mteId), recipe === undefined ? undefined : { recipe, tier: step.machine.tier });
+  const use = recipe === undefined ? undefined : { recipe, tier: step.machine.tier };
+  return machineBuildCost(exportPack(pack), model.prices, machineOf(pack, machineIdOfLegacy(step.machine.mteId)), use);
+}
+
+/**
+ * What the crop farm steps of a plan plant (add-on 17): their crop sticks (`FarmStep.sticks`), each a Crop Sticks and
+ * the item placed for its soil at the build model's prices (`stickCost`; the seeds are the group's own), 0 without one;
+ * and the parts it could not price (`unpricedPlantings`), each once, as `<part> for the <crop> farm`, which the
+ * `build-cost-unknown` warning names (the final review of add-on 17).
+ */
+function plantingsOf(pack: Pack, model: BuildModel, steps: readonly PlanStep[]): { build: number; unpriced: string[] } {
+  let build = 0;
+  const unpriced = new Set<string>();
+  const cost = (key: StuffKey): number => model.prices.cost(key);
+  for (const step of steps) {
+    const farm = pack.recipeById.get(step.recipeId)?.meta.farm;
+    if (farm?.kind !== 'crop' || step.farm?.sticks === undefined || step.farm.sticks <= 0) continue;
+    build += step.farm.sticks * stickCost(farm, cost);
+    for (const key of unpricedPlantings(farm, cost)) unpriced.add(`${pack.nameOf(key)} for the ${farm.crop?.name ?? stepProductName(pack, step)} farm`);
+  }
+  return { build, unpriced: [...unpriced] };
 }
 
 /** New machines of one type a plan adds, and what building one costs (`each`; null: no price could be worked out). */
-interface NewMachines { mteId: number; name: string; count: number; each: number | null }
+interface NewMachines { id: MachineId; name: string; count: number; each: number | null }
 
 /**
  * The new machines a plan adds, in step order: rate, `count − owned` of each step that holds machines (a sharing pool
@@ -1452,16 +1655,17 @@ interface NewMachines { mteId: number; name: string; count: number; each: number
  */
 function newMachinesOf(pack: Pack, model: BuildModel, steps: readonly PlanStep[], made: MakeNResult | undefined): NewMachines[] {
   if (made !== undefined) {
-    return made.addedMachines.flatMap(({ mteId, count }) => {
-      const step = steps.find((s) => s.machine.mteId === mteId);
-      return step === undefined ? [] : [{ mteId, name: step.machine.name, count, each: unitBuild(pack, model, step) }];
+    return made.addedMachines.flatMap(({ id, count }) => {
+      const step = steps.find((s) => machineIdOfLegacy(s.machine.mteId) === id);
+      return step === undefined ? [] : [{ id, name: step.machine.name, count, each: unitBuild(pack, model, step) }];
     });
   }
   return machineGroups(steps).flatMap((group) => {
     const first = group[0] as PlanStep;
     const count = first.count - first.owned;
-    if (count <= 0 || first.handCraft || PSEUDO_IDS.has(first.machine.mteId)) return [];
-    return [{ mteId: first.machine.mteId, name: first.machine.name, count, each: unitBuild(pack, model, first) }];
+    const id = machineIdOfLegacy(first.machine.mteId);
+    if (count <= 0 || first.handCraft || isPseudoMachineId(id)) return [];
+    return [{ id, name: first.machine.name, count, each: unitBuild(pack, model, first) }];
   });
 }
 
@@ -1476,24 +1680,28 @@ type Spend = { mode: 'rate'; rawPerSecond: number } | { mode: 'makeN'; run: Make
  * set only when above 0, and the warning names them, each type once, a cleanroom last: `Not counted in the build cost:
  * <names> (their price could not be worked out)`, `its price` for one, at most MAX_UNPRICED_NAMED names then ` and <n>
  * more`. Rate: `runPerHour` = the raw material a second × 3,600, `horizonHours` what build cost was weighed against
- * (null: ignored). Make N: `batch` = Σ bought × leaf cost, `runPerHour` that spread over the batch's time an hour,
- * `horizonHours` null.
+ * (`horizonHoursOf`, add-on 17: null in least raw material, which counts no build cost, whatever horizon is stored).
+ * Make N: `batch` = Σ bought × leaf cost, `runPerHour` that spread over the batch's time an hour,
+ * `horizonHours` null. `build` also holds what the line's crop farms plant (`plantingsOf`, add-on 17), in every mode; a
+ * planting part it could not price is named in the warning after the machines (`<part> for the <crop> farm`), and
+ * `unpriced` keeps counting machines only.
  */
 function planCost(
   pack: Pack, settings: PlanSettings, model: BuildModel, steps: readonly PlanStep[], spend: Spend,
 ): { cost: NonNullable<Plan['cost']>; warnings: PlanWarning[] } {
   const machines = newMachinesOf(pack, model, steps, spend.mode === 'makeN' ? spend.run : undefined);
-  let build = 0;
+  const planted = plantingsOf(pack, model, steps);
+  let build = planted.build;
   let unpriced = 0;
-  const names = new Map<number, string>();
+  const names = new Map<MachineId, string>();
   for (const m of machines) {
     if (m.each !== null) build += m.count * m.each;
     else {
       unpriced += m.count;
-      if (!names.has(m.mteId)) names.set(m.mteId, m.name);
+      if (!names.has(m.id)) names.set(m.id, m.name);
     }
   }
-  const unknown = [...names.values()];
+  const unknown = [...names.values(), ...planted.unpriced];
   const room = model.cleanroom;
   if (room !== null && room.owned === 0 && steps.some((s) => s.needsCleanroom === true)) {
     if (room.build !== null) build += room.build;
@@ -1504,8 +1712,7 @@ function planCost(
   }
   let cost: NonNullable<Plan['cost']>;
   if (spend.mode === 'rate') {
-    const horizonHours = settings.buildHorizonHours === null ? null : (settings.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS);
-    cost = { runPerHour: sig9(spend.rawPerSecond * SECONDS_PER_HOUR), build: sig9(build), horizonHours };
+    cost = { runPerHour: sig9(spend.rawPerSecond * SECONDS_PER_HOUR), build: sig9(build), horizonHours: horizonHoursOf(settings) };
   } else {
     let batch = 0;
     for (const [key, amount] of spend.run.buys) batch += amount * (spend.graph.goods.get(key)?.cost ?? 0);
@@ -1554,10 +1761,75 @@ function addBuildNotes(pack: Pack, settings: PlanSettings, model: BuildModel, st
     if (built !== undefined && step.machine.tier === built.tier) {
       step.warnings.push(`Built at ${tierName(built.tier)}, not ${tierName(built.wanted)}: ${built.why}`);
     }
-    if (onlyRequired && pack.machines.get(step.machine.mteId)?.kind === 'multiblock') {
+    if (onlyRequired && machineOf(pack, machineIdOfLegacy(step.machine.mteId))?.kind === 'multiblock') {
       step.warnings.push(`A multiblock is needed: nothing else makes ${stepProductName(pack, step)}`);
     }
   }
+}
+
+/** A maker is full where its machines (its sharing pool's) run at least this share of their time: the deep check's `relTol`. */
+const FULL_SHARE = 1 - 1e-6;
+/** Two ways of a good differ in raw material a unit only beyond this share and amount (the swap list rounds to 6 decimals). */
+const RAW_UNIT_TIE = 1e-6;
+
+/**
+ * The goods a rate line with build cost counted makes two or more ways (`multi-producer`), or buys beside the steps that
+ * make them (`bought-and-made`), on purpose (`Plan.deliberate`; plan 12's final review: the plan's side of controller
+ * ruling 249's `needsMachine`, which the deep check reads), in the plan index's order. A step by hand or on a pseudo
+ * machine has room for any share, any other for what its machines (its sharing pool's) leave idle, and makes a unit of
+ * its main output for its swap list's raw cost (its own row, `addAlternatives`). Two or more makers: `full` where some
+ * maker's machines are full and no maker can go within the plan's machines — the other makers that make the good for no
+ * more raw material a unit have too little room for its share, so making it all one way needs another machine, which the
+ * build stage weighed as dearer than the raw material it saves; a purchase: `full` where every step making the good
+ * (as its main output or not) is full. Else `raw-cap` where the build stage's decision uses all the raw material the raw
+ * cap allows (`Solution.atRawCap`) and the ways differ in raw material a unit (a purchase at what it costs a unit,
+ * `rawInputs`), so the cap, not a tie, sets their shares. Every other finding stays an integrity issue.
+ */
+export function deliberateSplits(steps: readonly PlanStep[], flows: readonly PlanFlow[], rawInputs: readonly RawInput[], atRawCap: boolean): DeliberateSplit[] {
+  const index = indexPlan({ steps, flows, warnings: [], rawInputs });
+  const byId = new Map(steps.map((s) => [s.id, s]));
+  const stepOf = (id: string): PlanStep => byId.get(id) as PlanStep;
+  const onNoMachine = (s: PlanStep): boolean => s.handCraft || isPseudoMachineId(machineIdOfLegacy(s.machine.mteId));
+  const fullness = (s: PlanStep): number => {
+    const pool = s.pool;
+    return pool === undefined ? s.utilization : steps.filter((t) => t.pool?.id === pool.id).reduce((sum, t) => sum + t.utilization, 0);
+  };
+  const isFull = (s: PlanStep): boolean => !onNoMachine(s) && fullness(s) >= FULL_SHARE;
+  /** How much more of a good `s` could make a second within its machines, making `perSecond` of it now. */
+  const room = (s: PlanStep, perSecond: number): number =>
+    (onNoMachine(s) || !(s.utilization > 0) ? Infinity : (Math.max(0, 1 - fullness(s)) * perSecond) / s.utilization);
+  /** Raw material a unit of its main output; NaN where its swap list lacks its own recipe (then it may take any share). */
+  const unitRaw = (s: PlanStep): number => s.alternatives.find((a) => a.recipeId === s.recipeId)?.rawCost ?? NaN;
+  const dearer = (a: number, b: number): boolean => a > b * (1 + RAW_UNIT_TIE) + RAW_UNIT_TIE;
+  const differ = (costs: readonly number[]): boolean => {
+    const known = costs.filter((c) => Number.isFinite(c));
+    return known.length >= 2 && dearer(Math.max(...known), Math.min(...known));
+  };
+  const out: DeliberateSplit[] = [];
+  for (const issue of index.issues) {
+    if (issue.code !== 'multi-producer' && issue.code !== 'bought-and-made') continue;
+    const makers = index.producers.get(issue.key) ?? [];
+    const mains = makers.filter((p) => p.main);
+    if (issue.code === 'multi-producer') {
+      const full = mains.filter((p) => isFull(stepOf(p.stepId))).map((p) => p.stepId);
+      const canGo = mains.some((p) => {
+        let spare = 0;
+        for (const q of mains) {
+          if (q !== p && !dearer(unitRaw(stepOf(q.stepId)), unitRaw(stepOf(p.stepId)))) spare += room(stepOf(q.stepId), q.perSecond);
+        }
+        return spare >= p.perSecond * FULL_SHARE;
+      });
+      if (full.length > 0 && !canGo) out.push({ key: issue.key, code: issue.code, why: 'full', full });
+      else if (atRawCap && differ(mains.map((p) => unitRaw(stepOf(p.stepId))))) out.push({ key: issue.key, code: issue.code, why: 'raw-cap' });
+      continue;
+    }
+    const full = makers.filter((p) => isFull(stepOf(p.stepId))).map((p) => p.stepId);
+    const bought = rawInputs.find((r) => r.key === issue.key && r.from === undefined);
+    const price = bought !== undefined && bought.perSecond > 0 ? bought.cost / bought.perSecond : NaN;
+    if (makers.length > 0 && full.length === makers.length) out.push({ key: issue.key, code: issue.code, why: 'full', full });
+    else if (atRawCap && differ([price, ...mains.map((p) => unitRaw(stepOf(p.stepId)))])) out.push({ key: issue.key, code: issue.code, why: 'raw-cap' });
+  }
+  return out;
 }
 
 /** The line `planLine` plans: its pricing and avoid list, its graph solved, and the build model it was solved with. */
@@ -1577,9 +1849,11 @@ interface PlannedLine {
  * that no machine can run either (`BuildModel.blockedAlike`; `linePricing`'s `unbuildable`, which `avoidingLine`'s walks
  * leave out too), so producers that can run take their place; the set only grows, so this ends.
  * With an avoid list the plain line is first only probed (probes get no model), and a probe that plans nothing ends it.
+ * Each pricing's solves take `optionsFor` it (add-on 17: the tools its farms wear are upkeep).
  */
 async function plannedLine(
-  pack: Pack, settings: PlanSettings, ctx: PlanContext, first: LinePricing, demand: ReadonlyMap<StuffKey, number>, options: SolveOptions,
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, first: LinePricing, demand: ReadonlyMap<StuffKey, number>,
+  optionsFor: (pricing: LinePricing) => SolveOptions,
 ): Promise<PlannedLine> {
   const unbuildable = new Map<string, string>();
   /**
@@ -1600,11 +1874,14 @@ async function plannedLine(
   for (let priced = first; ;) {
     const pricing = priced;
     const open = pricing.graph;
+    const options = optionsFor(pricing);
     const avoid = avoidRequest(pack, settings, pricing.target, pricing);
-    const openModel = await lineBuildModel(pack, open, pricing.basis, settings, ctx);
+    // the line's farm pack, when it has farms (add-on 17): its graphs' farm recipes are recipes of that pack only
+    const linePack = pricing.pack ?? pack;
+    const openModel = await lineBuildModel(linePack, open, pricing.basis, settings, ctx);
     if (!blocks(openModel)) {
       const full: FullSolve = async (graph) => {
-        const model = graph === open ? openModel : await lineBuildModel(pack, graph, pricing.basis, settings, ctx);
+        const model = graph === open ? openModel : await lineBuildModel(linePack, graph, pricing.basis, settings, ctx);
         if (blocks(model)) return null;
         return { sol: await solveLine(graph, demand, { ...options, build: model }), model };
       };
@@ -1630,16 +1907,71 @@ async function plannedLine(
 export type SolveTuning = Pick<SolveOptions, 'buildTimeLimit' | 'buildMaxNodes' | 'buildMaxIterations'>;
 
 /**
+ * What a line takes from beyond its own steps and purchases, and whom its byproducts may serve (add-on 17, architecture
+ * §11.45 (2), (4)): its capped free supplies, each with where it comes from (`RawInput.from`), and the needs it may be
+ * credited for, each with the project that needs it.
+ */
+interface LineReads {
+  supplies: Array<SupplyColumn & { from: NonNullable<RawInput['from']> }>;
+  credits: Array<CreditColumn & { by: string; name: string }>;
+}
+
+/**
+ * The line's reads (`LineReads`): in rate mode the farms the group runs (`runningSupplies`: `farm:<index>:<key>`, from
+ * that farm) and the offers of other projects (`project:<from>:<key>`, from that project), and in best multi-output the
+ * needs of other projects (`need:<by>:<key>`), each in the order given (Task 6 orders them oldest project first: ruling
+ * R16); none in Make N, which has no steady rate to cap or credit them by.
+ */
+function lineReads(settings: PlanSettings, offers: readonly Offer[], needs: readonly Need[]): LineReads {
+  if (settings.mode !== 'rate') return { supplies: [], credits: [] };
+  const supplies: LineReads['supplies'] = runningSupplies(settings)
+    .map(({ id, key, perSecond, name }) => ({ id, key, perSecond, from: { kind: 'farm', id, name } }));
+  for (const o of offers) {
+    supplies.push({ id: `project:${o.from}:${o.key}`, key: o.key, perSecond: o.perSecond, from: { kind: 'project', id: o.from, name: o.name } });
+  }
+  const credits = objectiveOf(settings) !== 'multi-output' ? []
+    : needs.map((n) => ({ id: `need:${n.by}:${n.key}`, key: n.key, perSecond: n.perSecond, by: n.by, name: n.name }));
+  return { supplies, credits };
+}
+
+/**
+ * The raw inputs a line takes from its supplies (add-on 17): one row per supply it takes from, a row of its own beside
+ * any bought row of the good — per second, cost 0, available, no sources, and where it comes from (`from`).
+ */
+function suppliedInputs(sol: Solution, supplies: LineReads['supplies']): RawInput[] {
+  return supplies.flatMap((s): RawInput[] => {
+    const perSecond = sol.supplied?.get(s.id) ?? 0;
+    return perSecond > 0 ? [{ key: s.key, perSecond, cost: 0, available: true, sources: [], from: s.from }] : [];
+  });
+}
+
+/** `Plan.credits` (add-on 17): each need the line's byproducts are credited to (`Solution.credited`), in the order of the needs. */
+function creditsOf(sol: Solution, credits: LineReads['credits']): NonNullable<Plan['credits']> {
+  return credits.flatMap((c) => {
+    const perSecond = sol.credited?.get(c.id) ?? 0;
+    return perSecond > 0 ? [{ to: c.by, name: c.name, key: c.key, perSecond }] : [];
+  });
+}
+
+/**
  * Plans one line (spec §3.2–§3.11): least raw material at the project's tier where the group can reach — with the raw
  * material to build the machines it adds weighed against the build horizon (Make N: the batch; plan 12) — each recipe
  * step paying for itself in raw material (the project's step charge, `solveOptions`), as a steady rate or as a batch of N
  * on the machines the group owns, keeping out of the materials the project avoids where any plan can (`avoidingLine`),
  * and around the steps no machine that can be built here or is owned can run (`plannedLine`). A missing or unknown
  * target gives an `empty` plan; a target nothing reachable makes gives an `infeasible` plan whose warnings say what
- * blocks it and what unlocks it. Every plan that plans has its `cost` (`planCost`). `tuning` (tests and calibration
- * only) overrides the build MIP's limits.
+ * blocks it and what unlocks it. Every plan that plans has its `cost` (`planCost`). `opts`' build MIP limits (tests and
+ * calibration only) override the solver's (`SolveTuning`).
+ *
+ * Add-on 17 (architecture §11.45; ruling S4): the plan is made in its settings' mode (`objectiveOf`, `Plan.objective`) and
+ * says how many different raw goods it buys (`Plan.rawSources`). In rate mode the farms the group runs and the offers of
+ * other projects (`opts.offers`, read by Task 6) are capped free supplies, each one the plan takes from a raw input of its
+ * own beside any bought row of the good (`RawInput.from`); in best multi-output the needs of other projects
+ * (`opts.needs`) are credited with the byproducts of the line's own runs (`Plan.credits`, part of `byproducts`).
  */
-export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanContext, tuning?: SolveTuning): Promise<Plan> {
+export async function planLine(
+  pack: Pack, settings: PlanSettings, ctx: PlanContext, opts?: SolveTuning & { offers?: readonly Offer[]; needs?: readonly Need[] },
+): Promise<Plan> {
   // Each synchronous stretch (availability, each candidate walk, each LP solve) yields first, so other
   // requests and live events go on between them (ledger 200).
   await yieldToEventLoop();
@@ -1660,19 +1992,30 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   const aim: Pick<PlanBody, 'target' | 'targetPerSecond'> = batch
     ? { target } : { target, targetPerSecond: sig9(settings.amount / SECONDS_PER[settings.per]) };
   // Steps vs raw material (fix spec R3) for every solve of the line, the forms of goods that tell twin recipes apart
-  // (`stockForm`), and the build model of each graph solved in full.
-  const options = { ...solveOptions(settings), formRank: stockForm(pack), ...tuning };
-  const planned = await plannedLine(pack, settings, ctx, first, demand, options);
+  // (`stockForm`), the group's stock its byproduct-only goods are priced against (`groupStock`, fix wave 3 (C)), and the
+  // build model of each graph solved in full; add-on 17: the mode, the line's supplies and credits, and the tools its
+  // farms wear (upkeep, per pricing).
+  const { offers, needs, ...tuning } = opts ?? {};
+  const reads = lineReads(settings, offers ?? [], needs ?? []);
+  const stock = groupStock(settings, ctx);
+  const optionsFor = (pricing: LinePricing): SolveOptions => ({
+    ...solveOptions(settings, { upkeep: new Set(pricing.farm?.tools.keys() ?? []), supplies: reads.supplies, credits: reads.credits }),
+    formRank: stockForm(pack), stock, ...tuning,
+  });
+  const planned = await plannedLine(pack, settings, ctx, first, demand, optionsFor);
   const { priced, avoid, line, model: buildModel, unbuildable } = planned;
   const { graph, sol } = line;
   const { model } = priced;
-  const solverWarnings = sol.warnings.map((w) => namedSolverWarning(pack, graph, sol, w));
+  // Add-on 17 (ruling S5): the line's farm pack, when it has farms, holds its farm recipes, so the plan is assembled on
+  // it (steps, flows, raw inputs, names); swap lists, option prices and build-list breakdowns read the export pack.
+  const linePack = priced.pack ?? pack;
+  const solverWarnings = sol.warnings.map((w) => namedSolverWarning(linePack, graph, sol, w));
 
   if (sol.status === 'infeasible' || buildModel === undefined) {
     // A graph cut short at its recipe cap names no blockers (solve.ts): its `graph-too-big` warning says why.
     const blocked = blockerWarnings(pack, sol, basis, settings, ctx);
-    const warnings = [...graph.warnings, ...solverWarnings, ...blocked.warnings, ...avoid.warnings];
-    return assemble(pack, settings, basis, { ...withAvoided(bodyWithout('infeasible', warnings, blocked.unlocks), avoid, []), ...aim });
+    const warnings = [...graph.warnings, ...solverWarnings, ...blocked.warnings, ...avoid.warnings, ...stopsOutsideInputs(pack, settings)];
+    return assemble(linePack, settings, basis, { ...withAvoided(bodyWithout('infeasible', warnings, blocked.unlocks), avoid, []), ...aim });
   }
 
   // A step's main output is its most valuable output the line uses (fix spec D13): its raw cost × what the other steps
@@ -1687,7 +2030,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     },
     empties: emptyContainers(pack),
   };
-  const opts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks, value, build: buildModel };
+  const stepOpts = { settings, groupTier: basis.tier, coilHeat: basis.coilHeat, ctx, multiblocks: basis.env.multiblocks, value, build: buildModel };
   let steps: PlanStep[];
   let flows: PlanFlow[];
   let buys: ReadonlyMap<StuffKey, number>;
@@ -1698,11 +2041,12 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
   let batchWarnings: PlanWarning[] = [];
   let spend: Spend;
   if (batch) {
-    const run = await makeN(pack, graph, sol, demand, opts);
+    // Its whole runs buy byproduct-only goods against the stock the solve priced them against (fix wave 3 (C)).
+    const run = await makeN(linePack, graph, sol, demand, { ...stepOpts, stock });
     batchWarnings = batchShortWarning(pack, run.short, target, settings.amount);
     // The whole runs makeN planned (the same rounding again), spread over the batch's time: flows and byproducts are
     // rates, as in every plan, and the leftovers are what the line sinks.
-    const whole = await wholeRuns(graph, sol, demand);
+    const whole = await wholeRuns(graph, sol, demand, stock);
     const perSecond = run.totalSeconds > 0 ? 1 / run.totalSeconds : 0;
     const leftovers = scaled(new Map(whole.leftovers.map((p) => [p.key, p.amount])), perSecond);
     flows = buildFlows(graph, { ...sol, runs: scaled(whole.runs, perSecond), buys: scaled(whole.buys, perSecond), sinks: leftovers }, [target]);
@@ -1713,7 +2057,7 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     stepRuns = whole.runs;
     spend = { mode: 'makeN', run, graph };
   } else {
-    steps = planSteps(pack, graph, sol, { ...opts, perSecondScale: 1 });
+    steps = planSteps(linePack, graph, sol, { ...stepOpts, perSecondScale: 1 });
     flows = buildFlows(graph, sol, [target]);
     buys = sol.buys;
     sinks = sol.sinks;
@@ -1721,43 +2065,61 @@ export async function planLine(pack: Pack, settings: PlanSettings, ctx: PlanCont
     spend = { mode: 'rate', rawPerSecond: sol.rawCost };
   }
   // Where the new machines are built and why a multiblock is needed (the user's ruling 224).
-  addBuildNotes(pack, settings, buildModel, steps);
+  addBuildNotes(linePack, settings, buildModel, steps);
+  // A farm step's swap list holds the export's recipes only (its own recipe is no recipe of the export).
   const exact = await addAlternatives(pack, settings, basis, steps, model, graph, line.avoid, unbuildable);
   // Every option of each ore-dictionary slot, with its share in this plan and what it would cost (fix spec R9).
-  await addOptions(pack, settings, steps, stepLine(graph, stepRuns), priced);
+  await addOptions(pack, settings, ctx, steps, stepLine(graph, stepRuns), priced);
   // A batch may be crafted by hand (fix spec D7); a pin is judged against the swap list just made (D24); a pinned tier
   // that cannot be built says so (plan 12).
   const stepWarnings = [
     ...(batch ? [] : handStepWarnings(pack, steps, graph)), ...pinDominatedWarnings(pack, settings, steps, exact),
     ...tierFallbackWarnings(pack, buildModel, steps),
   ];
-  const cost = planCost(pack, settings, buildModel, steps, spend);
+  const cost = planCost(linePack, settings, buildModel, steps, spend);
 
-  const raw = rawInputsOf(pack, graph, basis, priced.chains, ctx, buys, made?.totalSeconds ?? null, gatheredRecipesOn(settings));
+  const raw = rawInputsOf(
+    linePack, graph, basis, priced.chains, ctx, buys, made?.totalSeconds ?? null, gatheredRecipesOn(settings), priced.farm?.tools,
+  );
+  // Add-on 17: a row per supply the line takes from, beside any bought row of its good (by key, the bought row first).
+  const rawInputs = [...raw.rawInputs, ...suppliedInputs(sol, reads.supplies)].sort((a, b) => byString(a.key, b.key));
+  // What a rate line with build cost counted makes two ways, or buys beside its makers, on purpose (plan 12's final
+  // review): the plan index gives those as notes, not as integrity issues.
+  const deliberate = !batch && sol.buildStats !== undefined ? deliberateSplits(steps, flows, rawInputs, sol.atRawCap === true) : [];
   // Make N steps of one machine type share that type's machines (makeN), so they draw at most once per type.
   const power = powerSummary(steps, { sharedByType: batch });
   // The parts the machines hold are ones the line may use (ruling R7): never an option it still avoids.
   const held = heldAvoid(avoid, line);
   // The build list breaks down at the plain pricing's prices (`first`, the one `expandBomLines` reads for the layout's
   // parts), also after a walk around machines that cannot be built, so a line's machines and its layout parts break down
-  // alike (architecture §11.15; the controller's ruling after plan 12 Task 5, item (a)).
-  const bom = await buildBom(pack, steps, { settings, env: basis.env, leaf: first.leaf, ctx, avoid: held });
-  const uses = unavoidableUses(pack, avoid, line, steps, flows, buys, basis.tier);
+  // alike (architecture §11.15; the controller's ruling after plan 12 Task 5, item (a)), without "Only these come in"
+  // (`buildLeaf`, fix wave 3 (B)); on the export pack, beside what the line's farms plant (`buildBom`, add-on 17).
+  const bom = await buildBom(linePack, steps, { settings, env: basis.env, leaf: first.buildLeaf, ctx, avoid: held });
+  const uses = unavoidableUses(linePack, avoid, line, steps, flows, buys, basis.tier);
   const body: PlanBody = {
-    status: 'ok', unlocks: [], steps, flows, rawInputs: raw.rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
+    status: 'ok', unlocks: [], steps, flows, rawInputs, byproducts: byproductsOf(graph, sinks, target), power,
     buildList: bom.lines, buildTotals: bom.totals,
     ...(bom.alternatives === undefined || bom.alternatives.size === 0 ? {} : { buildAlternatives: Object.fromEntries(bom.alternatives) }),
-    buildSteps: buildSteps(pack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
+    buildSteps: buildSteps(linePack, { steps, bom, power, settings, tier: basis.tier, target, totalSeconds: made?.totalSeconds, avoid: held }),
     warnings: [
-      ...graph.warnings, ...solverWarnings, ...stepWarnings, ...batchWarnings, ...raw.warnings, ...cost.warnings, ...bom.warnings, ...avoid.warnings,
-      ...uses.warnings,
+      ...graph.warnings, ...solverWarnings, ...stepWarnings, ...batchWarnings, ...raw.warnings,
+      ...beyondStockWarnings(pack, graph, settings, ctx, buys), ...cost.warnings, ...bom.warnings, ...avoid.warnings,
+      ...uses.warnings, ...stopsOutsideInputs(pack, settings),
     ],
     ...aim,
     cost: cost.cost,
   };
+  if (deliberate.length > 0) body.deliberate = deliberate;
   if (made !== undefined) body.makeN = made;
   // The raw material the plan uses against the least any plan of its graph needs (fix spec R3): a rate's trade-off.
-  if (!batch) body.rawCost = { perSecond: sol.rawCost, leastPerSecond: sol.leastRawCost };
+  if (!batch) {
+    body.rawCost = { perSecond: sol.rawCost, leastPerSecond: sol.leastRawCost };
+    if (sol.leanRawCost !== undefined) body.rawCost.leanestPerSecond = sol.leanRawCost;
+  }
+  // Add-on 17: its raw sources, and the needs of other projects its byproducts are credited to.
+  if (sol.sources !== undefined) body.rawSources = sol.sources;
+  const credits = creditsOf(sol, reads.credits);
+  if (credits.length > 0) body.credits = credits;
   // Supporting lines come from the finished steps and flows (fix spec R6).
-  return withLines(pack, basis, assemble(pack, settings, basis, withAvoided(body, avoid, uses.avoided)));
+  return withLines(linePack, basis, assemble(linePack, settings, basis, withAvoided(body, avoid, uses.avoided)));
 }

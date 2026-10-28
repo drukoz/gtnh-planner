@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest';
+import { benchToolSpec } from '../../helpers/build-fixtures.ts';
 import { smeltSpec } from '../../helpers/howto-fixtures.ts';
-import { miniGt } from '../../helpers/mini-gt.ts';
+import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type IngredientSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { emptyContextForTest } from '../../helpers/plan-context.ts';
-import { acceptRecipe, buildCandidates, MAX_RECIPES, virtualKey, type CandidateGraph, type PlanEnv, type LeafOracle } from '../../../src/server/planner/candidates.ts';
+import {
+  ACCEPTANCE_MEMO_SIZE, acceptOf, acceptRecipe, acceptanceMemoStats, buildCandidates, MAX_RECIPES, virtualKey, type CandidateGraph, type PlanEnv, type LeafOracle,
+} from '../../../src/server/planner/candidates.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { EXCLUSION_RULES } from '../../../src/server/planner/candidates.ts';
 import { DEFAULT_EXCLUDED_CATEGORIES } from '../../../src/shared/types/plan.ts';
+import type { Recipe } from '../../../src/shared/types/pack.ts';
 
 const pack = miniGt();
 const env = (tier: number, extra: Partial<PlanEnv> = {}): PlanEnv => ({ tier, reachable: new Set(['overworld', 'nether']), lowGravity: false,
@@ -50,6 +54,80 @@ describe('acceptRecipe', () => {
   it('checks EBF heat: coil + 100 per tier above MV', () => {
     expect(acceptRecipe(pack, R('ebf-ti'), env(3, { coilHeat: 1801 }))).toMatchObject({ ok: false, why: 'heat' });   // 1901 K < 1941 K
     expect(acceptRecipe(pack, R('ebf-ti'), env(3, { coilHeat: 2701 })).ok).toBe(true);                               // 2801 K
+  });
+});
+
+describe('the shared acceptance memo (fix wave 3 (E))', () => {
+  it("shares recipe acceptance between walks of one context, and still leaves out each walk's own unbuildable recipes", () => {
+    const first = buildCandidates(pack, defaultSettings(), env(1), oracle, ['t:circuit@0']);
+    const kept = first.recipes.find((r) => r.kind === 'recipe')?.id as string;
+    expect(kept).toBeDefined();
+    const before = acceptanceMemoStats(pack).hits;
+    const without = buildCandidates(pack, defaultSettings(), env(1), oracle, ['t:circuit@0'], { unbuildable: new Map([[kept, 'test']]) });
+    expect(without.recipes.map((r) => r.id)).not.toContain(kept);
+    const again = buildCandidates(pack, defaultSettings(), env(1), oracle, ['t:circuit@0']);
+    expect(again.recipes.map((r) => r.id)).toEqual(first.recipes.map((r) => r.id));
+    expect(acceptanceMemoStats(pack).hits).toBeGreaterThan(before);
+    expect(acceptanceMemoStats(pack).contexts).toBeGreaterThanOrEqual(1);
+    buildCandidates(pack, defaultSettings(), env(2), oracle, ['t:circuit@0']);   // another tier: its own context
+    expect(acceptanceMemoStats(pack).contexts).toBeGreaterThanOrEqual(2);
+  });
+  it("answers what acceptRecipe answers in each context, never another context's answer from memory", () => {
+    const p = packFromSpec({ ...MINI_GT,
+      machines: [...(MINI_GT.machines ?? []), { mteId: 9, name: 'Eye of Harmony', maps: ['gt.recipe.eyeofharmony'], kind: 'multiblock' }],
+      recipes: [...(MINI_GT.recipes ?? []),
+        { id: 'eoh', map: 'gt.recipe.eyeofharmony', out: [['t:iron_dust@0', 64]], eut: 0 },
+        { id: 'lowg', map: 'gt.recipe.macerator', in: [['t:iron_ore@0', 1]], out: [['t:iron_dust@0', 2]], meta: { lowGravity: true } },
+        { id: 'nothing', map: 'gt.recipe.centrifuge', in: [['t:iron_dust@0', 1]], out: [['t:tin_ingot@0', 1]], eut: 16 }] });
+    // A recipe and two contexts that judge it differently, for each field of the key but the bench line (below).
+    const pairs: Array<[string, PlanEnv, PlanEnv]> = [
+      ['circuit-mv', env(1), env(2)],
+      ['ebf-ti', env(3, { coilHeat: 1801 }), env(3, { coilHeat: 2701 })],
+      ['lowg', env(1), env(1, { lowGravity: true })],
+      ['lava-copper', env(3), env(3, { excluded: new Set() })],
+      ['eoh', env(1, { multiblocks: new Set() }), env(1, { multiblocks: new Set(['gt:9']) })],
+      ['nothing', env(1), env(1, { fromNothing: new Set(['nothing']) })],
+    ];
+    for (const [id, a, b] of pairs) {
+      const r = p.recipeById.get(id) as Recipe;
+      const [first, second] = [acceptRecipe(p, r, a), acceptRecipe(p, r, b)];
+      expect(first, id).not.toEqual(second);
+      expect(acceptOf(p, a)(r), id).toEqual(first);
+      expect(acceptOf(p, b)(r), id).toEqual(second);
+      expect(acceptOf(p, a)(r), id).toEqual(first);   // from memory
+    }
+    // The bench line: none, one without a stock cap and one per logistics that caps it are contexts of their own.
+    const bp = packFromSpec(benchToolSpec());
+    const variant = bp.recipes.find((r) => r.meta.benchVariantOf === 'rod-file') as Recipe;
+    expect(acceptOf(bp, env(1))(variant)).toEqual({ ok: false, why: 'bench' });
+    expect(acceptOf(bp, env(1), {})(variant)).toEqual({ ok: true, mapId: 'crafting' });
+    expect(acceptanceMemoStats(bp).contexts).toBe(2);
+    acceptOf(bp, env(1), { capBy: 'EnderIO' });
+    acceptOf(bp, env(1), { capBy: 'Project Red' });
+    expect(acceptanceMemoStats(bp).contexts).toBe(4);
+  });
+  it('is one context however its sets were built', () => {
+    const p = miniGt();
+    acceptOf(p, env(1, { excluded: new Set(['recycling', 'massfab']), multiblocks: new Set(['gt:2', 'gt:10', 'gt:1']), fromNothing: new Set(['b', 'a']) }));
+    acceptOf(p, env(1, { excluded: new Set(['massfab', 'recycling']), multiblocks: new Set(['gt:1', 'gt:2', 'gt:10']), fromNothing: new Set(['a', 'b']) }));
+    expect(acceptanceMemoStats(p).contexts).toBe(1);
+  });
+  it('keeps at most ACCEPTANCE_MEMO_SIZE contexts per pack, the least recently used going first', () => {
+    const p = miniGt();
+    const r = p.recipeById.get('circuit-lv') as Recipe;
+    const context = (i: number): PlanEnv => env(1, { coilHeat: 1801 + 100 * i });   // a context of its own for each i
+    const remembered = (i: number): boolean => {   // whether context i already answered for r
+      const before = acceptanceMemoStats(p).hits;
+      acceptOf(p, context(i))(r);
+      return acceptanceMemoStats(p).hits > before;
+    };
+    for (let i = 0; i < ACCEPTANCE_MEMO_SIZE; i++) expect(remembered(i)).toBe(false);
+    expect(acceptanceMemoStats(p).contexts).toBe(ACCEPTANCE_MEMO_SIZE);
+    expect(remembered(0)).toBe(true);                       // asked again: the most recent now, and context 1 the oldest
+    expect(remembered(ACCEPTANCE_MEMO_SIZE)).toBe(false);   // one more context drops the oldest ...
+    expect(acceptanceMemoStats(p).contexts).toBe(ACCEPTANCE_MEMO_SIZE);
+    expect(remembered(0)).toBe(true);                       // ... not the one asked again
+    expect(remembered(1)).toBe(false);                      // the dropped one is judged anew
   });
 });
 
@@ -334,7 +412,7 @@ describe('real-data rules (final review)', () => {
     const r = p.recipeById.get('eoh')!;
     expect(acceptRecipe(p, r, env(1)).ok).toBe(true);                                         // no gate given: any multiblock
     expect(acceptRecipe(p, r, env(1, { multiblocks: new Set() }))).toEqual({ ok: false, why: 'multiblock' });
-    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set([9]) })).ok).toBe(true);
+    expect(acceptRecipe(p, r, env(1, { multiblocks: new Set(['gt:9']) })).ok).toBe(true);
   });
   it('leaves out the recipes an env names as making ore from nothing, and smelting parts back into metal', () => {
     const p = packFromSpec({
@@ -360,5 +438,27 @@ describe('real-data rules (final review)', () => {
       'smelt-rod': true, 'smelt-mag-long': true, 'smelt-pig-spring': true, 'smelt-bars': true, 'smelt-dust': false, 'smelt-red-iron': false,
       'smelt-cluster': false, 'smelt-nugget': false, 'polarize-rod': false,
     });
+  });
+});
+
+describe('farm-made leaves and the estimate passes (add-on 12 x 17 integration, F2)', () => {
+  // t from a (1) or from l, a leaf at 3 that a farm of the line makes for nothing. Plan 12's second estimate pass walks such
+  // a leaf's producers; it now runs for gathered world blocks only (`alsoMade`). By the dug estimate alone from-l is over
+  // KEEP_WITHIN (2) × from-a and is pruned, so the farm-on graph is the farm-free one (the union of both passes grew the
+  // real farm-on graphs 1.6 to 4.3 times).
+  const M = 'gt.recipe.macerator';
+  const recipes: RecipeSpec[] = [
+    { id: 'from-a', map: M, in: [['a@0', 1]], out: [['t@0', 1]], eut: 2 },
+    { id: 'from-l', map: M, in: [['l@0', 1]], out: [['t@0', 1]], eut: 2 },
+    { id: 'farm-l', map: M, out: [['l@0', 1]], meta: { farm: { kind: 'crop', tier: 1, machines: [1], parallel: 1, footprint: [1, 1, 1] } } },
+  ];
+  const spec = { machines: [{ mteId: 1, name: 'M', maps: [M], tier: 1 }], recipes };
+  const leaf = (mark: 'farmMade' | 'alsoMade'): LeafOracle => (k) => (k === 'a@0' ? { buyable: true, cost: 1, leafClass: 'direct' }
+    : k === 'l@0' ? { buyable: true, cost: 3, leafClass: 'direct', [mark]: true } : { buyable: false, cost: 0, leafClass: null });
+  it('prunes by the dug estimate where only a farm makes a leaf', () => {
+    expect(buildCandidates(packFromSpec(spec), defaultSettings(), env(1), leaf('farmMade'), ['t@0']).recipes.map((r) => r.id)).toEqual(['from-a']);
+  });
+  it('keeps plan 12\'s second pass for a gathered world block', () => {
+    expect(buildCandidates(packFromSpec(spec), defaultSettings(), env(1), leaf('alsoMade'), ['t@0']).recipes.map((r) => r.id)).toContain('from-l');
   });
 });

@@ -1,12 +1,14 @@
 // The layout service (Plan 5 Task 12; architecture §6.7, §7, §11.8, §11.15–§11.16; spec §3.5–§3.10): each project's
-// line layout, cached by the plan's own cache key (export, scan, base, settings hash) plus the placement, which only
-// the layout depends on; and the work of Plan 2's `planFinish` hook, which merges that layout into the plan: its power
-// fit, its parts broken down to base materials, and its pin-linked build steps. The app's real dependencies read the
-// world service and the planner hook on every call, so a service registered later is the one used.
+// line layout, cached by the plan's own cache key (export, scan, base, settings hash, and the hash of what the plan read
+// of other projects: add-on 17) plus the placement, which only the layout depends on; and the work of Plan 2's
+// `planFinish` hook, which merges that layout into the plan: its power fit, its parts broken down to base materials,
+// and its pin-linked build steps. The app's real dependencies read the world service and the planner hook on every
+// call, so a service registered later is the one used.
 
 import type { AppContext } from '../app.ts';
 import { planForProject } from '../http/routes/projects.ts';
 import { worldService } from '../http/routes/world.ts';
+import { allMachines } from '../pack/lookup.ts';
 import { expandBomLines, partName, type BomMake } from '../planner/bom.ts';
 import { bomBuildCost } from '../planner/build-cost.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
@@ -37,7 +39,12 @@ interface Expansion {
 
 export interface LayoutServiceDeps {
   pack(): Promise<Pack>;
-  /** The project's plan before `planFinish`: the plan the plan route finishes. */
+  /**
+   * The project's plan before `planFinish`, the one the plan route serves, asked only when a caller brings no plan (the
+   * layout route). `finishPlan`, and the projector through `layoutFor(project, plan)`, lay out the plan their own
+   * request was served: a plan reads the other projects' summaries when it is made (add-on 17), so asking again could
+   * plan another line after a publish in between.
+   */
   plan(project: Project): Promise<Plan>;
   /** Null unless the scan is done. */
   scan(scanId: string): Promise<WorldScan | null>;
@@ -60,8 +67,9 @@ export interface LayoutServiceDeps {
 }
 
 export interface LayoutService {
-  layoutFor(project: Project): Promise<Layout>;
-  /** The plan with the project's layout merged in; a plan with nothing to build comes back as it is (same object). */
+  /** The layout of `plan` in `project`, or of the plan `deps.plan` gives when there is none (`plan`: add-on 17). */
+  layoutFor(project: Project, plan?: Plan): Promise<Layout>;
+  /** The plan with its own layout merged in; a plan with nothing to build comes back as it is (same object). */
   finishPlan(plan: Plan, project: Project): Promise<Plan>;
   /** Layouts computed so far (cache misses). */
   readonly computations: number;
@@ -77,18 +85,20 @@ interface Entry { layout: Promise<Layout>; expansion: Promise<Expansion> | null;
  * differ in tier, which is not counted twice. A taller tower's added casings stay: no build counts them.
  */
 export function layoutParts(pack: Pack, layout: Layout): BomLine[] {
-  const hatches = new Set([...pack.machines.values()].filter((m) => m.kind === 'hatch').map((m) => m.itemKey));
+  const hatches = new Set(allMachines(pack).filter((m) => m.kind === 'hatch').map((m) => m.itemKey));
   return layout.bom.filter((l) => !isOptional(l) && !(l.group === 'machines' && hatches.has(l.key)));
 }
 
 /**
- * The plan cache key of `plan` in `project`'s scan and base (architecture §11.8), then the placement as
- * `<x>,<y>,<z>@<rotation>` ('-' without one).
+ * The plan cache key of `plan` in `project`'s scan and base (architecture §11.8), then `x:<plan.crossHash>` when the
+ * plan read other projects' summaries (add-on 17, §11.45 (4): a plan made again because what it read changed, under the
+ * same settings hash, is laid out again), then the placement as `<x>,<y>,<z>@<rotation>` ('-' without one).
  */
 export function layoutKey(plan: Plan, project: Project): string {
   const { scanId, baseId } = project.world;
   const { placement } = project;
-  return `${planCacheKey(plan.settingsHash, plan.exportId, scanId, baseId)}|${placement ? `${placement.origin.join(',')}@${placement.rotation}` : '-'}`;
+  const read = plan.crossHash === undefined ? '' : `|x:${plan.crossHash}`;
+  return `${planCacheKey(plan.settingsHash, plan.exportId, scanId, baseId)}${read}|${placement ? `${placement.origin.join(',')}@${placement.rotation}` : '-'}`;
 }
 
 /**
@@ -112,11 +122,12 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
   }
 
   /**
-   * The entry of `project`'s key, made the youngest; a miss starts the layout and drops the oldest beyond the cap.
-   * Nothing is awaited between the lookup and the insert, so concurrent callers share one computation.
+   * The entry of `given`'s key in `project` (of `deps.plan`'s plan when none is given), made the youngest; a miss
+   * lays that plan out and drops the oldest beyond the cap. Nothing is awaited between the lookup and the insert, so
+   * concurrent callers share one computation.
    */
-  async function entryFor(project: Project): Promise<Entry> {
-    const plan = await deps.plan(project);
+  async function entryFor(project: Project, given?: Plan): Promise<Entry> {
+    const plan = given ?? (await deps.plan(project));
     const key = layoutKey(plan, project);
     const hit = entries.get(key);
     if (hit !== undefined) {
@@ -164,12 +175,12 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
     get computations() {
       return computations;
     },
-    async layoutFor(project) {
-      return (await entryFor(project)).layout;
+    async layoutFor(project, plan) {
+      return (await entryFor(project, plan)).layout;
     },
     async finishPlan(plan, project) {
       if (plan.status !== undefined && plan.status !== 'ok') return plan;
-      const entry = await entryFor(project);
+      const entry = await entryFor(project, plan);
       const layout = await entry.layout;
       const pack = await deps.pack();
       const expansion = await expansionOf(entry, pack, layout, project, plan);
@@ -184,8 +195,9 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
 
 /**
  * The app's layout service (`app.services.layout`), created on first use: the active pack, the plan the plan route
- * serves (`planForProject`), scans and voxels from the world service, and the whole build broken down (with the plan's
- * steps) and the layout's parts priced in the project's world context (`app.services.planContext`, else an empty one).
+ * serves (`planForProject`) for a caller that brings none, scans and voxels from the world service, and the whole build
+ * broken down (with the plan's steps) and the layout's parts priced in the project's world context
+ * (`app.services.planContext`, else an empty one).
  */
 export function layoutService(app: AppContext): LayoutService {
   const existing = app.services.layout as LayoutService | undefined;

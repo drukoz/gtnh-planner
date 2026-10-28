@@ -1,11 +1,11 @@
 // The planner's basis: the one place that turns a project's settings and the world context into the tier, the
 // reachable dimensions, the environment the candidate recipes are judged in, material availability, prices, the free
 // inputs the line makes itself and the leaf oracle, so `planLine` and `expandBomLines` always derive them the same way.
-// Also the settings hash, and the part of the world context the basis reads (`basisContextKey`), which together key
-// what is derived from them (pricing.ts); the goods an avoid list covers (`resolveAvoid`), which only `planLine`'s own
-// graphs honor (plan.ts); and whether the settings count the build cost of new machines and let the line make gathered
-// world blocks (`buildCostCounts`, `gatheredRecipesOn`: plan 12, here because pricing.ts reads them and importing
-// machine-options.ts there would close a cycle through bom.ts).
+// Also the settings hash (and the part of it a line's pricing reads, `pricingHash`), and the part of the world context
+// the basis reads (`basisContextKey`), which together key what is derived from them (pricing.ts); the goods an avoid list
+// covers (`resolveAvoid`), which only `planLine`'s own graphs honor (plan.ts); and whether the settings count the build
+// cost of new machines and let the line make gathered world blocks (`buildCostCounts`, `gatheredRecipesOn`: plan 12,
+// here because pricing.ts reads them and importing machine-options.ts there would close a cycle through bom.ts).
 
 import { createHash } from 'node:crypto';
 import { defaultCoilHeat } from '../../shared/gt/overclock.ts';
@@ -13,9 +13,11 @@ import type { StuffKey } from '../../shared/keys.ts';
 import type { Pack, Recipe } from '../../shared/types/pack.ts';
 import { FREE_KEYS, NETWORKED_LOGISTICS, type PlanContext, type PlanSettings } from '../../shared/types/plan.ts';
 import { suppliedKey } from '../pack/supply.ts';
+import { machineIdOfLegacy } from '../../shared/ids.ts';
 import { computeAvailability, reachableDims, type Availability, type Reachability } from './availability.ts';
 import { acceptRecipe, type LeafOracle, type PlanEnv } from './candidates.ts';
 import { makeLeafOracle, makePrices, type PriceTable } from './costs.ts';
+import { horizonHoursOf, objectiveOf } from './objective.ts';
 
 function byString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -121,12 +123,25 @@ export function effectiveTier(s: PlanSettings, ctx: PlanContext): number {
 }
 
 /**
- * Whether the settings count the build cost of the machines a line adds (architecture §11.39): Make N (against the
- * batch), or rate mode whose `buildHorizonHours` is not null ("Ignore build cost"; absent = 24 h). The settings' side of
- * machine-options.ts's `buildCounts`, which says the same of the model `lineBuildModel` builds from them.
+ * Whether the settings count the build cost of the machines a line adds (architecture §11.39 as §11.45 (1) amends it):
+ * never in least raw material (`objectiveOf`: also a rate project whose `buildHorizonHours` is null, add-on 12's "Ignore
+ * build cost"); else Make N (against the batch), or rate mode with a horizon (`horizonHoursOf`; absent = 24 h). The
+ * settings' side of machine-options.ts's `buildCounts`, which says the same of the model `lineBuildModel` builds from them.
  */
 export function buildCostCounts(settings: PlanSettings): boolean {
-  return settings.mode === 'makeN' || settings.buildHorizonHours !== null;
+  return objectiveOf(settings) !== 'least-raw' && (settings.mode === 'makeN' || horizonHoursOf(settings) !== null);
+}
+
+/**
+ * The settings part of a line pricing's memo key (pricing.ts `linePricing`, add-on 17): the settings hash without the
+ * planning mode (`objective`), the build horizon and "Use other projects' surplus", which pricing never reads, then
+ * whether build cost counts (`buildCostCounts`), the one thing it reads of them (the gathered blocks of
+ * `gatheredRecipesOn`; farms are walked in every mode). So a project's cheapest and multi-output plans, and its horizons,
+ * share one pricing.
+ */
+export function pricingHash(s: PlanSettings): string {
+  const { objective: _objective, useSurplus: _surplus, buildHorizonHours: _horizon, ...read } = s;
+  return `${settingsHash(read)}|${buildCostCounts(s) ? 'build-cost' : 'no-build-cost'}`;
 }
 
 /**
@@ -211,7 +226,7 @@ export function planBasis(pack: Pack, settings: PlanSettings, ctx: PlanContext):
   const avail = computeAvailability(pack, open);
   // Candidate recipes may only use the multiblocks the group can build at this tier, and never mine an ore material
   // from free inputs alone (availability.ts).
-  const env: PlanEnv = { ...open, multiblocks: avail.multiblocks, fromNothing: avail.fromNothing };
+  const env: PlanEnv = { ...open, multiblocks: new Set([...avail.multiblocks].map(machineIdOfLegacy)), fromNothing: avail.fromNothing };
   const prices = makePrices(pack, settings.costOverrides);
   const supplied = suppliedFreeKeys(pack, settings, env);
   const leaf = makeLeafOracle(pack, settings, avail, prices, undefined, undefined, { supplied });

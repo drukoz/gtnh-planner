@@ -14,6 +14,7 @@ import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { configTexts } from '../../../src/shared/layout/configure-text.ts';
 import type { LogisticsMode, Plan } from '../../../src/shared/types/plan.ts';
 import { IDS, layoutPack, makePlan, makeProject, makeScan } from '../../helpers/layout-fixtures.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 const MODES: readonly LogisticsMode[] = ['routed', 'ae2', 'enderio'];
 const MULTI_STACK_OFF = configTexts({ multiStack: false })[0]!;
@@ -78,7 +79,7 @@ describe('feeding settings', () => {
     const casing = unit.cells.findIndex((c) => c.role === 'casing' && c.pos[1] === 0);
     unit.cells[casing] = { ...unit.cells[casing]!, role: 'hatch', hatch: 'input_bus' };
     const settingsAs = (cls: string) => {
-      pack.machines.get(IDS.EBF)!.cls = `gregtech.common.tileentities.machines.multi.${cls}`;
+      machineByMteId(pack, IDS.EBF)!.cls = `gregtech.common.tileentities.machines.multi.${cls}`;
       return feedSettings(pack, plan, placement).map((c) => c.config);
     };
     // the Pyrolyse Oven starts with it on, as the EBF does; the Vacuum Freezer has no such setting and reads both buses

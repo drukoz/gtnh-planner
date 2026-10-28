@@ -16,13 +16,17 @@ import { lruSet, SURFACE_Y, tileCache, tileKeyId, type TileKey } from '../map/ti
 import type { MapMarker, MapOverlay, MapViewport, MapViewProps } from '../map/types.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import { TILE_SIZE, tileOf, type MapTile, type WorldScan } from '../../shared/types/world.ts';
+import { pointIn } from './pan-zoom.ts';
 
 const START_PPB = 4;
 const ZOOM_STEP = 2;
 /** The wheel zooms by WHEEL_ZOOM^(−deltaY/100). */
 const WHEEL_ZOOM = 1.2;
 const WHEEL_LINE_PIXELS = 16;
-/** A press moves this far (px) before it counts as a drag instead of a click. */
+/**
+ * A press moves this far (px) before it counts as a drag instead of a click: the pointer's own move on the page, so a press stays a click
+ * while the map moves under a still pointer, as in the diagrams (ledger rulings P2-R16, P2-R19).
+ */
 const DRAG_THRESHOLD = 4;
 const MARKER_RADIUS = 9;
 /** A click this close (px) to a marker's centre is a click on the marker. */
@@ -270,8 +274,12 @@ class MapRenderer {
   }
 }
 
-/** A press on the canvas: where it started, whether an overlay took it, whether it has become a drag and panned the map. */
-interface Press { pointerId: number; startX: number; startY: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean; panned: boolean }
+/**
+ * A press on the canvas: where it went down on the page (`cx`, `cy`: client px, which decide when it becomes a drag), where the pointer
+ * last was on the canvas (`lastX`, `lastY`: `pointIn`, which the pan follows), whether an overlay took it, whether it has become a drag
+ * and panned the map.
+ */
+interface Press { pointerId: number; cx: number; cy: number; lastX: number; lastY: number; consumed: boolean; dragging: boolean; panned: boolean }
 
 /** A scan's palette names: each entry's English name in palette order, and every GT tile entity's name by mteId. */
 interface PaletteNames { blocks: readonly string[]; mte: ReadonlyMap<number, string> }
@@ -421,10 +429,6 @@ export function MapView(props: MapViewProps): ReactElement {
   // A new view (pan, zoom, Y level, dimension, size) or scan hides the tooltip before it is painted, as unmounting does.
   useLayoutEffect(() => () => hoverTimer.clear(), [hoverTimer, view, scanId]);
 
-  const pointOf = (e: PointerEvent<HTMLCanvasElement>): [number, number] => {
-    const box = e.currentTarget.getBoundingClientRect();
-    return [e.clientX - box.left, e.clientY - box.top];
-  };
   /** Hands the event to the overlays, topmost first, until one consumes it. */
   const toOverlays = (kind: 'down' | 'move' | 'up', px: number, py: number): boolean => {
     const [wx, wz] = screenToWorld(view, px, py);
@@ -448,12 +452,12 @@ export function MapView(props: MapViewProps): ReactElement {
   const onPointerDown = (e: PointerEvent<HTMLCanvasElement>): void => {
     hoverTimer.clear();   // a press (a click, a pan, an overlay's drag) hides the tooltip
     if (e.button !== 0) return;
-    const [px, py] = pointOf(e);
+    const [px, py] = pointIn(e);
     e.currentTarget.setPointerCapture(e.pointerId);
-    press.current = { pointerId: e.pointerId, startX: px, startY: py, lastX: px, lastY: py, consumed: toOverlays('down', px, py), dragging: false, panned: false };
+    press.current = { pointerId: e.pointerId, cx: e.clientX, cy: e.clientY, lastX: px, lastY: py, consumed: toOverlays('down', px, py), dragging: false, panned: false };
   };
   const onPointerMove = (e: PointerEvent<HTMLCanvasElement>): void => {
-    const [px, py] = pointOf(e);
+    const [px, py] = pointIn(e);
     const consumed = toOverlays('move', px, py);
     const p = press.current;
     if (p === null || p.pointerId !== e.pointerId) {
@@ -462,7 +466,9 @@ export function MapView(props: MapViewProps): ReactElement {
       hoverAt(px, py);
       return;
     }
-    if (!p.dragging && Math.hypot(px - p.startX, py - p.startY) >= DRAG_THRESHOLD) p.dragging = true;
+    // the pointer's own move decides: a still press stays a click while the map moves under it (P2-R16, P2-R19); a pan then follows
+    // the map from the press on (`lastX`, `lastY` are still the press's point until it starts)
+    if (!p.dragging && Math.hypot(e.clientX - p.cx, e.clientY - p.cy) >= DRAG_THRESHOLD) p.dragging = true;
     if (!p.dragging) return;
     if (!p.consumed && !consumed) {
       const dx = px - p.lastX, dy = py - p.lastY;
@@ -478,7 +484,7 @@ export function MapView(props: MapViewProps): ReactElement {
     if (p === null || p.pointerId !== e.pointerId) return;
     press.current = null;
     e.currentTarget.style.cursor = 'grab';
-    const [px, py] = pointOf(e);
+    const [px, py] = pointIn(e);
     if (!p.consumed && !p.dragging && props.onMarkerClick !== undefined) {
       const marker = markerAt(view, markers, px, py);
       if (marker !== null) {
@@ -502,10 +508,10 @@ export function MapView(props: MapViewProps): ReactElement {
   const tooWide = visibleTiles(view).length > WANTED_TILES;
 
   return (
-    <div className="map-view" style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, height: '100%' }}>
-      <div className="row">
-        <button type="button" className="small" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
-        <button type="button" className="small" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
+    <div className="map-view">
+      <div className="row map-toolbar">
+        <button type="button" className="small map-zoom" aria-label="Zoom in" onClick={() => zoomCentre(ZOOM_STEP)}>+</button>
+        <button type="button" className="small map-zoom" aria-label="Zoom out" onClick={() => zoomCentre(1 / ZOOM_STEP)}>−</button>
         {focusX !== undefined && focusZ !== undefined && (
           <button type="button" className="small" onClick={() => setView((v) => ({ ...v, centerX: focusX, centerZ: focusZ }))}>Re-centre</button>
         )}
@@ -516,17 +522,11 @@ export function MapView(props: MapViewProps): ReactElement {
             setView((v) => ({ ...v, y }));
           }}
         />
-        <span>{yLabel}</span>
+        <span className="map-y">{yLabel}</span>
         {tooWide && <span className="muted">Zoom in to load the rest of the map</span>}
         {paletteError !== null && <span className="error">Map colours could not be loaded: {paletteError}</span>}
       </div>
-      <div
-        ref={boxRef}
-        style={{
-          position: 'relative', flex: 1, minHeight: 360, overflow: 'hidden', borderRadius: 'var(--radius)',
-          border: '1px solid var(--border)', background: 'var(--surface-2)',
-        }}
-      >
+      <div ref={boxRef} className="map-box">
         <canvas
           ref={canvasRef}
           role="img"

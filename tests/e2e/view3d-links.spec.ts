@@ -2,15 +2,24 @@
 // EnderIO line the toggle starts off; turned on, the Connections tab's links are drawn over the line (new pixels in the
 // links' own flat colours) and the tab says how many; hovering one names it as the Connections tab does and redraws it
 // thicker while the others fade (the review of f82c98c); a click shows its details and marks it and both its faces in
-// white; Focus shows beside the toggle and the note says what it does; and both are still on after a reload.
+// white; Focus shows beside the toggle and the note says what it does; and both are still on after a reload. The second
+// test holds the scene's block faces back, so the canvas is read before the viewer is made: that read must leave the
+// canvas's WebGL context to the viewer, or the line never reads back (Phase 2 Task F1).
 
 import { test, expect, type Page } from '@playwright/test';
 import { createProject, login, setName } from './helpers.ts';
 import { uploadSampleWorld } from './world-upload.ts';
 
-/** Runs in the page: keeps a copy of the 3D canvas's pixels (the test keeps its drawing buffer), and how many are lit. */
+/**
+ * Runs in the page: keeps a copy of the 3D canvas's pixels (the test keeps its drawing buffer), and how many are lit:
+ * none until the viewer has made the canvas's WebGL context. three's renderer marks the canvas (`data-engine`) just
+ * before it does, in the same task; asking for the context earlier would make it here, with WebGL's defaults, and the
+ * renderer would be handed that one, its own ask for a kept buffer ignored: each frame would be cleared once shown and
+ * read back blank.
+ */
 function keepPixels(): number {
   const c = document.querySelector<HTMLCanvasElement>('[data-testid=view3d-canvas] canvas')!;
+  if (!c.hasAttribute('data-engine')) return 0;
   const gl = c.getContext('webgl2')!;
   const px = new Uint8Array(c.width * c.height * 4);
   gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
@@ -59,18 +68,53 @@ function changedPixels(): { changed: number; white: number; point: [number, numb
   return { changed, white, point: null, rgb: null };
 }
 
-/** Opens the 3D tab (again, while the layout's warnings coming in above the tabs move them) and waits until the line is drawn. */
-async function open3d(page: Page): Promise<void> {
+/**
+ * Runs in the page before its scripts: marks a canvas once a draw call of its WebGL 2 context ran (the 3D view's first
+ * frame), and keeps the drawing buffer for the test.
+ */
+function markDrawn(): void {
+  try { localStorage.setItem('gp.test.preserveDrawingBuffer', '1'); } catch { /* private mode */ }
+  const proto = WebGL2RenderingContext.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
+  for (const name of ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced', 'drawRangeElements']) {
+    const draw = proto[name];
+    if (draw === undefined) continue;
+    proto[name] = function (this: WebGL2RenderingContext, ...args: unknown[]) {
+      (this.canvas as unknown as { gpDrawn?: true }).gpDrawn = true;
+      return draw.apply(this, args);
+    };
+  }
+}
+
+/** Runs in the page: whether the 3D canvas drew its first frame (`markDrawn`). */
+function drawn(): boolean {
+  return document.querySelector<HTMLCanvasElement & { gpDrawn?: true }>('[data-testid=view3d-canvas] canvas')?.gpDrawn === true;
+}
+
+/** Opens the 3D tab (again, while the layout's warnings coming in above the tabs move them) and waits for its block list. */
+async function show3d(page: Page): Promise<void> {
   await expect(async () => {
     await page.getByRole('tab', { name: '3D' }).click();
     await expect(page.getByTestId('view3d')).toBeVisible({ timeout: 2_000 });
   }).toPass();
   await expect(page.getByTestId('block-list')).toContainText('Item Conduit');
+}
+
+/**
+ * `show3d`, then waits until the line is drawn. It reads the canvas only after the viewer's first frame (the controller's
+ * ruling G4 at the integration's release gate, round 2): under load the textures can take longer than the first read.
+ */
+async function open3d(page: Page): Promise<void> {
+  await show3d(page);
+  await expect.poll(() => page.evaluate(drawn), { timeout: 30_000 }).toBe(true);
   await expect.poll(() => page.evaluate(keepPixels), { timeout: 15_000 }).toBeGreaterThan(50);
 }
 
-test('show the Connections links in 3D, name one by hovering it and mark its faces by clicking it', async ({ page }) => {
-  await page.addInitScript(() => { try { localStorage.setItem('gp.test.preserveDrawingBuffer', '1'); } catch { /* private mode */ } });
+/**
+ * Logs in, with the canvas kept readable and its first frame marked (`markDrawn`), and lays out the sample world's EnderIO
+ * iron plate line; resolves once its layout is in.
+ */
+async function enderioLine(page: Page): Promise<void> {
+  await page.addInitScript(markDrawn);
   await login(page);
   await setName(page, 'E2E');
   const scanId = await uploadSampleWorld(page);
@@ -78,6 +122,10 @@ test('show the Connections links in 3D, name one by hovering it and mark its fac
   const ops = [{ op: 'settings', patch: { target: 't:iron_plate@0', amount: 24, per: 'min', logistics: 'enderio' } }, { op: 'world', scanId, baseId: '0:0:0' }];
   expect((await page.request.post(`/api/projects/${id}/ops`, { data: { ops }, headers: { 'X-Planner-Name': 'E2E' } })).ok()).toBe(true);
   await expect.poll(async () => (await (await page.request.get(`/api/projects/${id}/layout`)).json()).status, { timeout: 30_000 }).toBe('ok');
+}
+
+test('show the Connections links in 3D, name one by hovering it and mark its faces by clicking it', async ({ page }) => {
+  await enderioLine(page);
 
   await open3d(page);
   const toggle = page.getByRole('checkbox', { name: 'Show connections' });
@@ -123,4 +171,27 @@ test('show the Connections links in 3D, name one by hovering it and mark its fac
   await expect(page.getByRole('checkbox', { name: 'Show connections' })).toBeChecked();
   await expect(page.getByRole('checkbox', { name: 'Focus' })).toBeChecked();
   await expect(page.getByTestId('view3d-links')).toContainText(/\d+ connections? drawn/);
+});
+
+// The block list that open3d waits for shows as soon as the layout is in, but the viewer is made only once the scene's
+// block faces, icons, covers and textures have come, so open3d's first read can come before it: the first test lost
+// that race now and then, more often under load (Phase 2 Task F1). Holding the faces back makes the read come first
+// every time.
+test('a read of the 3D canvas while its block faces are on the way leaves the canvas to the viewer, so the line reads back once drawn', async ({ page }) => {
+  await enderioLine(page);
+  let asked = 0;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/api/assets/blocks', async (route) => {
+    asked++;
+    await held;
+    await route.continue();
+  });
+
+  await show3d(page);
+  await expect.poll(() => asked).toBeGreaterThan(0);              // the viewer waits on the held faces
+  expect(await page.evaluate(keepPixels)).toBe(0);                // nothing drawn yet
+  release();
+  await expect.poll(() => page.evaluate(keepPixels), { timeout: 15_000 }).toBeGreaterThan(50);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });

@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type RecipeSpec } from '../../helpers/pack-spec.ts';
 import { centrifugeDustSpec, kitSpec, largeBenderSpec, sandSpec, withAutoWorkbenches, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { allMachines } from '../../../src/server/pack/lookup.ts';
 import { buildCostCounts, planBasis } from '../../../src/server/planner/basis.ts';
 import { buildKeys, itemPrices, type ItemPrices } from '../../../src/server/planner/build-cost.ts';
 import { buildCandidates, type CandidateGraph, type LeafOracle } from '../../../src/server/planner/candidates.ts';
@@ -22,6 +23,7 @@ import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
 import type { LogisticsMode, PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
+import { type MachineId } from '../../../src/shared/ids.ts';
 
 const ctx = emptyContext();
 const lv: PlanSettings = { ...defaultSettings(), tier: 1 };
@@ -30,7 +32,7 @@ const CIRCUIT = 't:circuit@0';
 
 /** The prices of every machine of `pack` at `s`. */
 function pricesOf(pack: Pack, s: PlanSettings): Promise<ItemPrices> {
-  return itemPrices(pack, s, ctx, buildKeys(pack, [...pack.machines.values()]));
+  return itemPrices(pack, s, ctx, buildKeys(pack, allMachines(pack)));
 }
 
 function recipeOf(pack: Pack, id: string): Recipe {
@@ -39,12 +41,12 @@ function recipeOf(pack: Pack, id: string): Recipe {
   return r;
 }
 
-/** The options' environment at MV with Cupronickel coils, owning `owned` ([mteId, count]). */
-function mvEnv(prices: ItemPrices, owned: Array<[number, number]> = [], more: Partial<MachineOptionEnv> = {}): MachineOptionEnv {
+/** The options' environment at MV with Cupronickel coils, owning `owned` ([id, count]). */
+function mvEnv(prices: ItemPrices, owned: Array<[MachineId, number]> = [], more: Partial<MachineOptionEnv> = {}): MachineOptionEnv {
   return { groupTier: 2, coilHeat: 1801, owned: new Map(owned), prices, ...more };
 }
 
-const ids = (options: readonly MachineOption[]): number[] => options.map((o) => o.mteId);
+const ids = (options: readonly MachineOption[]): MachineId[] => options.map((o) => o.id);
 
 /** The build model of `pack`'s line for `s` (which names its target), on the graph `linePricing` walks. */
 async function modelOf(pack: Pack, s: PlanSettings, c: PlanContext = ctx): Promise<BuildModel> {
@@ -78,13 +80,13 @@ async function keysOn(pack: Pack, graph: CandidateGraph, logistics: LogisticsMod
 describe('machineOptions', () => {
   it('lists every eligible tier with its overclocked rate', async () => {
     const pack = miniGt();
-    const options = machineOptions(pack, recipeOf(pack, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(await pricesOf(pack, mv), [[122, 1]]));
+    const options = machineOptions(pack, recipeOf(pack, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(await pricesOf(pack, mv), [['gt:122', 1]]));
     // LV: log4(32 / 32) = 0 overclocks, 20 / 200 = 0.1 runs/s. MV: log4(128 / 32) = 1, the voltage cap MV − LV = 1, so
     // 16 × 4 = 64 EU/t and 200 / 2 = 100 ticks, 0.2 runs/s. No recipe makes the Advanced Assembler: it serves as owned.
     expect(options).toMatchObject([
-      { mteId: 121, tier: 1, kind: 'basic', perMachine: 0.1, build: 15, owned: 0 },
+      { id: 'gt:121', tier: 1, kind: 'basic', perMachine: 0.1, build: 15, owned: 0 },
       {
-        mteId: 122, tier: 2, kind: 'basic', perMachine: 0.2, build: null, owned: 1, canAdd: false, unbuildable: 'no recipe in this pack',
+        id: 'gt:122', tier: 2, kind: 'basic', perMachine: 0.2, build: null, owned: 1, canAdd: false, unbuildable: 'no recipe in this pack',
         oc: { euPerTick: 64, durationTicks: 100, overclocks: 1 },
       },
     ]);
@@ -92,7 +94,7 @@ describe('machineOptions', () => {
 
   it('drops a machine that cannot be built unless the group owns it', async () => {
     const pack = miniGt();
-    expect(ids(machineOptions(pack, recipeOf(pack, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(await pricesOf(pack, mv))))).toEqual([121]);
+    expect(ids(machineOptions(pack, recipeOf(pack, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(await pricesOf(pack, mv))))).toEqual(['gt:121']);
   });
 
   it('keeps a pricing-gap machine when nothing else runs the recipe', async () => {
@@ -100,37 +102,37 @@ describe('machineOptions', () => {
     const gap = packFromSpec(withPriceGap(MINI_GT, [122]));
     const gapOptions = machineOptions(gap, recipeOf(gap, 'circuit-mv'), 'gt.recipe.assembler', mvEnv(await pricesOf(gap, mv)));
     // idiv(128, 120) = 1: no overclock, 20 / 100 = 0.2 runs/s.
-    expect(gapOptions).toMatchObject([{ mteId: 122, perMachine: 0.2, build: null, owned: 0, canAdd: true }]);
+    expect(gapOptions).toMatchObject([{ id: 'gt:122', perMachine: 0.2, build: null, owned: 0, canAdd: true }]);
     expect(gapOptions[0]?.unbuildable).toBeUndefined();
     const pack = miniGt();
     const prices = await pricesOf(pack, mv);
     expect(machineOptions(pack, recipeOf(pack, 'circuit-mv'), 'gt.recipe.assembler', mvEnv(prices))).toEqual([]);
-    expect(machineOptions(pack, recipeOf(pack, 'circuit-mv'), 'gt.recipe.assembler', mvEnv(prices, [[122, 1]])))
-      .toMatchObject([{ mteId: 122, owned: 1, canAdd: false, unbuildable: 'no recipe in this pack' }]);
+    expect(machineOptions(pack, recipeOf(pack, 'circuit-mv'), 'gt.recipe.assembler', mvEnv(prices, [['gt:122', 1]])))
+      .toMatchObject([{ id: 'gt:122', owned: 1, canAdd: false, unbuildable: 'no recipe in this pack' }]);
   });
 
   it('offers a multiblock only when no singleblock runs the recipe or the group owns it', async () => {
     const pack = packFromSpec(largeBenderSpec());
     const prices = await pricesOf(pack, lv);
-    const atLv = (owned: Array<[number, number]>): MachineOption[] =>
+    const atLv = (owned: Array<[MachineId, number]>): MachineOption[] =>
       machineOptions(pack, recipeOf(pack, 'bend-plate'), 'gt.recipe.metalbender', mvEnv(prices, owned, { groupTier: 1 }));
-    expect(ids(atLv([]))).toEqual([101]);
+    expect(ids(atLv([]))).toEqual(['gt:101']);
     // 67 for the controller and structure, 16 for its hatch set less the casings it takes (Task 2).
-    expect(atLv([[1100, 1]])).toMatchObject([
-      { mteId: 101, tier: 1, kind: 'basic', perMachine: 0.2, build: 17, owned: 0 },
-      { mteId: 1100, tier: 1, kind: 'multiblock', perMachine: 0.2, build: 83, owned: 1 },
+    expect(atLv([['gt:1100', 1]])).toMatchObject([
+      { id: 'gt:101', tier: 1, kind: 'basic', perMachine: 0.2, build: 17, owned: 0 },
+      { id: 'gt:1100', tier: 1, kind: 'multiblock', perMachine: 0.2, build: 83, owned: 1 },
     ]);
   });
 
   it('prices each hatch tier of a multiblock with the hatches it needs', async () => {
     const pack = packFromSpec(largeBenderSpec());
-    const options = machineOptions(pack, recipeOf(pack, 'bend-plate'), 'gt.recipe.metalbender', mvEnv(await pricesOf(pack, mv), [[1100, 1]]));
+    const options = machineOptions(pack, recipeOf(pack, 'bend-plate'), 'gt.recipe.metalbender', mvEnv(await pricesOf(pack, mv), [['gt:1100', 1]]));
     // Both hatch tiers stay (the MV energy hatch makes the faster one dearer); no recipe makes the Advanced Bending
     // Machine 102 and none is owned, so it is dropped.
     expect(options).toMatchObject([
-      { mteId: 101, tier: 1, perMachine: 0.2, build: 16 },
-      { mteId: 1100, tier: 1, kind: 'multiblock', perMachine: 0.2, build: 81.5, owned: 1, hatches: 'machine:51@0×1,machine:61@0×1,machine:71@0×1,machine:81@0×1' },
-      { mteId: 1100, tier: 2, kind: 'multiblock', perMachine: 0.4, build: 86.5, owned: 1, hatches: 'machine:51@0×1,machine:61@0×1,machine:71@0×1,machine:82@0×1' },
+      { id: 'gt:101', tier: 1, perMachine: 0.2, build: 16 },
+      { id: 'gt:1100', tier: 1, kind: 'multiblock', perMachine: 0.2, build: 81.5, owned: 1, hatches: 'machine:51@0×1,machine:61@0×1,machine:71@0×1,machine:81@0×1' },
+      { id: 'gt:1100', tier: 2, kind: 'multiblock', perMachine: 0.4, build: 86.5, owned: 1, hatches: 'machine:51@0×1,machine:61@0×1,machine:71@0×1,machine:82@0×1' },
     ]);
     expect(options[0]?.hatches).toBeUndefined();
   });
@@ -140,23 +142,23 @@ describe('machineOptions', () => {
     // only recipe is a pricing gap (it can be built, at a stand-in), and the owned Advanced Assembler cannot be built.
     const base = structuredClone(MINI_GT);
     const pack = packFromSpec(withPriceGap({ ...base, recipes: (base.recipes ?? []).filter((r) => r.id !== 'make-121') }, [121]));
-    expect(machineOptions(pack, recipeOf(pack, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(await pricesOf(pack, mv), [[122, 1]]))).toMatchObject([
-      { mteId: 121, perMachine: 0.1, build: null, owned: 0, canAdd: true },
-      { mteId: 122, perMachine: 0.2, build: null, owned: 1, canAdd: false, unbuildable: 'no recipe in this pack' },
+    expect(machineOptions(pack, recipeOf(pack, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(await pricesOf(pack, mv), [['gt:122', 1]]))).toMatchObject([
+      { id: 'gt:121', perMachine: 0.1, build: null, owned: 0, canAdd: true },
+      { id: 'gt:122', perMachine: 0.2, build: null, owned: 1, canAdd: false, unbuildable: 'no recipe in this pack' },
     ]);
   });
 
   it('keeps only the pinned tier, clamped to the eligible ones', async () => {
     const pack = miniGt();
     const prices = await pricesOf(pack, mv);
-    const pinned = (pin: number, owned: Array<[number, number]>, eligibleOnly?: true): number[] =>
+    const pinned = (pin: number, owned: Array<[MachineId, number]>, eligibleOnly?: true): MachineId[] =>
       ids(machineOptions(pack, recipeOf(pack, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(prices, owned, eligibleOnly ? { pin, eligibleOnly } : { pin })));
-    const one: Array<[number, number]> = [[122, 1]];
+    const one: Array<[MachineId, number]> = [['gt:122', 1]];
     // Amendment OQ5 (ruling P5): the pinned MV assembler is owned but cannot be built, so the LV one runs the rest.
-    expect([1, 2, 5, 0].map((pin) => pinned(pin, one))).toEqual([[121], [121, 122], [121, 122], [121]]);
-    expect([1, 2, 5, 0].map((pin) => pinned(pin, one, true))).toEqual([[121, 122], [121, 122], [121, 122], [121, 122]]);
+    expect([1, 2, 5, 0].map((pin) => pinned(pin, one))).toEqual([['gt:121'], ['gt:121', 'gt:122'], ['gt:121', 'gt:122'], ['gt:121']]);
+    expect([1, 2, 5, 0].map((pin) => pinned(pin, one, true))).toEqual([['gt:121', 'gt:122'], ['gt:121', 'gt:122'], ['gt:121', 'gt:122'], ['gt:121', 'gt:122']]);
     // Nothing owned: the MV tier can neither be built nor borrowed.
-    expect(pinned(2, [])).toEqual([121]);
+    expect(pinned(2, [])).toEqual(['gt:121']);
   });
 });
 
@@ -167,11 +169,11 @@ describe('lineBuildModel', () => {
     const s = { ...mv, target: CIRCUIT };
     const model = await modelOf(packFromSpec(withPriceGap({ ...base, recipes: [...(base.recipes ?? []), make102] }, [122, 131])), s);
     // 102 (a hull 9 and 4 circuits of 2.5: 19) is the priced basic MV machine; 101 and 111 at 16 the dearest basic LV ones.
-    expect(model.options('circuit-mv')).toMatchObject([{ mteId: 122, build: null, solveBuild: 19 }]);
-    expect(model.options('extract-iron')).toMatchObject([{ mteId: 131, build: null, solveBuild: 16 }]);
+    expect(model.options('circuit-mv')).toMatchObject([{ id: 'gt:122', build: null, solveBuild: 19 }]);
+    expect(model.options('extract-iron')).toMatchObject([{ id: 'gt:131', build: null, solveBuild: 16 }]);
     // With no priced MV machine, the dearest priced machine of the model.
     const noMv = await modelOf(packFromSpec(withPriceGap(MINI_GT, [122])), s);
-    expect(noMv.options('circuit-mv')).toMatchObject([{ mteId: 122, build: null, solveBuild: 16 }]);
+    expect(noMv.options('circuit-mv')).toMatchObject([{ id: 'gt:122', build: null, solveBuild: 16 }]);
   });
 
   it('blocks a step whose only machine cannot be built', async () => {
@@ -229,10 +231,10 @@ describe('lineBuildModel', () => {
     const s = { ...mv, target: CIRCUIT, machineTier: { 'circuit-lv': 2 } };
     const fallback = { tier: 2, name: 'Advanced Assembler', why: 'no recipe in this pack' };
     const none = await modelOf(pack, s);
-    expect(ids(none.options('circuit-lv'))).toEqual([121]);
+    expect(ids(none.options('circuit-lv'))).toEqual(['gt:121']);
     expect(none.pinFallback('circuit-lv')).toEqual(fallback);
     const owning = await modelOf(pack, { ...s, ownedManual: [{ mteId: 122, count: 1 }] });
-    expect(owning.options('circuit-lv')).toMatchObject([{ mteId: 121, canAdd: true }, { mteId: 122, owned: 1, canAdd: false }]);
+    expect(owning.options('circuit-lv')).toMatchObject([{ id: 'gt:121', canAdd: true }, { id: 'gt:122', owned: 1, canAdd: false }]);
     expect(owning.pinFallback('circuit-lv')).toEqual(fallback);
     // No fallback on a pinned tier that can be built, nor without a pin.
     expect((await modelOf(pack, { ...s, machineTier: { 'circuit-lv': 1 } })).pinFallback('circuit-lv')).toBeUndefined();
@@ -294,7 +296,7 @@ describe('lineBuildModel', () => {
     expect(sharingKey(recipeOf(mini, 'extract-iron'), [])).toBe('-|||fluid:molten.iron');
     expect(sharingKey(recipeOf(mini, 'circuit-mv'), [])).toBe('-||fluid:molten.iron|');
     const [opt121] = machineOptions(mini, recipeOf(mini, 'circuit-lv'), 'gt.recipe.assembler', mvEnv(await pricesOf(mini, lv), [], { groupTier: 1 }));
-    expect(poolKey(opt121!, '2|')).toBe('121:1:|2|');
+    expect(poolKey(opt121!, '2|')).toBe('gt:121:1:|2|');
   });
 
   it('shares no machine on Project Red lines', async () => {
@@ -330,9 +332,9 @@ describe('lineBuildModel', () => {
   it('reads the owned pool from the world and the manual list', () => {
     const c: PlanContext = { ...emptyContext(), ownedMachines: [{ mteId: 121, count: 2, where: [{ dim: 0, pos: [1, 64, 1] }, { dim: 0, pos: [2, 64, 1] }] }] };
     const s: PlanSettings = { ...defaultSettings(), ownedManual: [{ mteId: 121, count: 1 }, { mteId: 111, count: 1 }] };
-    expect([...ownedPools(c, s)]).toEqual([[121, [{ dim: 0, pos: [1, 64, 1] }, { dim: 0, pos: [2, 64, 1] }, null]], [111, [null]]]);
-    expect([...ownedMachineMap(c, s)]).toEqual([[121, 3], [111, 1]]);
-    expect([...ownedPools(c, { ...s, declineReuse: [121] })]).toEqual([[111, [null]]]);
+    expect([...ownedPools(c, s)]).toEqual([['gt:111', [null]], ['gt:121', [{ dim: 0, pos: [1, 64, 1] }, { dim: 0, pos: [2, 64, 1] }, null]]]);
+    expect([...ownedMachineMap(c, s)]).toEqual([['gt:111', 1], ['gt:121', 3]]);
+    expect([...ownedPools(c, { ...s, declineReuse: [121] })]).toEqual([['gt:111', [null]]]);
     expect([...ownedPools(c, { ...s, reuseOwned: false })]).toEqual([]);
   });
 
@@ -354,11 +356,11 @@ describe('crafting-table steps on the Auto Workbench', () => {
     // 2,048 EU a craft at 1 A of the tier's voltage: 64 ticks at LV, 16 at MV (gt-mechanics §8); the HV one is above MV.
     expect(machineOptions(pack, plate, 'crafting', { ...env, automateCrafting: true })).toMatchObject([
       {
-        mteId: 31091, name: 'Auto Workbench (LV)', tier: 1, kind: 'basic', perMachine: 0.3125, build: 14, owned: 0, canAdd: true,
+        id: 'gt:31091', name: 'Auto Workbench (LV)', tier: 1, kind: 'basic', perMachine: 0.3125, build: 14, owned: 0, canAdd: true,
         oc: { euPerTick: 32, durationTicks: 64, overclocks: 0 },
       },
       {
-        mteId: 31092, name: 'Auto Workbench (MV)', tier: 2, kind: 'basic', perMachine: 1.25, build: 19, owned: 0, canAdd: true,
+        id: 'gt:31092', name: 'Auto Workbench (MV)', tier: 2, kind: 'basic', perMachine: 1.25, build: 19, owned: 0, canAdd: true,
         oc: { euPerTick: 128, durationTicks: 16, overclocks: 0 },
       },
     ]);
@@ -383,7 +385,7 @@ describe('crafting-table steps on the Auto Workbench', () => {
     // keeps the EV one.
     const built = packFromSpec(withAutoWorkbenches(MINI_GT, [4, 5]));
     const fast = machineOptions(built, recipeOf(built, 'hammer-plate'), 'crafting', mvEnv(await pricesOf(built, mv), [], { groupTier: 5, automateCrafting: true }));
-    expect(fast).toMatchObject([{ mteId: 31094, tier: 4, perMachine: 20, build: 29 }]);
+    expect(fast).toMatchObject([{ id: 'gt:31094', tier: 4, perMachine: 20, build: 29 }]);
   });
 
   it('never shares an Auto Workbench between two crafting recipes', async () => {
@@ -402,7 +404,7 @@ describe('crafting-table steps on the Auto Workbench', () => {
     const pack = packFromSpec(withAutoWorkbenches(MINI_GT, [1, 2]));
     const model = await modelOf(pack, s);
     // At LV: a hull 9 and 2 circuits of 3.
-    expect(model.options('hammer-plate')).toMatchObject([{ mteId: 31091, tier: 1, build: 15, canAdd: true }]);
+    expect(model.options('hammer-plate')).toMatchObject([{ id: 'gt:31091', tier: 1, build: 15, canAdd: true }]);
     expect(model.blocked.has('hammer-plate')).toBe(false);
     const pricing = (await linePricing(pack, s, ctx))!;
     expect(optionMachines(pack, pricing.graph, { groupTier: 1, automateCrafting: true }, new Map()).map((m) => m.mteId)).toContain(31091);
@@ -469,11 +471,11 @@ describe('AE2 pools by blocking mode and the machine\'s own input slots', () => 
     const env = mvEnv(await pricesOf(pack, mv), [], { groupTier: 3 });
     // two kinds and a held mold: the LV press's two slots leave one, the HV press's four leave three
     const two = machineOptions(pack, recipeOf(pack, 'press-two'), 'gt.recipe.press', { ...env, eligibleOnly: true });
-    expect(two.map((o) => [o.mteId, o.ownPool])).toEqual([[201, 'press-two'], [203, undefined]]);
-    expect(poolKey(two[0]!, '-|' + MOLD)).toBe(`201:1:|-|${MOLD}|own:press-two`);
-    expect(poolKey(two[1]!, '-|' + MOLD)).toBe(`203:3:|-|${MOLD}`);
+    expect(two.map((o) => [o.id, o.ownPool])).toEqual([['gt:201', 'press-two'], ['gt:203', undefined]]);
+    expect(poolKey(two[0]!, '-|' + MOLD)).toBe(`gt:201:1:|-|${MOLD}|own:press-two`);
+    expect(poolKey(two[1]!, '-|' + MOLD)).toBe(`gt:203:3:|-|${MOLD}`);
     const one = machineOptions(pack, recipeOf(pack, 'press-a'), 'gt.recipe.press', { ...env, eligibleOnly: true });
-    expect(one.map((o) => [o.mteId, o.ownPool])).toEqual([[201, undefined], [203, undefined]]);
+    expect(one.map((o) => [o.id, o.ownPool])).toEqual([['gt:201', undefined], ['gt:203', undefined]]);
     // a machine the slot table does not know is not limited
     const assembler = machineOptions(pack, recipeOf(pack, 'combo'), 'gt.recipe.assembler', { ...env, eligibleOnly: true });
     expect(assembler.every((o) => o.ownPool === undefined)).toBe(true);

@@ -4,15 +4,19 @@
 // people tick survive a re-plan.
 
 import { withArticle } from '../../shared/format.ts';
-import { PSEUDO_IDS, tierName } from '../../shared/gt/tiers.ts';
+import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
+import { joinNames } from '../../shared/layout/format.ts';
+import { isPseudoMachineId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, BuildStep, LogisticsMode, PlanSettings, PlanStep, PowerSummary } from '../../shared/types/plan.ts';
+import { machineByMteId } from '../pack/lookup.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { cleanroomMachine, partName, stepOneOffs, stepProductName, stepTools, type Bom, type BomMake } from './bom.ts';
 import { structureParts } from './build-cost.ts';
 import type { HeldAvoid } from './candidates.ts';
+import { plantingParts, soilWork, type PlantingPart } from './farms/recipes.ts';
 import { orderJobs, type OrderJob } from './howto.ts';
 
 /** The gather step names this many base materials. */
@@ -54,26 +58,27 @@ function isProgrammedCircuit(key: StuffKey): boolean {
  * steps that list no units (rate: each such step's; Make N: the type's first step's).
  */
 function machinesToPlace(steps: readonly PlanStep[], makeN: boolean): Array<{ name: string; added: number; reused: number }> {
-  const types = new Map<number, { name: string; added: number; owned: number; units: Set<number> }>();
-  const typeOf = (mteId: number, name: string): { name: string; added: number; owned: number; units: Set<number> } => {
-    let type = types.get(mteId);
-    if (type === undefined) types.set(mteId, (type = { name, added: 0, owned: 0, units: new Set() }));
+  const types = new Map<MachineId, { name: string; added: number; owned: number; units: Set<number> }>();
+  const typeOf = (id: MachineId, name: string): { name: string; added: number; owned: number; units: Set<number> } => {
+    let type = types.get(id);
+    if (type === undefined) types.set(id, (type = { name, added: 0, owned: 0, units: new Set() }));
     return type;
   };
   const counting = new Set(machineGroups(steps).map((group) => group[0]));
-  const seen = new Set<number>();
+  const seen = new Set<MachineId>();
   for (const step of steps) {
-    const { mteId, name } = step.machine;
-    if (step.handCraft || PSEUDO_IDS.has(mteId)) continue;
-    const first = !seen.has(mteId);
-    seen.add(mteId);
-    const type = typeOf(mteId, name);
+    const id = machineIdOfLegacy(step.machine.mteId);
+    const { name } = step.machine;
+    if (step.handCraft || isPseudoMachineId(id)) continue;
+    const first = !seen.has(id);
+    seen.add(id);
+    const type = typeOf(id, name);
     if (makeN ? first : counting.has(step)) type.added += Math.max(0, step.count - step.owned);
     const units = step.reused?.units;
     if (units !== undefined) for (const u of units) type.units.add(u);
     else if (!makeN || first) type.owned += step.owned;
     for (const o of step.reused?.others ?? []) {
-      const other = typeOf(o.mteId, o.name);
+      const other = typeOf(machineIdOfLegacy(o.mteId), o.name);
       if (o.units !== undefined) for (const u of o.units) other.units.add(u);
       else other.owned += o.count;
     }
@@ -140,6 +145,51 @@ function handCraftText(
   return `Hand-craft ${rate} ${stepProductName(pack, step)} at a crafting table` + (tools.length > 0 ? ` (tools: ${tools.join(', ')})` : '');
 }
 
+/** A part the line's crop farms plant (add-on 17): which part, and the farms that plant it. */
+interface Planted { part: PlantingPart['part']; farms: string[] }
+
+/**
+ * What the line's crop farm steps plant (`plantingParts`; a farm pack's recipes say it), by key: which part, and each
+ * farm that plants it, in step order, as `the <crop> farm`, followed for a soil placed as another block by what to do to
+ * it (` (hoe it into Farmland)`).
+ */
+function farmPlantings(pack: Pack, steps: readonly PlanStep[]): Map<StuffKey, Planted> {
+  const out = new Map<StuffKey, Planted>();
+  for (const step of steps) {
+    const farm = (step.farm?.sticks ?? 0) > 0 ? pack.recipeById.get(step.recipeId)?.meta.farm : undefined;
+    if (farm?.kind !== 'crop' || farm.crop === undefined) continue;
+    for (const p of plantingParts(farm)) {
+      const work = p.soil === undefined ? undefined : soilWork(p.soil);
+      const name = `the ${farm.crop.name} farm${work === undefined ? '' : ` (${work})`}`;
+      const planted = out.get(p.key);
+      if (planted === undefined) out.set(p.key, { part: p.part, farms: [name] });
+      else if (!planted.farms.includes(name)) planted.farms.push(name);
+    }
+  }
+  return out;
+}
+
+/**
+ * The craft step of a one-off only crop farms plant (the final review of add-on 17): its crop sticks are made and planted
+ * round the Crop Manager, its soil laid under them, its seeds taken from the group's seed bank — never "stays in the
+ * machine".
+ */
+function plantingText(amount: string, planted: Planted): string {
+  const farms = joinNames(planted.farms);
+  if (planted.part === 'sticks') return `Make ${amount} to plant in ${farms}`;
+  if (planted.part === 'soil') return `Get ${amount} as soil for ${farms}`;
+  return `Take ${amount} from your seed bank for ${farms}`;
+}
+
+/**
+ * What a crop farm's part that the build list makes is for (add-on 14 × 17), as its make step's note in brackets: its
+ * crop sticks or seeds `to plant in the <crop> farm`, its soil `as soil for the <crop> farm`.
+ */
+function plantedFor(planted: Planted): string {
+  const farms = joinNames(planted.farms);
+  return planted.part === 'soil' ? `as soil for ${farms}` : `to plant in ${farms}`;
+}
+
 function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSeconds: number | undefined): string {
   if (settings.mode === 'makeN') {
     const time = totalSeconds === undefined ? '' : ` in about ${Math.max(1, Math.round(totalSeconds / 60))} min`;
@@ -155,7 +205,10 @@ function testText(pack: Pack, settings: PlanSettings, target: StuffKey, totalSec
  * top-level line (a key's first top-level line carries its step and id) — in Kahn's order of their waits (`BomMake.after`),
  * batched by machine (`orderJobs`). Each job is worded by its `made`, as the build list words it: the breakdown breaks a
  * cycle through machines this line builds where `made` is set (`expandWith`), so a caller's own cycle is broken for the
- * order alone. The cleanroom line's own step, made or not, says to build it around the steps that need it.
+ * order alone. The cleanroom line's own step, made or not, says to build it around the steps that need it. A top-level
+ * one-off says what it is for: a hand-crafting tool, what a crop farm plants (add-on 17: a made one says
+ * `(to plant in the <crop> farm)`, one not made is worded as `plantingText` words it, and seeds nothing here makes come
+ * from the group's seed bank), else that it stays in the machine.
  */
 export function partSteps(
   pack: Pack, input: { steps: readonly PlanStep[]; bom: { lines: BomLine[]; totals: BomLine[]; makes?: readonly BomMake[] }; tier: number; avoid?: HeldAvoid },
@@ -172,7 +225,11 @@ export function partSteps(
   const roomKey = cleanroomMachine(pack)?.itemKey;
   // Task 13 ruling: a one-off that is only a hand-crafting tool (no step keeps it in a machine) is worded as a tool.
   const machineParts = new Set(steps.flatMap((s) => stepOneOffs(pack, s, avoid).map((o) => o.key)));
-  const toolsOnly = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)).filter((key) => !machineParts.has(key)));
+  const tools = new Set(steps.flatMap((s) => stepTools(pack, s, avoid)));
+  const toolsOnly = new Set([...tools].filter((key) => !machineParts.has(key)));
+  // Add-on 17: one that only crop farms plant (no step keeps it in a machine or crafts with it) is worded as planting.
+  const plantings = farmPlantings(pack, steps);
+  const plantedOf = (key: StuffKey): Planted | undefined => (machineParts.has(key) || tools.has(key) ? undefined : plantings.get(key));
   const firstTop = new Map<StuffKey, BomLine>();
   /** What all the top-level lines of a key ask for: a bought part's one step names every group's amount. */
   const topAmount = new Map<StuffKey, number>();
@@ -183,7 +240,9 @@ export function partSteps(
   const suffix = (key: StuffKey): string => {
     const top = firstTop.get(key);
     if (top === undefined || (top.group ?? 'machines') !== 'one-off') return '';
-    return toolsOnly.has(key) ? ' (a tool for hand-crafting)' : ' (stays in the machine)';
+    if (toolsOnly.has(key)) return ' (a tool for hand-crafting)';
+    const planted = plantedOf(key);
+    return planted === undefined ? ' (stays in the machine)' : ` (${plantedFor(planted)})`;
   };
   const idOf = (key: StuffKey): string => (firstTop.has(key) ? `craft:${key}` : `make:${key}`);
   /** The cleanroom line's own step, made or not, says where it goes (the copy table's last row). */
@@ -201,7 +260,7 @@ export function partSteps(
     const held = (m.made.nonConsumed ?? []).map((k) => partName(pack, k));
     const machineWaits: StuffKey[] = [];
     if (typeof machine === 'object' && machine.source === 'line') {
-      const own = pack.machines.get(machine.mteId);
+      const own = machineByMteId(pack, machine.mteId);
       if (own !== undefined) for (const k of [own.itemKey, ...structureParts(pack, own).keys()]) if (m.after.includes(k)) machineWaits.push(k);
     }
     const text = (): string => {
@@ -224,6 +283,9 @@ export function partSteps(
   }
   for (const t of bom.totals) {
     if (t.unmade === undefined || nodes.has(t.key)) continue;
+    // seeds come from the group's own seed bank (add-on 17): one nothing here makes is no import, and its top-level line's
+    // step, below, says to take it from there
+    if (firstTop.get(t.key)?.group === 'one-off' && plantedOf(t.key)?.part === 'seed') continue;
     const what = `${qty(t.key, t.amount)}${suffix(t.key)}`;
     const text = (t.unmade === 'own-chain'
       ? `Get ${what}: every recipe for it here needs a part of its own chain, so swap the recipe of a part it goes into, or import it (mark it "we already make this")`
@@ -234,7 +296,9 @@ export function partSteps(
     if (nodes.has(l.key)) continue;
     const group = l.group ?? 'machines';
     const amount = qty(l.key, topAmount.get(l.key) ?? l.amount);
+    const planted = plantedOf(l.key);
     const text = group === 'one-off' && toolsOnly.has(l.key) ? `Make ${amount} (a tool for hand-crafting)`
+      : group === 'one-off' && planted !== undefined ? plantingText(amount, planted)
       : group === 'one-off' ? `Make ${amount} (stays in the machine)`
       : group === 'machines' && l.key === roomKey ? `Build a cleanroom (${partName(pack, l.key)}) around the steps that need it`
       : `Craft ${amount}`;
@@ -249,7 +313,10 @@ export function partSteps(
 
 /**
  * The build steps in order (`order` = position + 1): gather the build's base materials and make each build part in
- * order (`partSteps`); place the machines; connect power; hook up logistics for the project's mode; configure
+ * order (`partSteps`: a one-off that stays in a machine, a hand-crafting tool, or what a crop farm plants, as
+ * `Make <n>× Crop Sticks to plant in the <crop> farm`, `Get <n>× Dirt as soil for the <crop> farm (hoe it into
+ * Farmland)`, `Take <n>× <seeds> from your seed bank for the <crop> farm`, add-on 17); place the machines; connect
+ * power; hook up logistics for the project's mode; configure
  * each step with a programmed circuit or other parts that stay in the machine (hand-crafting tools are none of these,
  * Task 13 ruling), and each supply step where its machine must stand (`supplyText`) — a sharing pool once, by its first
  * step, naming every product of the pool (plan 12); hand-craft each hand-crafting step,

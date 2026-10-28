@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { Figs } from '../../src/client/components/Figs.tsx';
 import { FoundPanel } from '../../src/client/map/FoundPanel.tsx';
 import { summarize, type FoundSummary } from '../../src/client/map/summary.ts';
 import type { Note } from '../../src/shared/types/project.ts';
@@ -90,7 +91,7 @@ describe('summarize', () => {
     expect([s.storage.items.length, s.storage.items.find((i) => i.key === 'test:item@0')!.where.length]).toEqual([13, 7]);   // 12 + iron
     expect(s.storage.items.map((i) => i.total)).toEqual([...s.storage.items.map((i) => i.total)].sort((a, b) => b - a));
     const html = renderToStaticMarkup(<FoundPanel summary={s} notes={[]} onFocusNote={() => {}} />);
-    expect(html).toContain('Show all 13 items');
+    expect(html).toContain('Show all <span class="fig">13</span> items');
     expect(html.match(/data-key="/g)).toHaveLength(10);   // ITEMS_PAGE rows until "Show all"
   });
 
@@ -151,15 +152,34 @@ describe('FoundPanel', () => {
     expect(html).toMatch(/data-testid="note-1"[^]*Build here/);
     expect(html).toMatch(/data-testid="note-2"[^]*Nether portal/);
     // N1, N2 as the map draws note pins: a plain number is a layout pin (a build step's "pin 1")
-    expect(html).toMatch(/data-testid="note-1"[^]*?<span class="badge">N1<\/span>/);
-    expect(html).toMatch(/data-testid="note-2"[^]*?<span class="badge">N2<\/span>/);
-    expect(html).not.toMatch(/<span class="badge">\d+<\/span>/);
+    expect(html).toMatch(/data-testid="note-1"[^]*?<span class="badge">N<span class="fig">1<\/span><\/span>/);
+    expect(html).toMatch(/data-testid="note-2"[^]*?<span class="badge">N<span class="fig">2<\/span><\/span>/);
+    // a badge's figures ride in a span.fig (spec §25), so a plain number is read with or without it: the check sees one as the panel would draw
+    // it (the final fix wave, FW-15: the bare pattern could not fail once the figures went into Figs)
+    const plainNumber = /<span class="badge">(?:<span class="fig">\d+<\/span>|\d+)<\/span>/;
+    expect(renderToStaticMarkup(<span className="badge"><Figs text="1" /></span>)).toMatch(plainNumber);
+    expect(html).not.toMatch(plainNumber);
     expect(html).toMatch(/id="found-note-2" data-testid="note-2" aria-current="true"/);   // the note whose marker was clicked
     expect(html).not.toContain('not pinned');
   });
 
   it('offers "show on map" only when the map can show a place', () => {
     expect(renderToStaticMarkup(<FoundPanel summary={s} notes={[]} onFocusNote={() => {}} />)).not.toContain('show on map');
+  });
+
+  // The panel wears classes (restyle plan Phase 1 Task 8): a section, an item's label, a note's row; the selected note is marked
+  // on its li alone, and the only inline style left in the panel is each icon's own size and colour.
+  it('dresses the sections and rows with classes, and leaves no inline style but the icons\'', () => {
+    expect(html).toContain('<div class="found-panel" data-testid="found-panel"><section class="found-section"><h3>Machines</h3>');
+    expect(html).toContain('<summary><span class="found-item-label"><span class="item-icon');
+    expect(html).toContain('<span class="found-item-name">minecraft:iron_ingot@0</span>');
+    expect(html).toContain('<ul class="small map-list"><li data-key="minecraft:iron_ingot@0">');
+    expect(html).toContain('<ol class="small map-list"><li id="found-note-1" data-testid="note-1">'
+      + '<button type="button" class="small map-row-button"><span class="badge">N<span class="fig">1</span></span> Build here <span class="muted">at 4 63 5 (Overworld)</span></button></li>');
+    expect(html).toContain('<li id="found-note-2" data-testid="note-2" aria-current="true"><button type="button" class="small map-row-button">');
+    const many = renderToStaticMarkup(<FoundPanel summary={summarize(manyItems(12, 7), '0:0:0')} notes={[]} onFocusNote={() => {}} />);
+    expect(many).toContain('<button type="button" class="small found-show-all">Show all <span class="fig">13</span> items</button>');
+    for (const markup of [html, many]) expect(markup.replace(/<span class="item-icon[^>]*>/g, '')).not.toContain('style=');
   });
 
   it('shows the scan notes first, and no such section when the scan read everything', () => {

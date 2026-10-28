@@ -4,10 +4,12 @@
 // placed (spec §4). Figures are left unrounded; texts round through `fmtInt`.
 
 import { tierName, V } from '../../shared/gt/tiers.ts';
+import { compareMachineId } from '../../shared/ids.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { LayoutPowerContext } from '../../shared/types/layout.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import type { BomLine, PlanContext, PowerSummary } from '../../shared/types/plan.ts';
+import { allMachineIds, machineOf } from '../pack/lookup.ts';
 import { simpleClassName } from '../world/facts.ts';
 import { RAIN_OUTAGE_FRACTION, solarBoilerOf, turbineSteamForFull } from '../world/power.ts';
 
@@ -168,10 +170,12 @@ export function fitPower(input: FitInput): { power: PowerSummary; optional: BomL
 
 // ---- Generator suggestions ----
 
-function lowestMteId(pack: Pack, keep: (m: Machine) => boolean): Machine | null {
-  let best: Machine | null = null;
-  for (const m of pack.machines.values()) if (keep(m) && (best === null || m.mteId < best.mteId)) best = m;
-  return best;
+function lowestId(pack: Pack, keep: (m: Machine) => boolean): Machine | null {
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m !== undefined && keep(m)) return m;
+  }
+  return null;
 }
 
 /** Average L/s of steam a boiler makes: a solar boiler loses the rain outage and the cool part of the day (gt-mechanics §4.2). */
@@ -181,18 +185,19 @@ function averageSteam(boiler: Machine, steamPerSecondMax: number): number {
 }
 
 /**
- * The boiler to suggest: the HP solar boiler first, then the most average steam, then mteId. Boilers whose output the
+ * The boiler to suggest: the HP solar boiler first, then the most average steam, then id. Boilers whose output the
  * export does not give (architecture §11.19: missing means unknown) are skipped.
  */
 function chooseBoiler(pack: Pack): { boiler: Machine; steam: number } | null {
   const rank = (m: Machine) => (simpleClassName(m.cls) === 'MTEBoilerSolarSteel' ? 0 : 1);
   const boilers: Array<{ boiler: Machine; steam: number }> = [];
-  for (const m of pack.machines.values()) {
-    if (m.kind === 'boiler' && m.steamPerSecondMax !== undefined && m.steamPerSecondMax > 0) {
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m !== undefined && m.kind === 'boiler' && m.steamPerSecondMax !== undefined && m.steamPerSecondMax > 0) {
       boilers.push({ boiler: m, steam: averageSteam(m, m.steamPerSecondMax) });
     }
   }
-  boilers.sort((a, b) => rank(a.boiler) - rank(b.boiler) || b.steam - a.steam || a.boiler.mteId - b.boiler.mteId);
+  boilers.sort((a, b) => rank(a.boiler) - rank(b.boiler) || b.steam - a.steam || compareMachineId(a.boiler.id, b.boiler.id));
   return boilers[0] ?? null;
 }
 
@@ -206,7 +211,7 @@ export function generatorSuggestion(pack: Pack, shortfallEUt: number, tier: numb
   const shortfall = fmtInt(shortfallEUt);
   const why = `optional: covers a ${shortfall} EU/t power shortfall`;
   const line = (m: Machine, amount: number): BomLine => ({ key: m.itemKey, amount, why, group: 'power' });
-  const turbine = lowestMteId(pack, (m) => m.kind === 'turbine' && m.tier === tier);
+  const turbine = lowestId(pack, (m) => m.kind === 'turbine' && m.tier === tier);
   const steam = turbine === null ? null : chooseBoiler(pack);
   if (turbine !== null && steam !== null) {
     const turbines = Math.ceil(shortfallEUt / volts);
@@ -216,7 +221,7 @@ export function generatorSuggestion(pack: Pack, shortfallEUt: number, tier: numb
       lines: [line(steam.boiler, boilers), line(turbine, turbines)],
     };
   }
-  const generator = lowestMteId(pack, (m) => m.kind === 'generator' && m.tier === tier);
+  const generator = lowestId(pack, (m) => m.kind === 'generator' && m.tier === tier);
   if (generator !== null) {
     const count = Math.ceil(shortfallEUt / (volts * (generator.amps ?? 1)));
     return { text: `Add about ${count}× ${generator.name} to cover ${shortfall} EU/t`, lines: [line(generator, count)] };

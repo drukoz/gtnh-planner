@@ -7,6 +7,7 @@
 
 import { V } from '../../src/shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type FluidKey, type ItemKey, type StuffKey } from '../../src/shared/keys.ts';
+import { gtMachineId, machineIdOfLegacy, type MachineId } from '../../src/shared/ids.ts';
 import type {
   Fluid, GtMaterial, Ingredient, Item, Machine, MachineKind, Pack, PackManifest, Product, Recipe, RecipeMapInfo, RecipeSource,
   StructureInfo, Worldgen,
@@ -116,7 +117,7 @@ function mapFrom(spec: MapSpec): RecipeMapInfo {
 
 function machineFrom(spec: MachineSpec): Machine {
   const machine: Machine = {
-    mteId: spec.mteId, metaName: spec.metaName ?? `test.machine.${spec.mteId}`, name: spec.name, cls: spec.cls ?? 'test.Machine',
+    id: gtMachineId(spec.mteId), mteId: spec.mteId, metaName: spec.metaName ?? `test.machine.${spec.mteId}`, name: spec.name, cls: spec.cls ?? 'test.Machine',
     itemKey: spec.itemKey ?? `machine:${spec.mteId}@0`, kind: spec.kind ?? 'basic', maps: [...spec.maps],
   };
   if (spec.tier !== undefined) {
@@ -140,7 +141,7 @@ function addOnce<K, T>(map: Map<K, T>, key: K, value: T, what: string): void {
  * `recipes` (one the spec already has by id is not added again), a pump machine gets the pseudo map `pump`, and the
  * compressor recipes are marked `meta.supply` with their ids unchanged (ruling P20).
  */
-function addSupply(recipes: Recipe[], machines: Map<number, Machine>, maps: Map<string, RecipeMapInfo>, fluidContainers: NonNullable<Pack['fluidContainers']>): void {
+function addSupply(recipes: Recipe[], machines: Map<MachineId, Machine>, maps: Map<string, RecipeMapInfo>, fluidContainers: NonNullable<Pack['fluidContainers']>): void {
   const supply = deriveSupply({ recipes, machines, maps, fluidContainers });
   const flagged = new Set(supply.flagged);
   for (const r of recipes) if (flagged.has(r.id)) r.meta.supply = 'compressor';
@@ -150,7 +151,7 @@ function addSupply(recipes: Recipe[], machines: Map<number, Machine>, maps: Map<
   const map = supply.pumpMap.id;
   maps.set(map, supply.pumpMap);
   for (const id of supply.pumpMachines) {
-    const machine = machines.get(id);
+    const machine = machines.get(machineIdOfLegacy(id));
     if (machine !== undefined && !machine.maps.includes(map)) machine.maps.push(map);
   }
 }
@@ -175,8 +176,11 @@ export function packFromSpec(spec: PackSpec): Pack {
   }
   const maps = new Map<string, RecipeMapInfo>();
   for (const s of spec.maps ?? []) addOnce(maps, s.id, mapFrom(s), 'map');
-  const machines = new Map<number, Machine>();
-  for (const s of spec.machines ?? []) addOnce(machines, s.mteId, machineFrom(s), 'machine');
+  const machines = new Map<MachineId, Machine>();
+  for (const s of spec.machines ?? []) {
+    const machine = machineFrom(s);
+    addOnce(machines, machine.id, machine, 'machine');
+  }
   addSupply(recipes, machines, maps, fluidContainers);
   // the loader's bench variants (load.ts `addDerivedRecipes`), from the declared items' ore names
   recipes.push(...benchVariants(recipes, items));
@@ -218,9 +222,11 @@ export function packFromSpec(spec: PackSpec): Pack {
   }
 
   const { producers, consumers } = buildIndices(recipes);
+  const machineByMteId = new Map<number, Machine>();
+  for (const m of machines.values()) machineByMteId.set(m.mteId, m);
   const pack: Pack = {
     manifest, items, fluids, oreDict, maps, recipes, recipeById, producers, consumers,
-    machines, machinesByMap: buildMachinesByMap(machines), materials, worldgen,
+    machines, machineByMteId, machinesByMap: buildMachinesByMap(machines), materials, worldgen,
     nameOf: (key) => items.get(key)?.name ?? fluids.get(key)?.name ?? key,
   };
   if (spec.fluidContainers !== undefined) pack.fluidContainers = fluidContainers;

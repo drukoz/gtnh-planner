@@ -4,10 +4,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   dimRows, dimOverridePatch, toggleList, parseAmount, groupDimRows, parseCost, STEP_CHARGE_PRESETS, ownableMachineGroups, ownedMachineLabel, ownedWith,
   ownedWithout, parseOwnedCount, BUILD_HORIZON_PRESETS, horizonChoice, horizonPatch, buildTierOptions, buildTierPatch, MULTIBLOCK_CHOICES, multiblocksPatch,
+  RAW_CAP_PRESETS, rawCapChoice, rawCapOf, rawCapPatch,
+  inputsOnlyFromPlan, inputsOnlyPatch,
 } from '../../src/client/views/settings-model.ts';
 import {
-  BuildHorizonField, BuildTierField, HaveSupplySection, MultiblocksField, OptionPinsSection, ReuseOwnedField, SettingsPanel, StepChargeField,
+  BuildHorizonField, BuildTierField, HaveSupplySection, InputsOnlySection, MultiblocksField, OptionPinsSection, RawCapField, ReuseOwnedField, SettingsPanel, StepChargeField,
 } from '../../src/client/views/SettingsPanel.tsx';
+import { ItemSearch } from '../../src/client/components/ItemSearch.tsx';
 import { OwnedMachinesEditor } from '../../src/client/components/OwnedMachinesEditor.tsx';
 import { TierPicker } from '../../src/client/components/TierPicker.tsx';
 import { defaultSettings, validateOp } from '../../src/shared/project/apply-op.ts';
@@ -121,10 +124,11 @@ describe('settings model', () => {
   });
 });
 
-describe('steps vs raw material, supplies and pinned options', () => {
+describe('machines vs raw material, supplies and pinned options', () => {
   const options = (html: string): string[] => [...html.matchAll(/<option value="([^"]*)"( selected="")?>([^<]*)<\/option>/g)].map((m) => `${m[1]}=${m[3]}${m[2] === undefined ? '' : ' *'}`);
-  const stepCharge = (html: string): string[] => options(/<select[^>]*aria-label="Steps vs raw material"[^>]*>.*?<\/select>/s.exec(html)?.[0] ?? '');
-  it('lists the presets of the Steps vs raw material select and sends the one picked', () => {
+  // Ruling S17: the select is "Machines vs raw material" now, under "Plan for" (formerly "Steps vs raw material" in Options).
+  const stepCharge = (html: string): string[] => options(/<select[^>]*aria-label="Machines vs raw material"[^>]*>.*?<\/select>/s.exec(html)?.[0] ?? '');
+  it('lists the presets of the Machines vs raw material select and sends the one picked', () => {
     // Plan 12 fix wave 2 (the user's answer of 2026-10-20): Least raw material, Some machines, Fewest machines (the default).
     expect(STEP_CHARGE_PRESETS.map((p) => [p.value, p.label])).toEqual([[0, 'Least raw material'], [0.02, 'Some machines'], [0.5, 'Fewest machines']]);
     expect(stepCharge(panelOf({ ...defaultSettings(), stepCharge: 0.02 }))).toEqual([
@@ -182,11 +186,13 @@ describe('steps vs raw material, supplies and pinned options', () => {
 
 // The build horizon (plan 12 Task 7, design spec §3.3), the tier new machines are built at and when a multiblock may be
 // built (the user's ruling 224 of 2026-10-20), and no crafting switch any more (the user's ruling 180: crafting steps are
-// automatic), all in the Options section beside "Steps vs raw material".
+// automatic), in the Options section; the horizon is under "Plan for" beside "Machines vs raw material" since add-on 17,
+// which made "Ignore build cost" the mode "Least raw material" (no horizon preset any more).
 describe('build cost, machine tier and multiblocks', () => {
   const options = (html: string): string[] => [...html.matchAll(/<option value="([^"]*)"( selected="")?>([^<]*)<\/option>/g)].map((m) => `${m[1]}=${m[3]}${m[2] === undefined ? '' : ' *'}`);
   const select = (html: string, label: string): string[] => options(new RegExp(`<select[^>]*aria-label="${label}"[^>]*>.*?</select>`, 's').exec(html)?.[0] ?? '');
   const optionsSection = (html: string): string => /<h3>Options<\/h3>.*?<\/section>/s.exec(html)?.[0] ?? '';
+  const planForSection = (html: string): string => /<legend class="settings-title">Plan for<\/legend>.*?<\/section>/s.exec(html)?.[0] ?? '';
   /** What picking `value` in the select of `field` sends. */
   const sendsOf = (field: (props: { settings: PlanSettings; plan?: Plan | null; patch: (p: Partial<PlanSettings>) => void }) => ReactElement,
     settings: PlanSettings, value: string, plan: Plan | null = null): unknown[] => {
@@ -196,35 +202,68 @@ describe('build cost, machine tier and multiblocks', () => {
     return patch.mock.calls.map((c) => c[0]);
   };
 
+  it('offers the raw cap beside Machines vs raw material: at most +10, +25 or +50 %, or no limit (fix wave 3 (A))', () => {
+    const label = 'Raw material for fewer machines';
+    expect(RAW_CAP_PRESETS.map((p) => [p.value, p.cap, p.label])).toEqual([
+      ['0.1', 0.1, 'At most +10 %'], ['0.25', 0.25, 'At most +25 %'], ['0.5', 0.5, 'At most +50 %'], ['off', null, 'No limit'],
+    ]);
+    expect(select(panelOf(defaultSettings()), label)).toEqual(['0.1=At most +10 %', '0.25=At most +25 % *', '0.5=At most +50 %', 'off=No limit']);
+    const old = { ...defaultSettings() };
+    delete old.rawCap;
+    expect(rawCapOf(old)).toBe(0.25);
+    expect(select(panelOf(old), label)).toContain('0.25=At most +25 % *');
+    expect(select(panelOf({ ...defaultSettings(), rawCap: null }), label)).toContain('off=No limit *');
+    expect(rawCapChoice(0.3)).toEqual({ value: 'custom', label: 'At most +30 %' });
+    expect(select(panelOf({ ...defaultSettings(), rawCap: 0.3 }), label)).toEqual([
+      '0.1=At most +10 %', '0.25=At most +25 %', '0.5=At most +50 %', 'off=No limit', 'custom=At most +30 % *']);
+    expect(sendsOf(RawCapField, defaultSettings(), 'off')).toEqual([{ rawCap: null }]);
+    expect(sendsOf(RawCapField, defaultSettings(), '0.5')).toEqual([{ rawCap: 0.5 }]);
+    expect(sendsOf(RawCapField, defaultSettings(), '0.25')).toEqual([]);                                // the value it has
+    expect(sendsOf(RawCapField, { ...defaultSettings(), rawCap: 0.3 }, 'custom')).toEqual([]);
+    expect([rawCapPatch('0.1'), rawCapPatch('off'), rawCapPatch('custom')]).toEqual([{ rawCap: 0.1 }, { rawCap: null }, {}]);
+    for (const patch of [rawCapPatch('0.1'), rawCapPatch('off')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
+    // Since add-on 17 the step charge and the horizon are under "Plan for" (the horizon above the step charge), and the
+    // raw cap with them, right after the step charge.
+    const planFor = planForSection(panelOf(defaultSettings()));
+    expect(planFor.indexOf(label)).toBeGreaterThan(planFor.indexOf('Machines vs raw material'));
+    expect(planFor.indexOf(label)).toBeGreaterThan(planFor.indexOf('Count build cost against'));
+    expect(planFor.indexOf('Count build cost against')).toBeGreaterThan(-1);
+    expect(optionsSection(panelOf(defaultSettings()))).not.toContain(label);
+    expect(planFor).toContain('Fewer machines never cost more raw material than this over the leanest line (what Least raw material plans).');
+    expect(planForSection(panelOf({ ...defaultSettings(), buildHorizonHours: null })))
+      .toContain('With build cost ignored the plan stays within 25 % of the least raw material instead.');
+  });
   it('shows 24 hours for a project without buildHorizonHours', () => {
     expect(BUILD_HORIZON_PRESETS.map((p) => [p.value, p.hours, p.label])).toEqual([
-      ['1', 1, '1 hour'], ['8', 8, '8 hours'], ['24', 24, '24 hours'], ['168', 168, '1 week'], ['none', null, 'Ignore build cost']]);
+      ['1', 1, '1 hour'], ['8', 8, '8 hours'], ['24', 24, '24 hours'], ['168', 168, '1 week']]);
     expect(horizonChoice(undefined)).toEqual({ value: '24', label: '24 hours' });
     const old = { ...defaultSettings() };
     delete old.buildHorizonHours;
-    expect(select(panelOf(old), 'Count build cost against')).toEqual(['1=1 hour', '8=8 hours', '24=24 hours *', '168=1 week', 'none=Ignore build cost']);
-    expect(optionsSection(panelOf(old))).toContain('Count build cost against');
+    expect(select(panelOf(old), 'Count build cost against')).toEqual(['1=1 hour', '8=8 hours', '24=24 hours *', '168=1 week']);
+    expect(planForSection(panelOf(old))).toContain('Count build cost against');
   });
-  it('sends the horizon picked: a week, or ignoring build cost', () => {
+  it('sends the horizon picked: a week', () => {
     expect(sendsOf(BuildHorizonField, defaultSettings(), '168')).toEqual([{ buildHorizonHours: 168 }]);
-    expect(sendsOf(BuildHorizonField, defaultSettings(), 'none')).toEqual([{ buildHorizonHours: null }]);
+    expect(sendsOf(BuildHorizonField, defaultSettings(), 'none')).toEqual([]);                   // no preset any more: least raw material is a mode
     expect(sendsOf(BuildHorizonField, defaultSettings(), '24')).toEqual([]);                     // the value it has: nothing to send
     expect(horizonPatch('1')).toEqual({ buildHorizonHours: 1 });
-    for (const patch of [horizonPatch('168'), horizonPatch('none'), horizonPatch('8')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
-    expect(select(panelOf({ ...defaultSettings(), buildHorizonHours: null }), 'Count build cost against')).toContain('none=Ignore build cost *');
+    expect(horizonPatch('none')).toEqual({});
+    for (const patch of [horizonPatch('168'), horizonPatch('8')]) expect(validateOp({ op: 'settings', patch })).toBeNull();
+    // A running line without a horizon plans least raw material, which counts no build cost: no select.
+    expect(panelOf({ ...defaultSettings(), buildHorizonHours: null })).not.toContain('aria-label="Count build cost against"');
   });
   it('shows a stored horizon that is no preset as Custom', () => {
     expect(horizonChoice(48)).toEqual({ value: 'custom', label: 'Custom (48 h)' });
     expect(horizonChoice(168)).toEqual({ value: '168', label: '1 week' });
-    expect(horizonChoice(null)).toEqual({ value: 'none', label: 'Ignore build cost' });
+    expect(horizonChoice(null)).toEqual({ value: '24', label: '24 hours' });
     expect(select(panelOf({ ...defaultSettings(), buildHorizonHours: 48 }), 'Count build cost against')).toEqual([
-      '1=1 hour', '8=8 hours', '24=24 hours', '168=1 week', 'none=Ignore build cost', 'custom=Custom (48 h) *']);
+      '1=1 hour', '8=8 hours', '24=24 hours', '168=1 week', 'custom=Custom (48 h) *']);
     expect(sendsOf(BuildHorizonField, { ...defaultSettings(), buildHorizonHours: 48 }, 'custom')).toEqual([]);
   });
   it('says in Make N that the batch carries the build cost, with no select', () => {
     const html = panelOf({ ...defaultSettings(), mode: 'makeN', amount: 64 });
     expect(html).not.toContain('aria-label="Count build cost against"');
-    expect(optionsSection(html)).toContain('Make N counts the build cost of new machines against the batch itself.');
+    expect(planForSection(html)).toContain('Make N counts the build cost of new machines against the batch itself.');
     expect(panelOf(defaultSettings())).not.toContain('Make N counts the build cost');
   });
 
@@ -241,6 +280,17 @@ describe('build cost, machine tier and multiblocks', () => {
     delete old.buildTier;
     expect(select(panelOf(old), 'Build machines at')).toEqual(['=Cheapest tier *', '1=LV']);
     expect(optionsSection(panelOf(defaultSettings()))).toContain('Build machines at');
+  });
+  it('waits for the plan to list the tiers when the project tier comes from the world (the controller\'s ruling after Task 7, (b))', () => {
+    // An auto tier (null) with no plan yet (loading, or none) is not LV: the select offers the cheapest tier and the stored
+    // tier, plainly, until the plan says the project's tier.
+    expect(buildTierOptions(null, null)).toEqual([{ value: '', label: 'Cheapest tier' }]);
+    expect(buildTierOptions(null, 2)).toEqual([{ value: '', label: 'Cheapest tier' }, { value: '2', label: 'MV' }]);
+    expect(select(panelOf(defaultSettings()), 'Build machines at')).toEqual(['=Cheapest tier *']);
+    expect(select(panelOf({ ...defaultSettings(), buildTier: 2 }), 'Build machines at')).toEqual(['=Cheapest tier', '2=MV *']);
+    expect(select(panelOf({ ...defaultSettings(), buildTier: 2 }, { ...plan([]), tier: 3 } as Plan), 'Build machines at'))
+      .toEqual(['=Cheapest tier', '1=LV', '2=MV *', '3=HV']);
+    expect(sendsOf(BuildTierField, { ...defaultSettings(), buildTier: 2 }, '')).toEqual([{ buildTier: null }]);
   });
   it('sends the tier picked for new machines, or the cheapest', () => {
     const mv = { ...defaultSettings(), tier: 2 };
@@ -262,6 +312,15 @@ describe('build cost, machine tier and multiblocks', () => {
     expect([multiblocksPatch('allow'), multiblocksPatch('other')]).toEqual([{ multiblocks: 'allow' }, null]);
     expect(validateOp({ op: 'settings', patch: { multiblocks: 'only-required' } })).toBeNull();
     expect(optionsSection(panelOf(defaultSettings()))).toContain('Multiblocks');
+  });
+  it('says what "Only when nothing else can do it" does with build cost ignored (the controller\'s ruling after Task 7, (c))', () => {
+    const hint = 'With build cost ignored, a recipe only a multiblock runs is weighed by its raw material alone.';
+    const onlyRequired: PlanSettings = { ...defaultSettings(), multiblocks: 'only-required' };
+    expect(optionsSection(panelOf({ ...onlyRequired, buildHorizonHours: null }))).toContain(hint);
+    // not with build cost counted (the default horizon), not where multiblocks are used when cheaper, not in Make N
+    expect(optionsSection(panelOf(onlyRequired))).not.toContain(hint);
+    expect(optionsSection(panelOf({ ...defaultSettings(), buildHorizonHours: null }))).not.toContain(hint);
+    expect(optionsSection(panelOf({ ...onlyRequired, buildHorizonHours: null, mode: 'makeN', amount: 64 }))).not.toContain(hint);
   });
   it('has no switch for crafting-table steps: they run on an Auto Workbench', () => {
     // The user's ruling 180 (a): no control replaces the old checkbox, whatever a stored project held.
@@ -351,5 +410,72 @@ describe('reusing machines we have', () => {
     expect(ownedWith(full, 5, 1)).toEqual({ owned: full.map((e) => (e.mteId === 5 ? { mteId: 5, count: 2 } : e)) });
     expect(ownedWith([], 121, 0)).toEqual({ error: 'Enter a whole number from 1 to 10,000' });
     expect(ownedWithout([{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }], 121)).toEqual([{ mteId: 101, count: 1 }]);
+  });
+});
+
+// The page that draws the panel also draws the Settings button of the head, which says what the project makes in the panel's own words,
+// so the page keeps the names of what was picked in the search boxes and hands them to the panel (`usePickedNames`).
+describe('the settings panel and the names a page hands it', () => {
+  const settings = { ...defaultSettings(), target: 't:circuit@0' };
+  const project = { id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 0, settings, world: { scanId: null, baseId: null }, placement: null, marks: {}, notes: [] };
+  const names = { nameOf: (key: string) => (key === 't:circuit@0' ? 'Basic Circuit (the page names it)' : key), remember: () => {} };
+
+  it('names the target with the names it is given, where its own would have only the key', () => {
+    // no plan has named the key yet, and nothing was picked in this panel: it falls back to the key
+    expect(panelOf(settings)).toContain('<span class="settings-target-name">t:circuit@0</span>');
+    const html = renderToStaticMarkup(<SettingsPanel info={info} project={project} plan={null} send={() => {}} me="Ann" names={names} />);
+    expect(html).toContain('<span class="settings-target-name">Basic Circuit (the page names it)</span>');
+    expect(html).not.toContain('t:circuit@0</span>');
+  });
+
+  it('keeps the plan\'s names first when it keeps its own', () => {
+    const html = renderToStaticMarkup(<SettingsPanel info={info} project={project} plan={{ ...plan([]), names: { 't:circuit@0': 'Basic Circuit' }, tier: 1 }} send={() => {}} me="Ann" />);
+    expect(html).toContain('<span class="settings-target-name">Basic Circuit</span>');
+  });
+});
+
+describe('only these come in (fix wave 3 (B))', () => {
+  it('takes the plan’s raw inputs as the list: free inputs left out, once each, sorted, at most 50', () => {
+    const raw = (keys: string[]): Pick<Plan, 'rawInputs'> => ({ rawInputs: keys.map((key) => ({ key })) } as unknown as Pick<Plan, 'rawInputs'>);
+    expect(inputsOnlyFromPlan(raw(['t:b@0', 'fluid:water', 't:a@0', 'minecraft:cobblestone@0', 't:b@0']))).toEqual(['t:a@0', 't:b@0']);
+    const many = Array.from({ length: 60 }, (_, i) => `t:k${String(i).padStart(2, '0')}@0`);
+    expect(inputsOnlyFromPlan(raw(many))).toEqual(many.slice(0, 50));
+  });
+
+  it('adds and removes one key, never past 50', () => {
+    const s = { ...defaultSettings(), inputsOnly: ['t:b@0'] };
+    expect(inputsOnlyPatch(s, 't:a@0', true)).toEqual({ inputsOnly: ['t:a@0', 't:b@0'] });
+    expect(inputsOnlyPatch(s, 't:b@0', false)).toEqual({ inputsOnly: [] });
+    const full = { ...defaultSettings(), inputsOnly: Array.from({ length: 50 }, (_, i) => `t:k${i}@0`) };
+    expect(inputsOnlyPatch(full, 't:new@0', true)).toBeNull();
+    expect(inputsOnlyPatch(full, 't:k3@0', true)).toEqual({ inputsOnly: [...full.inputsOnly].sort() });
+    expect(validateOp({ op: 'settings', patch: inputsOnlyPatch(s, 't:a@0', true) })).toBeNull();
+  });
+
+  it('shows "Only these come in" with a chip per key, a search, "Use this plan’s raw inputs" and "Clear"', () => {
+    const p = { ...plan([]), tier: 1, rawInputs: [{ key: 't:a@0' }, { key: 'fluid:water' }, { key: 't:b@0' }],
+      names: { 't:a@0': 'Alpha', 't:b@0': 'Beta' } } as unknown as Plan;
+    const listed = { ...defaultSettings(), inputsOnly: ['t:a@0'] };
+    const html = panelOf(listed, p);
+    expect(html).toContain('<h3>Only these come in</h3>');
+    expect(html).toContain('aria-label="Remove Alpha"');
+    const patch = vi.fn();
+    const remember = vi.fn();
+    const tree = InputsOnlySection({ settings: listed, plan: p, nameOf: (k) => p.names?.[k] ?? k, patch, remember });
+    const button = (label: string): ReactElement<Record<string, unknown>> =>
+      findAll(tree, (e) => e.type === 'button' && (e.props.children === label || e.props['aria-label'] === label))[0]!;
+    (button("Use this plan's raw inputs").props.onClick as () => void)();
+    (button('Clear').props.onClick as () => void)();
+    (button('Remove Alpha').props.onClick as () => void)();
+    const [search] = findAll(tree, (e) => e.type === ItemSearch);
+    (search!.props.onPick as (hit: { key: string; name: string }) => void)({ key: 't:c@0', name: 'Gamma' });
+    expect(remember).toHaveBeenCalledWith({ key: 't:c@0', name: 'Gamma' });
+    expect(patch.mock.calls.map((c) => c[0])).toEqual([
+      { inputsOnly: ['t:a@0', 't:b@0'] }, { inputsOnly: [] }, { inputsOnly: [] }, { inputsOnly: ['t:a@0', 't:c@0'] },
+    ]);
+    const off = panelOf(defaultSettings(), null);
+    expect(off).toContain('Off: the line buys whatever the planner picks.');
+    expect(off).not.toContain('>Clear<');
+    expect(off).toMatch(/<button[^>]*disabled=""[^>]*>Use this plan&#x27;s raw inputs<\/button>/);
   });
 });

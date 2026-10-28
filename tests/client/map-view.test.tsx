@@ -22,3 +22,21 @@ describe('MapView (server-side render: effects do not run)', () => {
     expect(focused).toContain('Re-centre');
   });
 });
+
+// The chrome round the canvas (restyle plan Phase 1 Task 8): classes, not inline styles. The one inline style left is the canvas's
+// own: its cursor is written from code, and nothing (no border, no padding) may frame it. The frame is the box's.
+describe('MapView chrome', () => {
+  it('lays the toolbar and the box out with classes', () => {
+    const html = renderToStaticMarkup(<MapView scanId="s" dim={0} focus={[4.5, 5.5]} />);
+    expect(html).toContain('<div class="map-view">');
+    expect(html).toContain('<div class="row map-toolbar">');
+    expect(html).toContain('<button type="button" class="small map-zoom" aria-label="Zoom in">+</button>');
+    expect(html).toContain('<button type="button" class="small map-zoom" aria-label="Zoom out">−</button>');
+    expect(html).toContain('<button type="button" class="small">Re-centre</button>');
+    expect(html).toContain('<span class="map-y">surface</span>');
+    // the canvas is the box's own child: nothing sits between them to frame or to move it
+    expect(html).toContain('<div class="map-box"><canvas role="img" aria-label="Map of Overworld"');
+    expect(html.match(/ style="/g)).toHaveLength(1);
+    expect(html).toContain('style="position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab"');
+  });
+});

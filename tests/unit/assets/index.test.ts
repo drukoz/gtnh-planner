@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { indexOf } from '../../helpers/assets-dir.ts';
-import { assetIndexFrom, loadAssetIndex, iconPath, AssetIndexError, ASSET_INDEX_FORMAT, type AssetIndexFile } from '../../../src/server/assets/index.ts';
+import { assetIndexFrom, loadAssetIndex, iconPath, AssetIndexError, ASSET_INDEX_FORMAT, type AssetIndexFile, type AssetPacks } from '../../../src/server/assets/index.ts';
 import type { LayerRegion } from '../../../src/shared/types/assets.ts';
 
 const FILE: AssetIndexFile = {
@@ -13,6 +13,13 @@ const FILE: AssetIndexFile = {
     'minecraft/textures/blocks/stone.png': { w: 16, h: 16, jar: 'client.jar' },
   },
 };
+
+/** Writes `file` as `index.json` into a fresh temp folder and returns that folder. */
+async function writeIndex(file: AssetIndexFile): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'gp-ix-'));
+  await writeFile(join(dir, 'index.json'), JSON.stringify(file));
+  return dir;
+}
 
 describe('asset index', () => {
   it('maps icon names to files', () => {
@@ -59,5 +66,12 @@ describe('asset index', () => {
     expect((await loadAssetIndex(dir)).has('minecraft/textures/blocks/stone.png')).toBe(true);
     await writeFile(join(dir, 'index.json'), JSON.stringify({ ...FILE, format: 'other/1' }));
     await expect(loadAssetIndex(dir)).rejects.toBeInstanceOf(AssetIndexError);
+  });
+
+  it('accepts a packs record and refuses a malformed one', async () => {
+    const packs: AssetPacks = { enabled: ['P'], read: [{ name: 'P', format: 'zip', version: '1', entries: 2, bytes: 9, files: 1 }] };
+    expect((await loadAssetIndex(await writeIndex({ ...FILE, packs }))).file!.packs).toEqual(packs);
+    for (const bad of [{ enabled: 'P', read: [] }, { enabled: [], read: [{ name: 'P' }] }, { enabled: [], read: [{ ...packs.read[0]!, format: 'tar' }] }])
+      await expect(loadAssetIndex(await writeIndex({ ...FILE, packs: bad } as unknown as AssetIndexFile))).rejects.toThrow(/bad "packs"/);
   });
 });

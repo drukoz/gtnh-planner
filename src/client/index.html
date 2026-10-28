@@ -3,9 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
-    <link rel="icon" href="data:," />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#1a1a1a" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Cpath fill='%23141414' d='M1 1h6v6H1zM6 2h7v3H6zM10 5h3v4H10zM9 9h6v6H9z'/%3E%3Cpath fill='%23d8d8d8' d='M2 2h3v1H2zM2 3h1v2H2zM10 10h3v1H10zM10 11h1v2H10z'/%3E%3Cpath fill='%236e6e6e' d='M5 2h1v3H5zM2 5h4v1H2zM13 10h1v3H13zM10 13h4v1H10z'/%3E%3Cpath fill='%23ff8a1f' d='M3 3h2v2H3z'/%3E%3Cpath fill='%2355ff55' d='M11 11h2v2H11z'/%3E%3Cpath fill='%23ffd84a' d='M7 3h5v1H7zM11 4h1v6H11z'/%3E%3Cpath fill='%237a5a10' d='M9 3h1v1H9zM11 4h1v1H11zM11 7h1v1H11z'/%3E%3C/svg%3E" />
     <title>GTNH Line Planner</title>
+    <script>
+      try { var t = localStorage.getItem('gtnh-planner:theme'); if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

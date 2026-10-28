@@ -353,9 +353,16 @@ describe('MapTooltip', () => {
     expect(html).toContain('role="tooltip"');
     expect(html).toContain('id="map-tip"');
     expect(html).toContain('pointer-events:none');
-    const at = ['Basic Macerator', '3 64 3', BASE_LINE].map((line) => html.indexOf(`>${line}<`));
+    // the NEI look is the stylesheet's (`.map-tooltip`); the inline style keeps only what the map and the pointer need
+    expect(html).toContain('class="map-tooltip"');
+    expect(html).not.toMatch(/class="[^"]*\bsmall\b/);
+    expect(html).toMatch(/style="position:absolute;pointer-events:none"/);
+    // a line's figures are VT323 (`span.fig`, Phase 2 spec §25): each line is found with those tags taken out
+    const lines = html.replace(/<span class="fig">|<\/span>/g, '');
+    const at = ['Basic Macerator', '3 64 3', BASE_LINE].map((line) => lines.indexOf(`>${line}<`));
     expect(at.every((i) => i > 0)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(html).toContain('<div><span class="fig">3 64 3</span></div>');
   });
 
   it('is not part of the map until a column is described', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MapTab, NO_BASES_TEXT, worldOps } from '../../src/client/views/MapTab.tsx';
+import { MapTab, NO_BASES_TEXT, NoteDialog, worldOps } from '../../src/client/views/MapTab.tsx';
 import { PROJECT_TABS, tabFromHash } from '../../src/client/views/project-tabs.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Project } from '../../src/shared/types/project.ts';
@@ -30,6 +30,23 @@ describe('MapTab (server-side render only: effects do not run)', () => {
     expect(html).not.toContain('Choose a world scan');
   });
 
+  // The picker and the status lines wear classes (restyle plan Phase 1 Task 8), not inline styles; the new line's panel under the
+  // picker sits in a wrapper of its own, so it stays under the picker and inside its width.
+  it('lays the picker out with classes, and keeps the new line under it', () => {
+    const html = renderToStaticMarkup(<MapTab project={projectWithWorld(null, null)} plan={null} send={() => {}} me="Ann" />);
+    expect(html).toContain('<div class="map-picker"><h2>Choose a world scan</h2><p class="muted">Pick a finished scan');
+    expect(html).toContain('<div class="row map-picker-actions"><button type="button" class="primary" disabled="">Use this base</button><a href="/world">Scan the world</a></div>');
+    expect(html).toContain('<div class="map-picker-line"><section class="line-panel" data-testid="line-panel"');
+    expect(html.indexOf('class="map-picker"')).toBeLessThan(html.indexOf('class="map-picker-line"'));
+    expect(html).not.toContain('style=');
+  });
+
+  it('shows the loading line in a status box with a class', () => {
+    const html = renderToStaticMarkup(<MapTab project={projectWithWorld('20261017T120000Z-000016', '0:0:0')} plan={null} send={() => {}} me="Ann" />);
+    expect(html).toContain('<div class="map-tab map-tab-status"><p class="muted">Loading the world scan…</p></div>');
+    expect(html).not.toContain('style=');
+  });
+
   it('is the first project tab', () => expect(PROJECT_TABS[0]).toMatchObject({ id: 'map', label: 'Map' }));
 
   it('says a scan without bases has no map, and that the plan then counts the whole world', () => {
@@ -55,5 +72,13 @@ describe('MapTab world ops', () => {
     expect(worldOps(placed, null, null)).toEqual([{ op: 'world', scanId: null, baseId: null }, { op: 'clearPlacement' }]);
     expect(worldOps(placed, 'S2', '0:0:0')).toEqual([{ op: 'world', scanId: 'S2', baseId: '0:0:0' }]);   // a rescan of the same base keeps it
     expect(worldOps(projectWithWorld('S1', '0:0:0'), 'S1', '0:1:1')).toEqual([{ op: 'world', scanId: 'S1', baseId: '0:1:1' }]);
+  });
+});
+
+// Phase 2 spec §25: the note dialog's title writes the pin's position as figures, VT323 in span.fig, among Pixelify words.
+describe('MapTab note dialog', () => {
+  it('titles the dialog with the pin\'s position, its figures in span.fig', () => {
+    const html = renderToStaticMarkup(<NoteDialog pin={{ dim: 0, x: 4, y: 63, z: 5 }} onSave={() => {}} onCancel={() => {}} />);
+    expect(html).toContain('<h2>Add note at <span class="fig">4</span>, <span class="fig">63</span>, <span class="fig">5</span></h2>');
   });
 });

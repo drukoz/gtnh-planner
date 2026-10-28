@@ -8,12 +8,19 @@ import {
 } from '../../../src/server/planner/build-cost.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { emptyContext } from '../../../src/server/planner/plan.ts';
+import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
+import { MC_MACHINES } from '../../../src/shared/ids.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { Machine, Pack, Recipe } from '../../../src/shared/types/pack.ts';
-import { EBF_STRUCTURE, IDS, layoutPack } from '../../helpers/layout-fixtures.ts';
-import { rowElements, withElements } from '../../helpers/hatch-export-fixtures.ts';
+import { EBF_STRUCTURE, IDS, layoutPack, makePlan, type StepSpec } from '../../helpers/layout-fixtures.ts';
+import {
+  FRONT_BOX_ELEMENTS, FRONT_BOX_ID, hatchExportPack, rowElements, STEAM_BOX_ID, withElements, type ElementSpec,
+} from '../../helpers/hatch-export-fixtures.ts';
+import { HATCH_IDS } from '../../helpers/hatch-fixtures.ts';
+import { unitsFromPlan } from '../../../src/server/layout/arrange.ts';
 import { hatchRulesOf } from '../../../src/server/layout/hatch-rules.ts';
+import type { ExportHatchKind } from '../../../src/shared/gt/hatch-kinds.ts';
 import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const lv: PlanSettings = { ...defaultSettings(), tier: 1 };
@@ -22,11 +29,11 @@ const ctx = emptyContext();
 
 /** The prices of every machine of `pack` at `s`. */
 function pricesOf(pack: Pack, s: PlanSettings): Promise<ItemPrices> {
-  return itemPrices(pack, s, ctx, buildKeys(pack, [...pack.machines.values()]));
+  return itemPrices(pack, s, ctx, buildKeys(pack, allMachines(pack)));
 }
 
 function machine(pack: Pack, mteId: number): Machine {
-  const m = pack.machines.get(mteId);
+  const m = machineByMteId(pack, mteId);
   if (m === undefined) throw new Error(`no machine ${mteId}`);
   return m;
 }
@@ -55,7 +62,7 @@ describe('machineBuildCost', () => {
     const prices = await pricesOf(pack, lv);
     expect(machineBuildCost(pack, prices, machine(pack, 122))).toBeNull();
     // A priced item on a pseudo machine (packFromSpec packs hold none).
-    expect(machineBuildCost(pack, prices, { ...machine(pack, 121), mteId: PSEUDO_MACHINES.CRAFTING_TABLE })).toBeNull();
+    expect(machineBuildCost(pack, prices, { ...machine(pack, 121), id: MC_MACHINES.CRAFTING_TABLE, mteId: PSEUDO_MACHINES.CRAFTING_TABLE })).toBeNull();
     expect(machineBuildCost(pack, prices, undefined)).toBeNull();
   });
 
@@ -163,6 +170,120 @@ describe('machineBuildCost', () => {
     expect(machineBuildCost(pack, prices, ebf, { recipe: smelt, tier: 1 })).toBe(233);
   });
 
+  describe('counts exactly the hatches its layout lays (the controller\'s ruling after the merge e2efd36)', () => {
+    // A multiblock's build holds the hatches Plan 5's layout lays for the same step, kind for kind: by its hatch rules
+    // (ruledHatches) where it has any, else generically. Each case lays the step out and compares the classes.
+    const OX = 'fluid:oxygen';
+    const MI = 'fluid:molten.iron';
+    /** A GT recipe `id` of these item and fluid inputs and outputs, `eut` EU/t. */
+    const recipeOf = (id: string, inputs: Array<[string, number]>, outputs: Array<[string, number]>, eut = 30): Recipe => ({
+      id, source: 'gt', maps: [], euPerTick: eut, durationTicks: 20, amps: 1, specialValue: 0, meta: {}, flags: {},
+      inputs: inputs.map(([key, amount], i) => ({ slot: key.startsWith('fluid:') ? 100 + inputs.slice(0, i).filter(([k]) => k.startsWith('fluid:')).length
+        : inputs.slice(0, i).filter(([k]) => !k.startsWith('fluid:')).length, consumed: true, chance: 1, options: [{ key, amount }] })),
+      outputs: outputs.map(([key, amount]) => ({ key, amount, chance: 1 })),
+    });
+    /** The simple class names of `hatchSet`'s hatches and of the hatch cells the layout lays (exported mufflers aside), each sorted. */
+    const both = (pack: Pack, mteId: number, r: Recipe, tier: number): { build: string[]; layout: string[] } => {
+      pack.recipes.push(r);
+      pack.recipeById.set(r.id, r);
+      const simple = (m: Machine | undefined): string => (m?.cls ?? '?').slice((m?.cls ?? '?').lastIndexOf('.') + 1);
+      const byItem = new Map(allMachines(pack).map((m) => [m.itemKey, m]));
+      const build = [...hatchSet(pack, machine(pack, mteId), r, tier)].flatMap(([key, n]) => Array.from({ length: n }, () => simple(byItem.get(key)))).sort();
+      const step: StepSpec = { id: r.id, mteId, count: 1, tier, euPerTick: r.euPerTick,
+        inputs: r.inputs.map((ing) => [ing.options[0]!.key, ing.options[0]!.amount]), outputs: r.outputs.map((p) => [p.key, p.amount]) };
+      const { units } = unitsFromPlan(pack, makePlan([step]));
+      const layout = units[0]!.cells.filter((c) => c.hatch !== undefined && c.exported !== true).map((c) => simple(machineByMteId(pack, c.block.mteId!))).sort();
+      return { build, layout };
+    };
+    const ALL_SIX: ExportHatchKind[] = ['input_bus', 'output_bus', 'input_hatch', 'output_hatch', 'energy', 'maintenance'];
+    const giveElements = (pack: Pack, mteId: number, specs: readonly ElementSpec[]): void => {
+      const m = machine(pack, mteId);
+      m.structure = withElements(m.structure!, specs);
+    };
+
+    it('lays no maintenance hatch where the export takes none, and no energy hatch where it takes only multi-amp ones', () => {
+      const frontBox = recipeOf('f', [['t:in@0', 1], [OX, 1000]], [['t:dust@0', 1], [MI, 144]]);
+      const noMaintenance = hatchExportPack();
+      giveElements(noMaintenance, FRONT_BOX_ID, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: ['energy'] } : s)));
+      const a = both(noMaintenance, FRONT_BOX_ID, frontBox, 1);
+      expect(a.build).toEqual(['MTEHatchEnergy', 'MTEHatchInput', 'MTEHatchInputBus', 'MTEHatchOutput', 'MTEHatchOutputBus']);
+      expect(a.build).toEqual(a.layout);
+      const exotic = hatchExportPack();
+      giveElements(exotic, FRONT_BOX_ID, FRONT_BOX_ELEMENTS.map((s) => (s.ch === 'k' ? { ...s, hatches: ['energy_multi', 'maintenance'] } : s)));
+      const b = both(exotic, FRONT_BOX_ID, frontBox, 1);
+      expect(b.build).toEqual(['MTEHatchInput', 'MTEHatchInputBus', 'MTEHatchMaintenance', 'MTEHatchOutput', 'MTEHatchOutputBus']);
+      expect(b.build).toEqual(b.layout);
+      // the export's six on its cells: all of them, as before
+      const all = hatchExportPack();
+      giveElements(all, FRONT_BOX_ID, FRONT_BOX_ELEMENTS);
+      const c = both(all, FRONT_BOX_ID, frontBox, 1);
+      expect(c.build).toEqual(['MTEHatchEnergy', 'MTEHatchInput', 'MTEHatchInputBus', 'MTEHatchMaintenance', 'MTEHatchOutput', 'MTEHatchOutputBus']);
+      expect(c.build).toEqual(c.layout);
+    });
+
+    it("lays a steam multiblock's steam buses and steam hatch, and no energy or maintenance hatch", () => {
+      const pack = hatchExportPack();
+      giveElements(pack, STEAM_BOX_ID, [
+        { ch: 'a', hatches: ['steam_input_bus', 'steam_output_bus'], where: (p) => p[1] === 0 && p[2] === 0 },
+        { ch: 'k', hatches: ['steam_hatch'], where: (p) => p[1] === 0 && p[2] === 2 },
+        { ch: 'c', hatches: [], where: () => true },
+      ]);
+      const { build, layout } = both(pack, STEAM_BOX_ID, recipeOf('s', [['t:in@0', 1]], [['t:dust@0', 1]], 0), 1);
+      expect(build).toEqual(['MTEHatchCustomFluidBase', 'MTEHatchSteamBusInput', 'MTEHatchSteamBusOutput']);
+      expect(build).toEqual(layout);
+      // and prices them: the keys of a build hold its steam hatches
+      expect(buildKeys(pack, [machine(pack, STEAM_BOX_ID)])).toEqual(expect.arrayContaining(
+        [HATCH_IDS.STEAM_BUS_IN, HATCH_IDS.STEAM_BUS_OUT, HATCH_IDS.STEAM_HATCH].map((id) => `gregtech:gt.blockmachines@${id}`)));
+    });
+
+    it('lays a tower an output hatch on every layer, a cracker its middle input hatch, an EBF its muffler, by the table and the export', () => {
+      // the tower: one fluid out on its 3 layers needs an output hatch on each of the 2 above the bottom, and the input
+      // hatch GT's check needs; four fluids out build it 5 high
+      const tower = hatchExportPack();
+      const one = both(tower, HATCH_IDS.DT, recipeOf('d1', [['t:in@0', 1]], [['fluid:t1', 100]], 480), 3);
+      expect(one.build.filter((c) => c === 'MTEHatchOutput')).toHaveLength(2);
+      expect(one.build).toEqual(one.layout);
+      const four = both(tower, HATCH_IDS.DT, recipeOf('d4', [['fluid:t1', 100]], [['fluid:t1', 100], ['fluid:t2', 100], ['fluid:t3', 100], ['fluid:t4', 100]], 480), 3);
+      expect(four.build.filter((c) => c === 'MTEHatchOutput')).toHaveLength(4);
+      expect(four.build).toEqual(four.layout);
+      // the cracker: a recipe of one fluid on the sides still needs a middle input hatch; with two, both are its own
+      const cracker = hatchExportPack();
+      const single = both(cracker, HATCH_IDS.CRACKER, recipeOf('c1', [['fluid:heavyfuel', 1000]], [['fluid:crackedheavy', 1000]], 30), 1);
+      expect(single.build.filter((c) => c === 'MTEHatchInput')).toHaveLength(2);
+      expect(single.build).toEqual(single.layout);
+      const pair = both(cracker, HATCH_IDS.CRACKER, recipeOf('c2', [['fluid:heavyfuel', 1000], ['fluid:steam', 1000]], [['fluid:crackedheavy', 1000]], 30), 1);
+      expect(pair.build.filter((c) => c === 'MTEHatchInput')).toHaveLength(2);
+      expect(pair.build).toEqual(pair.layout);
+      // the EBF by its row narrowed by the export, and by the export alone (no muffler need there)
+      const ebfRule = layoutPack();
+      const ebf = machine(ebfRule, IDS.EBF);
+      ebf.structure = withElements(ebf.structure!, rowElements(ebf, { b: ALL_SIX, f: ['output_hatch'], m: ['muffler'], C: [] }));
+      const smelt = recipeOf('e', [['t:dust@0', 1]], [['t:ingot@0', 1]], 120);
+      const ruled = both(ebfRule, IDS.EBF, smelt, 2);
+      expect(ruled.build).toContain('MTEHatchMuffler');
+      expect(ruled.build).toEqual(ruled.layout);
+      const exportOnly = { ...ebf, cls: `${ebf.cls}ExportOnly` };
+      ebfRule.machines.set(exportOnly.id, exportOnly);
+      ebfRule.machineByMteId.set(IDS.EBF, exportOnly);
+      const alone = both(ebfRule, IDS.EBF, { ...smelt, id: 'e2' }, 2);
+      expect(alone.build).not.toContain('MTEHatchMuffler');
+      expect(alone.build).toEqual(alone.layout);
+    });
+
+    it('lays no energy hatch on a furnace its rules run without power, and keeps the generic placement without rules', () => {
+      // the Bricked Blast Furnace (power none, run by hand): nothing its rules take; the large bender (no rules): buses,
+      // energy and maintenance as Plan 5's generic placement lays them
+      const pack = hatchExportPack();
+      const bbf = both(pack, HATCH_IDS.BBF, recipeOf('b', [['t:in@0', 1]], [['t:dust@0', 1]], 0), 1);
+      expect(bbf.build).toEqual([]);
+      expect(bbf.build).toEqual(bbf.layout);
+      const bender = packFromSpec(largeBenderSpec());
+      const plate = bender.recipeById.get('bend-plate')!;
+      expect([...hatchSet(bender, machine(bender, 1100), plate, 1)].sort())
+        .toEqual([['machine:51@0', 1], ['machine:61@0', 1], ['machine:71@0', 1], ['machine:81@0', 1]]);
+    });
+  });
+
   it('prices free inputs at 0 where a supply machine exists', async () => {
     const spec = structuredClone(MINI_GT);
     const pack = packFromSpec({
@@ -242,7 +363,7 @@ describe('machineGap', () => {
     const minedPrices = await pricesOf(mined, lv);
     expect(machineBuildCost(mined, minedPrices, machine(mined, 102))).toBe(10);
     expect(machineGap(mined, minedPrices, machine(mined, 102))).toBeNull();
-    expect(minedPrices.cost('t:gem_flawless@0')).toBe(1);
+    expect((await itemPrices(mined, lv, ctx, ['t:gem_flawless@0'])).cost('t:gem_flawless@0')).toBe(1);
     // A part another route makes keeps that route's price (5 iron ingots, so 9 + 5): the ore is a leaf only where
     // nothing else makes the part.
     const pressed = packFromSpec(gemSpec(['overworld'], { press: true }));
@@ -382,7 +503,7 @@ describe('structure cells that need nothing placed', () => {
 describe('itemPrices', () => {
   it('memoizes prices per pricing context', async () => {
     const pack = miniGt();
-    const keys = buildKeys(pack, [...pack.machines.values()]);
+    const keys = buildKeys(pack, allMachines(pack));
     const first = itemPrices(pack, lv, ctx, keys);
     const line: PlanSettings = { ...lv, target: 't:iron_plate@0', amount: 60, mode: 'makeN', logistics: 'ae2', buildHorizonHours: null };
     expect(itemPrices(pack, line, ctx, [...keys].reverse())).toBe(first);
@@ -412,13 +533,127 @@ describe('itemPrices', () => {
     const pack = miniWith({
       id: 'make-151', map: 'crafting', in: [['t:hull_lv@0', 1], { any: [['t:iron_plate@0', 1], ['t:titanium_plate@0', 1]] }], out: [['machine:151@0', 1]],
     });
-    const keys = buildKeys(pack, [...pack.machines.values()]);
+    const keys = buildKeys(pack, allMachines(pack));
     const project: PlanSettings = { ...lv, target: 't:iron_dust@0', optionChoice: { 'make-151#1': 't:titanium_plate@0' } };
     const first = itemPrices(pack, project, ctx, keys);
     // Hull 9 + iron plate 1; pinned to the titanium plate it would have no price.
     expect(machineBuildCost(pack, await first, machine(pack, 151))).toBe(10);
     expect(pricingSettings(project, ctx)).toEqual(pricingSettings(lv, ctx));
     expect(itemPrices(pack, lv, ctx, keys)).toBe(first);
+  });
+});
+
+/**
+ * Mini-GT where one centrifuge run splits a Tin Ingot (1) into Part A and Part B, and Part B2 is crafted from Part B;
+ * with `machines`, three LV machines crafted from one part each: 171 from Part A, 172 from Part B, 173 from Part B2.
+ */
+function splitPack(machines: boolean): Pack {
+  const spec = structuredClone(MINI_GT);
+  spec.items?.push({ key: 't:part_a@0', name: 'Part A' }, { key: 't:part_b@0', name: 'Part B' }, { key: 't:part_b2@0', name: 'Part B2' });
+  spec.recipes?.push(
+    { id: 'split', map: 'gt.recipe.centrifuge', in: [['t:tin_ingot@0', 1]], out: [['t:part_a@0', 1], ['t:part_b@0', 1]], eut: 8, dur: 100 },
+    { id: 'make-b2', map: 'crafting', in: [['t:part_b@0', 1]], out: [['t:part_b2@0', 1]] },
+  );
+  if (machines) {
+    spec.machines?.push(
+      { mteId: 171, name: 'Part A Machine', maps: [], tier: 1 }, { mteId: 172, name: 'Part B Machine', maps: [], tier: 1 },
+      { mteId: 173, name: 'Part B2 Machine', maps: [], tier: 1 },
+    );
+    spec.recipes?.push(
+      { id: 'make-171', map: 'crafting', in: [['t:part_a@0', 1]], out: [['machine:171@0', 1]] },
+      { id: 'make-172', map: 'crafting', in: [['t:part_b@0', 1]], out: [['machine:172@0', 1]] },
+      { id: 'make-173', map: 'crafting', in: [['t:part_b2@0', 1]], out: [['machine:173@0', 1]] },
+    );
+  }
+  return packFromSpec(spec);
+}
+
+/**
+ * Mini-GT where Part P is joined in an assembler from the four quarters one centrifuge run of a Tin Ingot (1) makes, or
+ * carved from three Oak Wood logs; with `withMachine`, machine 174 (LV) is crafted from it (without it no price key
+ * needs Part P, so no price graph reaches it).
+ */
+function quarterPack(withMachine: boolean): Pack {
+  const spec = structuredClone(MINI_GT);
+  const quarters = [1, 2, 3, 4].map((i) => `t:quarter_${i}@0`);
+  spec.items?.push(...quarters.map((key, i) => ({ key, name: `Quarter ${i + 1}` })), { key: 't:part_p@0', name: 'Part P' });
+  spec.recipes?.push(
+    { id: 'quarter', map: 'gt.recipe.centrifuge', in: [['t:tin_ingot@0', 1]], out: quarters.map((key): [string, number] => [key, 1]), eut: 8, dur: 100 },
+    { id: 'join', map: 'gt.recipe.assembler', in: quarters.map((key): [string, number] => [key, 1]), out: [['t:part_p@0', 1]], eut: 16, dur: 100 },
+    { id: 'carve', map: 'crafting', in: [['minecraft:log@0', 3]], out: [['t:part_p@0', 1]] },
+  );
+  if (withMachine) {
+    spec.machines?.push({ mteId: 174, name: 'Part P Machine', maps: [], tier: 1 });
+    spec.recipes?.push({ id: 'make-174', map: 'crafting', in: [['t:part_p@0', 1]], out: [['machine:174@0', 1]] });
+  }
+  return packFromSpec(spec);
+}
+
+/**
+ * Mini-GT where Part X is crafted from Part Y and Part Y from Part X (a loop with no way in), Part X also from a Comb
+ * nothing makes and Part Y, and machine 175 (LV) from Part X.
+ */
+function loopPack(): Pack {
+  const spec = structuredClone(MINI_GT);
+  spec.items?.push({ key: 't:part_x@0', name: 'Part X' }, { key: 't:part_y@0', name: 'Part Y' }, { key: 't:comb@0', name: 'Comb' });
+  spec.machines?.push({ mteId: 175, name: 'Part X Machine', maps: [], tier: 1 });
+  spec.recipes?.push(
+    { id: 'a-comb-x', map: 'crafting', in: [['t:comb@0', 1], ['t:part_y@0', 1]], out: [['t:part_x@0', 1]] },
+    { id: 'loop-x', map: 'crafting', in: [['t:part_y@0', 1]], out: [['t:part_x@0', 1]] },
+    { id: 'loop-y', map: 'crafting', in: [['t:part_x@0', 1]], out: [['t:part_y@0', 1]] },
+    { id: 'make-175', map: 'crafting', in: [['t:part_x@0', 1]], out: [['machine:175@0', 1]] },
+  );
+  return packFromSpec(spec);
+}
+
+describe('prices independent of the keys asked (fix wave 3 (D))', () => {
+  it('prices a key the same whatever else is asked with it', async () => {
+    // The cost analysis of one graph per key set shared the split's cost among its parts by what else the graph held:
+    // Part A Machine cost 1 asked alone and 0 beside the machines made from Part B and B2. Each now costs what making it
+    // on its own costs: one Tin Ingot, the other part sunk.
+    const pack = splitPack(true);
+    const together = await itemPrices(pack, lv, ctx, buildKeys(pack, [171, 172, 173].map((id) => machine(pack, id))));
+    expect([171, 172, 173].map((id) => machineBuildCost(pack, together, machine(pack, id)))).toEqual([1, 1, 1]);
+    // Alone, asked at MV: another pricing context, so no price comes from the memo of the first.
+    expect(machineBuildCost(pack, await itemPrices(pack, mv, ctx, ['machine:171@0']), machine(pack, 171))).toBe(1);
+    // Keys no machine of the pack is built from are each walked on their own, alike.
+    const parts = splitPack(false);
+    const asked = ['t:part_a@0', 't:part_b@0', 't:part_b2@0'];
+    const all = await itemPrices(parts, lv, ctx, asked);
+    expect(asked.map((key) => all.cost(key))).toEqual([1, 1, 1]);
+    expect((await itemPrices(parts, mv, ctx, ['t:part_a@0'])).cost('t:part_a@0')).toBe(1);
+  });
+
+  it('calls a part whose dead ends would not let it be made a pricing gap, never one of those ends', async () => {
+    // Given the Comb, Part X still cannot be made (Part Y only comes from Part X), so the Comb is not what Part X Machine
+    // lacks: a pricing gap. On the 2.9 export's price graph the Steam Hatch (31040) meets two bee combs so, and read
+    // "needs Brown Tinted Comb", which walked six GT++ steam multiblocks' recipes out of every line.
+    const pack = loopPack();
+    const prices = await itemPrices(pack, lv, ctx, ['machine:175@0']);
+    expect(machineBuildCost(pack, prices, machine(pack, 175))).toBeNull();
+    expect(machineGap(pack, prices, machine(pack, 175))).toEqual({ kind: 'gap' });
+  });
+
+  it('never prices a key above its price without the override when an override makes a good cheaper', async () => {
+    // The walk keeps a good's producers within twice its cheapest estimate and charges a recipe's whole input to each
+    // output, so joining the quarters is estimated at 4 against carving at 3 logs. With logs at 0.4 (carving 1.2) it
+    // dropped the join, and Part P Machine rose from 1 to 1.2 when the logs got cheaper. A context with cost overrides
+    // also keeps the producers of the same context without them.
+    const pack = quarterPack(true);
+    const at = async (log: number): Promise<number | null> => machineBuildCost(
+      pack, await itemPrices(pack, { ...lv, costOverrides: { 'minecraft:log@0': log } }, ctx, ['machine:174@0']), machine(pack, 174));
+    expect([await at(1), await at(0.4), await at(0.2)]).toEqual([1, 1, 0.6]);
+  });
+
+  it('never prices a key the price graph never reached above its price without the override either', async () => {
+    // Without machine 174 no price graph reaches Part P, so it is priced on its own walk, which at logs 0.4 dropped the
+    // join as the price graph's walk did, and Part P rose from 1 to 1.2 when the logs got cheaper. With cost overrides
+    // that walk is united with the key's own walk in the same context without them, as a price graph is with the one
+    // without them.
+    const pack = quarterPack(false);
+    const at = async (log: number): Promise<number> =>
+      (await itemPrices(pack, { ...lv, costOverrides: { 'minecraft:log@0': log } }, ctx, ['t:part_p@0'])).cost('t:part_p@0');
+    expect([await at(1), await at(0.4), await at(0.2)]).toEqual([1, 1, 0.6]);
   });
 });
 

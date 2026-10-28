@@ -15,6 +15,7 @@ import { DEFAULT_ORIGIN, emptyScan, layoutLine } from '../../../src/server/layou
 import { PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
 import { tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { simpleClassName } from '../../../src/server/world/facts.ts';
 import { isFluidKey } from '../../../src/shared/keys.ts';
@@ -141,7 +142,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
 
   it('fits every row to the exported structure of its class, and checks every class it has a row for', () => {
     const fits = HATCH_RULES.map((rule) => {
-      const machines = [...pack.machines.values()].filter((m) => m.kind === 'multiblock' && simpleClassName(m.cls) === rule.cls);
+      const machines = allMachines(pack).filter((m) => m.kind === 'multiblock' && simpleClassName(m.cls) === rule.cls);
       const st = machines[0]?.structure;
       return { cls: rule.cls, machines: machines.length,
         fits: st !== undefined && ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos)) };
@@ -153,7 +154,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
 
   /** Every hatch the layout chose, on a cell whose element takes its kind (the table); the tower's and the cracker's fluid rules. */
   function checkUnit(u: Unit, recipeFluids: { inputs: string[]; outputs: string[] }): string[] {
-    const m = pack.machines.get(u.mteId)!;
+    const m = machineByMteId(pack, u.mteId)!;
     const rule = hatchRuleFor(m);
     const st = m.structure;
     if (rule === null || st === undefined || !ruleFits(rule, st.controller, st.size, st.blocks.map((b) => b.pos))) return [];
@@ -183,7 +184,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
 
   /** What GT_CHECKS says of the unit's class that the unit does not meet. */
   function checkGt(u: Unit): string[] {
-    const cls = simpleClassName(pack.machines.get(u.mteId)!.cls) ?? '';
+    const cls = simpleClassName(machineByMteId(pack, u.mteId)!.cls) ?? '';
     const check = GT_CHECKS[cls];
     if (check === undefined) return [];
     const hatches = u.cells.filter((c) => c.hatch !== undefined);
@@ -275,7 +276,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
       for (const u of units) {
         if (!u.multiblock || seen.has(u.stepId)) continue;
         seen.add(u.stepId);
-        const m = pack.machines.get(u.mteId)!;
+        const m = machineByMteId(pack, u.mteId)!;
         bump(hatchRuleFor(m) === null ? unruled : placed, u.name);
         const recipe = pack.recipeById.get(plan.steps.find((s) => s.id === u.stepId)!.recipeId);
         const fluidInputs = (recipe?.inputs ?? []).filter((i) => i.slot >= 100).sort((a, b) => a.slot - b.slot).map((i) => i.options[0]!.key);

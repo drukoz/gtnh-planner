@@ -153,6 +153,34 @@ describe('the line on the map', () => {
     expect([hookupNetworkKind(hookup, 'direct'), hookupNetworkKind({ ...hookup, from: { ...hookup.from, networkId: 'e:item:0:1' } }, 'direct'),
       hookupNetworkKind({ ...hookup, kind: 'power' }, 'enderio')]).toEqual(['gtpipe', 'enderio', null]);
   });
+
+  it('draws an area kept for a farm as a dashed box in the farm colour that moves with the line (add-on 17)', () => {
+    const farmed: Layout = { ...layout, reserved: [{ stepId: 'tgs', pos: [14, 64, 20], size: [7, 7, 5], pin: 3, text: 'Farm: Tree Growth Simulator' }] };
+    const dashed = (l: Layout, drag: { dx: number; dz: number } | null) =>
+      overlayShapes(l, view, drag, []).filter((s) => s.kind === 'rect' && s.dash.length > 0);
+    expect(dashed(layout, null)).toEqual([]);
+    // the area's world bounds, x 14–20 and z 20–24, in view pixels
+    expect(dashed(farmed, null)).toEqual([{ kind: 'rect', x: 216, y: 200, w: 28, h: 20, fill: null, stroke: PIN_COLORS.farm, dash: expect.any(Array) }]);
+    expect(dashed(farmed, { dx: 5, dz: -1 })).toEqual([{ kind: 'rect', x: 236, y: 196, w: 28, h: 20, fill: null, stroke: PIN_COLORS.farm, dash: expect.any(Array) }]);
+    expect(overlayShapes({ ...farmed, dim: -1 }, view, null, [])).toEqual([]);
+    expect(layoutMarkers({ ...farmed, pins: [{ n: 3, dim: 0, pos: [17, 64, 22], kind: 'farm', text: 'Farm: Tree Growth Simulator' }] }))
+      .toEqual([{ n: 3, pos: [17, 64, 22], color: PIN_COLORS.farm, label: 'Pin 3: Farm: Tree Growth Simulator' }]);
+  });
+
+  it('sums up and moves a line whose only new machines are farms (the final review of add-on 17)', () => {
+    // every other machine owned: no block to place, one area kept for the new Tree Growth Simulator, and the layout `ok`
+    const farmsOnly: Layout = {
+      ...layout, blocks: [], hookups: [], size: [7, 7, 7], origin: [30, 64, 30],
+      pins: [{ n: 1, dim: 0, pos: [18, 64, 18], kind: 'reuse', text: 'Reuse your 1× Basic Macerator' }, { n: 2, dim: 0, pos: [33, 64, 33], kind: 'farm', text: 'Farm: Tree Growth Simulator' }],
+      reserved: [{ stepId: 'tgs', pos: [30, 64, 30], size: [7, 7, 7], pin: 2, text: 'Farm: Tree Growth Simulator' }],
+    };
+    expect(lineSummary(farmsOnly, null)).toMatchObject({ newMachines: 1, footprint: '7×7×7' });
+    // and a line with farms counts each area beside its machine blocks
+    expect(lineSummary({ ...layout, reserved: farmsOnly.reserved }, plan).newMachines).toBe(3);
+    const html = panel(farmsOnly);
+    expect(html).not.toContain('Nothing new to build');
+    for (const text of ['Machines: 1 new', 'Move line', 'Rotate <span class="fig">90</span>°', 'Auto place', '2. Farm: Tree Growth Simulator']) expect(html).toContain(text);
+  });
 });
 
 describe('the line on the map: the rules in detail', () => {
@@ -219,6 +247,28 @@ describe('the line on the map: the rules in detail', () => {
     expect(html({})).not.toContain('aria-current');
   });
 
+  // The panel wears classes (restyle plan Phase 1 Task 8): the fits badge is the shared badge, tinted by the stylesheet from its
+  // data-fits (it carried an inline colour), a pin is a row button, the focused row looks different by the stylesheet alone
+  // (`aria-current` is on its li), and the one inline style left is the dot, which has the colour of its marker on the map.
+  it('dresses the panel with classes, and keeps the inline style of a pin\'s dot alone', () => {
+    const html = panel(layout);
+    expect(html).toContain('<span class="badge" data-fits="tight">Tight in rain</span>');
+    expect(panel({ ...layout, power: { ...layout.power!, fits: 'yes' } })).toContain('<span class="badge" data-fits="yes">Fits</span>');
+    expect(panel({ ...layout, power: { ...layout.power!, fits: 'no' } })).toContain('<span class="badge" data-fits="no">Does not fit</span>');
+    expect(panel({ ...layout, power: undefined })).toContain('<span class="badge" data-fits="unknown">Unknown</span>');
+    expect(html).toContain('<div class="row line-actions">');
+    expect(html).toContain('<ol class="small map-list">');
+    expect(html).toContain('<button type="button" class="small map-row-button">');
+    expect(html).toContain(`<span aria-hidden="true" class="pin-dot" style="background:${PIN_COLORS.site}"></span>1. Build the line here`);
+    expect(html.match(/ style="/g)).toHaveLength(layout.pins.length);   // a dot per pin, and nothing else
+    // a focused row is marked on its li only: no border or fill of its own on the button
+    const focused = renderToStaticMarkup(<LinePanel layout={layout} plan={plan} loading={false} error={null} moving={false} focusedPin={2}
+      onToggleMove={() => {}} onRotate={() => {}} onAutoPlace={() => {}} onPin={() => {}} />);
+    expect(focused).toContain('<li data-testid="pin-2" class="focused" aria-current="true"><button type="button" class="small map-row-button">');
+    expect(focused).not.toContain('border-color');
+    expect(focused.match(/ style="/g)).toHaveLength(layout.pins.length);
+  });
+
   it('fetches once per burst of changes, keeps the last layout when a fetch fails and stops when closed', async () => {
     vi.useFakeTimers();
     let fetches = 0;
@@ -266,7 +316,7 @@ describe('the line on the map: the rules in detail', () => {
       placement: null, marks: {}, notes: [] } as unknown as Project;
     const withGather = { ...plan, buildSteps: [...plan.buildSteps, { id: 'gather', order: 2, text: 'Gather', kind: 'gather' }] } as unknown as Plan;
     const html = renderToStaticMarkup(<StepsView project={project} plan={withGather} send={() => {}} me="Ann" />);
-    expect(html).toMatch(/data-row="step:layout:site"[^]*<button type="button" class="pin-link" data-pin="1"[^>]*>pin 1<\/button>/);
+    expect(html).toMatch(/data-row="step:layout:site"[^]*<button type="button" class="pin-link" data-pin="1"[^>]*>pin <span class="fig">1<\/span><\/button>/);
     expect(html.match(/class="pin-link"/g)).toHaveLength(1);
   });
 

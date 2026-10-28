@@ -2,6 +2,7 @@
 // Mini-GT goods, maps and machines only (tests/helpers/mini-gt.ts), so what a panel sends still makes sense to the real
 // e2e server. Step ids are the Mini-GT recipe ids, not the content hashes of the e2e export; rates are per second.
 
+import { TIER_NAMES } from '../../../src/shared/gt/tiers.ts';
 import type { Product } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow, PlanStep, RawInput } from '../../../src/shared/types/plan.ts';
 
@@ -82,6 +83,39 @@ export function platesTwoWays(): Plan {
       flow('hammer-plate', 'circuit-lv', 't:iron_plate@0', 0.005), flow('circuit-lv', 'out', 't:circuit@0', 0.5),
     ],
     rawInputs: [mined('t:copper_ingot@0', 0.5), mined('t:iron_ingot@0', 0.505), mined('t:redstone@0', 0.5)],
+  });
+}
+
+/**
+ * A step at every voltage tier, ULV to MAX, each with a machine count of its own and every other one shared by a pool: every tier chip there is
+ * and count chips from "×1" to "×1024 shared" (Phase 2 Task 4, ledger ruling P2-R8: the chips' text must fit with the web fonts and without).
+ * Nothing flows, so the boxes have no rows.
+ */
+export function everyTier(): Plan {
+  const counts = [1, 2, 5, 12, 64, 128, 1024];
+  const steps = TIER_NAMES.map((name, tier) => step({
+    id: `tier-${tier}`, mapId: 'gt.recipe.assembler', machine: { mteId: 121, name: `${name} Assembler`, tier }, mainOutput: 't:circuit@0',
+    count: counts[tier % counts.length] ?? 1, euPerTick: 8 * 4 ** tier,
+    ...(tier % 2 === 0 ? { pool: { id: `pool:tier-${tier}`, steps: [`tier-${tier}`, `tier-${tier + 1}`] } } : {}),
+  }));
+  return planOf({ tier: 1, targetPerSecond: 0.5, steps, flows: [], rawInputs: [] });
+}
+
+/**
+ * Deferred F8 (Phase 2 spec §15.5, Task 12): one assembler, `big`, taking 201 raw goods (direct imports, as `mined` gives them, each from a
+ * stub of its own), `t:g0@0` to `t:g200@0`, which have no names (they show their keys): 202 arrows with the target's, past
+ * `PIPE_ANIMATION_LIMIT`, so only the lit pipes move and carry goods.
+ */
+export function manyEdges(): Plan {
+  const keys = Array.from({ length: 201 }, (_, i) => `t:g${i}@0`);
+  const big = step({
+    id: 'big', mapId: 'gt.recipe.assembler', machine: { mteId: 121, name: 'Basic Assembler', tier: 1 }, mainOutput: 't:circuit@0',
+    inputs: keys.map((key) => per(key, 1)), outputs: [per('t:circuit@0', 1)],
+  });
+  return planOf({
+    tier: 1, targetPerSecond: 0.5, steps: [big],
+    flows: [...keys.map((key) => flow('raw', 'big', key, 0.5)), flow('big', 'out', 't:circuit@0', 0.5)],
+    rawInputs: keys.map((key) => mined(key, 0.5)),
   });
 }
 

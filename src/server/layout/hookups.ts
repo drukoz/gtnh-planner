@@ -1,9 +1,10 @@
 // Hookups of a line into the base (Plan 5 Task 9; spec §3.5, §3.6, §3.8, §5): which power and logistics network the
 // line joins and at which tap, the route of the hookup through the scanned world from the tap to the line, the cable
 // or logistics parts laid along it, and the existing blocks shown as faint ghosts where the line connects.
-// A hookup goes round the line's box and ends beside it, and touches nothing it must keep away from (another tier's
-// cable, a machine below its tier); its blocks link only to each other, the tap and the port they end at. One that
-// ends on an EnderIO conduit face also keeps off its `keepOff` cells (plan 11, ruling R14).
+// A hookup goes round the line's box and ends beside it, goes round the areas kept for the line's farms (add-on 17), and
+// touches nothing it must keep away from (another tier's cable, a machine below its tier); its blocks link only to each
+// other, the tap and the port they end at. One that ends on an EnderIO conduit face also keeps off its `keepOff` cells
+// (plan 11, ruling R14).
 // A hookup cable is never laid onto a tap whose own cable is rated for fewer amps than the line draws (spec §5): that
 // hookup stays a dashed guide with `power_amps_low`, and Task 10 writes the upgrade step from `blocked`. A route that
 // cannot be found within the node budget becomes a dashed guide round the line (`found: false`, `no_path`). Every
@@ -20,6 +21,7 @@ import type { BomLine, LogisticsMode, PlanWarning } from '../../shared/types/pla
 import {
   AIR_INDEX, UNKNOWN_INDEX, type Base, type LogisticsNetwork, type PowerNetwork, type TapPoint, type Voxels, type WorldScan,
 } from '../../shared/types/world.ts';
+import { machineByMteId } from '../pack/lookup.ts';
 import type { BlockConfig } from './arrange.ts';
 import type { ModeHookup } from './modes/mode.ts';
 import { findPath, linkBits, MAX_PATH_NODES, straightPath, type PathBounds } from './path.ts';
@@ -45,6 +47,12 @@ export interface RouteWorld {
    * face. The route search and the dashed guide's search keep off them; a straight guide, the last resort, does not.
    */
   keepOff?: ReadonlySet<string>;
+  /**
+   * The world boxes, inclusive, of the areas kept for the line's farms (add-on 17, farms.ts): a hookup goes round them as
+   * it goes round the line's box (no cell in their columns, and no block laid there by a straight guide either), so it
+   * never takes the ground a farm's build step sends the group to build on.
+   */
+  areas?: readonly PathBounds[];
 }
 export interface HookupBuild { hookup: Hookup; blocks: LayoutBlock[]; warnings: PlanWarning[]; found: boolean }
 export interface PowerHookupBuild extends HookupBuild {
@@ -87,12 +95,18 @@ function inColumns(p: Vec3, box: PathBounds): boolean {
   return p[0] >= box.min[0] && p[0] <= box.max[0] && p[2] >= box.min[2] && p[2] <= box.max[2];
 }
 
+/** Whether `p` stands in the columns of an area kept for a farm (`RouteWorld.areas`). */
+function inAreas(p: Vec3, world: RouteWorld): boolean {
+  return world.areas?.some((a) => inColumns(p, a)) === true;
+}
+
 /**
- * Whether a hookup may use `p` whatever the terrain: not a line cell, not kept off, outside the line's columns, touching
- * nothing to keep away from.
+ * Whether a hookup may use `p` whatever the terrain: not a line cell, not kept off, outside the line's columns and the
+ * farms' areas' columns, touching nothing to keep away from.
  */
 function clearOfLine(world: RouteWorld, p: Vec3): boolean {
   if (world.line.has(posKey(p)) || world.keepOff?.has(posKey(p)) === true || (world.box !== undefined && inColumns(p, world.box))) return false;
+  if (inAreas(p, world)) return false;
   const keepAway = world.keepAway;
   return keepAway === undefined || !DIRS.some((_, side) => keepAway.has(posKey(step(p, side))));
 }
@@ -166,7 +180,7 @@ function intersect(a: PathBounds, b: PathBounds): PathBounds {
 /** The machine name by mteId, else the item name of `id@meta`, else the block id. */
 export function blockName(pack: Pack, ref: BlockRef): string {
   if (ref.mteId !== undefined) {
-    const machine = pack.machines.get(ref.mteId);
+    const machine = machineByMteId(pack, ref.mteId);
     if (machine !== undefined) return machine.name;
   }
   let name: string | undefined;
@@ -242,7 +256,7 @@ function cableAmpsOf(tap: LayoutTap): number {
 export function tapCableAmps(pack: Pack, vox: Voxels | null, tap: LayoutTap): number | undefined {
   if (tap.cableAmps !== undefined) return tap.cableAmps;
   const ref = existingBlock(vox, tap.pos);
-  return ref?.mteId === undefined ? undefined : pack.machines.get(ref.mteId)?.cable?.amps;
+  return ref?.mteId === undefined ? undefined : machineByMteId(pack, ref.mteId)?.cable?.amps;
 }
 
 /**
@@ -253,6 +267,11 @@ export function choosePowerTap(taps: readonly LayoutTap[], target: Vec3, amps: n
   return nearestTap(taps.filter((t) => freeAmpsOf(t) >= amps), target)
     ?? nearestTap(taps.filter((t) => cableAmpsOf(t) >= amps), target)
     ?? nearestTap(taps, target);
+}
+
+/** `choosePowerTap`'s two classes of taps that can carry the line: those with `amps` free, then the others whose cable carries `amps`. */
+export function carryingTaps<T extends LayoutTap>(taps: readonly T[], amps: number): [T[], T[]] {
+  return [taps.filter((t) => freeAmpsOf(t) >= amps), taps.filter((t) => freeAmpsOf(t) < amps && cableAmpsOf(t) >= amps)];
 }
 
 // ---- Routes ----
@@ -271,9 +290,9 @@ function straightGuide(world: RouteWorld, tap: Vec3, ports: readonly Vec3[]): Ve
   return straightPath(guideEnd(world, tap, port, LEVEL_FIRST), guideEnd(world, port, tap, portSides(world)));
 }
 
-/** The box around the tap and the ports (and the line), `HOOKUP_REACH` wider on every side. */
-function reachBounds(world: RouteWorld, tap: Vec3, ports: readonly Vec3[]): PathBounds {
-  const around = bboxOf([tap, ...ports, ...(world.box === undefined ? [] : [world.box.min, world.box.max])])!;
+/** The box around the taps and the ports (and the line), `HOOKUP_REACH` wider on every side. */
+function reachBounds(world: RouteWorld, taps: readonly Vec3[], ports: readonly Vec3[]): PathBounds {
+  const around = bboxOf([...taps, ...ports, ...(world.box === undefined ? [] : [world.box.min, world.box.max])])!;
   return {
     min: [around.min[0] - HOOKUP_REACH, around.min[1] - HOOKUP_REACH, around.min[2] - HOOKUP_REACH],
     max: [around.max[0] + HOOKUP_REACH, around.max[1] + HOOKUP_REACH, around.max[2] + HOOKUP_REACH],
@@ -291,7 +310,7 @@ export function hookupPath(world: RouteWorld, tap: Vec3, ports: readonly Vec3[],
   if (ports.length === 0) return { path: [], found: false };
   const clear = (p: Vec3) => clearOfLine(world, p);
   const { starts, goals } = endCells(world, tap, ports);
-  const reach = reachBounds(world, tap, ports);
+  const reach = reachBounds(world, [tap], ports);
   const budget = maxNodes ?? MAX_PATH_NODES;
   if (vox !== null) {
     const passable = (p: Vec3) => clear(p) && isFreeVoxel(vox, p);
@@ -300,6 +319,28 @@ export function hookupPath(world: RouteWorld, tap: Vec3, ports: readonly Vec3[],
   }
   const guide = findPath(starts.filter(clear), goals.filter(clear), { passable: clear, bounds: reach, maxNodes: budget });
   return { path: guide.found ? guide.path : straightGuide(world, tap, ports), found: false };
+}
+
+/**
+ * Which of `taps` a hookup can leave (architecture §11 entry 52): `hookupPath`'s route search, run once from the face
+ * neighbours of every tap at the same time, through the same cells to the same goals, inside the voxel box and within 16
+ * blocks of the taps and ports. The tap the cheapest route leaves from (routes of equal cost go by the search's fixed
+ * order, which takes the taps in the order given); null without voxels or when no route is found. It draws no guide.
+ */
+export function reachableTap<T extends TapPoint>(world: RouteWorld, taps: readonly T[], ports: readonly Vec3[], maxNodes?: number): T | null {
+  const { vox } = world;
+  if (vox === null || taps.length === 0 || ports.length === 0) return null;
+  const passable = (p: Vec3) => clearOfLine(world, p) && isFreeVoxel(vox, p);
+  // each passable start cell with the first tap it is a face neighbour of
+  const leaves = new Map<string, { start: Vec3; tap: T }>();
+  for (const tap of taps) {
+    for (const start of endCells(world, tap.pos, ports).starts) if (passable(start) && !leaves.has(posKey(start))) leaves.set(posKey(start), { start, tap });
+  }
+  const { goals } = endCells(world, taps[0]!.pos, ports);                // the same for every tap
+  const route = findPath([...leaves.values()].map((l) => l.start), goals.filter(passable), {
+    passable, bounds: intersect(voxelBounds(vox), reachBounds(world, taps.map((t) => t.pos), ports)), maxNodes: maxNodes ?? MAX_PATH_NODES,
+  });
+  return route.found ? leaves.get(posKey(route.path[0]!))!.tap : null;
 }
 
 /** The side of `cell` that touches a port (DIRS order); -1 when none does. */
@@ -325,9 +366,12 @@ function hookupBits(path: readonly Vec3[], laid: ReadonlySet<string>, tap: Vec3,
   return linkBits(links);
 }
 
-/** The cells a hookup lays a block on: every path cell outside the line and its columns (only a straight guide can cross them). */
+/**
+ * The cells a hookup lays a block on: every path cell outside the line, its columns and the farms' areas' columns (only a
+ * straight guide can cross them).
+ */
 function runCells(path: readonly Vec3[], world: RouteWorld): Vec3[] {
-  return path.filter((p) => !world.line.has(posKey(p)) && (world.box === undefined || !inColumns(p, world.box)));
+  return path.filter((p) => !world.line.has(posKey(p)) && (world.box === undefined || !inColumns(p, world.box)) && !inAreas(p, world));
 }
 
 /** The tap as Plan 4 gives it (a `LayoutTap`'s `cableAmps` is the layout's own reading, not part of the hookup). */

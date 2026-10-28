@@ -129,14 +129,19 @@ export function orientFaces(faces: Readonly<Record<Face, readonly TextureLayer[]
   return out;
 }
 
-/** Stable colour for anything without a texture: FNV-1a hue, HSL(hue, 45%, 55%). */
-export function hashColor(s: string): Rgb {
+/** The 32-bit FNV-1a hash of `s`'s UTF-16 code units, unsigned: a placeholder's colour, and a Flow rider's phase (Phase 2 spec §15.1). */
+export function fnv1a(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  const hue = h % 360;
+  return h;
+}
+
+/** Stable colour for anything without a texture: FNV-1a hue, HSL(hue, 45%, 55%). */
+export function hashColor(s: string): Rgb {
+  const hue = fnv1a(s) % 360;
   const sat = 0.45;
   const light = 0.55;
   const a = sat * Math.min(light, 1 - light);

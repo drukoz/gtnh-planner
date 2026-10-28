@@ -7,6 +7,7 @@ import {
   buildPower, RAIN_OUTAGE_FRACTION, RAIN_OUTAGE_SECONDS, SOLAR_BOILERS, solarBoilerOf, solarOutput, turbineEUt, turbineSteamForFull,
   type PowerInput,
 } from '../../../src/server/world/power.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import { itemKey } from '../../../src/shared/keys.ts';
 import { testFacts } from '../../helpers/world-facts.ts';
 
@@ -18,11 +19,11 @@ const N = 1 << 2, S = 1 << 3, W = 1 << 4, E = 1 << 5;
 const HV_CHARGER = 693, HV_TURBO_CHARGER = 12043;
 const CHARGERS = 'gregtech.common.tileentities.machines.basic.';
 facts.machines.set(HV_CHARGER, {
-  mteId: HV_CHARGER, metaName: 'batterycharger.16.tier.03', name: 'High Voltage Battery Charger', cls: `${CHARGERS}MTECharger`,
+  id: gtMachineId(HV_CHARGER), mteId: HV_CHARGER, metaName: 'batterycharger.16.tier.03', name: 'High Voltage Battery Charger', cls: `${CHARGERS}MTECharger`,
   itemKey: itemKey('gregtech:gt.blockmachines', HV_CHARGER), kind: 'battery_buffer', maps: [], tier: 3, voltage: 512, amps: 2, batterySlots: 4,
 });
 facts.machines.set(HV_TURBO_CHARGER, {
-  mteId: HV_TURBO_CHARGER, metaName: 'batteryturbocharger.16.tier.03', name: 'High Voltage Turbo Charger', cls: `${CHARGERS}MTETurboCharger`,
+  id: gtMachineId(HV_TURBO_CHARGER), mteId: HV_TURBO_CHARGER, metaName: 'batteryturbocharger.16.tier.03', name: 'High Voltage Turbo Charger', cls: `${CHARGERS}MTETurboCharger`,
   itemKey: itemKey('gregtech:gt.blockmachines', HV_TURBO_CHARGER), kind: 'battery_buffer', maps: [], tier: 3, voltage: 512, amps: 16, batterySlots: 4,
 });
 

@@ -5,9 +5,11 @@
 // and the order of its jobs (`orderJobs`), which also says where a cycle of machine waits is broken.
 
 import { PSEUDO_MACHINES, V } from '../../shared/gt/tiers.ts';
+import { compareMachineId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { BomMachine, PlanContext, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
+import { machinesForMap } from '../pack/lookup.ts';
 import type { CandidateGraph, LpRecipe } from './candidates.ts';
 
 /** Amounts up to this count as zero, and a run count this little above a whole number stays whole (as bom.ts). */
@@ -240,20 +242,20 @@ export function unmadeCause(graph: CandidateGraph, settled: Settled, key: StuffK
 }
 
 /**
- * The machines a one-off job may run on (architecture §11 entry 41 (1)): per mteId the group's machines of the world scan
+ * The machines a one-off job may run on (architecture §11 entry 41 (1)): per machine id the group's machines of the world scan
  * (`ctx.ownedMachines`), of "Machines we have" (`settings.ownedManual`) and of every step's `owned` count, summed. Reuse
  * settings (`declineReuse`, `reuseOwned`) do not apply: they keep a machine out of the running line, not out of a one-off
  * job. Only whether a type is there is read.
  */
-export function ownedForParts(ctx: PlanContext, settings: PlanSettings, steps: readonly PlanStep[]): Map<number, number> {
-  const owned = new Map<number, number>();
-  const add = (mteId: number, count: number): void => {
-    if (count > 0) owned.set(mteId, (owned.get(mteId) ?? 0) + count);
+export function ownedForParts(ctx: PlanContext, settings: PlanSettings, steps: readonly PlanStep[]): Map<MachineId, number> {
+  const owned = new Map<MachineId, number>();
+  const add = (id: MachineId, count: number): void => {
+    if (count > 0) owned.set(id, (owned.get(id) ?? 0) + count);
   };
-  for (const m of ctx.ownedMachines) add(m.mteId, m.count);
-  for (const m of settings.ownedManual ?? []) add(m.mteId, m.count);
-  for (const s of steps) add(s.machine.mteId, s.owned);
-  return new Map([...owned].sort(([a], [b]) => a - b));
+  for (const m of ctx.ownedMachines) add(machineIdOfLegacy(m.mteId), m.count);
+  for (const m of settings.ownedManual ?? []) add(machineIdOfLegacy(m.mteId), m.count);
+  for (const s of steps) add(machineIdOfLegacy(s.machine.mteId), s.owned);
+  return new Map([...owned].sort(([a], [b]) => compareMachineId(a, b)));
 }
 
 function tierOf(m: Machine): number {
@@ -264,32 +266,34 @@ function tierOf(m: Machine): number {
  * The machine a one-off job of `r` on `mapId` runs on (architecture §11 entry 41 (1)): the crafting table for `crafting`,
  * the furnace for `furnace`; else, of the map's machines that run `r` at `groupTier` (`pickMachine`'s rule: a singleblock of
  * a tier at most `groupTier` whose `V[tier]` × the map's amps covers the recipe's EU/t, any multiblock of the map), the first
- * of: one the group has (`owned`; highest tier, then lowest mteId) → `owned`; one this line builds (`line`) and `exclude`
- * leaves in (highest tier, lowest mteId) → `line`; a singleblock not in `exclude` (lowest tier, lowest mteId: the cheapest
- * to build) → `new`; a multiblock not in `exclude` (one of `multiblocks` first, lowest mteId) → `new`; one of `exclude`
- * (lowest tier, lowest mteId) → `first`. Null when none runs it.
+ * of: one the group has (`owned`; highest tier, then lowest id) → `owned`; one this line builds (`line`) and `exclude`
+ * leaves in (highest tier, lowest id) → `line`; a singleblock not in `exclude` (lowest tier, lowest id: the cheapest to
+ * build) → `new`; a multiblock not in `exclude` (one of `multiblocks` first, lowest id) → `new`; one of `exclude` (lowest
+ * tier, lowest id) → `first`; ids in `compareMachineId` order. Null when none runs it.
  */
 export function partMachine(
   pack: Pack, r: Recipe, mapId: string,
-  opts: { groupTier: number; owned: ReadonlyMap<number, number>; line: ReadonlySet<number>; exclude?: ReadonlySet<number>; multiblocks?: ReadonlySet<number> },
+  opts: {
+    groupTier: number; owned: ReadonlyMap<MachineId, number>; line: ReadonlySet<MachineId>; exclude?: ReadonlySet<MachineId>; multiblocks?: ReadonlySet<MachineId>;
+  },
 ): BomMachine | 'crafting table' | null {
   if (mapId === 'crafting') return 'crafting table';
   if (mapId === 'furnace') return { mteId: PSEUDO_MACHINES.FURNACE, name: 'Furnace', tier: 0, source: 'owned' };
   const amps = pack.maps.get(mapId)?.amps ?? 1;
-  const runs = (pack.machinesByMap.get(mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? [])
+  const runs = machinesForMap(pack, mapId)
     .filter((m) => m.kind === 'multiblock' || (m.kind === 'basic' && tierOf(m) <= opts.groupTier && (V[tierOf(m)] as number) * amps >= r.euPerTick));
-  const exclude = opts.exclude ?? new Set<number>();
-  const highest = (a: Machine, b: Machine): number => tierOf(b) - tierOf(a) || a.mteId - b.mteId;
-  const lowest = (a: Machine, b: Machine): number => tierOf(a) - tierOf(b) || a.mteId - b.mteId;
+  const exclude = opts.exclude ?? new Set<MachineId>();
+  const highest = (a: Machine, b: Machine): number => tierOf(b) - tierOf(a) || compareMachineId(a.id, b.id);
+  const lowest = (a: Machine, b: Machine): number => tierOf(a) - tierOf(b) || compareMachineId(a.id, b.id);
   const as = (m: Machine | undefined, source: BomMachine['source']): BomMachine | undefined =>
     m === undefined ? undefined : { mteId: m.mteId, name: m.name, tier: tierOf(m), source };
   const multis = (list: Machine[]): Machine[] => list.filter((m) => m.kind === 'multiblock')
-    .sort((a, b) => Number(!(opts.multiblocks?.has(a.mteId) ?? true)) - Number(!(opts.multiblocks?.has(b.mteId) ?? true)) || a.mteId - b.mteId);
-  return as(runs.filter((m) => (opts.owned.get(m.mteId) ?? 0) > 0).sort(highest)[0], 'owned')
-    ?? as(runs.filter((m) => opts.line.has(m.mteId) && !exclude.has(m.mteId)).sort(highest)[0], 'line')
-    ?? as(runs.filter((m) => m.kind === 'basic' && !exclude.has(m.mteId)).sort(lowest)[0], 'new')
-    ?? as(multis(runs.filter((m) => !exclude.has(m.mteId)))[0], 'new')
-    ?? as(runs.filter((m) => exclude.has(m.mteId)).sort(lowest)[0], 'first')
+    .sort((a, b) => Number(!(opts.multiblocks?.has(a.id) ?? true)) - Number(!(opts.multiblocks?.has(b.id) ?? true)) || compareMachineId(a.id, b.id));
+  return as(runs.filter((m) => (opts.owned.get(m.id) ?? 0) > 0).sort(highest)[0], 'owned')
+    ?? as(runs.filter((m) => opts.line.has(m.id) && !exclude.has(m.id)).sort(highest)[0], 'line')
+    ?? as(runs.filter((m) => m.kind === 'basic' && !exclude.has(m.id)).sort(lowest)[0], 'new')
+    ?? as(multis(runs.filter((m) => !exclude.has(m.id)))[0], 'new')
+    ?? as(runs.filter((m) => exclude.has(m.id)).sort(lowest)[0], 'first')
     ?? null;
 }
 

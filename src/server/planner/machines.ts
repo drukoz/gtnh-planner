@@ -4,22 +4,26 @@
 // machines of other tiers), the tiers it could run at, and the item and fluid flows between the steps.
 
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
-import { PSEUDO_IDS, PSEUDO_MACHINES, V, tierName } from '../../shared/gt/tiers.ts';
+import { V, tierName } from '../../shared/gt/tiers.ts';
+import { compareMachineId, legacyMteId, isPseudoMachineId, machineIdOfLegacy, MC_MACHINES, type MachineId } from '../../shared/ids.ts';
 import type { StuffKey } from '../../shared/keys.ts';
+import { defaultFarmSettings, type FarmSettings } from '../../shared/types/farm.ts';
 import type { Ingredient, Machine, Pack, Product, Recipe } from '../../shared/types/pack.ts';
 import {
   FREE_KEYS, type MachineWhere, type PlanContext, type PlanFlow, type PlanSettings, type PlanStep, type StepTier,
 } from '../../shared/types/plan.ts';
+import { machineByMteId, machineIdsForMap, machineOf } from '../pack/lookup.ts';
 import { suppliedKey } from '../pack/supply.ts';
 import type { StepMachines } from './build-mip.ts';
 import { keptOptions, virtualKey, type CandidateGraph, type LpRecipe } from './candidates.ts';
+import { farmMachineKind, farmOc, farmStepOf } from './farms/recipes.ts';
 import { feedsEither, poolKey, sharesMachines, sharingKey, type BuildModel, type MachineOption, type OwnedPools } from './machine-options.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
-import { sig9 } from './round.ts';
+import { sig9, wholeMachines, wholeSlack } from './round.ts';
 import type { Solution } from './solve.ts';
 
 export interface MachinePick {
-  mteId: number; name: string; tier: number; kind: 'basic' | 'multiblock' | 'hand' | 'crafting' | 'furnace'; oc: MachineOc;
+  id: MachineId; name: string; tier: number; kind: 'basic' | 'multiblock' | 'hand' | 'crafting' | 'furnace'; oc: MachineOc;
   runsPerSecondPerMachine: number; handCraft: boolean;
 }
 
@@ -27,8 +31,8 @@ const TICKS_PER_SECOND = 20;
 /** Ruling R5: one craft per second per crafter, whatever the recipe's duration (0 for crafting recipes, §11.4). */
 const CRAFT_TICKS = 20;
 /**
- * Amounts up to this count as zero, and a machine count this little above a whole number stays whole (prior-art §3.4
- * step 6: a count that is exactly 2 stays 2).
+ * Amounts up to this count as zero. A machine count a little above a whole number stays whole by `wholeMachines`
+ * (round.ts), which the crop sticks of a farm step count by too.
  */
 const TINY = 1e-9;
 const HAND_CRAFT_RUNS_PER_SECOND = 1;
@@ -70,17 +74,17 @@ function picked(p: Omit<MachinePick, 'runsPerSecondPerMachine'>): MachinePick {
 
 /** Highest tier first, then the lowest mteId. */
 function preferred(a: Machine, b: Machine): number {
-  return tierOf(b) - tierOf(a) || a.mteId - b.mteId;
+  return tierOf(b) - tierOf(a) || compareMachineId(a.id, b.id);
 }
 
 /** `wantTier` clamped to the accepting tiers (the highest machine at or below it), else owned, else the highest tier. */
-function chooseSingleblock(accepting: Machine[], wantTier: number | undefined, owned: ReadonlyMap<number, number>): Machine {
+function chooseSingleblock(accepting: Machine[], wantTier: number | undefined, owned: ReadonlyMap<MachineId, number>): Machine {
   if (wantTier !== undefined) {
     const tiers = accepting.map(tierOf);
     const tier = clamp(wantTier, Math.min(...tiers), Math.max(...tiers));
     return accepting.filter((m) => tierOf(m) <= tier).sort(preferred)[0] as Machine;
   }
-  const mine = accepting.filter((m) => (owned.get(m.mteId) ?? 0) > 0);
+  const mine = accepting.filter((m) => (owned.get(m.id) ?? 0) > 0);
   return (mine.length > 0 ? mine : accepting).sort(preferred)[0] as Machine;
 }
 
@@ -88,32 +92,42 @@ function chooseSingleblock(accepting: Machine[], wantTier: number | undefined, o
  * The machine that runs `r` on `mapId` for a group at `groupTier`: a crafting table (by hand unless crafting is
  * automated), the vanilla furnace, else a singleblock of the map at or below the group's tier that has the voltage for
  * the recipe (the per-recipe `wantTier`, else the best owned one, else the highest tier), else the map's multiblock
- * with one energy hatch at `wantTier ?? groupTier`. Throws when the map has no machine that can run the recipe.
+ * with one energy hatch at `wantTier ?? groupTier`. A synthetic farm recipe (`Recipe.meta.farm`, add-on 17) runs on the
+ * first of its farm's machines the group owns, else its first, at the farm's own tier and never overclocked (`farmOc`),
+ * whatever the group's tier. Throws when the map has no machine that can run the recipe.
  */
 export function pickMachine(
   pack: Pack, r: Recipe, mapId: string,
   opts: {
-    groupTier: number; wantTier?: number; coilHeat: number; automateCrafting: boolean; owned: ReadonlyMap<number, number>;
+    groupTier: number; wantTier?: number; coilHeat: number; automateCrafting: boolean; owned: ReadonlyMap<MachineId, number>;
     /** The multiblocks the group can build (`PlanEnv.multiblocks`); absent = any. */
-    multiblocks?: ReadonlySet<number>;
+    multiblocks?: ReadonlySet<MachineId>;
   },
 ): MachinePick {
+  const farm = r.meta.farm;
+  if (farm !== undefined) {
+    // a farm's `machines` is export data and stays numeric (like `BlockRef.mteId`): convert at this edge
+    const mteId = farm.machines.find((n) => (opts.owned.get(machineIdOfLegacy(n)) ?? 0) > 0) ?? farm.machines[0];
+    const m = mteId === undefined ? undefined : machineByMteId(pack, mteId);
+    if (m === undefined) throw new Error(`pickMachine: no farm machine runs recipe ${r.id}`);
+    return picked({ id: m.id, name: m.name, tier: farm.tier, kind: farmMachineKind(m), oc: farmOc(r, farm), handCraft: false });
+  }
   if (mapId === 'crafting') {
     const hand = !opts.automateCrafting;
     return picked({
-      mteId: hand ? PSEUDO_MACHINES.HAND : PSEUDO_MACHINES.CRAFTING_TABLE, name: hand ? HAND_NAME : CRAFTING_TABLE_NAME, tier: 0,
+      id: hand ? MC_MACHINES.HAND : MC_MACHINES.CRAFTING_TABLE, name: hand ? HAND_NAME : CRAFTING_TABLE_NAME, tier: 0,
       kind: hand ? 'hand' : 'crafting', oc: fixedOc(0, CRAFT_TICKS), handCraft: hand,
     });
   }
   if (mapId === 'furnace') {
     // It burns fuel, not EU; a duration of at least one tick keeps the rate finite.
     return picked({
-      mteId: PSEUDO_MACHINES.FURNACE, name: FURNACE_NAME, tier: 0, kind: 'furnace', oc: fixedOc(0, Math.max(r.durationTicks, 1)),
+      id: MC_MACHINES.FURNACE, name: FURNACE_NAME, tier: 0, kind: 'furnace', oc: fixedOc(0, Math.max(r.durationTicks, 1)),
       handCraft: false,
     });
   }
 
-  const machines = (pack.machinesByMap.get(mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? []);
+  const machines = machineIdsForMap(pack, mapId).flatMap((id) => machineOf(pack, id) ?? []);
   const mapAmps = pack.maps.get(mapId)?.amps ?? 1;
   // The rule of acceptRecipe (candidates.ts): machine tier ≤ group tier and EU/t ≤ V[machine tier] × the map's amps.
   const accepting = machines.filter(
@@ -122,12 +136,12 @@ export function pickMachine(
   if (accepting.length > 0) {
     const m = chooseSingleblock(accepting, opts.wantTier, opts.owned);
     const oc = singleblockOverclock(r, { tier: tierOf(m), amps: m.amps ?? mapAmps });
-    return picked({ mteId: m.mteId, name: m.name, tier: tierOf(m), kind: 'basic', oc, handCraft: false });
+    return picked({ id: m.id, name: m.name, tier: tierOf(m), kind: 'basic', oc, handCraft: false });
   }
 
   const built = opts.multiblocks;
-  const multis = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => a.mteId - b.mteId);
-  const multi = (built === undefined ? undefined : multis.find((m) => built.has(m.mteId))) ?? multis[0];
+  const multis = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => compareMachineId(a.id, b.id));
+  const multi = (built === undefined ? undefined : multis.find((m) => built.has(m.id))) ?? multis[0];
   if (multi === undefined) throw new Error(`pickMachine: no machine on ${mapId} runs recipe ${r.id} at ${tierName(opts.groupTier)}`);
   // Never a hatch above the group's tier, nor one too weak for the recipe (spec §5).
   const hatchTier = clamp(opts.wantTier ?? opts.groupTier, Math.min(voltageTier(r.euPerTick), opts.groupTier), opts.groupTier);
@@ -135,7 +149,7 @@ export function pickMachine(
     { euPerTick: r.euPerTick, durationTicks: r.durationTicks, heat: r.meta.coilHeat ?? r.specialValue },
     { hatchTier, perfectOC: multi.perfectOC === true, heatOC: multi.heatOC === true, coilHeat: opts.coilHeat },
   );
-  return picked({ mteId: multi.mteId, name: multi.name, tier: hatchTier, kind: 'multiblock', oc, handCraft: false });
+  return picked({ id: multi.id, name: multi.name, tier: hatchTier, kind: 'multiblock', oc, handCraft: false });
 }
 
 // The owned pools and a recipe's programmed circuit live in a leaf module (owned.ts); their callers keep reading them here.
@@ -353,7 +367,7 @@ export interface PickedRecipe { id: string; runs: number; lp: LpRecipe; mapId: s
 
 /** The machine of a machine option (plan 12): its type, tier and overclock, as the build-cost solve picked it. */
 function optionPick(o: MachineOption): MachinePick {
-  return { mteId: o.mteId, name: o.name, tier: o.tier, kind: o.kind, oc: o.oc, runsPerSecondPerMachine: o.perMachine, handCraft: false };
+  return { id: o.id, name: o.name, tier: o.tier, kind: o.kind, oc: o.oc, runsPerSecondPerMachine: o.perMachine, handCraft: false };
 }
 
 /**
@@ -365,7 +379,7 @@ function optionPick(o: MachineOption): MachinePick {
 export function pickStepMachines(
   pack: Pack, graph: CandidateGraph, runs: ReadonlyMap<string, number>,
   opts: {
-    settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<number, number>; multiblocks?: ReadonlySet<number>;
+    settings: PlanSettings; groupTier: number; coilHeat: number; owned: ReadonlyMap<MachineId, number>; multiblocks?: ReadonlySet<MachineId>;
     machines?: ReadonlyMap<string, StepMachines>;
   },
 ): PickedRecipe[] {
@@ -482,14 +496,15 @@ export type StepSize = Pick<PlanStep, 'count' | 'owned' | 'runsPerSecond' | 'uti
 /**
  * The step of a picked recipe, sized by the caller: the machine and its overclocked speed, per-run inputs (one per
  * good, slots added up) and outputs (expected amounts), the main output, the overclock inputs, the cleanroom flag, the
- * programmed circuit, for a supply recipe the good it supplies (`suppliedKey`, fix spec R2), and the owned machines it
- * runs on (`size.reused`).
+ * programmed circuit, for a supply recipe the good it supplies (`suppliedKey`, fix spec R2), the owned machines it
+ * runs on (`size.reused`), and for a farm recipe its farm (`PlanStep.farm`, add-on 17: `farmStepOf`, worded with
+ * `farms`, the project's farm settings).
  * `alternatives` stays empty here (Task 14 fills it).
  */
-export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize): PlanStep {
+export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: StepSize, farms?: FarmSettings): PlanStep {
   const { id, recipe: r, pick } = p;
   const step: PlanStep = {
-    id, recipeId: id, mapId: p.mapId, machine: { mteId: pick.mteId, name: pick.name, tier: pick.tier },
+    id, recipeId: id, mapId: p.mapId, machine: { mteId: legacyMteId(pick.id), name: pick.name, tier: pick.tier },
     count: size.count, owned: size.owned, runsPerSecond: size.runsPerSecond, utilization: size.utilization,
     euPerTick: pick.oc.euPerTick, durationTicks: pick.oc.durationTicks, overclocks: pick.oc.overclocks,
     inputs: stepInputs(r, line),
@@ -500,7 +515,7 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
   if (mainOutput !== undefined) step.mainOutput = mainOutput;
   step.oc = {
     recipeEuPerTick: r.euPerTick, recipeDurationTicks: baseDurationTicks(r, p.mapId, pick), machineVoltage: pick.oc.machineVoltage,
-    machineAmps: pick.oc.machineAmps, perfect: pick.kind === 'multiblock' && pack.machines.get(pick.mteId)?.perfectOC === true,
+    machineAmps: pick.oc.machineAmps, perfect: pick.kind === 'multiblock' && machineOf(pack, pick.id)?.perfectOC === true,
     heatOverclocks: pick.oc.heatOverclocks,
   };
   if (p.lp.needsCleanroom) step.needsCleanroom = true;
@@ -509,6 +524,8 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
   const supply = suppliedKey(r, pack.fluidContainers);
   if (supply !== undefined) step.supply = supply;
   if (size.reused !== undefined) step.reused = size.reused;
+  const farm = r.meta.farm === undefined ? undefined : farmStepOf(pack, step, r, farms ?? defaultFarmSettings());
+  if (farm !== undefined) step.farm = farm;
   return step;
 }
 
@@ -519,18 +536,21 @@ export function describeStep(pack: Pack, p: PickedRecipe, line: StepLine, size: 
  * own claim is placed by its load alone); `key` is its sharing pool (with sharing; default its own id); `ownedOnly`, a
  * step that can only run on owned machines (`BuildModel.ownedOnly`).
  */
-export interface OwnedClaim { id: string; mteId: number; load: number; share?: number; also?: boolean; key?: string; ownedOnly?: boolean }
+export interface OwnedClaim { stepId: string; id: MachineId; load: number; share?: number; also?: boolean; key?: string; ownedOnly?: boolean }
 
 /**
  * Which owned machines (`units`, indices in the type's pool, ascending) a step runs on and how many new ones of its
  * type it adds; `pool` (`'pool:' + its smallest id`) when a sharing pool of two or more steps holds them; `others`, the
  * units of its `also` claims, per type.
  */
-export interface OwnedAssignment { units: number[]; added: number; pool?: string; others?: Array<{ mteId: number; units: number[] }> }
+export interface OwnedAssignment { units: number[]; added: number; pool?: string; others?: Array<{ id: MachineId; units: number[] }> }
 
-/** A claim's first unit is taken for any load above 0 (a running step needs a machine); further ones above this. */
-function loadLeft(left: number, taken: number): boolean {
-  return taken === 0 ? left > 0 : left > TINY;
+/**
+ * A claim's first unit is taken for any load above 0 (a running step needs a machine); further ones while more than
+ * `slack` is left (`wholeSlack` of the claim's whole load).
+ */
+function loadLeft(left: number, taken: number, slack: number): boolean {
+  return taken === 0 ? left > 0 : left > slack;
 }
 
 /**
@@ -541,11 +561,12 @@ function loadLeft(left: number, taken: number): boolean {
  * the next free unit, which then serves its key, spilling into further free units for a share above 1 — and adding no
  * machine (the solve's owned rows left room for them); then the own claims, those with `ownedOnly` first (a step that
  * can only use owned machines takes its units before the others, so a machine that cannot be built is never added).
- * Without `shared`, by load descending, then id: `needed = max(1, ceil(load − 1e-9))`, the next `min(needed, left)`
+ * Without `shared`, by load descending, then id: `needed = max(1, wholeMachines(load))`, the next `min(needed, left)`
  * units, and the rest added new. With it, the claims of one key form a sharing pool of their summed load; pools by load
  * descending, then their smallest id: a pool takes the room left in the units of its key (index order), then free units
- * (the next indices) while load is left — any load above 0 takes one — then `ceil(left − 1e-9)` new machines, at least
- * one machine in all; every claim of the pool gets the pool's units and new machines. A unit serves one key (controller
+ * (the next indices) while load is left — any load above 0 takes one — then `ceil(left − slack)` new machines, at least
+ * one machine in all, `slack` being `wholeSlack` of the pool's load (a load read from 9 significant digits, a little
+ * above a whole number, stays whole); every claim of the pool gets the pool's units and new machines. A unit serves one key (controller
  * ruling 9), and a pool takes no unit its load does not reach, so no step is counted on machines it does not use.
  */
 export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, shared: boolean): Map<string, OwnedAssignment> {
@@ -555,16 +576,16 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
     if (entry === undefined) out.set(id, (entry = { units: [], added: 0 }));
     return entry;
   };
-  const byType = new Map<number, OwnedClaim[]>();
+  const byType = new Map<MachineId, OwnedClaim[]>();
   for (const claim of claims) {
-    entryOf(claim.id);
-    const list = byType.get(claim.mteId);
-    if (list === undefined) byType.set(claim.mteId, [claim]);
+    entryOf(claim.stepId);
+    const list = byType.get(claim.id);
+    if (list === undefined) byType.set(claim.id, [claim]);
     else list.push(claim);
   }
-  for (const mteId of [...byType.keys()].sort((a, b) => a - b)) {
-    const list = byType.get(mteId) as OwnedClaim[];
-    const total = pools.get(mteId)?.length ?? 0;
+  for (const id of [...byType.keys()].sort(compareMachineId)) {
+    const list = byType.get(id) as OwnedClaim[];
+    const total = pools.get(id)?.length ?? 0;
     const free = Array.from({ length: total }, (_, u) => u);   // the next indices first
     const used = new Array<number>(total).fill(0);              // with sharing: machines' worth on each unit
     const keyOf: Array<string | undefined> = new Array<string | undefined>(total).fill(undefined);
@@ -572,12 +593,12 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
       keyOf[u] = key;
       used[u] = (used[u] ?? 0) + amount;
     };
-    for (const claim of list.filter((c) => c.also === true).sort((a, b) => byString(a.id, b.id))) {
+    for (const claim of list.filter((c) => c.also === true).sort((a, b) => byString(a.stepId, b.stepId))) {
       const share = Math.max(0, claim.share ?? claim.load);
-      const key = claim.key ?? claim.id;
+      const key = claim.key ?? claim.stepId;
       const taken: number[] = [];
       if (!shared) {
-        taken.push(...free.splice(0, Math.min(free.length, Math.ceil(share - TINY))));
+        taken.push(...free.splice(0, Math.min(free.length, wholeMachines(share))));
       } else {
         let best: number | undefined;
         for (let u = 0; u < total; u++) {
@@ -588,7 +609,7 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
           take(best, key, share);
           taken.push(best);
         } else {
-          for (let left = share; loadLeft(left, taken.length) && free.length > 0;) {
+          for (let left = share; loadLeft(left, taken.length, wholeSlack(share)) && free.length > 0;) {
             const u = free.shift() as number;
             take(u, key, Math.min(1, left));
             taken.push(u);
@@ -596,15 +617,15 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
           }
         }
       }
-      if (taken.length > 0) (entryOf(claim.id).others ??= []).push({ mteId, units: taken.sort((a, b) => a - b) });
+      if (taken.length > 0) (entryOf(claim.stepId).others ??= []).push({ id, units: taken.sort((a, b) => a - b) });
     }
     const own = list.filter((c) => c.also !== true);
     const onlyOwnedFirst = (a: boolean, b: boolean): number => Number(b) - Number(a);
     if (!shared) {
-      own.sort((a, b) => onlyOwnedFirst(a.ownedOnly === true, b.ownedOnly === true) || b.load - a.load || byString(a.id, b.id));
+      own.sort((a, b) => onlyOwnedFirst(a.ownedOnly === true, b.ownedOnly === true) || b.load - a.load || byString(a.stepId, b.stepId));
       for (const claim of own) {
-        const needed = Math.max(1, Math.ceil(claim.load - TINY));
-        const entry = entryOf(claim.id);
+        const needed = Math.max(1, wholeMachines(claim.load));
+        const entry = entryOf(claim.stepId);
         entry.units = free.splice(0, Math.min(needed, free.length));
         entry.added = needed - entry.units.length;
       }
@@ -612,21 +633,22 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
     }
     const byKey = new Map<string, OwnedClaim[]>();
     for (const claim of own) {
-      const key = claim.key ?? claim.id;
+      const key = claim.key ?? claim.stepId;
       const members = byKey.get(key);
       if (members === undefined) byKey.set(key, [claim]);
       else members.push(claim);
     }
     const sharingPools = [...byKey].map(([key, members]) => {
-      members.sort((a, b) => byString(a.id, b.id));
+      members.sort((a, b) => byString(a.stepId, b.stepId));
       let load = 0;
       for (const m of members) load += Math.max(0, m.load);
-      return { key, members, load, first: (members[0] as OwnedClaim).id, ownedOnly: members.some((m) => m.ownedOnly === true) };
+      return { key, members, load, first: (members[0] as OwnedClaim).stepId, ownedOnly: members.some((m) => m.ownedOnly === true) };
     }).sort((a, b) => onlyOwnedFirst(a.ownedOnly, b.ownedOnly) || b.load - a.load || byString(a.first, b.first));
     for (const p of sharingPools) {
       let left = p.load;
+      const slack = wholeSlack(p.load);
       const taken: number[] = [];
-      for (let u = 0; u < total && loadLeft(left, taken.length); u++) {
+      for (let u = 0; u < total && loadLeft(left, taken.length, slack); u++) {
         const room = 1 - (used[u] ?? 0);
         if (keyOf[u] !== p.key || room <= TINY) continue;
         const t = Math.min(room, left);
@@ -634,18 +656,18 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
         taken.push(u);
         left -= t;
       }
-      while (loadLeft(left, taken.length) && free.length > 0) {
+      while (loadLeft(left, taken.length, slack) && free.length > 0) {
         const u = free.shift() as number;
         const t = Math.min(1, left);
         take(u, p.key, t);
         taken.push(u);
         left -= t;
       }
-      let added = Math.max(0, Math.ceil(left - TINY));
+      let added = Math.max(0, Math.ceil(left - slack));
       if (taken.length + added === 0) added = 1;
       const units = taken.sort((a, b) => a - b);
       for (const m of p.members) {
-        const entry = entryOf(m.id);
+        const entry = entryOf(m.stepId);
         entry.units = [...units];
         entry.added = added;
         if (p.members.length >= 2) entry.pool = `pool:${p.first}`;
@@ -657,7 +679,7 @@ export function assignOwned(claims: readonly OwnedClaim[], pools: OwnedPools, sh
 
 /** A step on a pseudo machine (by hand, the crafting table, the vanilla furnace): no owned machines, no build cost. */
 function isPseudo(pick: MachinePick): boolean {
-  return pick.handCraft || PSEUDO_IDS.has(pick.mteId);
+  return pick.handCraft || isPseudoMachineId(pick.id);
 }
 
 /**
@@ -673,36 +695,36 @@ function ownedClaims(p: PickedRecipe, runsPerSecond: number, model: BuildModel |
   let besides = 0;
   for (const o of others) besides += o.ownedLoad * o.option.perMachine;
   const load = Math.max(0, runsPerSecond - besides) / p.pick.runsPerSecondPerMachine;
-  const claim: OwnedClaim = { id: p.id, mteId: p.pick.mteId, load };
+  const claim: OwnedClaim = { stepId: p.id, id: p.pick.id, load };
   if (decided !== undefined) claim.share = Math.min(decided.ownedLoad, load);
   if (model?.ownedOnly(p.id) !== undefined) claim.ownedOnly = true;
   if (decided !== undefined && model?.share === true) claim.key = poolKey(decided.option, model.sharingKey(p.id));
   const claims = [claim];
   for (const o of others) {
-    const also: OwnedClaim = { id: p.id, mteId: o.option.mteId, load: o.ownedLoad, share: o.ownedLoad, also: true };
+    const also: OwnedClaim = { stepId: p.id, id: o.option.id, load: o.ownedLoad, share: o.ownedLoad, also: true };
     if (model !== undefined) also.key = poolKey(o.option, model.sharingKey(p.id));
     claims.push(also);
   }
   return claims;
 }
 
-/** Where the owned machines `units` of type `mteId` stand, those known, in unit order (copies). */
-function unitPositions(pools: OwnedPools, mteId: number, units: readonly number[]): MachineWhere[] {
-  const pool = pools.get(mteId) ?? [];
+/** Where the owned machines `units` of type `id` stand, those known, in unit order (copies). */
+function unitPositions(pools: OwnedPools, id: MachineId, units: readonly number[]): MachineWhere[] {
+  const pool = pools.get(id) ?? [];
   return units.flatMap((u) => {
     const at = pool[u];
     return at === undefined || at === null ? [] : [{ dim: at.dim, pos: [at.pos[0], at.pos[1], at.pos[2]] as [number, number, number] }];
   });
 }
 
-/** `PlanStep.reused` of a step on the owned machines `units` of type `mteId` (plan 12): how many, where those known stand, which. */
-export function reusedOf(pools: OwnedPools, mteId: number, units: readonly number[]): NonNullable<PlanStep['reused']> {
-  return { count: units.length, where: unitPositions(pools, mteId, units), units: [...units] };
+/** `PlanStep.reused` of a step on the owned machines `units` of type `id` (plan 12): how many, where those known stand, which. */
+export function reusedOf(pools: OwnedPools, id: MachineId, units: readonly number[]): NonNullable<PlanStep['reused']> {
+  return { count: units.length, where: unitPositions(pools, id, units), units: [...units] };
 }
 
 /** The option of `list` with the lowest build (an unpriced one last), then the lowest mteId. */
 function cheapestBuild(list: readonly MachineOption[]): MachineOption | undefined {
-  return [...list].sort((a, b) => (a.build ?? Infinity) - (b.build ?? Infinity) || a.mteId - b.mteId)[0];
+  return [...list].sort((a, b) => (a.build ?? Infinity) - (b.build ?? Infinity) || compareMachineId(a.id, b.id))[0];
 }
 
 /**
@@ -725,9 +747,9 @@ function stepTiers(model: BuildModel, recipeId: string, runsPerSecond: number, p
   const pinned = pin === undefined ? undefined : below.length > 0 ? Math.max(...below) : tiers[0];
   return tiers.map((tier): StepTier => {
     const o = cheapestBuild(byTier.get(tier) as MachineOption[]) as MachineOption;
-    const machines = Math.max(1, Math.ceil(runsPerSecond / o.perMachine - TINY));
+    const machines = Math.max(1, wholeMachines(runsPerSecond / o.perMachine));
     const owned = Math.min(machines, o.owned);
-    const entry: StepTier = { tier, mteId: o.mteId, name: o.name, machines, owned, build: o.build === null ? null : sig9((machines - owned) * o.build) };
+    const entry: StepTier = { tier, mteId: legacyMteId(o.id), name: o.name, machines, owned, build: o.build === null ? null : sig9((machines - owned) * o.build) };
     if (o.unbuildable !== undefined) entry.unbuildable = o.unbuildable;
     if (tier === pinned) entry.pinned = true;
     return entry;
@@ -772,12 +794,13 @@ function keptApart(pack: Pack, picked: readonly PickedRecipe[]): Set<string> {
  * (`reused.others`); the other steps on any of those machines (`reused.sharedWith`); and its sharing pool (`pool`, with
  * the model's sharing, else on an AE2 rate line: `sharesMachines`). `utilization` counts the others' capacity too, and a pooled step's
  * is its own share of the pool. With a model, `tiers` lists the step's eligible tiers, and on a Project Red line a step
- * kept out of another's machine because one feeds the other says so (ruling P7).
+ * kept out of another's machine because one feeds the other says so (ruling P7). A farm step (add-on 17; `pack` is then
+ * the line's farm pack) says what it plants (`PlanStep.farm`, worded with `settings.farms`).
  */
 export function planSteps(
   pack: Pack, graph: CandidateGraph, sol: Solution,
   opts: {
-    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number; multiblocks?: ReadonlySet<number>;
+    settings: PlanSettings; groupTier: number; coilHeat: number; ctx: PlanContext; perSecondScale: number; multiblocks?: ReadonlySet<MachineId>;
     /** What the line's goods are worth and the pack's empty containers, for each step's main output (`StepLine`). */
     value?: Pick<StepLine, 'valueOf' | 'empties'>;
     /** The line's build model (plan 12): its owned pools, sharing, steps that can only use owned machines and tiers. */
@@ -786,7 +809,7 @@ export function planSteps(
 ): PlanStep[] {
   const { settings, groupTier, coilHeat, ctx, perSecondScale, multiblocks, build: model } = opts;
   const pools: OwnedPools = model?.pools ?? ownedPools(ctx, settings);
-  const owned = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
+  const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const line = stepLine(graph, sol.runs, opts.value);
   line.bought = boughtGoods(sol.buys);
   const picked = pickStepMachines(pack, graph, sol.runs, { settings, groupTier, coilHeat, owned, multiblocks, machines: sol.machines });
@@ -800,7 +823,7 @@ export function planSteps(
   for (const p of picked) {
     const a = assigned.get(p.id);
     if (a === undefined) continue;
-    const mine = [...a.units.map((u) => `${p.pick.mteId}:${u}`), ...(a.others ?? []).flatMap((o) => o.units.map((u) => `${o.mteId}:${u}`))];
+    const mine = [...a.units.map((u) => `${p.pick.id}:${u}`), ...(a.others ?? []).flatMap((o) => o.units.map((u) => `${o.id}:${u}`))];
     unitsOf.set(p.id, mine);
     for (const unit of mine) {
       const ids = onUnit.get(unit);
@@ -818,18 +841,18 @@ export function planSteps(
     const warnings = machineWarnings(p.lp, p.pick, runsPerSecond);
     if (apart.has(p.id)) warnings.push(ownOutputWarning(p.pick.name));
     if (a === undefined) {
-      const count = Math.max(1, Math.ceil(runsPerSecond / perMachine - TINY));
-      return describeStep(pack, p, line, { count, owned: 0, runsPerSecond, utilization: runsPerSecond / (count * perMachine), warnings });
+      const count = Math.max(1, wholeMachines(runsPerSecond / perMachine));
+      return describeStep(pack, p, line, { count, owned: 0, runsPerSecond, utilization: runsPerSecond / (count * perMachine), warnings }, settings.farms);
     }
     const count = a.added + a.units.length;
     // The owned machines of the step's other options, matched to the solve's `others` in its order: per type, its claims
     // in the order they were made (two options of one type, a multiblock at two hatch tiers, take one claim each).
-    const left = new Map<number, number[][]>();
-    for (const o of a.others ?? []) left.set(o.mteId, [...(left.get(o.mteId) ?? []), o.units]);
+    const left = new Map<MachineId, number[][]>();
+    for (const o of a.others ?? []) left.set(o.id, [...(left.get(o.id) ?? []), o.units]);
     const others = (p.decided?.others ?? []).flatMap(({ option: o }) => {
-      const units = left.get(o.mteId)?.shift() ?? [];
+      const units = left.get(o.id)?.shift() ?? [];
       return units.length === 0 ? [] : [{
-        mteId: o.mteId, name: o.name, tier: o.tier, count: units.length, units, where: unitPositions(pools, o.mteId, units),
+        mteId: legacyMteId(o.id), name: o.name, tier: o.tier, count: units.length, units, where: unitPositions(pools, o.id, units),
         euPerTick: o.oc.euPerTick, runsPerSecondPerMachine: o.perMachine,
       }];
     });
@@ -837,14 +860,14 @@ export function planSteps(
     for (const o of others) capacity += o.count * o.runsPerSecondPerMachine;
     const size: StepSize = { count, owned: a.units.length, runsPerSecond, utilization: capacity > 0 ? runsPerSecond / capacity : 0, warnings };
     if (a.units.length > 0 || others.length > 0) {
-      const reused = reusedOf(pools, p.pick.mteId, a.units);
+      const reused = reusedOf(pools, p.pick.id, a.units);
       const peers = new Set<string>();
       for (const unit of unitsOf.get(p.id) ?? []) for (const id of onUnit.get(unit) ?? []) if (id !== p.id) peers.add(id);
       if (peers.size > 0) reused.sharedWith = [...peers].sort(byString);
       if (others.length > 0) reused.others = others;
       size.reused = reused;
     }
-    const step = describeStep(pack, p, line, size);
+    const step = describeStep(pack, p, line, size, settings.farms);
     if (a.pool !== undefined) step.pool = { id: a.pool, steps: [...(poolSteps.get(a.pool) ?? [p.id])].sort(byString) };
     if (model !== undefined) {
       const pin = Object.hasOwn(settings.machineTier, p.id) ? settings.machineTier[p.id] : undefined;
@@ -870,11 +893,19 @@ function baseDurationTicks(r: Recipe, mapId: string, pick: MachinePick): number 
  * proportion to what each takes. Convert recipes are transparent: what one takes of an option goes on to the recipes
  * that consume its virtual good, in proportion to their use. A flow at most `FLOW_DROP_REL` of what its producer makes
  * of the good is dropped, and a target's `out` flow needs more than that share of what is made of it; values keep 9
- * significant digits and are sorted by `from`, `to`, `key`.
+ * significant digits and are sorted by `from`, `to`, `key`. Add-on 17: what the line takes of a capped free supply (a
+ * farm the group runs, another project's surplus: `Solution.supplied`, by its column's good) reaches it as a bought input
+ * does, from `raw`, so the layout's input chest, the flow diagram's imports and `indexPlan`'s ports count it; what it is
+ * credited for (`Solution.credited`) is already part of what it sinks. What goes to `sink` is first what comes from outside
+ * the line (`raw`, a farm step: `LpRecipe.farm`), up to what each makes; the rest is split pro rata (12 x 17 F5).
  */
 export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffKey[]): PlanFlow[] {
   const { made, used } = recipeAmounts(graph, sol.runs);
   for (const [key, amount] of sol.buys) addAmount(made, key, RAW, amount);
+  for (const [id, amount] of sol.supplied ?? []) {
+    const key = sol.supplyKeys?.get(id);
+    if (key !== undefined) addAmount(made, key, RAW, amount);
+  }
   for (const [key, amount] of sol.sinks) addAmount(used, key, SINK, amount);
   for (const target of new Set(targets)) {
     const total = sum(made.get(target));
@@ -895,16 +926,36 @@ export function buildFlows(graph: CandidateGraph, sol: Solution, targets: StuffK
     for (const [to, amount] of users ?? []) addAmount(used, ends.option, to, (taken * amount) / total);
   }
 
+  // What the line throws away of a good is first what comes from outside it (`raw`, a farm step, which the layout never
+  // places): a good the line also makes is then never brought in while sunk (12 x 17 F5: the layout listed it on both chests
+  // and EnderIO moved it between them for ever). The rest is split pro rata; totals, byproducts and credits are unchanged.
+  const outside = new Set<string>([RAW, ...graph.recipes.filter((r) => r.farm === true).map((r) => r.id)]);
   const flows: PlanFlow[] = [];
   for (const [key, producers] of made) {
     if (graph.goods.get(key)?.virtual === true) continue;
     const consumers = used.get(key);
-    const total = sum(consumers);
-    if (consumers === undefined || total <= 0) continue;
-    for (const [from, produced] of producers) {
-      for (const [to, amount] of consumers) {
+    if (consumers === undefined || sum(consumers) <= 0) continue;
+    const left = new Map(producers);
+    const takers = new Map(consumers);
+    let sunk = takers.get(SINK) ?? 0;
+    if (sunk > 0) {
+      for (const [from, produced] of producers) {
+        if (!outside.has(from) || sunk <= 0) continue;
+        const take = Math.min(produced, sunk);
+        if (take > FLOW_DROP_REL * produced) flows.push({ from, to: SINK, key, perSecond: sig9(take) });
+        left.set(from, produced - take);
+        sunk -= take;
+      }
+      if (sunk > 0) takers.set(SINK, sunk);
+      else takers.delete(SINK);
+    }
+    const total = sum(takers);
+    if (total <= 0) continue;
+    for (const [from, produced] of left) {
+      const all = producers.get(from) ?? produced;
+      for (const [to, amount] of takers) {
         const perSecond = (produced * amount) / total;
-        if (perSecond > FLOW_DROP_REL * produced) flows.push({ from, to, key, perSecond: sig9(perSecond) });
+        if (perSecond > FLOW_DROP_REL * all) flows.push({ from, to, key, perSecond: sig9(perSecond) });
       }
     }
   }

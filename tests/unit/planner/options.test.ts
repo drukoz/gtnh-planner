@@ -173,6 +173,43 @@ describe('ingredient options', () => {
     const flagged = plan.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => [w.stepId, w.key]);
     expect(flagged).toEqual([['cast-weight', LEAD], ['x-lead', 't:lead_ingot@0']]);
     expect(plan.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, true], ['t:antimony_dust@0', false], ['t:lead_ingot@0', true]]);
+    // With build cost counted ("Fewest machines", the default) the slot takes the lead the line allows back for the weight,
+    // rather than add a tin extractor: its warning says so, where the weight's and the lead extractor's say nothing avoids
+    // it (the controller's ruling after the verify of 5e3820f, (b); a per-consumer allowance is a later follow-up).
+    // ("No limit" on the raw cap: its subject is the avoid list's wording, and at the default +25 % the line adds the tin
+    // extractor instead; fix wave 3 (A).)
+    const built = await planLine(packFromSpec(withBuildRecipes(spec)), S({ optionChoice: { 'ca#100': LEAD }, avoid: ['Lead', 'Antimony'], buildHorizonHours: 24, rawCap: null }), emptyContext());
+    expect(built.status).toBe('ok');
+    expect(ids(built)).toEqual(['ca', 'cast-weight', 'x-lead']);
+    expect(circuitStep(built).inputs).toContainEqual({ key: LEAD, amount: 288, chance: 1 });
+    expect(built.warnings.filter((w) => w.code === 'avoid-unavoidable').map((w) => [w.stepId, w.text])).toEqual([
+      ['ca', 'Basic Circuit Assembler uses Molten Lead, which the line allows back for Lead Weight'],
+      ['cast-weight', 'Basic Fluid Solidifier uses Molten Lead — no recipe at LV avoids it'],
+      ['x-lead', 'Basic Fluid Extractor uses Lead Ingot — no recipe at LV avoids it'],
+    ]);
+    expect(built.avoided?.map((a) => [a.key, a.unavoidable])).toEqual([[LEAD, true], ['t:antimony_dust@0', false], ['t:lead_ingot@0', true]]);
+  });
+  it('marks an option whose only chain around the avoid list runs on a machine that cannot be built here, in every mode', async () => {
+    // The controller's ruling after the verify of 5e3820f, (a): soldering alloy is also alloyed from lead, but only on a
+    // Lead Alloy Smelter that no recipe makes. With tin avoided the chain around it is walked again without that machine
+    // (as the line is, controller ruling OQ5 a), so no chain that can be built makes soldering alloy without tin: the
+    // option says why, not that it is usable through the Lead Alloy Smelter.
+    const spec = structuredClone(CIRCUIT);
+    spec.maps!.push({ id: 'gt.recipe.leadalloy', name: 'Lead Alloy Smelter' });
+    spec.machines!.push({ mteId: 77, name: 'Lead Alloy Smelter', maps: ['gt.recipe.leadalloy'], tier: 1 });
+    spec.recipes!.push({ id: 'alloy-solder-pb', map: 'gt.recipe.leadalloy', in: [['t:lead_ingot@0', 50], ['t:antimony_dust@0', 10]], out: [['t:solder_ingot@0', 10]], eut: 16 });
+    const p = packFromSpec(spec);
+    for (const buildHorizonHours of [null, 24]) {
+      const plan = await planLine(p, S({ avoid: ['Tin'], buildHorizonHours }), emptyContext());
+      expect(ids(plan), String(buildHorizonHours)).toEqual(['ca', 'x-lead']);
+      expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.unusable]), String(buildHorizonHours)).toEqual([
+        [SOLDER, 0, ['Lead Alloy Smelter cannot be built here (no recipe in this pack)']], [LEAD, 1, undefined]]);
+    }
+    // Where the Lead Alloy Smelter can be built, the chain around tin is the option's again.
+    const buildable = packFromSpec(withBuildRecipes(spec, [77]));
+    const plan = await planLine(buildable, S({ avoid: ['Tin'] }), emptyContext());
+    expect(circuitStep(plan).options?.[0]?.choices.map((c) => [c.key, c.share, c.rawPerRun, c.steps, c.via, c.unusable])).toEqual([
+      [LEAD, 1, 2, 1, ['Fluid Extractor'], undefined], [SOLDER, 0, 3, 2, ['Fluid Extractor', 'Lead Alloy Smelter'], undefined]]);
   });
   it('says it ignores a pinned option on the avoid list without promising another option', async () => {
     // Plan 09's final review: at LV only lead can be extracted (the solder and tin extractors need 34 EU/t, an MV machine),

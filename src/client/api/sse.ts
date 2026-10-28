@@ -1,10 +1,12 @@
 // The live event stream of one open project (architecture §8): exactly one EventSource per open project, because a
 // browser allows only six connections per origin across all its tabs (web-stack §4.4). The stream starts with a
-// `snapshot` of the project after every (re)connect, then carries each applied `op` and a `plan` event whenever the plan
-// may have changed. The browser reconnects by itself after a network failure (the server sends `retry: 2000`). A
-// `deleted` event (§11.24) ends it for good, as does finding the project gone when it tries to reopen.
+// `snapshot` of the project after every (re)connect, then carries each applied `op`, a `plan` event whenever the plan
+// may have changed and a `compare` event when the modes a compare was still planning are done (add-on 17, §11.45 (5)).
+// The parts of the page beside the project store (the Compare card) hear the `plan` and `compare` events of that one
+// stream through `listenProjectEvents`. The browser reconnects by itself after a network failure (the server sends
+// `retry: 2000`). A `deleted` event (§11.24) ends it for good, as does finding the project gone when it tries to reopen.
 
-import type { DeletedEvent, OpEvent, PlanEvent } from '../../shared/types/api.ts';
+import type { CompareEvent, DeletedEvent, OpEvent, PlanEvent } from '../../shared/types/api.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { ApiError, apiGet } from './client.ts';
 
@@ -30,6 +32,31 @@ function dataOf<T>(e: Event): T {
   return JSON.parse((e as MessageEvent<string>).data) as T;
 }
 
+/** A `plan` or `compare` event of a project's stream, with the project revision it came with. */
+export interface ProjectSignal { kind: 'plan' | 'compare'; rev: number }
+
+/** Who hears each project's `plan` and `compare` events beside its store, by project id. */
+const signalListeners = new Map<string, Set<(s: ProjectSignal) => void>>();
+
+/**
+ * Calls `fn` with each `plan` and `compare` event of project `id`'s stream, the one its store keeps open (no second
+ * EventSource); the returned function stops it.
+ */
+export function listenProjectEvents(id: string, fn: (s: ProjectSignal) => void): () => void {
+  let listeners = signalListeners.get(id);
+  if (listeners === undefined) signalListeners.set(id, (listeners = new Set()));
+  const own = listeners;
+  own.add(fn);
+  return () => {
+    own.delete(fn);
+    if (own.size === 0 && signalListeners.get(id) === own) signalListeners.delete(id);
+  };
+}
+
+function signal(id: string, s: ProjectSignal): void {
+  for (const fn of [...(signalListeners.get(id) ?? [])]) fn(s);
+}
+
 /** Opens the project's event stream; the returned function closes it for good. */
 export function openProjectEvents(id: string, on: ProjectEventHandlers): () => void {
   const path = `/api/projects/${encodeURIComponent(id)}`;
@@ -48,7 +75,12 @@ export function openProjectEvents(id: string, on: ProjectEventHandlers): () => v
     es.addEventListener('open', () => on.connected(true));
     es.addEventListener('snapshot', (e) => on.snapshot(dataOf<Project>(e)));
     es.addEventListener('op', (e) => on.op(dataOf<OpEvent>(e)));
-    es.addEventListener('plan', (e) => on.plan(dataOf<PlanEvent>(e)));
+    es.addEventListener('plan', (e) => {
+      const event = dataOf<PlanEvent>(e);
+      on.plan(event);
+      signal(id, { kind: 'plan', rev: event.rev });
+    });
+    es.addEventListener('compare', (e) => signal(id, { kind: 'compare', rev: dataOf<CompareEvent>(e).rev }));
     es.addEventListener('deleted', (e) => {
       stop();   // before the server ends the stream, so the browser never reconnects into a 404
       on.deleted(dataOf<DeletedEvent>(e));

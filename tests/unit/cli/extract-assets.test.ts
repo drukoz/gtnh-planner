@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeJar } from '../../helpers/jar.ts';
@@ -12,6 +12,7 @@ import {
 import { DEFAULT_CONFIG, configPath, loadConfig, saveConfig, type AppConfig } from '../../../src/server/config.ts';
 
 const PNG = makePng(16, 16, [90, 90, 90, 255]);
+const PACK_PNG = makePng(16, 16, [40, 160, 220, 255]);
 
 async function setup() {
   const dir = await mkdtemp(join(tmpdir(), 'gp-xa-'));
@@ -24,6 +25,19 @@ async function setup() {
   const config: AppConfig = { ...DEFAULT_CONFIG, dataDir: join(dir, 'data'), serverFolder: srv };
   const lines: string[] = [];
   return { dir, srv, client, config, lines, deps: { config, home: join(dir, 'home'), out: (l: string) => lines.push(l), err: (l: string) => lines.push(l) } };
+}
+
+/** A client instance laid out as Prism Launcher's: `inst/.minecraft` holds `options.txt` and the zip pack `P.zip`. */
+async function instance(dir: string): Promise<string> {
+  const inst = join(dir, 'inst');
+  const game = join(inst, '.minecraft');
+  await mkdir(game, { recursive: true });
+  await writeFile(join(game, 'options.txt'), 'version:0\nresourcePacks:["P.zip"]\n');
+  await makeJar(join(game, 'resourcepacks', 'P.zip'), {
+    'pack.mcmeta': '{"pack":{"description":"P 1"}}',
+    'assets/extra/textures/items/thing.png': PACK_PNG,
+  });
+  return inst;
 }
 
 describe('extract-assets CLI', () => {
@@ -95,6 +109,144 @@ describe('extract-assets CLI', () => {
     expect(await main(['--no-client', '--server', bad], deps)).toBe(1);
     expect(lines.at(-1)).toMatch(/^Extraction failed; the previous textures are still in place: no mod jar could be read: broken\.jar \(.+\)$/);
     expect((await readFile(index)).equals(first)).toBe(true);
+  });
+
+  it('extracts the enabled packs from --instance or the config, read-only', async () => {
+    const { dir, config, deps, lines } = await setup();
+    const inst = await instance(dir);
+    const before = await snapshot(inst);
+    expect(await main(['--no-client', '--instance', inst], deps)).toBe(0);
+    expect(lines).toContain('Resource packs, first wins (as in the game\'s menu): P.zip (P 1)');
+    expect(lines.find((l) => l.startsWith('Extracted '))).toMatch(/ from 2 jars and 1 resource pack into /);
+    const ix = JSON.parse(await readFile(join(config.dataDir, 'assets', 'index.json'), 'utf8'));
+    expect(ix.files['extra/textures/items/thing.png'].jar).toBe('P.zip');
+    expect(await snapshot(inst)).toEqual(before);
+    lines.length = 0;
+    expect(await main(['--no-client'], { ...deps, config: { ...config, clientInstance: inst } })).toBe(0);
+    expect(lines).toContain('Resource packs, first wins (as in the game\'s menu): P.zip (P 1)');
+  });
+
+  it('reports pack changes', async () => {   // Review Focus 5
+    const { dir, deps, lines } = await setup();
+    const inst = await instance(dir);
+    await main(['--no-client', '--instance', inst], deps);
+    expect(lines.some((l) => l.startsWith('Resource packs changed'))).toBe(false);   // nothing before it
+    lines.length = 0;
+    await main(['--no-client', '--instance', inst], deps);
+    expect(lines.some((l) => l.startsWith('Resource packs changed'))).toBe(false);   // unchanged
+    lines.length = 0;
+    expect(await main(['--no-client', '--no-packs'], deps)).toBe(0);
+    expect(lines).toContain('Resource packs: off (--no-packs)');
+    expect(lines.find((l) => l.startsWith('Resource packs changed since the last extraction ('))).toBeDefined();
+    expect(lines).toContain('  removed P.zip');
+  });
+
+  it('prints the pack lines after the summary and the skipped jars, in order, and the pack warnings last', async () => {
+    const { dir, srv, config, deps, lines } = await setup();
+    expect(await main(['--no-client'], deps)).toBe(0);   // a stock run: the packs run below reports its packs as added
+    const { createdAt } = JSON.parse(await readFile(join(config.dataDir, 'assets', 'index.json'), 'utf8'));
+    await writeFile(join(srv, 'mods', 'broken.jar'), 'not a zip');
+    const game = join(await instance(dir), '.minecraft');
+    await writeFile(join(game, 'options.txt'), 'resourcePacks:["P.zip","gone","Q","P.zip"]\r\n');
+    await makeJar(join(game, 'resourcepacks', 'P.zip'), {
+      'pack.mcmeta': '{"pack":{"description":"P 1"}}',
+      'assets/extra/textures/items/thing.png': PACK_PNG,
+      'assets/gregtech/textures/blocks/iconsets/machine_lv_side.png': PACK_PNG,   // a zip matches exactly: left out
+      'assets/extra/textures/items/new.png': Buffer.from([0xff, 0xd8, 0xff, 0xe0]),   // a JPEG
+    });
+    const q = join(game, 'resourcepacks', 'Q');   // a folder pack
+    await mkdir(join(q, 'assets', 'gregtech', 'textures', 'blocks', 'iconsets'), { recursive: true });
+    await writeFile(join(q, 'pack.mcmeta'), '{"pack":{}}');   // no version: named alone
+    await writeFile(join(q, 'assets', 'gregtech', 'textures', 'blocks', 'iconsets', 'machine_lv_side.png'), PACK_PNG);
+    lines.length = 0;
+    expect(await main(['--no-client', '--instance', game], deps)).toBe(0);
+    expect(lines).toEqual([
+      'warning: no client jar - vanilla block and item textures will be missing',
+      expect.stringMatching(/^Extracted 2 textures \(\d+\.\d MB\) from 2 jars and 2 resource packs into .*data\/assets$/),
+      expect.stringMatching(/^0 identical duplicates, 0 conflicting paths \(/),
+      expect.stringMatching(/^warning: skipped broken\.jar: /),
+      '2 of them from resource packs (2 replace a jar\'s texture)',   // P.zip's thing.png; Q's file as the jar's MACHINE_LV_SIDE.png
+      '1 files of zip packs left out: their names differ from the game\'s only in case',
+      'Resource packs, first wins (as in the game\'s menu): Q, P.zip (P 1)',
+      `Resource packs changed since the last extraction (${createdAt}):`,
+      '  added P.zip (P 1)',
+      '  added Q ()',
+      'warning: resource pack gone skipped: not in resourcepacks/',
+      'warning: resource pack P.zip skipped: listed twice',
+      'warning: P.zip: extra/textures/items/new.png is not a PNG (the game may still read it); left out',
+    ]);
+  });
+
+  it('says why it used no pack', async () => {
+    const { dir, config, deps, lines } = await setup();
+    const inst = await instance(dir);
+    const options = join(inst, '.minecraft', 'options.txt');
+    const afterSummary = () => lines.slice(3);   // after the no-client warning and the two summary lines
+    await writeFile(options, 'resourcePacks:[]\n');
+    expect(await main(['--no-client', '--instance', inst], deps)).toBe(0);
+    expect(lines[1]).toMatch(/ from 2 jars into /);
+    expect(afterSummary()).toEqual(['Resource packs: none enabled in options.txt']);
+    lines.length = 0;
+    await writeFile(options, 'resourcePacks:["gone"]\n');
+    expect(await main(['--no-client', '--instance', inst], deps)).toBe(0);
+    expect(afterSummary()).toEqual(['Resource packs: none usable (all skipped, see warnings)', 'warning: resource pack gone skipped: not in resourcepacks/']);
+    lines.length = 0;
+    expect(await main(['--no-client'], { ...deps, config: { ...config, clientInstance: ' ' } })).toBe(0);   // white space: unset
+    expect(afterSummary()).toEqual([expect.stringMatching(/^No client instance set: /)]);
+    lines.length = 0;
+    expect(await main(['--no-client', '--no-packs'], { ...deps, config: { ...config, clientInstance: inst } })).toBe(0);
+    expect(afterSummary()).toEqual(['Resource packs: off (--no-packs)']);   // over the setting
+  });
+
+  it('compares with no previous index when it cannot read the old one', async () => {
+    const { dir, config, deps, lines } = await setup();
+    const inst = await instance(dir);
+    await mkdir(join(config.dataDir, 'assets'), { recursive: true });
+    await writeFile(join(config.dataDir, 'assets', 'index.json'), '{oops');
+    expect(await main(['--no-client', '--instance', inst], deps)).toBe(0);
+    expect(lines.at(-1)).toBe('Resource packs, first wins (as in the game\'s menu): P.zip (P 1)');   // and no "changed since" line
+  });
+
+  it('needs a value for --instance', async () => {
+    const { deps, lines } = await setup();
+    expect(await main(['--no-client', '--instance', ' '], deps)).toBe(2);
+    expect(lines).toEqual(['--instance needs a value\nUsage: npm run extract-assets -- [--server <folder>] [--client-jar <path> | --no-client] [--instance <folder> | --no-packs]']);
+  });
+
+  it('explains a bad instance', async () => {
+    const { dir, deps, lines } = await setup();
+    expect(await main(['--no-client', '--instance', join(dir, 'nowhere')], deps)).toBe(2);
+    expect(lines.at(-1)).toMatch(/^No options\.txt in .*nowhere or its \.minecraft folder$/);
+    expect(await main(['--instance', 'x', '--no-packs'], deps)).toBe(2);
+    expect(lines.join('\n')).toContain('--instance and --no-packs cannot be used together');
+    expect(await main(['--no-client'], deps)).toBe(0);
+    expect(lines.at(-1)).toBe('No client instance set: textures from the jars only (set "clientInstance" in data/config.json or pass --instance <folder>)');
+  });
+
+  it('explains an unreadable options.txt', async () => {
+    const { dir, deps, lines } = await setup();
+    const inst = await instance(dir);
+    const options = join(inst, '.minecraft', 'options.txt');
+    await chmod(options, 0o000);
+    try {
+      expect(await main(['--no-client', '--instance', inst], deps)).toBe(2);
+      expect(lines.at(-1)).toMatch(/^Cannot read .*options\.txt: /);
+    } finally {
+      await chmod(options, 0o644);
+    }
+  });
+
+  it('explains an instance folder it cannot look into, and extracts nothing', async () => {
+    const { dir, config, deps, lines } = await setup();
+    const inst = await instance(dir);
+    await chmod(inst, 0o000);   // looking for inst/options.txt then fails with EACCES, not "no such file"
+    try {
+      expect(await main(['--no-client', '--instance', inst], deps)).toBe(2);
+      expect(lines.at(-1)).toMatch(/^Cannot read .*inst: EACCES/);
+    } finally {
+      await chmod(inst, 0o755);
+    }
+    expect(await readFile(join(config.dataDir, 'assets', 'index.json')).catch(() => null)).toBeNull();
   });
 
   it('runs as a script', async () => {

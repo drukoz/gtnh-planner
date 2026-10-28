@@ -5,6 +5,7 @@ import {
   type StepLine,
 } from '../../../src/server/planner/machines.ts';
 import { buildCandidates, virtualKey, type CandidateGraph, type LeafOracle, type PlanEnv } from '../../../src/server/planner/candidates.ts';
+import { type MachineId } from '../../../src/shared/ids.ts';
 import { computeAvailability, reachableDims } from '../../../src/server/planner/availability.ts';
 import { makeLeafOracle, makePrices } from '../../../src/server/planner/costs.ts';
 import { solveLine } from '../../../src/server/planner/solve.ts';
@@ -16,25 +17,25 @@ import type { PlanSettings } from '../../../src/shared/types/plan.ts';
 
 const pack = miniGt();
 const R = (id: string) => pack.recipeById.get(id)!;
-const none = new Map<number, number>();
+const none = new Map<MachineId, number>();
 const pick = (id: string, map: string, groupTier: number, extra = {}) =>
   pickMachine(pack, R(id), map, { groupTier, coilHeat: 2701, automateCrafting: false, owned: none, ...extra });
 
 describe('pickMachine', () => {
   it('uses the group tier and overclocks', () => {
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 1)).toMatchObject({ mteId: 101, tier: 1, runsPerSecondPerMachine: 0.2, oc: { euPerTick: 24, durationTicks: 100 } });
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 2)).toMatchObject({ mteId: 102, tier: 2, runsPerSecondPerMachine: 0.4, oc: { euPerTick: 96, durationTicks: 50, overclocks: 1 } });
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 1)).toMatchObject({ id: 'gt:101', tier: 1, runsPerSecondPerMachine: 0.2, oc: { euPerTick: 24, durationTicks: 100 } });
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 2)).toMatchObject({ id: 'gt:102', tier: 2, runsPerSecondPerMachine: 0.4, oc: { euPerTick: 96, durationTicks: 50, overclocks: 1 } });
   });
   it('honours a per-recipe tier and prefers owned machines', () => {
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier: 1 }).mteId).toBe(101);
-    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { owned: new Map([[101, 2]]) }).mteId).toBe(101);
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier: 1 }).id).toBe('gt:101');
+    expect(pick('bend-plate', 'gt.recipe.metalbender', 2, { owned: new Map([['gt:101', 2]]) }).id).toBe('gt:101');
   });
   it('crafting is by hand unless automated', () => {
-    expect(pick('hammer-plate', 'crafting', 2)).toMatchObject({ mteId: -3, name: 'Crafting table (by hand)', handCraft: true, runsPerSecondPerMachine: 1 });
-    expect(pick('hammer-plate', 'crafting', 2, { automateCrafting: true })).toMatchObject({ mteId: -1, handCraft: false });
+    expect(pick('hammer-plate', 'crafting', 2)).toMatchObject({ id: 'mc:hand', name: 'Crafting table (by hand)', handCraft: true, runsPerSecondPerMachine: 1 });
+    expect(pick('hammer-plate', 'crafting', 2, { automateCrafting: true })).toMatchObject({ id: 'mc:crafting_table', handCraft: false });
   });
   it('plans multiblocks with one hatch at the group tier', () => {
-    expect(pick('ebf-ti', 'gt.recipe.blastfurnace', 3)).toMatchObject({ mteId: 1000, kind: 'multiblock', tier: 3, oc: { euPerTick: 480, durationTicks: 1000 } });
+    expect(pick('ebf-ti', 'gt.recipe.blastfurnace', 3)).toMatchObject({ id: 'gt:1000', kind: 'multiblock', tier: 3, oc: { euPerTick: 480, durationTicks: 1000 } });
   });
 });
 
@@ -61,7 +62,7 @@ describe('planSteps and buildFlows', () => {
   });
   it('declined machines are not counted as owned', async () => {
     const owned = [{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }];
-    expect([...ownedMachineMap({ ...emptyContextForTest(), ownedMachines: owned }, { ...defaultSettings(), declineReuse: [121] })]).toEqual([[101, 1]]);
+    expect([...ownedMachineMap({ ...emptyContextForTest(), ownedMachines: owned }, { ...defaultSettings(), declineReuse: [121] })]).toEqual([['gt:101', 1]]);
     const { steps } = await lvCircuit(owned, [121]);
     expect(steps.find((s) => s.id === 'circuit-lv')).toMatchObject({ count: 5, owned: 0 });
     expect(steps.find((s) => s.id === 'bend-plate')).toMatchObject({ owned: 1 });
@@ -71,6 +72,35 @@ describe('planSteps and buildFlows', () => {
     expect(buildFlows(graph, sol, ['t:circuit@0']).map((f) => [f.from, f.to, f.key, Number(f.perSecond.toFixed(6))])).toEqual([
       ['bend-plate', 'circuit-lv', 't:iron_plate@0', 0.5], ['circuit-lv', 'out', 't:circuit@0', 0.5], ['raw', 'bend-plate', 't:iron_ingot@0', 0.5],
       ['raw', 'circuit-lv', 't:redstone@0', 0.5], ['raw', 'wire', 't:copper_ingot@0', 0.5], ['wire', 'circuit-lv', 't:copper_wire@0', 1]]);
+  });
+
+  it('sinks a farm\'s share of a good first and feeds the line from its own maker (12 x 17 F5)', () => {
+    // farm: 1 run -> 6 wood + 0.2 resin; centrifuge: 6 wood -> 6 resin; press: 4 resin -> 1 target. Resin sunk: 2.2. Split pro
+    // rata the farm's resin went in and out at once: the layout lists it on both chests and EnderIO moves it between them.
+    const recipes = [
+      { id: 'centrifuge', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', 6], ['t:wood@0', -6]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:resin@0' },
+      { id: 'farm', kind: 'recipe', mapId: 'f', coeffs: [['t:resin@0', 0.2], ['t:wood@0', 6]], euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: 't:wood@0', farm: true },
+      { id: 'press', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', -4], ['t:target@0', 1]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:target@0' },
+    ];
+    const graph = { targets: ['t:target@0'], recipes, goods: new Map(), blocked: new Map(), warnings: [] } as never;
+    const sol = { status: 'ok', runs: new Map([['centrifuge', 1], ['farm', 1], ['press', 1]]), buys: new Map(), sinks: new Map([['t:resin@0', 2.2]]),
+      rawCost: 0, leastRawCost: 0, blockers: [], warnings: [] } as never;
+    const resin = buildFlows(graph, sol, ['t:target@0']).filter((f) => f.key === 't:resin@0').map((f) => [f.from, f.to, Number(f.perSecond.toFixed(6))]);
+    expect(resin).toEqual([['centrifuge', 'press', 4], ['centrifuge', 'sink', 2], ['farm', 'sink', 0.2]]);
+  });
+
+  it('feeds the line what a farm makes beyond what the line throws away (12 x 17 F5)', () => {
+    // farm 3 resin, centrifuge 2, press takes 4, 1 sunk: the farm's 1 to sink, its other 2 and the centrifuge's 2 to the press.
+    const recipes = [
+      { id: 'centrifuge', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', 2], ['t:wood@0', -6]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:resin@0' },
+      { id: 'farm', kind: 'recipe', mapId: 'f', coeffs: [['t:resin@0', 3], ['t:wood@0', 6]], euPerRun: 0, nonConsumed: [], needsCleanroom: false, main: 't:wood@0', farm: true },
+      { id: 'press', kind: 'recipe', mapId: 'm', coeffs: [['t:resin@0', -4], ['t:target@0', 1]], euPerRun: 1, nonConsumed: [], needsCleanroom: false, main: 't:target@0' },
+    ];
+    const graph = { targets: ['t:target@0'], recipes, goods: new Map(), blocked: new Map(), warnings: [] } as never;
+    const sol = { status: 'ok', runs: new Map([['centrifuge', 1], ['farm', 1], ['press', 1]]), buys: new Map(), sinks: new Map([['t:resin@0', 1]]),
+      rawCost: 0, leastRawCost: 0, blockers: [], warnings: [] } as never;
+    const resin = buildFlows(graph, sol, ['t:target@0']).filter((f) => f.key === 't:resin@0').map((f) => [f.from, f.to, Number(f.perSecond.toFixed(6))]);
+    expect(resin).toEqual([['centrifuge', 'press', 2], ['farm', 'press', 2], ['farm', 'sink', 1]]);
   });
 });
 
@@ -317,8 +347,8 @@ describe('more machine and flow cases', () => {
     expect([at(0), at(2), at(3), at(9)]).toEqual([2, 2, 3, 3]);
   });
   it('clamps a per-recipe singleblock tier and runs vanilla furnace recipes at their own speed', () => {
-    expect([0, 7].map((wantTier) => pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier }).mteId)).toEqual([101, 102]);
-    expect(pick('smelt-v', 'furnace', 1)).toMatchObject({ mteId: -2, name: 'Furnace', kind: 'furnace', runsPerSecondPerMachine: 0.1,
+    expect([0, 7].map((wantTier) => pick('bend-plate', 'gt.recipe.metalbender', 2, { wantTier }).id)).toEqual(['gt:101', 'gt:102']);
+    expect(pick('smelt-v', 'furnace', 1)).toMatchObject({ id: 'mc:furnace', name: 'Furnace', kind: 'furnace', runsPerSecondPerMachine: 0.1,
       oc: { euPerTick: 0, durationTicks: 200, overclocks: 0 } });
   });
   it('finds the programmed circuit in the recipe meta or a not-consumed input', () => {

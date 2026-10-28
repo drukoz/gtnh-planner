@@ -4,6 +4,7 @@ import { unitsFromPlan, placeUnits } from '../../../src/server/layout/arrange.ts
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makePlan, makeScan, IDS } from '../../helpers/layout-fixtures.ts';
 import type { Plan } from '../../../src/shared/types/plan.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 
 const CONV = 'gregtech:gt.metaitem.01@32630';
 const FILTER = 'gregtech:gt.metaitem.01@32270';
@@ -41,7 +42,7 @@ describe('machine-to-machine mode', () => {
 
   it("warns when a machine's recipes also take another step's item from the shared pipe", () => {
     const pack = layoutPack();
-    pack.machines.get(IDS.ASSEMBLER)!.maps = ['assembler'];
+    machineByMteId(pack, IDS.ASSEMBLER)!.maps = ['assembler'];
     pack.recipes.push({ id: 'asm-in', source: 'gt', maps: ['assembler'], inputs: [{ options: [{ key: 't:in@0', amount: 1 }], consumed: true, chance: 1, slot: 0 }],
       outputs: [{ key: 't:x@0', amount: 1, chance: 1 }], euPerTick: 30, durationTicks: 20, amps: 1, specialValue: 0, meta: {}, flags: {} });
     pack.consumers.set('t:in@0', [pack.recipes.length - 1]);

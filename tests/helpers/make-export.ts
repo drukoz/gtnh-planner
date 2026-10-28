@@ -37,7 +37,8 @@ const MARKER_TEXT = { [MARKER_OK]: 'OK 0ms\n', [MARKER_FAILED]: 'FAILED 0ms\nsyn
 function defaultManifest(exportId: string): ManifestFile {
   return {
     format: EXPORT_FORMAT, exportId, exporterVersion: '0.1.0', exportedAt: '2026-10-17T12:00:00Z',
-    packVersion: '2.9.0-RC-1', gtVersion: '5.09.54.183', mods: { minecraft: '1.7.10', gregtech: '5.09.54.183' }, counts: {},
+    packVersion: '2.9.0-RC-1', gtVersion: '5.09.54.183', mcVersion: '1.7.10', loader: 'forge-10.13.4.1614',
+    mods: { minecraft: '1.7.10', gregtech: '5.09.54.183' }, counts: {},
     nameFailures: 0, nameFailureSamples: [], sectionMillis: {}, failedSections: [], skippedSections: [], warnings: [],
   };
 }

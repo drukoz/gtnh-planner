@@ -60,6 +60,13 @@ describe('reusing machines we have (rate)', () => {
     expect(stepOf(p, 'circuit-lv')).toMatchObject({ count: 3, owned: 1, reused: { count: 1, where: [] } });
     expect(built(p, ASSEMBLER)).toBe(2);
   });
+  it('reuses two machines of the "Machines we have" list without a world', async () => {
+    const p = await planLine(pack, S({ ownedManual: [{ mteId: ASSEMBLER, count: 2 }] }), emptyContext());
+    const step = stepOf(p, 'circuit-lv');
+    expect(step.reused?.count).toBe(2);
+    expect(step).toMatchObject({ count: 3, owned: 2, reused: { count: 2, where: [] } });
+    expect(built(p, ASSEMBLER)).toBe(1);
+  });
   it('adds the list to the scan, the scanned machines and where they stand first', async () => {
     const p = await planLine(pack, S({ ownedManual: [{ mteId: ASSEMBLER, count: 1 }] }), TWO_ASSEMBLERS);
     expect(stepOf(p, 'circuit-lv')).toMatchObject({ count: 3, owned: 3, reused: { count: 3, where: [A1, A2] } });
@@ -121,8 +128,8 @@ describe('reusing machines we have (Make N)', () => {
   });
   it('with the switch off, adds one new machine per type and reuses none, hammering the plates a new bender would not pay for', async () => {
     // Plan 12: a batch always weighs build cost, and for 10 circuits a new Basic Bending Machine (17 raw) costs more than
-    // the 10 extra iron ingots that hammering the plates takes.
-    const p = await planLine(pack, N({ reuseOwned: false }), TWO_ASSEMBLERS);
+    // the 10 extra iron ingots that hammering the plates takes (at No limit: at the default cap the bender wins, U2/F3b).
+    const p = await planLine(pack, N({ reuseOwned: false, rawCap: null }), TWO_ASSEMBLERS);
     expect(p.steps.map((s) => [s.id, s.count, s.owned, s.reused])).toEqual([
       ['circuit-lv', 1, 0, undefined], ['hammer-plate', 1, 0, undefined], ['wire', 1, 0, undefined]]);
     expect(built(p, ASSEMBLER)).toBe(1);
@@ -141,18 +148,18 @@ describe('ownedPools / ownedMachineMap', () => {
   const ctx = scanned({ mteId: ASSEMBLER, count: 2, where: [A1, A2] }, { mteId: BENDER, count: 1 });
   it('adds the list to the scan per type, positions only for what the scan found', () => {
     const settings = { ...defaultSettings(), ownedManual: [{ mteId: ASSEMBLER, count: 3 }, { mteId: 122, count: 1 }] };
-    // one entry per machine, in pool order: the scan's with where they stand, then the list's without a position
-    expect([...ownedPools(ctx, settings)]).toEqual([[ASSEMBLER, [A1, A2, null, null, null]], [BENDER, [null]], [122, [null]]]);
-    expect([...ownedMachineMap(ctx, settings)]).toEqual([[ASSEMBLER, 5], [BENDER, 1], [122, 1]]);
+    // one entry per machine, in pool order (by id): the scan's with where they stand, then the list's without a position
+    expect([...ownedPools(ctx, settings)]).toEqual([['gt:101', [null]], ['gt:121', [A1, A2, null, null, null]], ['gt:122', [null]]]);
+    expect([...ownedMachineMap(ctx, settings)]).toEqual([['gt:101', 1], ['gt:121', 5], ['gt:122', 1]]);
   });
   it('is empty with "Reuse machines we have" off and leaves out declined types', () => {
     expect([...ownedMachineMap(ctx, { ...defaultSettings(), reuseOwned: false, ownedManual: [{ mteId: 122, count: 1 }] })]).toEqual([]);
-    expect([...ownedMachineMap(ctx, { ...defaultSettings(), declineReuse: [ASSEMBLER], ownedManual: [{ mteId: ASSEMBLER, count: 1 }] })]).toEqual([[BENDER, 1]]);
+    expect([...ownedMachineMap(ctx, { ...defaultSettings(), declineReuse: [ASSEMBLER], ownedManual: [{ mteId: ASSEMBLER, count: 1 }] })]).toEqual([['gt:101', 1]]);
   });
   it('reads settings stored before the switch and the list as reuse on with an empty list', () => {
     const old = { ...defaultSettings() };
     delete old.reuseOwned;
     delete old.ownedManual;
-    expect([...ownedMachineMap(ctx, old)]).toEqual([[ASSEMBLER, 2], [BENDER, 1]]);
+    expect([...ownedMachineMap(ctx, old)]).toEqual([['gt:101', 1], ['gt:121', 2]]);
   });
 });

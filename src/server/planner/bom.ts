@@ -3,15 +3,18 @@
 // materials, plus those base materials summed, each saying which lines need it. `expandBomLines` gives Plan 5's layout
 // parts the same breakdown.
 
-import { PSEUDO_IDS } from '../../shared/gt/tiers.ts';
+import { compareMachineId, isPseudoMachineId, machineIdOfLegacy, type MachineId } from '../../shared/ids.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { machineGroups } from '../../shared/plan/pools.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
 import { FREE_KEYS, type BomLine, type BomMade, type PlanContext, type PlanSettings, type PlanStep, type PlanWarning } from '../../shared/types/plan.ts';
+import { allMachineIds, allMachines, machineByMteId, machineOf } from '../pack/lookup.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
 import { structureParts } from './build-cost.ts';
 import { buildCandidates, heldOption, keptOptions, type HeldAvoid, type LeafOracle, type LpRecipe, type PlanEnv } from './candidates.ts';
 import { makePrices } from './costs.ts';
+import { exportPack } from './farms/pack.ts';
+import { plantingParts, soilWork } from './farms/recipes.ts';
 import { madePerRun, makersOf, orderJobs, ownedForParts, partMachine, poolMakes, settleRecipes, unmadeCause } from './howto.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
@@ -65,12 +68,14 @@ function round6(x: number): number {
   return Math.round(x * 1e6) / 1e6 || 0;
 }
 
-/** The pack's cleanroom (the lowest mteId when there are several), if it has one. */
+/** The pack's cleanroom (the lowest id when there are several), if it has one. */
 export function cleanroomMachine(pack: Pack): Machine | undefined {
   let room: Machine | undefined;
-  for (const m of pack.machines.values()) {
+  for (const id of allMachineIds(pack)) {
+    const m = machineOf(pack, id);
+    if (m === undefined) continue;
     const simpleName = m.cls.slice(m.cls.lastIndexOf('.') + 1);
-    if (simpleName === CLEANROOM_CLASS && (room === undefined || m.mteId < room.mteId)) room = m;
+    if (simpleName === CLEANROOM_CLASS && (room === undefined || compareMachineId(m.id, room.id) < 0)) room = m;
   }
   return room;
 }
@@ -108,12 +113,12 @@ export function stepProductName(pack: Pack, step: PlanStep): string {
 
 const MACHINE_ITEMS = new WeakMap<Pack, ReadonlyMap<StuffKey, Machine>>();
 
-/** Each machine's item → the machine (the lowest mteId when several share an item), once per pack. */
+/** Each machine's item → the machine (the lowest id when several share an item), once per pack. */
 function machineItems(pack: Pack): ReadonlyMap<StuffKey, Machine> {
   let byItem = MACHINE_ITEMS.get(pack);
   if (byItem === undefined) {
     const map = new Map<StuffKey, Machine>();
-    for (const m of [...pack.machines.values()].sort((a, b) => a.mteId - b.mteId)) if (!map.has(m.itemKey)) map.set(m.itemKey, m);
+    for (const m of allMachines(pack)) if (!map.has(m.itemKey)) map.set(m.itemKey, m);
     byItem = map;
     MACHINE_ITEMS.set(pack, byItem);
   }
@@ -189,11 +194,19 @@ export function recipeParts(
  * merged, sorted by group then key, and broken down to base materials. The warnings are `no-cleanroom` and the
  * breakdown's own `graph-too-big`. With `avoid` (what the line avoids) each not-consumed slot holds an option the line
  * may use (`heldOption`); the breakdown itself avoids nothing (ruling R6).
+ *
+ * Add-on 17: `pack` may be the line's farm pack (farms/pack.ts), whose farm recipes say what each farm step plants: a crop
+ * farm its Crop Sticks, soil and seeds, one each per crop stick it tends (`FarmStep.sticks`, `plantingParts`: the soil
+ * as the item placed for it, so a farm on farmland lists dirt, `<crop name> farm (hoe it into Farmland)`; the seeds come
+ * from the group's own seed bank, so the build cost leaves them out), a new Tree Growth Simulator its sapling, one per
+ * new machine; each a one-off line `<crop or sapling name> farm`, which the build steps word as planting
+ * (steps.ts). The breakdown reads the export pack (`exportPack`, ruling S5).
  */
 export async function buildBom(
   pack: Pack, steps: PlanStep[],
   opts: { settings: PlanSettings; env: PlanEnv; leaf: LeafOracle; ctx: PlanContext; avoid?: HeldAvoid },
 ): Promise<Bom> {
+  const base = exportPack(pack);
   const drafts = new Map<string, { key: StuffKey; amount: number; whys: string[]; group: Group }>();
   const add = (key: StuffKey, amount: number, why: string, group: Group): void => {
     const id = `${group}\u0000${key}`;
@@ -206,19 +219,19 @@ export async function buildBom(
   };
 
   const makeN = opts.settings.mode === 'makeN';
-  const typesSeen = new Set<number>();
+  const typesSeen = new Set<MachineId>();
   // a sharing pool's machines once, by its first step (`machineGroups`): its steps' `count`, `owned` and held items are
   // the pool's
   for (const group of machineGroups(steps)) {
     const step = group[0]!;
-    const mteId = step.machine.mteId;
-    const machine = PSEUDO_IDS.has(mteId) ? undefined : pack.machines.get(mteId);
-    if (machine !== undefined && !(makeN && typesSeen.has(mteId))) {
-      typesSeen.add(mteId);
+    const id = machineIdOfLegacy(step.machine.mteId);
+    const machine = isPseudoMachineId(id) ? undefined : machineOf(pack, id);
+    if (machine !== undefined && !(makeN && typesSeen.has(id))) {
+      typesSeen.add(id);
       const n = step.count - step.owned;
       if (n > 0) {
         add(machine.itemKey, n, `${n}× ${step.machine.name}`, 'machines');
-        for (const [key, cells] of structureParts(pack, machine)) add(key, cells * n, `structure of ${n}× ${step.machine.name}`, 'machines');
+        for (const [key, cells] of structureParts(base, machine)) add(key, cells * n, `structure of ${n}× ${step.machine.name}`, 'machines');
       }
     }
     for (const { key, amount } of stepOneOffs(pack, step, opts.avoid)) {
@@ -237,14 +250,29 @@ export async function buildBom(
   for (const [key, products] of toolUses) {
     add(key, 1, `1× ${pack.nameOf(key)} (tool for hand-crafting ${[...products].join(', ')})`, 'one-off');
   }
+  // What the line's farms plant (add-on 17): a crop farm's parts (`plantingParts`), its soil as the item placed for it.
+  for (const step of steps) {
+    const farm = step.farm === undefined ? undefined : pack.recipeById.get(step.recipeId)?.meta.farm;
+    if (farm?.kind === 'crop' && farm.crop !== undefined) {
+      const sticks = step.farm?.sticks ?? 0;
+      const why = `${farm.crop.name} farm`;
+      for (const p of sticks > 0 ? plantingParts(farm) : []) {
+        const work = p.soil === undefined ? undefined : soilWork(p.soil);
+        add(p.key, sticks, work === undefined ? why : `${why} (${work})`, 'one-off');
+      }
+    } else if (farm?.kind === 'tgs' && farm.sapling !== undefined) {
+      const n = step.count - step.owned;
+      if (n > 0) add(farm.sapling, n, `${pack.nameOf(farm.sapling)} farm`, 'one-off');
+    }
+  }
 
   const warnings: PlanWarning[] = [];
   const clean = steps.filter((s) => s.needsCleanroom === true);
   if (clean.length > 0) {
     const products = [...new Set(clean.map((s) => stepProductName(pack, s)))].join(', ');
-    const room = cleanroomMachine(pack);
+    const room = cleanroomMachine(base);
     // the group's own cleanroom needs no building (plan 12 Task 6)
-    const owned = room !== undefined && (ownedPools(opts.ctx, opts.settings).get(room.mteId)?.length ?? 0) > 0;
+    const owned = room !== undefined && (ownedPools(opts.ctx, opts.settings).get(room.id)?.length ?? 0) > 0;
     if (room === undefined) warnings.push({ code: 'no-cleanroom', text: `Making ${products} needs a cleanroom, but this pack has no cleanroom machine` });
     else if (!owned) add(room.itemKey, 1, `cleanroom for ${products}`, 'machines');
   }
@@ -252,7 +280,7 @@ export async function buildBom(
   const lines: BomLine[] = [...drafts.values()]
     .map((d) => ({ key: d.key, amount: round9(d.amount), why: d.whys.join('; '), group: d.group }))
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || byString(a.key, b.key));
-  const expanded = await expandWith(pack, lines, { ...opts, steps });
+  const expanded = await expandWith(base, lines, { ...opts, steps });
   return { lines: expanded.lines, totals: expanded.totals, warnings: [...warnings, ...expanded.warnings], alternatives: expanded.alternatives, makes: expanded.makes };
 }
 
@@ -265,7 +293,8 @@ export async function buildBom(
  * (`Bom.alternatives`, by key), so the breakdown's warnings are not passed on here: `makes` and `alternatives` are
  * optional additions to §11.15's shape; `alternatives` is absent when the lines make nothing (or nothing with a recipe at
  * a finite cost). With `opts.steps` the machine pass knows the line's machines and the owned ones as `buildBom` does;
- * without them, no line machines and only the context's owned ones.
+ * without them, no line machines and only the context's owned ones. On the export pack, also when given a line's farm
+ * pack (`exportPack`, add-on 17).
  */
 export async function expandBomLines(
   pack: Pack, lines: BomLine[], settings: PlanSettings, ctx: PlanContext,
@@ -279,7 +308,7 @@ export async function expandBomLines(
   alternatives?: Record<StuffKey, PlanStep['alternatives']>;
 }> {
   const { env, leaf } = await lineLeaf(pack, settings, ctx);
-  const expanded = await expandWith(pack, lines, { settings, env, leaf, ctx, ...(opts?.steps === undefined ? {} : { steps: opts.steps }) });
+  const expanded = await expandWith(exportPack(pack), lines, { settings, env, leaf, ctx, ...(opts?.steps === undefined ? {} : { steps: opts.steps }) });
   return {
     lines: expanded.lines, totals: expanded.totals, makes: expanded.makes,
     ...(expanded.alternatives.size === 0 ? {} : { alternatives: Object.fromEntries(expanded.alternatives) }),
@@ -373,15 +402,16 @@ async function recipeBook(pack: Pack, x: Expansion, targets: StuffKey[], isLeaf:
  * R2): a running line makes its own with a generator (`PlanBasis.supplied`), but the one-off materials of its machines
  * get none. And a leaf the line may also make (`LeafDecision.alsoMade`, plan 12: a gathered world block) is a plain one
  * here: one-off build materials are dug, so the breakdown never walks a gathered block's producers, nor prices it at
- * what free cobblestone and hammers would make it for.
+ * what free cobblestone and hammers would make it for. So is a leaf a farm of the line makes (`farmMade`, add-on 17): the
+ * breakdown buys it, as the farm-free cost model prices it.
  */
 function freeLeaves(pack: Pack, x: Expansion): LeafOracle {
   const prices = makePrices(pack, x.settings.costOverrides);
   return (key) => {
     const d = x.leaf(key);
     if (d.buyable) {
-      if (d.alsoMade !== true) return d;
-      const { alsoMade: _made, ...dug } = d;
+      if (d.alsoMade !== true && d.farmMade !== true) return d;
+      const { alsoMade: _made, farmMade: _farmed, ...dug } = d;
       return dug;
     }
     return FREE.has(key) ? { buyable: true, cost: prices.price(key), leafClass: 'free' } : d;
@@ -412,7 +442,7 @@ function madeParts(pack: Pack, lines: readonly BomLine[], x: Expansion, book: Re
 } {
   const steps = x.steps ?? [];
   const owned = ownedForParts(x.ctx, x.settings, steps);
-  const line = new Set(steps.filter((s) => s.count > s.owned && !PSEUDO_IDS.has(s.machine.mteId)).map((s) => s.machine.mteId));
+  const line = new Set(steps.filter((s) => s.count > s.owned).map((s) => machineIdOfLegacy(s.machine.mteId)).filter((id) => !isPseudoMachineId(id)));
   const reach = (start: StuffKey): Set<StuffKey> => {
     const seen = new Set<StuffKey>();
     const stack = [start];
@@ -425,22 +455,22 @@ function madeParts(pack: Pack, lines: readonly BomLine[], x: Expansion, book: Re
     }
     return seen;
   };
-  const exclude = new Map<StuffKey, Set<number>>();
-  for (const mteId of [...line].sort((a, b) => a - b)) {
-    const m = pack.machines.get(mteId);
+  const exclude = new Map<StuffKey, Set<MachineId>>();
+  for (const id of [...line].sort(compareMachineId)) {
+    const m = machineOf(pack, id);
     if (m === undefined) continue;
     const own = new Set([m.itemKey, ...structureParts(pack, m).keys()]);
     for (const top of lines) {
       if (!own.has(top.key)) continue;
       for (const key of reach(top.key)) {
-        const set = exclude.get(key) ?? new Set<number>();
-        set.add(mteId);
+        const set = exclude.get(key) ?? new Set<MachineId>();
+        set.add(id);
         exclude.set(key, set);
       }
     }
   }
   const machines = new Map<StuffKey, BomMade['machine'] | null>();
-  const machineOf = (key: StuffKey, lp: LpRecipe): BomMade['machine'] | null => {
+  const jobMachine = (key: StuffKey, lp: LpRecipe): BomMade['machine'] | null => {
     if (!machines.has(key)) {
       const r = pack.recipeById.get(lp.id);
       machines.set(key, r === undefined || lp.mapId === null ? null : partMachine(pack, r, lp.mapId, {
@@ -453,11 +483,11 @@ function madeParts(pack: Pack, lines: readonly BomLine[], x: Expansion, book: Re
     if (isLeaf(key)) return undefined;
     const c = book.chosen(key);
     if (c === undefined) return book.unmade(key);
-    return machineOf(key, c.lp) === null ? 'no-recipe' : c;
+    return jobMachine(key, c.lp) === null ? 'no-recipe' : c;
   };
   const madeOf = (key: StuffKey, lp: LpRecipe, runs: number): BomMade => {
     const r = pack.recipeById.get(lp.id);
-    const made: BomMade = { recipeId: lp.id, mapId: lp.mapId as string, machine: machineOf(key, lp) as BomMade['machine'], runs };
+    const made: BomMade = { recipeId: lp.id, mapId: lp.mapId as string, machine: jobMachine(key, lp) as BomMade['machine'], runs };
     const circuit = r === undefined ? undefined : recipeCircuit(r);
     if (circuit !== undefined) made.circuit = circuit;
     const held = (r?.inputs ?? []).flatMap((ing) => {
@@ -585,7 +615,7 @@ async function expandWith(
     const made = parts.madeOf(key, how.lp, runs);
     // A machine this line builds runs the job once it stands: after its own craft and structure steps.
     if (typeof made.machine === 'object' && made.machine.source === 'line') {
-      const m = pack.machines.get(made.machine.mteId);
+      const m = machineByMteId(pack, made.machine.mteId);
       if (m !== undefined) {
         const own = new Set([m.itemKey, ...structureParts(pack, m).keys()]);
         onLine.set(key, { own, material: new Set(after) });

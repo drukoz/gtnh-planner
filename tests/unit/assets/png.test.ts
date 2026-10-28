@@ -16,6 +16,12 @@ describe('png', () => {
     expect(animationFrames('{"animation":{"frametime":1}}', { width: 16, height: 16 })).toBe(1);
     expect(animationFrames('{"fullDrawers1":{"trimWidth":0.0625}}', { width: 16, height: 64 })).toBe(1);
     expect(animationFrames('{oops', { width: 16, height: 64 })).toBe(1);
+    expect(animationFrames('\uFEFF{"animation":{}}', { width: 16, height: 32 })).toBe(2);   // keep the escape: a literal BOM is invisible
+    expect(animationFrames('{"animation":{"frames":[{index:0,time:3},],}}', { width: 16, height: 32 })).toBe(2);   // Gson-lenient, as the game reads it
+  });
+
+  it('reads strict JSON after a byte-order mark, so only a top-level animation counts', () => {
+    expect(animationFrames('\uFEFF{"x":{"animation":{}}}', { width: 16, height: 32 })).toBe(1);   // keep the escape: a literal BOM is invisible
   });
 
   it('frames are always square, whatever the .mcmeta says their height is', () => {

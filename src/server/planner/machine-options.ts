@@ -13,16 +13,19 @@ import { basicInputSlots, ignoredByBlocking } from '../../shared/gt/feeding.ts';
 import { multiblockOverclock, singleblockOverclock, voltageTier, type MachineOc } from '../../shared/gt/overclock.ts';
 import { V, tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
+import { type MachineId, compareMachineId } from '../../shared/ids.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
-import {
-  DEFAULT_BUILD_HORIZON_HOURS, type MachineWhere, type PlanContext, type PlanSettings,
-} from '../../shared/types/plan.ts';
+import type { MachineWhere, PlanContext, PlanSettings } from '../../shared/types/plan.ts';
 import { PROGRAMMED_CIRCUIT_ID } from '../pack/recipes.ts';
+import { machineByMteId, machinesForMap } from '../pack/lookup.ts';
 import type { PlanBasis } from './basis.ts';
 import { cleanroomMachine } from './bom.ts';
 import { buildKeys, gapText, hatchSet, itemPrices, machineBuildCost, machineGap, type ItemPrices, type PriceGap } from './build-cost.ts';
 import { acceptRecipe, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import { autoWorkbenches, benchCapBy, benchRefusal, isAutoWorkbench } from './benches.ts';
+import { exportPack } from './farms/pack.ts';
+import { farmMachineKind, farmOc, plantingKeys, stickCost } from './farms/recipes.ts';
+import { horizonHoursOf, objectiveOf } from './objective.ts';
 import { ownedPools, recipeCircuit } from './owned.ts';
 
 const TICKS_PER_SECOND = 20;
@@ -42,10 +45,10 @@ const AUTO_WORKBENCH_EU_PER_CRAFT = 2048;
 
 /** One machine a step recipe can run on (`machineOptions`), at one tier. */
 export interface MachineOption {
-  mteId: number; name: string; tier: number /* a multiblock's: its energy-hatch tier */; kind: 'basic' | 'multiblock';
+  id: MachineId; name: string; tier: number /* a multiblock's: its energy-hatch tier */; kind: 'basic' | 'multiblock';
   oc: MachineOc; perMachine: number /* runs per second one machine does: 20 × oc.parallel / oc.durationTicks */;
   build: number | null /* raw to build one (machineBuildCost, a multiblock with its hatch set at `tier`) */;
-  owned: number /* owned machines of this mteId */;
+  owned: number /* owned machines of this id */;
   /** The build cost the build MIP counts: `build`, else a stand-in (lineBuildModel), so a pricing gap never builds for free. */
   solveBuild: number;
   /** New machines of it may be planned: false for one that cannot be built here, and for a pricing gap of a step that has a priced option. */
@@ -73,8 +76,8 @@ export interface MachineOption {
 
 /** Where one owned machine stands (ruling P11: the existing `MachineWhere`). */
 export type OwnedUnit = MachineWhere;
-/** Per mteId the owned machines in pool order (`ownedPools`); null for one without a known position. */
-export type OwnedPools = ReadonlyMap<number, ReadonlyArray<OwnedUnit | null>>;
+/** Per id the owned machines in pool order (`ownedPools`); null for one without a known position. */
+export type OwnedPools = ReadonlyMap<MachineId, ReadonlyArray<OwnedUnit | null>>;
 
 /** Amendment OQ5 (ruling P5): the pinned tier `t*` whose machine cannot be built here, so its step falls back to another. */
 export interface PinFallback { tier: number; name: string; why: string }
@@ -88,8 +91,14 @@ export interface BuildTierFallback { wanted: number; tier: number; why: string }
 
 export interface BuildModel {
   mode: 'rate' | 'makeN';
-  /** rate: buildHorizonHours × 3600, null = build cost ignored; makeN: null (the batch is the horizon). */
+  /**
+   * rate: the build horizon (`horizonHoursOf`, add-on 17) × 3600, null = build cost ignored (least raw material); makeN:
+   * null (the batch is the horizon).
+   */
   horizonSeconds: number | null;
+  // optional addition (add-on 17, architecture §11.45 (1))
+  /** Make N planned for least raw material (`objectiveOf`): the batch's build cost is not counted either (`buildCounts`). */
+  leastRaw?: true;
   /** New and owned machines are shared by sharing pools (`sharesMachines`: rate mode on AE2 lines); else every step has its own. */
   share: boolean;
   /**
@@ -136,13 +145,22 @@ export interface BuildModel {
    * machines are built at another tier than the one wanted, which and why (`BuildTierFallback`); undefined otherwise.
    */
   buildTierFallback?: (recipeId: string) => BuildTierFallback | undefined;
-  owned: ReadonlyMap<number, number>; pools: OwnedPools; prices: ItemPrices;
-  cleanroom: { mteId: number; name: string; build: number | null; solveBuild: number; owned: number; unbuildable?: string } | null;
+  // optional addition (add-on 17)
+  /**
+   * A crop farm's step recipe (`Recipe.meta.farm` of kind `crop`): the raw material to plant the crop sticks one run a
+   * second of it needs — `cycleTicks / 20` sticks (one harvest of one stick a run), each a Crop Sticks and the item
+   * placed for its soil (`plantingKeys`; the soil one the line can get, farms/recipes.ts `cropSoil`) at `prices`
+   * (`stickCost`: a part without a price counts nothing, and the plan names it in `build-cost-unknown`) — which the
+   * build MIP weighs in rate mode (`BuildMipInput.plantings`); undefined for any other recipe.
+   */
+  planting?: (recipeId: string) => number | undefined;
+  owned: ReadonlyMap<MachineId, number>; pools: OwnedPools; prices: ItemPrices;
+  cleanroom: { id: MachineId; name: string; build: number | null; solveBuild: number; owned: number; unbuildable?: string } | null;
 }
 
 /** What `machineOptions` judges a step's machines in. */
 export interface MachineOptionEnv {
-  groupTier: number; coilHeat: number; multiblocks?: ReadonlySet<number>; owned: ReadonlyMap<number, number>; prices: ItemPrices; pin?: number;
+  groupTier: number; coilHeat: number; multiblocks?: ReadonlySet<MachineId>; owned: ReadonlyMap<MachineId, number>; prices: ItemPrices; pin?: number;
   /** `PlanSettings.automateCrafting`: crafting-table steps run on the Auto Workbench (rule 1); absent = by hand. */
   automateCrafting?: boolean;
   // optional addition (plan 12, controller ruling 214 (c))
@@ -175,9 +193,12 @@ export function sharesMachines(settings: Pick<PlanSettings, 'mode' | 'logistics'
   return settings.mode === 'rate' && settings.logistics === 'ae2';
 }
 
-/** Whether the model counts build cost: Make N, or rate mode with a horizon (basis.ts `buildCostCounts` says so of the settings). */
+/**
+ * Whether the model counts build cost: Make N unless it plans least raw material (`leastRaw`, add-on 17), or rate mode
+ * with a horizon (basis.ts `buildCostCounts` says so of the settings).
+ */
 export function buildCounts(model: BuildModel): boolean {
-  return model.mode === 'makeN' || model.horizonSeconds !== null;
+  return model.mode === 'makeN' ? model.leastRaw !== true : model.horizonSeconds !== null;
 }
 
 function byString(a: string, b: string): number {
@@ -185,7 +206,7 @@ function byString(a: string, b: string): number {
 }
 
 function byTierThenId(a: MachineOption, b: MachineOption): number {
-  return a.tier - b.tier || a.mteId - b.mteId;
+  return a.tier - b.tier || compareMachineId(a.id, b.id);
 }
 
 function tierOf(m: Machine): number {
@@ -221,7 +242,9 @@ function distinctSorted(keys: Iterable<string>): string[] {
  * (gt-mechanics §8), so two crafting recipes never share one. With the pack (every planning caller passes it), so does
  * a recipe holding an item AE2's blocking mode does not ignore (`ignoredByBlocking`: the Packager's schematic, a GGFab
  * mold, a cast): a shared machine needs blocking mode, which never pushes into a machine holding one, so such a recipe
- * never shares one (controller ruling 214 (b)). `held` is the graph recipe's `LpRecipe.nonConsumed`.
+ * never shares one (controller ruling 214 (b)). `held` is the graph recipe's `LpRecipe.nonConsumed`. So does a farm
+ * recipe (add-on 17): a Tree Growth Simulator grows the one sapling in its controller, and a Crop Manager tends the
+ * crop planted around it.
  */
 export function sharingKey(r: Recipe, held: readonly StuffKey[], pack?: Pack): string {
   const items = distinctSorted(held.filter((key) => !isFluidKey(key) && !isProgrammedCircuit(key)));
@@ -230,16 +253,16 @@ export function sharingKey(r: Recipe, held: readonly StuffKey[], pack?: Pack): s
   const fluidsOut = distinctSorted(r.outputs.filter((p) => isFluidKey(p.key)).map((p) => p.key));
   if (fluidsIn.length > 0 || fluidsOut.length > 0) key += `|${fluidsIn.join(',')}|${fluidsOut.join(',')}`;
   const unblocked = pack !== undefined && items.some((item) => !ignoredByBlocking(pack, item));
-  if (r.maps.includes('crafting') || unblocked) key += `|recipe:${r.id}`;
+  if (r.maps.includes('crafting') || unblocked || r.meta.farm !== undefined) key += `|recipe:${r.id}`;
   return key;
 }
 
 /**
- * The sharing pool of a step on option `o`: `<mteId>:<tier>:<hatches ?? ''>|<key>`, and `|own:<recipe id>` for an option
+ * The sharing pool of a step on option `o`: `<id>:<tier>:<hatches ?? ''>|<key>`, and `|own:<recipe id>` for an option
  * its recipe may share with no other (`MachineOption.ownPool`).
  */
 export function poolKey(o: MachineOption, key: string): string {
-  return `${o.mteId}:${o.tier}:${o.hatches ?? ''}|${key}${o.ownPool === undefined ? '' : `|own:${o.ownPool}`}`;
+  return `${o.id}:${o.tier}:${o.hatches ?? ''}|${key}${o.ownPool === undefined ? '' : `|own:${o.ownPool}`}`;
 }
 
 /**
@@ -354,9 +377,16 @@ function tiersFrom(lo: number, hi: number): number[] {
 
 /**
  * Rules 1–3 of `machineOptions`: the machines and tiers that can run `r` on `mapId` for the group (see there), without
- * overclocks or prices.
+ * overclocks or prices; for a farm recipe (add-on 17), each machine of its farm at the farm's tier.
  */
 function offersFor(pack: Pack, r: Recipe, mapId: string, env: OfferEnv): Offer[] {
+  const farm = r.meta.farm;
+  if (farm !== undefined) {
+    return farm.machines.flatMap((id): Offer[] => {
+      const m = machineByMteId(pack, id);
+      return m === undefined ? [] : [{ m, tier: farm.tier, kind: farmMachineKind(m) }];
+    });
+  }
   if (mapId === 'furnace') return [];
   if (mapId === 'crafting') {
     if (env.automateCrafting !== true) return [];
@@ -365,18 +395,18 @@ function offersFor(pack: Pack, r: Recipe, mapId: string, env: OfferEnv): Offer[]
     if (benchRefusal(pack, r, env.benchCapBy === undefined ? {} : { capBy: env.benchCapBy }) !== undefined) return [];
     return autoWorkbenches(pack).filter((m) => tierOf(m) <= env.groupTier).map((m) => ({ m, tier: tierOf(m), kind: 'basic' }));
   }
-  const machines = (pack.machinesByMap.get(mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? []);
+  const machines = machinesForMap(pack, mapId);
   const mapAmps = pack.maps.get(mapId)?.amps ?? 1;
   // The rule of acceptRecipe and pickMachine: machine tier ≤ group tier and EU/t ≤ V[machine tier] × the map's amps.
   const singles: Offer[] = machines
     .filter((m) => m.kind === 'basic' && tierOf(m) <= env.groupTier && (V[tierOf(m)] as number) * mapAmps >= r.euPerTick)
     .map((m) => ({ m, tier: tierOf(m), kind: 'basic' }));
-  const multis = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => a.mteId - b.mteId);
+  const multis = machines.filter((m) => m.kind === 'multiblock').sort((a, b) => compareMachineId(a.id, b.id));
   const built = env.multiblocks;
-  const buildable = built === undefined ? multis : multis.filter((m) => built.has(m.mteId));
-  // None the group can build: the lowest mteId, as pickMachine does.
+  const buildable = built === undefined ? multis : multis.filter((m) => built.has(m.id));
+  // None the group can build: the lowest id, as pickMachine does.
   const usable = buildable.length > 0 ? buildable : multis.slice(0, 1);
-  const offered = singles.length === 0 ? usable : usable.filter((m) => (env.owned.get(m.mteId) ?? 0) > 0);
+  const offered = singles.length === 0 ? usable : usable.filter((m) => (env.owned.get(m.id) ?? 0) > 0);
   const lowest = Math.min(voltageTier(r.euPerTick), env.groupTier);
   return [...singles, ...offered.flatMap((m) => tiersFrom(lowest, env.groupTier).map((tier): Offer => ({ m, tier, kind: 'multiblock' })))];
 }
@@ -397,6 +427,7 @@ function autoWorkbenchOc(tier: number): MachineOc {
 }
 
 function ocOf(pack: Pack, r: Recipe, mapId: string, offer: Offer, coilHeat: number): MachineOc {
+  if (r.meta.farm !== undefined) return farmOc(r, r.meta.farm);
   if (mapId === 'crafting') return autoWorkbenchOc(offer.tier);
   if (offer.kind === 'basic') return singleblockOverclock(r, { tier: offer.tier, amps: offer.m.amps ?? pack.maps.get(mapId)?.amps ?? 1 });
   return multiblockOverclock(
@@ -415,19 +446,23 @@ function hatchesText(set: ReadonlyMap<StuffKey, number>): string {
   return [...set].sort(([a], [b]) => byString(a, b)).map(([key, n]) => `${key}×${n}`).join(',');
 }
 
-/** Rule 4 of `machineOptions`: what an offer costs to build, how many the group owns, and whether it can be built here. */
+/**
+ * Rule 4 of `machineOptions`: what an offer costs to build, how many the group owns, and whether it can be built here.
+ * Its build is read from the export pack (`exportPack`; add-on 17's ruling S5: a line's farm pack never prices a machine).
+ */
 function optionOf(pack: Pack, r: Recipe, mapId: string, offer: Offer, env: MachineOptionEnv): MachineOption {
   const { m, tier, kind } = offer;
+  const base = exportPack(pack);
   const use = { recipe: r, tier };
   const oc = ocOf(pack, r, mapId, offer, env.coilHeat);
-  const build = machineBuildCost(pack, env.prices, m, use);
+  const build = machineBuildCost(base, env.prices, m, use);
   const option: MachineOption = {
-    mteId: m.mteId, name: m.name, tier, kind, oc, perMachine: (TICKS_PER_SECOND * oc.parallel) / oc.durationTicks, build,
-    owned: env.owned.get(m.mteId) ?? 0, solveBuild: build ?? env.standIn?.(kind, tier) ?? 0, canAdd: true,
+    id: m.id, name: m.name, tier, kind, oc, perMachine: (TICKS_PER_SECOND * oc.parallel) / oc.durationTicks, build,
+    owned: env.owned.get(m.id) ?? 0, solveBuild: build ?? env.standIn?.(kind, tier) ?? 0, canAdd: true,
   };
-  if (kind === 'multiblock') option.hatches = hatchesText(hatchSet(pack, m, r, tier));
+  if (kind === 'multiblock') option.hatches = hatchesText(hatchSet(base, m, r, tier));
   if (kind === 'basic' && !kindsFitSlots(r, m)) option.ownPool = r.id;
-  const why = build === null ? unbuildableText(pack, m, machineGap(pack, env.prices, m, use), env.groupTier) : undefined;
+  const why = build === null ? unbuildableText(base, m, machineGap(base, env.prices, m, use), env.groupTier) : undefined;
   if (why !== undefined) {
     option.unbuildable = why;
     option.canAdd = false;
@@ -445,7 +480,7 @@ function dominates(p: MachineOption, o: MachineOption): boolean {
   const pBuild = p.build ?? Infinity;
   const oBuild = o.build ?? Infinity;
   if (p.perMachine < o.perMachine || pBuild > oBuild) return false;
-  return p.perMachine > o.perMachine || pBuild < oBuild || p.mteId < o.mteId;
+  return p.perMachine > o.perMachine || pBuild < oBuild || compareMachineId(p.id, o.id) < 0;
 }
 
 /** A tier's name with its article: "an LV", "an MV", "a ZPM". */
@@ -462,12 +497,12 @@ function aTier(tier: number): string {
  * `no <TIER> machine runs this recipe`.
  */
 function buildTierWhy(pack: Pack, r: Recipe, mapId: string, eligible: readonly MachineOption[], wanted: number): string {
-  const at = eligible.filter((o) => o.tier === wanted).sort((a, b) => a.mteId - b.mteId);
+  const at = eligible.filter((o) => o.tier === wanted).sort((a, b) => compareMachineId(a.id, b.id));
   if (at.length > 0) {
     const unbuilt = at.find((o) => o.unbuildable !== undefined);
     return unbuilt !== undefined ? `${unbuilt.name} cannot be built here (${unbuilt.unbuildable})` : `no new ${tierName(wanted)} machine is built for it`;
   }
-  const machines = mapId === 'crafting' ? [] : (pack.machinesByMap.get(mapId) ?? []).flatMap((id) => pack.machines.get(id) ?? []);
+  const machines = mapId === 'crafting' ? [] : machinesForMap(pack, mapId);
   const short = machines.some((m) => m.kind === 'basic' && tierOf(m) === wanted)
     || (machines.some((m) => m.kind === 'multiblock') && wanted < voltageTier(r.euPerTick));
   return short ? `its recipe needs more power than ${aTier(wanted)} machine gives` : `no ${tierName(wanted)} machine runs this recipe`;
@@ -506,7 +541,7 @@ function optionsOf(
       const lower = addable.filter((o) => o.tier < pinned).map((o) => o.tier);
       const tier = lower.length > 0 ? Math.max(...lower) : Math.min(...addable.map((o) => o.tier));
       options = [...atPin, ...addable.filter((o) => o.tier === tier)].sort(byTierThenId);
-      const first = eligible.filter((o) => o.tier === pinned).sort((a, b) => a.mteId - b.mteId)[0];
+      const first = eligible.filter((o) => o.tier === pinned).sort((a, b) => compareMachineId(a.id, b.id))[0];
       if (first?.unbuildable !== undefined) fallback = { tier: pinned, name: first.name, why: first.unbuildable };
     }
   }
@@ -571,6 +606,9 @@ function optionsOf(
  *    stays (the solve may run them beside another option's new ones).
  * 8b. With `env.onlyRequiredMultiblocks` and no eligible single-block option that can be built here, every multiblock
  *    option that can add machines weighs `ONLY_REQUIRED_MULTIBLOCK_WEIGHT` more in `solveBuild`.
+ * A farm recipe (add-on 17, `Recipe.meta.farm`) takes, in place of rules 1–3, one option per machine of its farm
+ * (`meta.farm.machines`) at the farm's tier, never overclocked (`farmOc`), whatever the group's tier; rules 4–8 judge
+ * them as any other, so a Tree Growth Simulator that cannot be built here serves only as far as the group owns it.
  */
 export function machineOptions(pack: Pack, r: Recipe, mapId: string, env: MachineOptionEnv): MachineOption[] {
   return optionsOf(pack, r, mapId, env).options;
@@ -581,12 +619,12 @@ export function machineOptions(pack: Pack, r: Recipe, mapId: string, env: Machin
  * recipe's Auto Workbenches only with `automateCrafting` — distinct, by mteId: what `lineBuildModel` prices.
  */
 export function optionMachines(
-  pack: Pack, graph: CandidateGraph, env: { groupTier: number; multiblocks?: ReadonlySet<number>; automateCrafting?: boolean; benchCapBy?: string },
-  owned: ReadonlyMap<number, number>,
+  pack: Pack, graph: CandidateGraph, env: { groupTier: number; multiblocks?: ReadonlySet<MachineId>; automateCrafting?: boolean; benchCapBy?: string },
+  owned: ReadonlyMap<MachineId, number>,
 ): Machine[] {
-  const byId = new Map<number, Machine>();
-  for (const { r, mapId } of stepRecipes(pack, graph)) for (const { m } of offersFor(pack, r, mapId, { ...env, owned })) byId.set(m.mteId, m);
-  return [...byId.values()].sort((a, b) => a.mteId - b.mteId);
+  const byId = new Map<MachineId, Machine>();
+  for (const { r, mapId } of stepRecipes(pack, graph)) for (const { m } of offersFor(pack, r, mapId, { ...env, owned })) byId.set(m.id, m);
+  return [...byId.values()].sort((a, b) => compareMachineId(a.id, b.id));
 }
 
 /**
@@ -597,17 +635,22 @@ export function optionMachines(
  * weighed at the largest priced build of the model); the steps no machine can run (`blocked`), whose options are then
  * none; the steps only owned machines that cannot be built can run (`ownedOnly`); each step's sharing key, with on AE2
  * lines (the only ones that share, in rate mode: `sharesMachines`) its split into parts of at most nine recipes
- * (`ae2Parts`); and the horizon.
+ * (`ae2Parts`); and the horizon. Add-on 17: `pack` may be the line's farm pack (farms/pack.ts), whose farm recipes get
+ * their farm's machines as options; prices and builds are read from the export pack (`exportPack`, ruling S5), and each
+ * crop farm's planting is priced with them (`BuildModel.planting`).
  */
 export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: PlanBasis, settings: PlanSettings, ctx: PlanContext): Promise<BuildModel> {
-  const pools = ownedPools(ctx, settings);
-  const owned: ReadonlyMap<number, number> = new Map([...pools].map(([mteId, units]) => [mteId, units.length]));
+  const base = exportPack(pack);
+  const pools: OwnedPools = ownedPools(ctx, settings);
+  const owned: ReadonlyMap<MachineId, number> = new Map([...pools].map(([id, units]) => [id, units.length]));
   const capBy = benchCapBy(settings.logistics);
   const offerEnv = { groupTier: basis.tier, multiblocks: basis.env.multiblocks, automateCrafting: settings.automateCrafting, ...(capBy === undefined ? {} : { benchCapBy: capBy }) };
   const steps = stepRecipes(pack, graph);
   const machines = optionMachines(pack, graph, offerEnv, owned);
-  const room = steps.some((s) => s.lp.needsCleanroom) ? cleanroomMachine(pack) : undefined;
-  const prices = await itemPrices(pack, settings, ctx, buildKeys(pack, room === undefined ? machines : [...machines, room]));
+  const room = steps.some((s) => s.lp.needsCleanroom) ? cleanroomMachine(base) : undefined;
+  // what a crop farm plants (a Crop Sticks and the item placed for its soil, per stick) is priced with the machines
+  const planted = steps.flatMap(({ r }) => (r.meta.farm === undefined ? [] : plantingKeys(r.meta.farm)));
+  const prices = await itemPrices(base, settings, ctx, [...buildKeys(base, room === undefined ? machines : [...machines, room]), ...planted]);
   const env: MachineOptionEnv = { ...offerEnv, coilHeat: basis.coilHeat, owned, prices };
   // the user's ruling 224: the tier new machines are built at, and multiblocks only where nothing else can do it
   if (typeof settings.buildTier === 'number') env.buildTier = settings.buildTier;
@@ -629,13 +672,13 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
 
   let cleanroom: BuildModel['cleanroom'] = null;
   if (room !== undefined) {
-    const build = machineBuildCost(pack, prices, room);
-    cleanroom = { mteId: room.mteId, name: room.name, build, solveBuild: build ?? dearest ?? 0, owned: owned.get(room.mteId) ?? 0 };
-    const why = build === null ? unbuildableText(pack, room, machineGap(pack, prices, room), basis.tier) : undefined;
+    const build = machineBuildCost(base, prices, room);
+    cleanroom = { id: room.id, name: room.name, build, solveBuild: build ?? dearest ?? 0, owned: owned.get(room.id) ?? 0 };
+    const why = build === null ? unbuildableText(base, room, machineGap(base, prices, room), basis.tier) : undefined;
     if (why !== undefined) cleanroom.unbuildable = why;
   }
   // A cleanroom that cannot be built here and none owned: why the steps that need one cannot run.
-  const roomWhy = cleanroom !== null && (pools.get(cleanroom.mteId)?.length ?? 0) === 0 ? cleanroom.unbuildable : undefined;
+  const roomWhy = cleanroom !== null && (pools.get(cleanroom.id)?.length ?? 0) === 0 ? cleanroom.unbuildable : undefined;
 
   const optionsById = new Map<string, MachineOption[]>();
   const fallbackById = new Map<string, PinFallback>();
@@ -679,7 +722,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
   // The recipes of the maps it blocks that no machine can run either (`BuildModel.blockedAlike`).
   const alike = new Map<string, string>();
   if (blocked.size > 0) {
-    const priced = new Set(machines.map((m) => m.mteId));
+    const priced = new Set(machines.map((m) => m.id));
     const inGraph = new Set(steps.map((s) => s.lp.id));
     const maps = [...new Set(steps.filter((s) => blocked.has(s.lp.id)).map((s) => s.mapId))].sort(byString);
     for (const mapId of maps) {
@@ -687,7 +730,7 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
         if (inGraph.has(r.id) || alike.has(r.id)) continue;
         const accepted = acceptRecipe(pack, r, basis.env);
         if (!accepted.ok || accepted.mapId !== mapId) continue;
-        if (!offersFor(pack, r, mapId, { ...offerEnv, owned }).every(({ m }) => priced.has(m.mteId))) continue;
+        if (!offersFor(pack, r, mapId, { ...offerEnv, owned }).every(({ m }) => priced.has(m.id))) continue;
         const { why } = judge(r, mapId, undefined);
         if (why !== undefined) alike.set(r.id, why);
       }
@@ -701,8 +744,14 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     const part = parts?.get(lp.id) ?? 0;
     keys.set(lp.id, `${sharingKey(r, lp.nonConsumed, pack)}${part > 0 ? `#${part}` : ''}`);
   }
-  const horizonSeconds = settings.mode === 'makeN' || settings.buildHorizonHours === null
-    ? null : (settings.buildHorizonHours ?? DEFAULT_BUILD_HORIZON_HOURS) * SECONDS_PER_HOUR;
+  // Add-on 17: the horizon of the project's mode (none in least raw material, none in Make N).
+  const hours = horizonHoursOf(settings);
+  const horizonSeconds = hours === null ? null : hours * SECONDS_PER_HOUR;
+  // A crop farm's planting per run a second: its cycle in seconds is the sticks one run a second keeps growing.
+  const plantings = new Map<string, number>();
+  for (const { lp, r } of steps) {
+    if (r.meta.farm?.kind === 'crop') plantings.set(lp.id, (r.durationTicks / TICKS_PER_SECOND) * stickCost(r.meta.farm, (key) => prices.cost(key)));
+  }
 
   const model: BuildModel = {
     mode: settings.mode, horizonSeconds, share,
@@ -713,8 +762,10 @@ export async function lineBuildModel(pack: Pack, graph: CandidateGraph, basis: P
     ownedOnly: (id) => ownedOnly.get(id),
     pinFallback: (id) => fallbackById.get(id),
     buildTierFallback: (id) => builtAtById.get(id),
+    planting: (id) => plantings.get(id),
     owned, pools, prices, cleanroom,
   };
   if (alike.size > 0) model.blockedAlike = alike;
+  if (settings.mode === 'makeN' && objectiveOf(settings) === 'least-raw') model.leastRaw = true;
   return model;
 }

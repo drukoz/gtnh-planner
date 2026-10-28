@@ -21,6 +21,7 @@ import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
 import { openDb, type Db } from '../../../src/server/db/db.ts';
 import { createLayoutService } from '../../../src/server/layout/service.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { CIRCUIT_STAND_IN_IDS } from '../../../src/server/pack/stand-ins.ts';
 import { buildBom, expandBomLines, partName, type Bom, type BomMake } from '../../../src/server/planner/bom.ts';
 import { itemPrices, minimalHatch, NOTHING_TO_PLACE, structureParts } from '../../../src/server/planner/build-cost.ts';
@@ -237,7 +238,7 @@ function waitOrder(pack: Pack, steps: readonly BuildStep[], makes: readonly BomM
   const firstWording: string[] = [];
   for (const m of makes) {
     const machine = m.made.machine;
-    const unit = typeof machine === 'object' && machine.source === 'line' ? pack.machines.get(machine.mteId) : undefined;
+    const unit = typeof machine === 'object' && machine.source === 'line' ? machineByMteId(pack, machine.mteId) : undefined;
     const own = new Set(unit === undefined ? [] : [unit.itemKey, ...structureParts(pack, unit).keys()]);
     const me = position(m.key);
     if (me === undefined) continue;   // the one-step case reports it
@@ -399,11 +400,11 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')("the build list of the user's El
 
   it('builds no hatch above what the structure needs', () => {
     const hatches = new Map<StuffKey, Machine[]>();
-    for (const m of pack.machines.values()) if (m.kind === 'hatch') hatches.set(m.itemKey, [...(hatches.get(m.itemKey) ?? []), m]);
+    for (const m of allMachines(pack)) if (m.kind === 'hatch') hatches.set(m.itemKey, [...(hatches.get(m.itemKey) ?? []), m]);
     const keys = [...new Set(tree.map((l) => l.key))];
     expect(keys.filter((key) => hatches.has(key)).length, 'the build list holds a hatch (if not, the line changed: stop and report)').toBeGreaterThan(0);
     const above = keys.filter((key) => (hatches.get(key) ?? [])
-      .some((m) => !((m.tier ?? Infinity) <= plan.tier || minimalHatch(pack, m).mteId === m.mteId)));
+      .some((m) => !((m.tier ?? Infinity) <= plan.tier || minimalHatch(pack, m).id === m.id)));
     expect(above.map((key) => partName(pack, key))).toEqual([]);
     const everywhere = [...tree, ...(plan.buildTotals ?? [])].map((l) => l.key).concat(makes.flatMap((m) => [m.key, ...m.inputs.map((i) => i.key)]));
     expect(everywhere).not.toContain(UHV_MUFFLER_HATCH);

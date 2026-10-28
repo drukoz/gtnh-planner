@@ -11,6 +11,7 @@ import { planBasis } from '../../../src/server/planner/basis.ts';
 import { buildCandidates } from '../../../src/server/planner/candidates.ts';
 import { orderJobs, ownedForParts, partMachine, poolMakes, settleRecipes, type OrderJob, type PoolGood } from '../../../src/server/planner/howto.ts';
 import { PSEUDO_MACHINES } from '../../../src/shared/gt/tiers.ts';
+import type { MachineId } from '../../../src/shared/ids.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 
@@ -19,11 +20,11 @@ const r = (id: string) => pack.recipeById.get(id)!;
 
 describe('the machine of a one-off job', () => {
   it('picks a machine the group has, then one the line builds, then the cheapest that can', () => {
-    const at = (owned: Map<number, number>, line: Set<number>) => partMachine(pack, r('circuit-lv'), 'gt.recipe.assembler', { groupTier: 2, owned, line });
+    const at = (owned: Map<MachineId, number>, line: Set<MachineId>) => partMachine(pack, r('circuit-lv'), 'gt.recipe.assembler', { groupTier: 2, owned, line });
     expect(at(new Map(), new Set())).toEqual({ mteId: 121, name: 'Basic Assembler', tier: 1, source: 'new' });
-    expect(at(new Map([[122, 1]]), new Set())).toEqual({ mteId: 122, name: 'Advanced Assembler', tier: 2, source: 'owned' });
-    expect(at(new Map(), new Set([122]))).toEqual({ mteId: 122, name: 'Advanced Assembler', tier: 2, source: 'line' });
-    expect(at(new Map([[121, 1]]), new Set([122]))).toEqual({ mteId: 121, name: 'Basic Assembler', tier: 1, source: 'owned' });
+    expect(at(new Map([['gt:122', 1]]), new Set())).toEqual({ mteId: 122, name: 'Advanced Assembler', tier: 2, source: 'owned' });
+    expect(at(new Map(), new Set(['gt:122']))).toEqual({ mteId: 122, name: 'Advanced Assembler', tier: 2, source: 'line' });
+    expect(at(new Map([['gt:121', 1]]), new Set(['gt:122']))).toEqual({ mteId: 121, name: 'Basic Assembler', tier: 1, source: 'owned' });
     // circuit-mv draws 120 EU/t: an LV assembler's 32 EU/t is too little
     expect(partMachine(pack, r('circuit-mv'), 'gt.recipe.assembler', { groupTier: 2, owned: new Map(), line: new Set() }))
       .toEqual({ mteId: 122, name: 'Advanced Assembler', tier: 2, source: 'new' });
@@ -33,7 +34,7 @@ describe('the machine of a one-off job', () => {
   });
 
   it('marks the line\'s machine when its own build needs the part', () => {
-    expect(partMachine(pack, r('wire'), 'gt.recipe.wiremill', { groupTier: 1, owned: new Map(), line: new Set([111]), exclude: new Set([111]) }))
+    expect(partMachine(pack, r('wire'), 'gt.recipe.wiremill', { groupTier: 1, owned: new Map(), line: new Set(['gt:111']), exclude: new Set(['gt:111']) }))
       .toEqual({ mteId: 111, name: 'Basic Wiremill', tier: 1, source: 'first' });
   });
 
@@ -44,7 +45,7 @@ describe('the machine of a one-off job', () => {
       { ...defaultSettings(), ownedManual: [{ mteId: 111, count: 1 }], declineReuse: [121], reuseOwned: false },
       [partStep({ owned: 1, machine: { mteId: 101, name: 'Basic Bending Machine', tier: 1 } })],
     );
-    expect([...owned]).toEqual([[101, 1], [111, 1], [121, 2]]);
+    expect([...owned]).toEqual([['gt:101', 1], ['gt:111', 1], ['gt:121', 2]]);
   });
 });
 

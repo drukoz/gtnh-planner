@@ -172,6 +172,41 @@ describe('layout service', () => {
     expect(svc.computations).toBe(1);
   });
 
+  it('lays a plan out again when what it read changed', async () => {
+    // add-on 17 Task 6: the hash of what the plan read of other projects' summaries comes before the placement
+    const p = makeProject();
+    expect(layoutKey({ ...twoStep(), crossHash: 'abc' }, p)).toBe('E1|S1|0:0:0|h1|x:abc|-');
+    expect(layoutKey(twoStep(), p)).toBe('E1|S1|0:0:0|h1|-');
+    // what Q's plan does once it takes y from P: the same settings hash, and its step that made y gone
+    const taken = { ...makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }]), crossHash: 'abc' };
+    let calls = 0;
+    const svc = createLayoutService(deps({ plan: async () => (calls++ === 0 ? twoStep() : taken) }));
+    const first = await svc.layoutFor(p);
+    expect(first.blocks.some((b) => b.stepId === 's2')).toBe(true);
+    const again = await svc.layoutFor(p);
+    expect(svc.computations).toBe(2);
+    expect(again.blocks.some((b) => b.stepId === 's2')).toBe(false);
+  });
+
+  it('lays out the plan it is given, never a plan of another read', async () => {
+    // add-on 17 Task 6: a plan reads the other projects' summaries when it is made, so planning again could read a board
+    // another publish changed (here into the s1-only plan) and finish the given plan with another plan's layout
+    const p = makeProject();
+    const taken = { ...makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }]), crossHash: 'abc' };
+    let asked = 0;
+    const svc = createLayoutService(deps({ plan: async () => { asked++; return taken; } }));
+    const done = await svc.finishPlan(twoStep(), p);
+    expect(asked).toBe(0);
+    expect(done.buildSteps.map((s) => s.id)).toContain('layout:place:s2');
+    const same = await svc.layoutFor(p, twoStep());
+    expect(svc.computations).toBe(1);
+    expect(same.blocks.some((b) => b.stepId === 's2')).toBe(true);
+    const other = await svc.layoutFor(p, taken);
+    expect(svc.computations).toBe(2);
+    expect(other.blocks.some((b) => b.stepId === 's2')).toBe(false);
+    expect(asked).toBe(0);
+  });
+
   it('lays out on an empty scan until the scan is done, and reads terrain only for a scan id', async () => {
     const reads: boolean[] = [];
     const svc = createLayoutService(deps({

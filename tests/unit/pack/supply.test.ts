@@ -4,6 +4,8 @@
 import { describe, it, expect } from 'vitest';
 import { deriveSupply, SUPPLY_PUMP_MAP } from '../../../src/server/pack/supply.ts';
 import { nbtHash, recipeId } from '../../../src/server/pack/recipe-id.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
+import { gtMachineId, type MachineId } from '../../../src/shared/ids.ts';
 import { itemKey } from '../../../src/shared/keys.ts';
 import type { Ingredient, Machine, Recipe, RecipeMapInfo } from '../../../src/shared/types/pack.ts';
 import { makePack } from '../../helpers/make-pack.ts';
@@ -21,7 +23,7 @@ function slot(key: string, slotNo = 0, consumed = true, amount = 1): Ingredient 
   return { slot: slotNo, consumed, chance: consumed ? 1 : 0, options: [{ key, amount }] };
 }
 function machine(mteId: number, cls: string, maps: string[] = []): Machine {
-  return { mteId, metaName: `m.${mteId}`, name: `Machine ${mteId}`, cls, itemKey: `machine:${mteId}@0`, kind: 'basic', tier: 1, voltage: 32, maps };
+  return { id: gtMachineId(mteId), mteId, metaName: `m.${mteId}`, name: `Machine ${mteId}`, cls, itemKey: `machine:${mteId}@0`, kind: 'basic', tier: 1, voltage: 32, maps };
 }
 const MAPS: ReadonlyMap<string, RecipeMapInfo> = new Map([[ROCK_BREAKER, { id: ROCK_BREAKER, name: 'Rock Breaker', amps: 1, specialValue: 'none', aliases: [] }]]);
 /** The id `recipeId` gives a recipe's content. */
@@ -37,7 +39,7 @@ describe('deriveSupply', () => {
       id: 'fake-obsidian', inputs: [slot('minecraft:redstone@0')], outputs: [{ key: 'minecraft:obsidian@0', amount: 1, chance: 1 }],
       durationTicks: 128, flags: { fake: true },
     });
-    const input = { recipes: [lavaOnSide, obsidian], machines: new Map<number, Machine>(), maps: MAPS, fluidContainers: [] };
+    const input = { recipes: [lavaOnSide, obsidian], machines: new Map<MachineId, Machine>(), maps: MAPS, fluidContainers: [] };
     const out = deriveSupply(input);
     expect(out.recipes).toHaveLength(1);
     const made = out.recipes[0]!;
@@ -64,7 +66,8 @@ describe('deriveSupply', () => {
   });
 
   it('adds the pump map, pump machines and water and lava recipes', () => {
-    const machines = new Map([[1140, machine(1140, PUMP_CLS)], [441, machine(441, 'gregtech.common.tileentities.machines.basic.MTERockBreaker', [ROCK_BREAKER])]]);
+    const machines = new Map<MachineId, Machine>([machine(1140, PUMP_CLS), machine(441, 'gregtech.common.tileentities.machines.basic.MTERockBreaker', [ROCK_BREAKER])]
+      .map((m) => [m.id, m] as const));
     const out = deriveSupply({ recipes: [], machines, maps: MAPS, fluidContainers: [] });
     expect(SUPPLY_PUMP_MAP).toBe('pump');
     expect(out.pumpMap).toEqual({ id: 'pump', name: 'Pump', amps: 1, specialValue: 'none', aliases: [] });
@@ -74,8 +77,8 @@ describe('deriveSupply', () => {
       [[{ key: 'fluid:lava', amount: 1000, chance: 1 }], [], 8, 80, ['pump'], 'pump', 'derived'],
     ]);
     for (const r of out.recipes) expect(r.id).toBe(contentId(r));
-    expect(machines.get(1140)?.maps).toEqual([]);   // pure: the caller adds the map
-    const without = deriveSupply({ recipes: [], machines: new Map([[441, machine(441, 'gregtech.common.tileentities.machines.basic.MTERockBreaker')]]), maps: MAPS, fluidContainers: [] });
+    expect(machines.get(gtMachineId(1140))?.maps).toEqual([]);   // pure: the caller adds the map
+    const without = deriveSupply({ recipes: [], machines: new Map([[gtMachineId(441), machine(441, 'gregtech.common.tileentities.machines.basic.MTERockBreaker')]]), maps: MAPS, fluidContainers: [] });
     expect([without.pumpMap, without.pumpMachines, without.recipes]).toEqual([null, [], []]);
   });
 
@@ -135,7 +138,7 @@ describe('the loader', () => {
     const { supply: _flag, ...meta } = compressor!.meta;
     expect(contentId({ ...compressor!, meta })).toBe(compressor!.id);
     expect(pack.maps.get('pump')).toEqual({ id: 'pump', name: 'Pump', amps: 1, specialValue: 'none', aliases: [] });
-    expect(pack.machines.get(1140)?.maps).toEqual(['pump']);
-    expect(pack.machinesByMap.get('pump')).toEqual([1140]);
+    expect(machineByMteId(pack, 1140)?.maps).toEqual(['pump']);
+    expect(pack.machinesByMap.get('pump')).toEqual([gtMachineId(1140)]);
   });
 });

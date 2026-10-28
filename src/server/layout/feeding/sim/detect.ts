@@ -1,0 +1,938 @@
+// What a scenario run records and the findings it gives (plan `docs/superpowers/plans/2026-10-20-21-feeding-checker.md`
+// Task 4, detector rules 10–16, Task 5 rule 4, Task 6 rule 5, Task 8 rule 10 and Task 9 rule 8). The models record as they
+// run (`SimStats`): what each machine was handed and gave up, every recipe check it made and what came of it, how many input
+// slots each kind filled, what reached each chest and what was dropped into the world, what each Auto Workbench moved to
+// its result slot, destroyed, crafted, could not push and took in, what Project Red's payloads did: each pipe's
+// dispatches, the orders its broadcaster dropped and what a restart took out of its send queue, and at each node the items
+// that bounced, wandered or were pulled back out of an input bus; and what AE2 did: each ME interface's pushes and the
+// ticks its Locking Card let go, and each Fluid Packet that went into a machine's slot, waited in an interface's send list or
+// found no slot. `detect` reads that once the run is over:
+// - `feed_crowded`: a recipe waits for a kind that cannot get in, for `STALL_TICKS` in a row; or a multiblock has every
+//   input of its recipe on its input buses but no one bus holds them all while Input Separation is on, as long;
+// - `feed_overfill`: one kind in two or more input slots of a machine (or slots of a multiblock's input bus) that takes two
+//   or more kinds; one item in two or more input slots of a bench, or an item not in its grid in one;
+// - `feed_bench_eject`, `feed_bench_delete`: what a bench moved to its result slot that it did not craft, and what its
+//   clean-up of duplicate stacks overwrote there;
+// - `feed_bench_stuck`: a bench whose push left the stack in its result slot where it was for `STALL_TICKS` in a row;
+// - `feed_no_route`: an output blocked for `STALL_TICKS` in a row while nothing is taken out of the machine;
+// - neither of these two for a stall that only waited for its takers, as a push line's machines run ahead of their takers and
+//   wait, the line's normal state (research §7): the machine still gave what the plan asks of it of that item over the run's
+//   second half (`model.plannedOut`, within `feed_slow`'s tolerance), and the stall ended before the run's end, or is still
+//   open there but shorter than the interval between takes that pace keeps: over the second half, the most of the item taken
+//   in one tick over its plan rate, or the longest wait between two takes of it where that is longer (a taker that moves a
+//   run's share in pieces). Each is judged by itself, and an item reports its first stall that did not only wait: a line
+//   that drained it before and then stopped counts (Task 4 rule 14);
+// - `feed_pool_starve`: a recipe of a shared machine that never ran while its inputs were there for `STALL_TICKS`;
+// - `feed_fluid_packet`: once per machine and fluid, an ME interface's Fluid Packet that went into one of its input slots,
+//   that it kept in its send list for `STALL_TICKS` because the machine took none, or the CPU's push of a pattern of Fluid
+//   Packets alone that the machine refused for `STALL_TICKS` (it has no slot for them): whichever began first;
+// - `feed_starved`, `feed_slow`: a planned input never handed over, or handed over too slowly while the recipe waited;
+// - `feed_leak`: an item planned for a machine that reached a chest instead;
+// - `feed_churn`: `CHURN_ITEMS` of one item sent to a node over Project Red that did not fit and circle its pipe, that lost
+//   their way to it and wander, or that an Item Extractor Chip pulled back out of one of its input buses.
+// A multiblock's buses stand in for a basic machine's slots: what its input buses were handed counts as handed to it, and
+// what left its output buses as taken out of it.
+// Each finding is `phase: 'sim'` and `certain` for its scenario, with the first tick of its condition; findings come by node
+// (the model's local order), then the Codes table's order, then item key.
+// Pure TypeScript: nothing from node:* may be imported here.
+
+import type { StuffKey } from '../../../../shared/keys.ts';
+import { fmtInt, fmtRate } from '../../../../shared/layout/format.ts';
+import { CHURN_ITEMS, FEED_KINDS, STALL_TICKS, TICKS_PER_SECOND, SLOW_TOLERANCE, type FeedCode, type FeedFinding, type ScenarioName } from '../contract.ts';
+import type { BenchNode, ChestNode, FeedModel, FeedNode, MultiNode, NodeId } from '../model.ts';
+import { listText } from '../text.ts';
+import type { KeyTable, SimInv } from './core.ts';
+
+/** A network's reason why an item does not reach a node (`in`) or leave it (`out`), or null when it has none. */
+export type Explain = (kind: 'in' | 'out', node: NodeId, key: StuffKey) => string | null;
+
+/** A missing kind that cannot get into a machine (rule 6d): `key`, while `by` fills `slots` of its `of` input slots. */
+export interface Crowd { key: number; by: number; slots: number; of: number }
+
+const START = 0, WAIT = 1, BLOCK = 2, SPLIT = 3;
+
+/** One recipe check of a machine (rule 6d) and what came of it; `SPLIT`: a multiblock's set on separated buses (Task 5 rule 4). */
+interface Check {
+  t: number; kind: typeof START | typeof WAIT | typeof BLOCK | typeof SPLIT; recipe: number;
+  missing: number[]; crowd: Crowd | null;                     // a wait: what is missing, and what keeps a missing kind out
+  key: number; ready: number[];                               // a block: the item in the output slot that blocks, the other recipes whose inputs are there
+}
+
+/** What a run records about one node. */
+interface NodeRecord {
+  checks: Check[];
+  starts: number[];                                           // runs started, by recipe index
+  given: { t: number[]; key: number[]; n: number[] };         // `delivered`, in order
+  taken: number[];                                            // ticks something left its output slots
+  out: { t: number[]; key: number[]; n: number[] };           // `extracted`, in order: what left its output slots (a bench's result slot)
+  slots: Map<number, { most: number; first: number }>;        // input slots a kind filled: the most, the first tick it filled two
+  arrived: Array<[number, number, number]>;                   // a chest's arrivals: tick, key, count (one per tick and key)
+  spilled: Map<number, number>;                               // items dropped into the world, by key
+  final: Array<[number, number] | null> | null;               // slot contents at the end
+}
+
+function emptyRecord(): NodeRecord {
+  return {
+    checks: [], starts: [], given: { t: [], key: [], n: [] }, taken: [], out: { t: [], key: [], n: [] }, slots: new Map(), arrived: [], spilled: new Map(),
+    final: null,
+  };
+}
+
+/**
+ * Why a bench moved a stack to its result slot that it did not craft (Task 6 rule 3): a stray (an item neither in its grid
+ * nor a grid item's container), the last input slot after a failed craft, or the second of two stacks of one ingredient.
+ */
+export type BenchMove = 'stray' | 'failed' | 'duplicate';
+
+/** What a run records about one Auto Workbench (Task 6). */
+interface BenchRecord {
+  moved: Array<{ t: number; key: number; n: number; why: BenchMove }>;   // stacks moved to its result slot that it did not craft
+  lost: Array<{ t: number; key: number; n: number }>;                    // stacks its clean-up overwrote in its result slot
+  crafts: number[];                                                      // craft ticks
+  refused: Array<{ key: number; from: number; to: number }>;             // its push left its result from `from` until it went out at `to` (−1: never)
+  took: Map<number, number>;                                             // items not in its grid it took into an input slot: the first tick, by key
+}
+
+function emptyBench(): BenchRecord {
+  return { moved: [], lost: [], crafts: [], refused: [], took: new Map() };
+}
+
+/** How many of one item a node has seen churn (Task 8 rule 10), and the tick that count reached `CHURN_ITEMS` (−1 before). */
+interface Tally { n: number; reached: number }
+
+/**
+ * What a run records about the Project Red payloads that concern one node (Task 8), by key: what bounced at it (sent to it,
+ * it did not all fit, and it circles its pipe), what lost its way to it and wanders, and (at an input bus) what an Item
+ * Extractor Chip pulled back out of it. Each payload is counted once.
+ */
+interface ChurnRecord { bounced: Map<number, Tally>; wandered: Map<number, Tally>; pulledBack: Map<number, Tally> }
+
+/** What a run records about one Project Red pipe (Task 8): its dispatch ticks, the items in the orders its broadcaster dropped, and what a restart took out of its send queue. */
+interface PipeRecord { dispatches: number[]; dropped: number; lost: number }
+
+/** What a run records about one ME interface (Task 9): the ticks the CPU pushed a pattern into it, and those its Locking Card's lock cleared. */
+interface IfaceRecord { pushes: number[]; unlocks: number[] }
+
+/**
+ * How an ME interface's Fluid Packet fared at a machine (Task 9 rule 5): it went into an input slot (`slot`), it waits in the
+ * interface's send list as the machine took none of it (`send_list`), or the CPU's push of a pattern whose only stacks are Fluid
+ * Packets went nowhere (`no_slot`).
+ */
+export type PacketHow = 'slot' | 'send_list' | 'no_slot';
+
+/**
+ * The Fluid Packets of one fluid that one interface had at one machine, one way. `slot` keeps its first tick. `send_list` and
+ * `no_slot` keep stretches: records follow one another in a stretch until the CPU pushes into the interface again (`seq`, its
+ * count of pushes at the stretch's last record), as the packet left the send list or the refused push went through.
+ */
+interface PacketRecord { readonly iface: NodeId; readonly fluid: number; readonly how: PacketHow; readonly stretches: Array<{ from: number; to: number; seq: number }> }
+
+/** Adds `n` of `key` at tick `t` to `tallies`. */
+function tally(tallies: Map<number, Tally>, key: number, n: number, t: number): void {
+  let s = tallies.get(key);
+  if (s === undefined) {
+    s = { n: 0, reached: -1 };
+    tallies.set(key, s);
+  }
+  s.n += n;
+  if (s.reached < 0 && s.n >= CHURN_ITEMS) s.reached = t;
+}
+
+function totalOf(tallies: ReadonlyMap<number, Tally> | undefined): number {
+  let n = 0;
+  for (const s of tallies?.values() ?? []) n += s.n;
+  return n;
+}
+
+/**
+ * What a scenario run records, by node id. The models call the recorders as things happen (keys are `KeyTable` ids);
+ * the readers turn ids back into keys. Nothing here depends on how often an entity ran, so a scheduled run and an
+ * exhaustive one record the same.
+ */
+export class SimStats {
+  /** The run's key table: the readers turn ids back into keys with it. */
+  readonly keys: KeyTable;
+  private readonly nodes = new Map<NodeId, NodeRecord>();
+  private readonly benches = new Map<NodeId, BenchRecord>();
+  private readonly churns = new Map<NodeId, ChurnRecord>();
+  private readonly pipes = new Map<NodeId, PipeRecord>();
+  private readonly ifaces = new Map<NodeId, IfaceRecord>();
+  private readonly packets = new Map<string, PacketRecord>();
+  private readonly packetsAt = new Map<NodeId, PacketRecord[]>();
+  private readonly simulated = new Set<NodeId>();
+  private readonly spills: Array<[NodeId, number]> = [];      // (node, key) in the order they first spilled
+
+  constructor(keys: KeyTable) {
+    this.keys = keys;
+  }
+
+  private churnOf(node: NodeId): ChurnRecord {
+    let r = this.churns.get(node);
+    if (r === undefined) {
+      r = { bounced: new Map(), wandered: new Map(), pulledBack: new Map() };
+      this.churns.set(node, r);
+    }
+    return r;
+  }
+
+  private pipeOf(pipe: NodeId): PipeRecord {
+    let r = this.pipes.get(pipe);
+    if (r === undefined) {
+      r = { dispatches: [], dropped: 0, lost: 0 };
+      this.pipes.set(pipe, r);
+    }
+    return r;
+  }
+
+  private ifaceOf(iface: NodeId): IfaceRecord {
+    let r = this.ifaces.get(iface);
+    if (r === undefined) {
+      r = { pushes: [], unlocks: [] };
+      this.ifaces.set(iface, r);
+    }
+    return r;
+  }
+
+  private of(node: NodeId): NodeRecord {
+    let r = this.nodes.get(node);
+    if (r === undefined) {
+      r = emptyRecord();
+      this.nodes.set(node, r);
+    }
+    return r;
+  }
+
+  private benchOf(node: NodeId): BenchRecord {
+    let r = this.benches.get(node);
+    if (r === undefined) {
+      r = emptyBench();
+      this.benches.set(node, r);
+    }
+    return r;
+  }
+
+  /** `node` is simulated: `detect` reports on it. */
+  register(node: NodeId): void {
+    this.simulated.add(node);
+    this.of(node);
+  }
+
+  isSimulated(node: NodeId): boolean {
+    return this.simulated.has(node);
+  }
+
+  /** A network (or a test feeder) handed `n` of `key` to `node`. */
+  delivered(node: NodeId, key: number, n: number, t: number): void {
+    const g = this.of(node).given;
+    g.t.push(t);
+    g.key.push(key);
+    g.n.push(n);
+  }
+
+  /** `n` of `key` left `node`'s output slots (a bench's result slot). */
+  extracted(node: NodeId, key: number, n: number, t: number): void {
+    const r = this.of(node);
+    if (r.taken.at(-1) !== t) r.taken.push(t);
+    r.out.t.push(t);
+    r.out.key.push(key);
+    r.out.n.push(n);
+  }
+
+  /** A recipe check found no recipe whose inputs are there: recipe `recipe` (its cached one, else its first) misses `missing`. */
+  waiting(node: NodeId, recipe: number, missing: readonly number[], crowdedBy: Crowd | null, t: number): void {
+    this.of(node).checks.push({ t, kind: WAIT, recipe, missing: [...missing], crowd: crowdedBy === null ? null : { ...crowdedBy }, key: -1, ready: [] });
+  }
+
+  /** A run of recipe `recipe` started. */
+  started(node: NodeId, recipe: number, t: number): void {
+    const r = this.of(node);
+    r.checks.push({ t, kind: START, recipe, missing: [], crowd: null, key: -1, ready: [] });
+    while (r.starts.length <= recipe) r.starts.push(0);
+    r.starts[recipe]! += 1;
+  }
+
+  /**
+   * A recipe check found recipe `recipe` but its outputs do not fit (rule 6d: it never tries another): `key` is the item
+   * in the output slot that blocks, `ready` the other recipes whose inputs were there.
+   */
+  blocked(node: NodeId, recipe: number, t: number, key: number, ready: readonly number[] = []): void {
+    this.of(node).checks.push({ t, kind: BLOCK, recipe, missing: [], crowd: null, key, ready: [...ready] });
+  }
+
+  /**
+   * A multiblock's recipe check found every input of recipe `recipe` on its input buses, but no one bus holds them all
+   * while Input Separation checks each bus alone (Task 5 rule 4).
+   */
+  separated(node: NodeId, recipe: number, t: number): void {
+    this.of(node).checks.push({ t, kind: SPLIT, recipe, missing: [], crowd: null, key: -1, ready: [] });
+  }
+
+  /** `key` now fills `slots` input slots of `node`. */
+  occupancy(node: NodeId, key: number, slots: number, t: number): void {
+    const m = this.of(node).slots;
+    const r = m.get(key);
+    if (r === undefined) m.set(key, { most: slots, first: slots >= 2 ? t : -1 });
+    else {
+      r.most = Math.max(r.most, slots);
+      if (r.first < 0 && slots >= 2) r.first = t;
+    }
+  }
+
+  /** `n` of `key` arrived in `chest`. */
+  arrived(chest: NodeId, key: number, n: number, t: number): void {
+    const list = this.of(chest).arrived;
+    const last = list.at(-1);
+    if (last !== undefined && last[0] === t && last[1] === key) last[2] += n;
+    else list.push([t, key, n]);
+  }
+
+  /** `n` of `key` that `node` (a conveyor on it, or its auto-output) dropped into the world. */
+  spilled(node: NodeId, key: number, n: number, t: number): void {
+    void t;
+    const m = this.of(node).spilled;
+    if (!m.has(key)) this.spills.push([node, key]);
+    m.set(key, (m.get(key) ?? 0) + n);
+  }
+
+  /** Bench `node` moved `n` of `key` to its result slot, not as a craft's result: `why`. */
+  benchMoved(node: NodeId, key: number, n: number, why: BenchMove, t: number): void {
+    this.benchOf(node).moved.push({ t, key, n, why });
+  }
+
+  /** Bench `node`'s clean-up of duplicate stacks overwrote the `n` of `key` it had moved to its result slot: they are gone. */
+  benchLost(node: NodeId, key: number, n: number, t: number): void {
+    this.benchOf(node).lost.push({ t, key, n });
+  }
+
+  /** Bench `node` crafted: a run of its recipe 0, the one its grid is laid from (`started`). */
+  benchCrafted(node: NodeId, t: number): void {
+    this.benchOf(node).crafts.push(t);
+    this.started(node, 0, t);
+  }
+
+  /** Bench `node`'s push moved nothing while its result slot held `key`: from `t`, until that stack goes out (`benchFreed`). */
+  benchStuck(node: NodeId, key: number, t: number): void {
+    const list = this.benchOf(node).refused;
+    if (list.at(-1)?.to === -1) return;
+    list.push({ key, from: t, to: -1 });
+  }
+
+  /** The stack in bench `node`'s result slot that its push had left there went out at `t`, in whole or in part. */
+  benchFreed(node: NodeId, t: number): void {
+    const open = this.benchOf(node).refused.at(-1);
+    if (open !== undefined && open.to === -1) open.to = t;
+  }
+
+  /** Bench `node` took `key`, which is not in its grid, into an input slot (only its first time counts). */
+  benchTook(node: NodeId, key: number, t: number): void {
+    const took = this.benchOf(node).took;
+    if (!took.has(key)) took.set(key, t);
+  }
+
+  /** Project Red: the routed pipe `pipe` dispatched a payload of `n` of `key` (the head of its send queue). */
+  dispatched(pipe: NodeId, key: number, n: number, t: number): void {
+    void key;
+    void n;
+    this.pipeOf(pipe).dispatches.push(t);
+  }
+
+  /** Project Red: `n` of `key` sent to `node` did not all go in; they keep their destination and circle its pipe (once per payload). */
+  bounced(node: NodeId, key: number, n: number, t: number): void {
+    tally(this.churnOf(node).bounced, key, n, t);
+  }
+
+  /** Project Red: `n` of `key` on their way to `node` lost their destination and found no other: they wander (once per payload). */
+  wandered(node: NodeId, key: number, n: number, t: number): void {
+    tally(this.churnOf(node).wandered, key, n, t);
+  }
+
+  /** Project Red: an Item Extractor Chip took `n` of `key` back out of the input bus `node` (research §3.2). */
+  pulledBack(node: NodeId, key: number, n: number, t: number): void {
+    tally(this.churnOf(node).pulledBack, key, n, t);
+  }
+
+  /** Project Red: the Item Broadcaster Chip on `pipe` dropped an order for `n` of `key`, which it could not extract (`timeOutOnFailedExtract`). */
+  prDropped(pipe: NodeId, key: number, n: number, t: number): void {
+    void key;
+    void t;
+    this.pipeOf(pipe).dropped += n;
+  }
+
+  /** Project Red: a restart lost `n` of `key` that waited in `pipe`'s send queue, which Project Red does not save. */
+  queueLost(pipe: NodeId, key: number, n: number, t: number): void {
+    void key;
+    void t;
+    this.pipeOf(pipe).lost += n;
+  }
+
+  /** AE2: the crafting CPU pushed a pattern into the ME interface `iface` (one entry per push, several in one tick with co-processors). */
+  ae2Push(iface: NodeId, t: number): void {
+    this.ifaceOf(iface).pushes.push(t);
+  }
+
+  /** AE2: the lock the Locking Card of the ME interface `iface` set on a push cleared: its list of the pattern's outputs is down to 0. */
+  ae2Unlock(iface: NodeId, t: number): void {
+    this.ifaceOf(iface).unlocks.push(t);
+  }
+
+  /**
+   * AE2: a Fluid Packet of `fluid` from the ME interface `iface` at machine `node` (Task 9 rule 5): it went into one of its
+   * input slots (`slot`), waits in `iface`'s send list (`send_list`: at the push that left it there and at each try of the list
+   * that leaves it), or the CPU's push of a pattern of packets alone went nowhere (`no_slot`: at each refused push).
+   */
+  packet(node: NodeId, iface: NodeId, fluid: number, how: PacketHow, t: number): void {
+    const id = `${node}\n${iface}\n${fluid}\n${how}`;
+    let rec = this.packets.get(id);
+    if (rec === undefined) {
+      rec = { iface, fluid, how, stretches: [] };
+      this.packets.set(id, rec);
+      const list = this.packetsAt.get(node);
+      if (list === undefined) this.packetsAt.set(node, [rec]);
+      else list.push(rec);
+    }
+    if (how === 'slot') {
+      if (rec.stretches.length === 0) rec.stretches.push({ from: t, to: t, seq: 0 });
+      return;
+    }
+    const seq = this.ifaces.get(iface)?.pushes.length ?? 0;
+    const last = rec.stretches.at(-1);
+    if (last !== undefined && last.seq === seq) last.to = Math.max(last.to, t);
+    else rec.stretches.push({ from: t, to: t, seq });
+  }
+
+  /** Records `inv`'s contents at the end of the run. */
+  snapshot(inv: SimInv): void {
+    const out: Array<[number, number] | null> = [];
+    for (let i = 0; i < inv.slotCount(); i++) {
+      const s = inv.stack(i);
+      out.push(s === null ? null : [s.key, s.count]);
+    }
+    this.of(inv.id).final = out;
+  }
+
+  // ---- Readers ----
+
+  /** The items `node` dropped into the world. */
+  spilledTotal(node: NodeId): number {
+    let n = 0;
+    for (const v of this.nodes.get(node)?.spilled.values() ?? []) n += v;
+    return n;
+  }
+
+  /** What `node` dropped, by key, in the order each key first dropped (the unknowns `items_dropped` name them). */
+  spillsInOrder(): Array<[NodeId, StuffKey, number]> {
+    return this.spills.map(([node, key]) => [node, this.keys.key(key), this.nodes.get(node)!.spilled.get(key)!]);
+  }
+
+  /** What was handed to `node` (or to the bus `node`), in order: one entry per `delivered`. */
+  deliveries(node: NodeId): Array<[tick: number, key: StuffKey, count: number]> {
+    const g = this.nodes.get(node)?.given;
+    return g === undefined ? [] : g.t.map((t, i) => [t, this.keys.key(g.key[i]!), g.n[i]!]);
+  }
+
+  /** What reached `chest`, in order: one entry per tick and key. */
+  arrivals(chest: NodeId): Array<[tick: number, key: StuffKey, count: number]> {
+    return (this.nodes.get(chest)?.arrived ?? []).map(([t, key, n]) => [t, this.keys.key(key), n]);
+  }
+
+  /** `node`'s slot contents at the end of the run, in slot order (null: empty). */
+  final(node: NodeId): Array<[StuffKey, number] | null> {
+    return (this.nodes.get(node)?.final ?? []).map((s) => (s === null ? null : [this.keys.key(s[0]), s[1]]));
+  }
+
+  /** The runs `node` started, by recipe index. */
+  runsOf(node: NodeId): number[] {
+    return [...(this.nodes.get(node)?.starts ?? [])];
+  }
+
+  /** The ticks `node` started a run, in order: a basic machine's, a multiblock controller's, a bench's crafts. */
+  starts(node: NodeId): number[] {
+    return (this.nodes.get(node)?.checks ?? []).filter((c) => c.kind === START).map((c) => c.t);
+  }
+
+  /** The ticks the crafting CPU pushed a pattern into the ME interface `iface`, in order (one entry per push). */
+  ae2Pushes(iface: NodeId): number[] {
+    return [...(this.ifaces.get(iface)?.pushes ?? [])];
+  }
+
+  /** The ticks the lock of the ME interface `iface`'s Locking Card cleared, in order. */
+  unlocked(iface: NodeId): number[] {
+    return [...(this.ifaces.get(iface)?.unlocks ?? [])];
+  }
+
+  /** The ticks bench `node` crafted, in order. */
+  benchCrafts(node: NodeId): number[] {
+    return [...(this.benches.get(node)?.crafts ?? [])];
+  }
+
+  /** The ticks the routed pipe `pipe` dispatched a payload, in order. */
+  dispatches(pipe: NodeId): number[] {
+    return [...(this.pipes.get(pipe)?.dispatches ?? [])];
+  }
+
+  /** The items sent to `node` over Project Red that bounced and circle its pipe. */
+  bouncedTotal(node: NodeId): number {
+    return totalOf(this.churns.get(node)?.bounced);
+  }
+
+  /** The items on their way to `node` over Project Red that wander. */
+  wanderedTotal(node: NodeId): number {
+    return totalOf(this.churns.get(node)?.wandered);
+  }
+
+  /** The items Item Extractor Chips pulled back out of the input bus `node`. */
+  pulledBackTotal(node: NodeId): number {
+    return totalOf(this.churns.get(node)?.pulledBack);
+  }
+
+  /** The items in the orders the Item Broadcaster Chip on `pipe` dropped. */
+  droppedTotal(pipe: NodeId): number {
+    return this.pipes.get(pipe)?.dropped ?? 0;
+  }
+
+  /** The items restarts took out of `pipe`'s send queue. */
+  queueLostTotal(pipe: NodeId): number {
+    return this.pipes.get(pipe)?.lost ?? 0;
+  }
+
+  /** @internal what `detect` reads */
+  recordOf(node: NodeId): Readonly<NodeRecord> | undefined {
+    return this.nodes.get(node);
+  }
+
+  /** @internal what `detect` reads of a bench */
+  benchRecordOf(node: NodeId): Readonly<BenchRecord> | undefined {
+    return this.benches.get(node);
+  }
+
+  /** @internal what `detect` reads of Project Red's payloads at a node or an input bus */
+  churnRecordOf(node: NodeId): Readonly<ChurnRecord> | undefined {
+    return this.churns.get(node);
+  }
+
+  /** @internal what `detect` reads of the Fluid Packets at a machine, in the order each (interface, fluid, how) was first recorded */
+  packetRecordsOf(node: NodeId): readonly PacketRecord[] {
+    return this.packetsAt.get(node) ?? [];
+  }
+}
+
+// ---- detect ----
+
+const CODE_ORDER: readonly FeedCode[] = Object.keys(FEED_KINDS) as FeedCode[];
+
+/** Why a bench threw items out of its input slots, in the order `feed_bench_eject` gives them (Task 6 rule 5). */
+const BENCH_REASONS: ReadonlyArray<readonly [BenchMove, string]> = [
+  ['stray', 'it took items that are not in its grid'],
+  ['failed', 'a failed craft empties its last input slot'],
+  ['duplicate', 'its clean-up moves the second of two stacks of one ingredient to its result slot'],
+];
+
+/** How a Fluid Packet fared, in the order `feed_fluid_packet` prefers one that began on the same tick (Task 9 rule 8). */
+const PACKET_HOWS: readonly PacketHow[] = ['slot', 'send_list', 'no_slot'];
+
+/** "1 item", "448 items". */
+function itemsText(n: number): string {
+  return `${fmtInt(n)} item${n === 1 ? '' : 's'}`;
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+interface Pending { at: number; code: number; key: string; seq: number; finding: FeedFinding }
+
+/**
+ * How a machine kept to the plan's pace for one item over the run's second half: whether it gave what the plan asks of it,
+ * and the interval between takes that pace keeps, in ticks.
+ */
+interface Pace { kept: boolean; interval: number }
+
+/** The end of check `i`'s condition: the next check's tick, or the end of the run. */
+function endOf(checks: readonly Check[], i: number, ticks: number): number {
+  return checks[i + 1]?.t ?? ticks;
+}
+
+/**
+ * The stretches of consecutive checks for which `same(check)` gives the same non-null value: each from its first check
+ * to the next check that differs, or the end of the run.
+ */
+function stretches<T>(checks: readonly Check[], ticks: number, same: (c: Check) => T | null): Array<{ value: T; from: number; to: number; first: Check }> {
+  const out: Array<{ value: T; from: number; to: number; first: Check }> = [];
+  let open: { value: T; from: number; first: Check } | null = null;
+  for (let i = 0; i < checks.length; i++) {
+    const c = checks[i]!;
+    const v = same(c);
+    if (open !== null && v !== open.value) {
+      out.push({ ...open, to: c.t });
+      open = null;
+    }
+    if (open === null && v !== null) open = { value: v, from: c.t, first: c };
+    if (i === checks.length - 1 && open !== null) out.push({ ...open, to: endOf(checks, i, ticks) });
+  }
+  return out;
+}
+
+/** `list` with the entries of `more` after its own. */
+function joined(list: NodeRecord['given'], more: ReadonlyArray<NodeRecord['given'] | undefined>): NodeRecord['given'] {
+  const all = { t: [...list.t], key: [...list.key], n: [...list.n] };
+  for (const g of more) {
+    if (g === undefined) continue;
+    for (let i = 0; i < g.t.length; i++) {
+      all.t.push(g.t[i]!);
+      all.key.push(g.key[i]!);
+      all.n.push(g.n[i]!);
+    }
+  }
+  return all;
+}
+
+/**
+ * A multiblock's record as the detectors read it: its controller's checks and runs, with what its input buses were handed
+ * (`given`) and what left its output buses and when (`out`, `taken`), the buses standing in for a machine's slots.
+ */
+function withBuses(stats: SimStats, node: MultiNode, own: Readonly<NodeRecord>): Readonly<NodeRecord> {
+  const given = joined(own.given, node.inBuses.map((bus) => stats.recordOf(bus.id)?.given));
+  const out = joined(own.out, node.outBuses.map((bus) => stats.recordOf(bus.id)?.out));
+  const taken = new Set(own.taken);
+  for (const bus of node.outBuses) for (const t of stats.recordOf(bus.id)?.taken ?? []) taken.add(t);
+  return { ...own, given, out, taken: [...taken].sort((a, b) => a - b) };
+}
+
+/**
+ * The findings of a scenario run (rules 10–16, Task 5 rule 4) on the nodes the run simulated. `explain` gives the
+ * networks' reasons for an item that never arrives or never leaves; `slowTolerance` is `feed_slow`'s (default
+ * `SLOW_TOLERANCE`).
+ */
+export function detect(model: FeedModel, stats: SimStats, run: {
+  scenario: ScenarioName; ticks: number; explain: Explain; slowTolerance?: number;
+  /** By machine and item, the tick from which an AE2 job had no more of the item for the machine: `feed_slow` reads its rate only before it. */
+  jobEnds?: Readonly<Record<NodeId, Readonly<Record<StuffKey, number>>>>;
+}): FeedFinding[] {
+  const { ticks, scenario } = run;
+  const found: Pending[] = [];
+  const keyOf = (id: number) => stats.keys.key(id);
+  const name = (id: number) => model.nameOf(keyOf(id));
+  const emit = (at: number, node: FeedNode, code: FeedCode, text: string, more: { key?: StuffKey; stepId?: string; tick: number; count?: number }): void => {
+    const stepId = more.stepId ?? (node.kind === 'chest' ? undefined : node.stepIds[0]);
+    found.push({
+      at, code: CODE_ORDER.indexOf(code), key: more.key ?? '', seq: found.length,
+      finding: {
+        code, kind: FEED_KINDS[code], phase: 'sim', certainty: 'certain', scenario, ...(stepId === undefined ? {} : { stepId }),
+        machine: node.label, pos: [node.pos[0], node.pos[1], node.pos[2]], ...(more.key === undefined ? {} : { key: more.key }), text,
+        tick: more.tick, ...(more.count === undefined ? {} : { count: more.count }),
+      },
+    });
+  };
+
+  // the first machine whose plan rates list each key: who a leaked item was meant for
+  const meantFor = new Map<StuffKey, { node: FeedNode; stepId: string }>();
+  for (const node of model.nodes) {
+    if (node.kind === 'chest') continue;
+    for (const stepId of node.stepIds) {
+      for (const key of Object.keys(model.planned[stepId] ?? {}).sort(compareText)) if (!meantFor.has(key)) meantFor.set(key, { node, stepId });
+    }
+  }
+  const sinks = new Set(model.sinks);
+  // the run's second half, over which rates count, and how far below its plan a rate may fall
+  const half = Math.floor(ticks / 2);
+  const seconds = (ticks - half) / TICKS_PER_SECOND;
+  const tolerance = run.slowTolerance ?? SLOW_TOLERANCE;
+  /**
+   * How `node` kept to the plan's pace for item `key` (an id) over the run's second half, or null where the plan asks nothing
+   * of it there (a hand-built model, or an item the plan sends nowhere): `kept`, whether it gave what the plan asks of it,
+   * within `feed_slow`'s tolerance (`model.plannedOut`); `interval`, the ticks between takes that keep to it: the most of the
+   * item taken out of it in one tick, over its plan rate, or the longest wait between two takes of it where that is longer,
+   * as with a taker that moves a run's share in pieces (an EnderIO face offers at most 4 an extraction; a push moves only what
+   * the block behind has room for) and then waits for the next run's. The first half counts for neither: a stack taken at
+   * once there (an output slot that filled before its takers ran) says nothing of their pace.
+   */
+  const paceOf = (node: FeedNode, rec: Readonly<NodeRecord>, key: number): Pace | null => {
+    if (node.kind === 'chest' || seconds <= 0) return null;
+    const k = keyOf(key);
+    let rate = 0;
+    for (const stepId of node.stepIds) rate += model.plannedOut?.[stepId]?.[k] ?? 0;
+    if (rate <= 0) return null;
+    // the second half's takes of the item: what left it each tick (a multiblock's buses add theirs, out of tick order)
+    const takes = new Map<number, number>();
+    rec.out.key.forEach((x, i) => {
+      const t = rec.out.t[i]!;
+      if (x === key && t >= half && t < ticks) takes.set(t, (takes.get(t) ?? 0) + rec.out.n[i]!);
+    });
+    let gave = 0, most = 0, longest = 0, last = -1;
+    for (const [t, n] of [...takes].sort((a, b) => a[0] - b[0])) {
+      gave += n;
+      most = Math.max(most, n);
+      if (last >= 0) longest = Math.max(longest, t - last);
+      last = t;
+    }
+    return { kept: gave >= (1 - tolerance) * rate * seconds, interval: Math.max((most / rate) * TICKS_PER_SECOND, longest) };
+  };
+  /**
+   * Whether a stall of an output (a blocked output slot, or a result its back refuses) from tick `from` until `to` (`ticks`:
+   * still open at the run's end) only waited for its takers, as a push line's machines run ahead of their takers and wait
+   * (research §7): its machine kept to the plan's pace for the item (`pace`), and the stall ended before the run's end, or is
+   * still open there but shorter than the interval between takes that pace keeps. A stall open at the end that lasts longer is
+   * a stop, however far ahead of its plan the machine ran before it (Task 4 rule 14: a line that drained it before and then
+   * stopped counts).
+   */
+  const waited = (pace: Pace | null, from: number, to: number): boolean => pace !== null && pace.kept && (to < ticks || to - from < pace.interval);
+  // the ME interfaces' names, for the Fluid Packet texts
+  const ifaceLabels = new Map<NodeId, string>();
+  for (const net of model.networks) if (net.kind === 'ae2') for (const i of net.interfaces) ifaceLabels.set(i.id, i.label);
+
+  model.nodes.forEach((node, at) => {
+    if (!stats.isSimulated(node.id)) return;
+    const own = stats.recordOf(node.id);
+    if (own === undefined) return;
+    if (node.kind === 'chest') {
+      leaks(at, node, own);
+      churn(at, node);
+      return;
+    }
+    const rec = node.kind === 'multi' ? withBuses(stats, node, own) : own;
+    const recipeStep = (r: number) => node.recipes[r]?.stepId ?? node.stepIds[0];
+
+    // rule 10: feed_crowded, one per kind that cannot get in
+    const crowded = stretches(rec.checks, ticks, (c) => (c.kind === WAIT && c.crowd !== null ? c.crowd.key : null));
+    for (const key of [...new Set(crowded.map((s) => s.value))].sort((a, b) => a - b)) {
+      const mine = crowded.filter((s) => s.value === key);
+      const first = mine.find((s) => s.to - s.from >= STALL_TICKS);
+      if (first === undefined) continue;
+      const crowd = first.first.crowd!;
+      const multiOn = node.kind === 'basic' && (node.settings.multiStack === true || (node.settings.multiStack === null && scenario === 'multistack_on'));
+      emit(at, node, 'feed_crowded', `${name(key)} cannot get into ${node.label}: ${name(crowd.by)} fills ${crowd.slots} of its ${crowd.of} input slots`
+        + `${multiOn ? ' (Multi Stack Input On)' : ''} while its recipe waits for ${name(key)}`,
+      { key: keyOf(key), stepId: recipeStep(first.first.recipe), tick: first.from, count: Math.max(...mine.map((s) => s.to - s.from)) });
+    }
+
+    // Task 5 rule 4: feed_crowded, a multiblock's set split over input buses that Input Separation checks alone, one per recipe
+    const split = stretches(rec.checks, ticks, (c) => (c.kind === SPLIT ? c.recipe : null));
+    for (const recipe of [...new Set(split.map((s) => s.value))].sort((a, b) => a - b)) {
+      const mine = split.filter((s) => s.value === recipe);
+      const first = mine.find((s) => s.to - s.from >= STALL_TICKS);
+      if (first === undefined) continue;
+      emit(at, node, 'feed_crowded', `${node.label} has every input of its recipe but on different input buses, and Input Separation checks each bus alone`,
+        { stepId: recipeStep(recipe), tick: first.from, count: Math.max(...mine.map((s) => s.to - s.from)) });
+    }
+
+    // rule 11 (Task 5 rule 4 on a multiblock's input buses): feed_overfill; a bench's has its own words (Task 6 rule 5)
+    if (node.kind === 'bench') benchFindings(at, node, rec);
+    else if (node.kinds.length >= 2) {
+      const filled = node.kind === 'multi'
+        ? node.inBuses.map((bus) => ({ slots: stats.recordOf(bus.id)?.slots, where: (n: number) => `${n} slots of ${bus.label} of ${node.label}` }))
+        : [{ slots: rec.slots, where: (n: number) => `${n} input slots of ${node.label}` }];
+      for (const { slots, where } of filled) {
+        for (const [key, s] of [...(slots ?? [])].sort((a, b) => a[0] - b[0])) {
+          if (s.most < 2) continue;
+          const k = keyOf(key);
+          emit(at, node, 'feed_overfill', `${name(key)} fills ${where(s.most)}, which takes ${node.kinds.length} kinds of item`,
+            { key: k, stepId: node.recipes.find((r) => r.inputs.some((i) => i.key === k))?.stepId, tick: s.first });
+        }
+      }
+    }
+
+    // rule 14: feed_no_route, an output blocked with nothing taken out of the machine meanwhile: every such stall, by item, and
+    // each item's first one that did not only wait for its takers (`waited`)
+    const blocked = stretches(rec.checks, ticks, (c) => (c.kind === BLOCK ? c.key : null));
+    const stalls = new Map<number, Array<{ from: number; to: number; recipe: number }>>();
+    let next = 0;                                               // the first take not before the stretch (stretches come in tick order)
+    for (const s of blocked) {
+      while (next < rec.taken.length && rec.taken[next]! < s.from) next++;
+      const list = stalls.get(s.value) ?? [];
+      // the stall starts again each time something leaves the output slots
+      let from = s.from;
+      for (let i = next; i < rec.taken.length && rec.taken[i]! < s.to; i++) {
+        const t = rec.taken[i]!;
+        if (t - from >= STALL_TICKS) list.push({ from, to: t, recipe: s.first.recipe });
+        from = t;
+      }
+      if (s.to - from >= STALL_TICKS) list.push({ from, to: s.to, recipe: s.first.recipe });
+      if (list.length > 0) stalls.set(s.value, list);
+    }
+    for (const [key, list] of [...stalls].sort((a, b) => a[0] - b[0])) {
+      const pace = paceOf(node, rec, key);
+      const s = list.find((x) => !waited(pace, x.from, x.to));
+      if (s === undefined) continue;
+      const k = keyOf(key);
+      emit(at, node, 'feed_no_route', `Nothing takes ${name(key)} out of ${node.label}: ${run.explain('out', node.id, k) ?? 'nothing on the line takes it'}`,
+        { key: k, stepId: recipeStep(s.recipe), tick: s.from });
+    }
+
+    // rule 15: feed_pool_starve, a recipe that never ran while the cached one's output blocked it
+    if (node.recipes.length >= 2) {
+      node.recipes.forEach((recipe, j) => {
+        if ((rec.starts[j] ?? 0) > 0) return;
+        const waits = stretches(rec.checks, ticks, (c) => (c.kind === BLOCK && c.ready.includes(j) ? c.recipe : null));
+        const first = waits.find((s) => s.to - s.from >= STALL_TICKS);
+        if (first === undefined) return;
+        const outputs = [...new Set(node.recipes[first.value]?.outputs.map((o) => model.nameOf(o.key)) ?? [])];
+        emit(at, node, 'feed_pool_starve',
+          `${node.label} never ran its recipe for ${model.stepName(recipe.stepId)}: it kept waiting on its last recipe's blocked output (${listText(outputs)})`,
+          { stepId: recipe.stepId, tick: first.from });
+      });
+    }
+
+    // Task 9 rule 8: feed_fluid_packet, once per fluid
+    fluidPackets(at, node);
+
+    // rules 12 and 13: feed_starved and feed_slow, per planned input
+    const planned = new Map<StuffKey, { rate: number; stepId: string }>();
+    for (const stepId of node.stepIds) {
+      for (const [key, rate] of Object.entries(model.planned[stepId] ?? {})) {
+        const p = planned.get(key);
+        planned.set(key, { rate: (p?.rate ?? 0) + rate, stepId: p?.stepId ?? stepId });
+      }
+    }
+    for (const [key, p] of [...planned].sort((a, b) => compareText(a[0], b[0]))) {
+      const id = stats.keys.id(key);
+      // the second half, cut where an AE2 job had no more of the item for the machine (Task 9 rule 3): a machine that ran ahead
+      // of the plan's rate pushed its share and waits, which says nothing of its pace
+      const end = Math.min(ticks, run.jobEnds?.[node.id]?.[key] ?? ticks);
+      let total = 0, late = 0;
+      rec.given.key.forEach((k, i) => {
+        if (k !== id) return;
+        total += rec.given.n[i]!;
+        if (rec.given.t[i]! >= half && rec.given.t[i]! < end) late += rec.given.n[i]!;
+      });
+      if (total === 0) {
+        emit(at, node, 'feed_starved', `${node.label} never gets ${model.nameOf(key)}: ${run.explain('in', node.id, key) ?? 'nothing on the line hands it over'}`,
+          { key, stepId: p.stepId, tick: 0 });
+        continue;
+      }
+      const span = (end - half) / TICKS_PER_SECOND;
+      if (span <= 0 || late >= (1 - tolerance) * p.rate * span) continue;
+      // how long that window's checks left the recipe waiting for it
+      let waited = 0, since = -1;
+      rec.checks.forEach((c, i) => {
+        if (c.kind !== WAIT || !c.missing.includes(id)) return;
+        const from = Math.max(c.t, half), to = Math.min(endOf(rec.checks, i, ticks), end);
+        if (to <= from) return;
+        waited += to - from;
+        if (since < 0) since = from;
+      });
+      if (waited <= 0.1 * (end - half)) continue;
+      emit(at, node, 'feed_slow', `${node.label} gets ${model.nameOf(key)} at ${fmtRate(late / span)}/s, below the ${fmtRate(p.rate)}/s the plan needs`,
+        { key, stepId: p.stepId, tick: since });
+    }
+
+    churn(at, node);
+  });
+
+  /**
+   * Task 8 rule 10, `feed_churn`, per item from the tick its count reached `CHURN_ITEMS`: what was sent to the node over Project
+   * Red, did not fit and circles its pipe; what lost its way to it and wanders; and what an Item Extractor Chip pulled back out
+   * of one of its input buses (bus by bus).
+   */
+  function churn(at: number, node: FeedNode): void {
+    const stepFor = (key: StuffKey): string | undefined => (node.kind === 'chest' ? undefined : node.recipes.find((r) => r.inputs.some((i) => i.key === key))?.stepId);
+    const each = (tallies: ReadonlyMap<number, Tally> | undefined, words: (n: string, item: string) => string): void => {
+      for (const [key, s] of [...(tallies ?? [])].sort((a, b) => a[0] - b[0])) {
+        if (s.reached < 0) continue;
+        const k = keyOf(key);
+        emit(at, node, 'feed_churn', words(fmtInt(s.n), name(key)), { key: k, stepId: stepFor(k), tick: s.reached, count: s.n });
+      }
+    };
+    const rec = stats.churnRecordOf(node.id);
+    each(rec?.bounced, (n, item) => `${n} ${item} sent to ${node.label} did not fit and circle its pipe, trying again every pipe length until there is room `
+      + '(its responder counted every empty slot as a stack, or a restart lost the count of what was on its way)');
+    each(rec?.wandered, (n, item) => `${n} ${item} lost their way and wander the routed pipes until a responder answers`);
+    if (node.kind !== 'multi') return;
+    for (const bus of node.inBuses) {
+      each(stats.churnRecordOf(bus.id)?.pulledBack, (n, item) => `${n} ${item} were pulled back out of ${bus.label} of ${node.label} by its Item Extractor Chip`);
+    }
+  }
+
+  /**
+   * Task 9 rule 8, `feed_fluid_packet`, once per fluid (key order) at a machine: of its interfaces' Fluid Packets of that fluid,
+   * the condition that began first (ties: one that went into a slot, then one held in a send list, then a refused push; then the
+   * order first recorded): a packet that went into one of its input slots, at once; one an interface kept in its send list, and a
+   * push of packets alone the machine refused, once that lasted `STALL_TICKS`.
+   */
+  function fluidPackets(at: number, node: Exclude<FeedNode, ChestNode>): void {
+    const records = stats.packetRecordsOf(node.id);
+    const first = new Map<number, { tick: number; rank: number; rec: (typeof records)[number] }>();
+    for (const rec of records) {
+      const s = rec.how === 'slot' ? rec.stretches[0] : rec.stretches.find((x) => x.to - x.from >= STALL_TICKS);
+      if (s === undefined) continue;
+      const rank = PACKET_HOWS.indexOf(rec.how);
+      const best = first.get(rec.fluid);
+      if (best === undefined || s.from < best.tick || (s.from === best.tick && rank < best.rank)) first.set(rec.fluid, { tick: s.from, rank, rec });
+    }
+    for (const [fluid, { tick, rec }] of [...first].sort((a, b) => a[0] - b[0])) {
+      const iface = ifaceLabels.get(rec.iface) ?? rec.iface, f = name(fluid), m = node.label, key = keyOf(fluid);
+      const text = rec.how === 'slot' ? `${iface} pushed a Fluid Packet (${f}) into ${m}: it stays in an input slot for good`
+        : rec.how === 'send_list' ? `${iface} cannot push the Fluid Packet (${f}) into ${m}, so it is stuck with it`
+          : `${iface} cannot push ${f} into ${m}: as a Fluid Packet item it needs a free input slot, and ${m} has none`;
+      emit(at, node, 'feed_fluid_packet', text, { key, stepId: node.recipes.find((r) => r.fluidsIn.some((x) => x.key === key))?.stepId, tick });
+    }
+  }
+
+  /** `${n}× ${name}` for each item of `events` by its total, the largest first (ties: key order), joined by ", ". */
+  function countsText(events: ReadonlyArray<{ key: number; n: number }>): string {
+    const totals = new Map<number, number>();
+    for (const e of events) totals.set(e.key, (totals.get(e.key) ?? 0) + e.n);
+    return [...totals].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([key, n]) => `${fmtInt(n)}× ${name(key)}`).join(', ');
+  }
+
+  /**
+   * Task 6 rule 5, a bench: `feed_overfill` (one item in two or more input slots: n the most, from the first tick; an item
+   * not in its grid in one), `feed_bench_eject` (what it moved to its result slot that it did not craft), `feed_bench_delete`
+   * (what its clean-up overwrote there) and `feed_bench_stuck` (its push left its result for `STALL_TICKS` in a row, once
+   * per item, from the first such stretch that did not only wait for its takers: `waited`).
+   */
+  function benchFindings(at: number, node: BenchNode, rec: Readonly<NodeRecord>): void {
+    for (const [key, s] of [...rec.slots].sort((a, b) => a[0] - b[0])) {
+      if (s.most >= 2) emit(at, node, 'feed_overfill', `${name(key)} fills ${s.most} input slots of ${node.label}`, { key: keyOf(key), tick: s.first });
+    }
+    const b = stats.benchRecordOf(node.id);
+    if (b === undefined) return;
+    for (const [key, t] of [...b.took].sort((x, y) => x[0] - y[0])) {
+      emit(at, node, 'feed_overfill', `${node.label} took ${name(key)}, which is not in its grid`, { key: keyOf(key), tick: t });
+    }
+    if (b.moved.length > 0) {
+      const n = b.moved.reduce((sum, m) => sum + m.n, 0);
+      const reasons = BENCH_REASONS.filter(([why]) => b.moved.some((m) => m.why === why)).map(([, words]) => words);
+      emit(at, node, 'feed_bench_eject', `${node.label} threw ${itemsText(n)} out of its input slots (${countsText(b.moved)}): ${reasons.join('; ')}`,
+        { tick: b.moved[0]!.t, count: n });
+    }
+    if (b.lost.length > 0) {
+      const n = b.lost.reduce((sum, l) => sum + l.n, 0);
+      emit(at, node, 'feed_bench_delete', `${node.label} destroyed ${itemsText(n)} (${countsText(b.lost)}): its clean-up of stacks of one ingredient `
+        + 'overwrites the stack it already moved to its result slot', { tick: b.lost[0]!.t, count: n });
+    }
+    const stuck = new Map<number, number>();
+    const paces = new Map<number, Pace | null>();
+    for (const r of b.refused) {
+      const to = r.to === -1 ? ticks : r.to;
+      if (stuck.has(r.key) || to - r.from < STALL_TICKS) continue;
+      let pace = paces.get(r.key);
+      if (pace === undefined) {
+        pace = paceOf(node, rec, r.key);
+        paces.set(r.key, pace);
+      }
+      if (!waited(pace, r.from, to)) stuck.set(r.key, r.from);
+    }
+    for (const [key, from] of [...stuck].sort((x, y) => x[0] - y[0])) {
+      emit(at, node, 'feed_bench_stuck', `${node.label} stopped: ${name(key)} sits in its result slot and the block behind it does not take it`,
+        { key: keyOf(key), tick: from });
+    }
+  }
+
+  /** Rule 16: an item planned for a machine that reached the chest, and the plan does not send out of the line. */
+  function leaks(at: number, chest: ChestNode, rec: Readonly<NodeRecord>): void {
+    const got = new Map<number, { n: number; first: number }>();
+    for (const [t, key, n] of rec.arrived) {
+      const g = got.get(key);
+      if (g === undefined) got.set(key, { n, first: t });
+      else g.n += n;
+    }
+    for (const [key, g] of [...got].sort((a, b) => a[0] - b[0])) {
+      const k = keyOf(key);
+      const meant = meantFor.get(k);
+      if (meant === undefined || sinks.has(k)) continue;
+      emit(at, chest, 'feed_leak', `${model.nameOf(k)} meant for ${meant.node.label} reached ${chest.label}`, { key: k, stepId: meant.stepId, tick: g.first, count: g.n });
+    }
+  }
+
+  return found.sort((a, b) => a.at - b.at || a.code - b.code || compareText(a.key, b.key) || a.seq - b.seq).map((p) => p.finding);
+}

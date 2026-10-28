@@ -7,14 +7,15 @@
 // crafting-table steps by hand (HAND_STEP_WEIGHT 3), while the Auto Workbench is the default (the controller's ruling).
 
 import { describe, it, expect } from 'vitest';
-import { centrifugeDustSpec, fluidCellsSpec, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
+import { centrifugeDustSpec, fluidCellsSpec, gasSpec, kitSpec, sandSpec, withAutoWorkbenches, withBuildRecipes, withPriceGap } from '../../helpers/build-fixtures.ts';
 import { MINI_GT, miniGt } from '../../helpers/mini-gt.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
 import { expandBomLines } from '../../../src/server/planner/bom.ts';
 import { assignOwned } from '../../../src/server/planner/machines.ts';
-import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { emptyContext, namedSolverWarning, planLine } from '../../../src/server/planner/plan.ts';
 import { linePricing } from '../../../src/server/planner/pricing.ts';
 import { sig9 } from '../../../src/server/planner/round.ts';
+import type { Solution } from '../../../src/server/planner/solve.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import type { OreVein } from '../../../src/shared/types/pack.ts';
 import type { LogisticsMode, MachineWhere, Plan, PlanContext, PlanSettings, PlanStep } from '../../../src/shared/types/plan.ts';
@@ -107,6 +108,35 @@ describe('build cost in the plan', () => {
         expect(step?.alternatives.find((a) => a.recipeId === id)?.unusable, id).toEqual(['Basic Centrifuge cannot be built here (no recipe in this pack)']);
       }
     }
+  });
+
+  it('keeps a step whose machines are exactly full at that many machines, whatever the 9 digits of its rate', async () => {
+    // A Thing a minute per machine (1,200 ticks a run), 10 a minute: exactly 10 machines, which the build MIP decides.
+    // The step's rate keeps 9 significant digits, 1/6 a second as 0.166666667, so its load read 10.00000002 and the step
+    // took an 11th machine: a block more than the plan the MIP chose (on the 2.9 export: 11 Electric Blast Furnaces for
+    // aluminium at HV where 10 do, worse by the MIP's own measure than the plan that ignores build cost).
+    const spec: PackSpec = withBuildRecipes({
+      items: [{ key: 't:a@0', name: 'A Dust', gt: { prefix: 'dust', material: 'A' } }, { key: 't:b@0', name: 'B' }, { key: 't:t@0', name: 'Thing' }],
+      maps: [{ id: 'gt.recipe.press', name: 'Press' }],
+      machines: [{ mteId: 301, name: 'Basic Press', tier: 1, maps: ['gt.recipe.press'] }],
+      recipes: [
+        { id: 'press-b', map: 'gt.recipe.press', in: [['t:a@0', 1]], out: [['t:b@0', 1]], eut: 16, dur: 1200 },
+        { id: 'press-t', map: 'gt.recipe.press', in: [['t:b@0', 1]], out: [['t:t@0', 1]], eut: 16, dur: 1200 },
+      ],
+      worldgen: { veins: [{ name: 'ore.mix.a', dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
+        materials: { primary: 'A', secondary: 'A', between: 'A', sporadic: 'A' } }] },
+    }, [301], [['t:a@0', 4]]);
+    const pack = packFromSpec(spec);
+    const things = (p: Partial<PlanSettings>): Promise<Plan> => planLine(pack, { ...defaultSettings(), target: 't:t@0', tier: 1, amount: 10, per: 'min', ...p }, emptyContext());
+    const direct = await things({});
+    expect(direct.steps.map((s) => [s.id, s.runsPerSecond, s.count])).toEqual([['press-b', 0.166666667, 10], ['press-t', 0.166666667, 10]]);
+    expect(direct.cost?.build).toBe(80);
+    // On AE2 the two steps share their presses: 20 machines' worth, 20 presses.
+    const ae2 = await things({ logistics: 'ae2' });
+    expect(ae2.steps.map((s) => [s.id, s.count, s.pool?.id])).toEqual([['press-b', 20, 'pool:press-b'], ['press-t', 20, 'pool:press-b']]);
+    expect(ae2.cost?.build).toBe(80);
+    // The step panel's tiers say 10 too.
+    expect(stepOf(direct, 'press-t').tiers?.map((t) => t.machines)).toEqual([10]);
   });
 
   it('names the machines whose build cost it cannot count', async () => {
@@ -310,9 +340,12 @@ describe('build cost in Make N', () => {
     expect(ids(many)).toEqual(['bend-plate', 'circuit-lv', 'wire']);
     expect(many.cost).toMatchObject({ build: 50, batch: 192, horizonHours: null });
     expect(many.cost?.runPerHour).toBe(sig9((192 * 3600) / many.makeN!.totalSeconds));
-    const few = await planLine(pack, S({ mode: 'makeN', amount: 8 }), emptyContext());
+    const few = await planLine(pack, S({ mode: 'makeN', amount: 8, rawCap: null }), emptyContext());
     expect(ids(few)).toEqual(['circuit-lv', 'hammer-plate', 'wire']);
     expect(few.cost).toMatchObject({ build: 33, batch: 32 });
+    const capped = await planLine(pack, S({ mode: 'makeN', amount: 8 }), emptyContext());
+    expect(ids(capped)).toEqual(['bend-plate', 'circuit-lv', 'wire']);   // the default cap: the leanest line charges the hammer step (U2, F3b)
+    expect(capped.cost).toMatchObject({ build: 50, batch: 24 });
   });
 
   it('tells the steps that share an Auto Workbench in a batch to set its grid between batches (controller ruling 177)', async () => {
@@ -473,26 +506,7 @@ describe('machines of supply steps and machines that cannot be built', () => {
 });
 
 describe('one source at a tie', () => {
-  /**
-   * Mini-GT plus plan 09 Task 8's tie in build mode: `burn` (Basic Centrifuge 161, 16 EU/t × `dur` t) splits a Raw Dust into a
-   * Copper Ingot and 1,000 L Gas, and `make-thing` (assembler, 2 EU/t) takes 2 copper ingots and 1,000 L gas. Copper is also
-   * mined, so burning a second dust (its gas left over) costs the raw material that buying the other ingot does. The
-   * centrifuge is crafted from `from` (nothing: it builds for free).
-   */
-  const gasSpec = (dur: number, from: ReadonlyArray<[string, number]> = []): PackSpec => {
-    const spec = structuredClone(MINI_GT);
-    const vein = { name: 'ore.mix.raw', dims: ['overworld'], kind: 'vein' as const, weight: 1, minY: 0, maxY: 255, size: 1, density: 1,
-      materials: { primary: 'Raw', secondary: 'Raw', between: 'Raw', sporadic: 'Raw' } };
-    return withBuildRecipes({
-      ...spec,
-      items: [...(spec.items ?? []), { key: 't:raw_dust@0', name: 'Raw Dust', gt: { prefix: 'dust', material: 'Raw' } }, { key: 't:thing@0', name: 'Thing' }],
-      fluids: [...(spec.fluids ?? []), { key: 'fluid:gas', name: 'Gas' }],
-      recipes: [...(spec.recipes ?? []),
-        { id: 'burn', map: 'gt.recipe.centrifuge', in: [['t:raw_dust@0', 1]], out: [['t:copper_ingot@0', 1], ['fluid:gas', 1000]], eut: 16, dur },
-        { id: 'make-thing', map: 'gt.recipe.assembler', in: [['t:copper_ingot@0', 2], ['fluid:gas', 1000]], out: [['t:thing@0', 1]], eut: 2 }],
-      worldgen: { ...spec.worldgen, veins: [...(spec.worldgen?.veins ?? []), vein] },
-    }, [161], from);
-  };
+  // `gasSpec` (build-fixtures.ts): plan 09 Task 8's tie in build mode, a centrifuge's copper beside bought copper.
   const thing = (p: Partial<PlanSettings> = {}): PlanSettings => S({ target: 't:thing@0', amount: 6, per: 'min', ...p });
 
   it('makes all of a good a step of the line makes rather than buy the rest, where its machines have room', async () => {
@@ -535,17 +549,36 @@ describe('one source at a tie', () => {
     }
   });
 
-  it('makes the rest on owned machines the build stage left idle, in every mode', async () => {
-    // Four owned centrifuges (each 0.05 runs a second, priced at an iron ingot): the build MIP needed two of them for the
-    // gas and broke the raw-material tie towards buying the other ingot, two owned machines idle. Owned machines cost
-    // nothing, so the tie stage may run burn on them: all four, no copper bought, nothing new built (ignore mode's answer).
+  it('makes the rest on owned machines the build stage left idle at step charge 0, in every mode', async () => {
+    // Four owned centrifuges (each 0.05 runs a second, priced at an iron ingot): the gas takes two of them, all of the
+    // copper four, at the same raw material. At step charge 0 ("Least raw material") an owned machine costs nothing, so
+    // where the build MIP broke the tie towards buying the other ingot, the tie stage may run burn on the idle ones: all
+    // four, no copper bought, nothing new built (ignore mode's answer).
     for (const logistics of ['direct', 'enderio', 'ae2', 'routed'] as const) {
       for (const buildHorizonHours of [24, null]) {
-        const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours }), owning({ mteId: 161, count: 4 }));
+        const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours, stepCharge: 0 }), owning({ mteId: 161, count: 4 }));
         expect(plan.status).toBe('ok');
         expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.2, 4, 4], ['make-thing', 0.1, 1, 0]]);
         expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
       }
+    }
+  });
+
+  it('buys the rest rather than run more owned machines at Fewest machines, where each owned block pays its share', async () => {
+    // Ledger 265 (controller OQ24): a step on an owned machine counts toward Fewest machines, each owned block paying
+    // OWNED_STEP_SHARE of the step charge, though it costs no build. The build MIP runs burn on two of the four owned
+    // centrifuges and buys the other ingot, and the tie stage no longer grows the step by the two it left idle (as fix
+    // wave 2 (a) stopped it growing by new machines that build for nothing). With build cost ignored there are no machines
+    // to weigh, and plan 09's one source makes all of it on the four.
+    for (const logistics of ['direct', 'enderio', 'ae2', 'routed'] as const) {
+      const plan = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics }), owning({ mteId: 161, count: 4 }));
+      expect(plan.status).toBe('ok');
+      expect(plan.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.1, 2, 2], ['make-thing', 0.1, 1, 0]]);
+      expect(plan.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:copper_ingot@0', 0.1], ['t:raw_dust@0', 0.1]]);
+      expect(plan.cost?.build).toBe(16);   // the assembler's: the owned centrifuges build for nothing
+      const ignored = await planLine(packFromSpec(gasSpec(400, [['t:iron_ingot@0', 1]])), thing({ logistics, buildHorizonHours: null }), owning({ mteId: 161, count: 4 }));
+      expect(ignored.steps.map((s) => [s.id, s.runsPerSecond, s.count, s.owned])).toEqual([['burn', 0.2, 4, 4], ['make-thing', 0.1, 1, 0]]);
+      expect(ignored.rawInputs.map((r) => [r.key, r.perSecond])).toEqual([['t:raw_dust@0', 0.2]]);
     }
   });
 
@@ -667,12 +700,119 @@ describe('the build list', () => {
   });
 });
 
+describe("more of the plan's build cost (the controller's ruling after Task 5)", () => {
+  const ore = (material: string): OreVein => ({ name: `ore.mix.${material.toLowerCase()}`, dims: ['overworld'], kind: 'vein', weight: 1, minY: 0, maxY: 255,
+    size: 1, density: 1, materials: { primary: material, secondary: material, between: material, sporadic: material } });
+
+  it('walks the line again when the walk around the avoid list meets a machine that cannot be built', async () => {
+    // A Thing is pressed from 1 Alpha Dust (A Press), 3 Xeno Dust (U Press, which no recipe makes) or 4 Ypsi Dust (B
+    // Press). The plain walk keeps only the Alpha press (the others cost more than twice as much, KEEP_WITHIN); around
+    // Alpha the walk meets the U Press, whose step the trial graph's build model blocks, so `avoidingLine` gives up that
+    // graph and the line is walked again without it (plannedLine): it presses Ypsi Dust, and the swap list says why not
+    // Xeno, in both modes.
+    const pack = packFromSpec(withBuildRecipes({
+      items: [{ key: 't:t@0', name: 'Thing' }, { key: 't:a@0', name: 'Alpha Dust', gt: { prefix: 'dust', material: 'Alpha' } },
+        { key: 't:x@0', name: 'Xeno Dust', gt: { prefix: 'dust', material: 'Xeno' } }, { key: 't:y@0', name: 'Ypsi Dust', gt: { prefix: 'dust', material: 'Ypsi' } }],
+      maps: [{ id: 'gt.recipe.a', name: 'A Press' }, { id: 'gt.recipe.u', name: 'U Press' }, { id: 'gt.recipe.b', name: 'B Press' }],
+      machines: [{ mteId: 301, name: 'Basic A Press', tier: 1, maps: ['gt.recipe.a'] }, { mteId: 302, name: 'Basic U Press', tier: 1, maps: ['gt.recipe.u'] },
+        { mteId: 303, name: 'Basic B Press', tier: 1, maps: ['gt.recipe.b'] }],
+      recipes: [
+        { id: 'r-a', map: 'gt.recipe.a', in: [['t:a@0', 1]], out: [['t:t@0', 1]], eut: 16 },
+        { id: 'r-u', map: 'gt.recipe.u', in: [['t:x@0', 3]], out: [['t:t@0', 1]], eut: 16 },
+        { id: 'r-b', map: 'gt.recipe.b', in: [['t:y@0', 4]], out: [['t:t@0', 1]], eut: 16 },
+      ],
+      worldgen: { veins: ['Alpha', 'Xeno', 'Ypsi'].map(ore) },
+    }, [301, 303]));
+    expect(ids(await planLine(pack, S({ target: 't:t@0' }), emptyContext()))).toEqual(['r-a']);
+    for (const buildHorizonHours of [24, null]) {
+      const plan = await planLine(pack, S({ target: 't:t@0', avoid: ['Alpha'], buildHorizonHours }), emptyContext());
+      expect(plan.status).toBe('ok');
+      expect(ids(plan)).toEqual(['r-b']);
+      expect(plan.avoided).toEqual([{ key: 't:a@0', name: 'Alpha Dust', unavoidable: false }]);
+      expect(stepOf(plan, 'r-b').alternatives.find((a) => a.recipeId === 'r-u')?.unusable).toEqual(['Basic U Press cannot be built here (no recipe in this pack)']);
+    }
+  });
+
+  it('counts a cleanroom the line builds, never one the group owns, and names one it cannot price', async () => {
+    // A Chip is assembled in a cleanroom from a circuit and an iron plate: the Cleanroom (4 iron plates, 4 raw) is counted
+    // once beside the line's machines (66), not where the group owns one; a Cleanroom of a pricing gap is not counted,
+    // named, and counted in `unpriced`.
+    const spec = (gap: boolean): PackSpec => {
+      const s = structuredClone(MINI_GT);
+      s.items!.push({ key: 't:chip@0', name: 'Chip' });
+      s.machines!.push({ mteId: 1200, name: 'Cleanroom', kind: 'multiblock', maps: [], cls: 'gregtech.common.tileentities.machines.multi.MTECleanroom' });
+      s.recipes!.push({ id: 'chip', map: 'gt.recipe.assembler', in: [['t:circuit@0', 1], ['t:iron_plate@0', 1]], out: [['t:chip@0', 1]], eut: 16, dur: 100, meta: { cleanroom: true } });
+      return gap ? withPriceGap(s, [1200]) : withBuildRecipes(s, [1200], [['t:iron_plate@0', 4]]);
+    };
+    const chips = S({ target: 't:chip@0' });
+    const owningRoom = owning({ mteId: 1200, count: 1 });
+    const built = packFromSpec(spec(false));
+    expect((await planLine(built, chips, emptyContext())).cost).toEqual({ runPerHour: 240, build: 70, horizonHours: 24 });
+    expect((await planLine(built, chips, owningRoom)).cost).toEqual({ runPerHour: 240, build: 66, horizonHours: 24 });
+    const gap = packFromSpec(spec(true));
+    const unpriced = await planLine(gap, chips, emptyContext());
+    expect(unpriced.cost).toEqual({ runPerHour: 240, build: 66, horizonHours: 24, unpriced: 1 });
+    expect(unpriced.warnings.filter((w) => w.code === 'build-cost-unknown'))
+      .toEqual([{ code: 'build-cost-unknown', text: 'Not counted in the build cost: Cleanroom (its price could not be worked out)' }]);
+    const owned = await planLine(gap, chips, owningRoom);
+    expect(owned.cost).toEqual({ runPerHour: 240, build: 66, horizonHours: 24 });
+    expect(codes(owned)).not.toContain('build-cost-unknown');
+  });
+
+  it('names at most five machines it cannot price, then counts the rest', async () => {
+    // Six steps, each on a machine of a pricing gap (MAX_UNPRICED_NAMED is 5).
+    const chain: PackSpec = {
+      items: [{ key: 't:g0@0', name: 'Base Dust', gt: { prefix: 'dust', material: 'Base' } }], maps: [{ id: 'crafting', name: 'Crafting' }], machines: [],
+      recipes: [{ id: 'hull', map: 'crafting', in: [['t:g0@0', 1]], out: [['t:hull_lv@0', 1]] }], worldgen: { veins: [ore('Base')] },
+    };
+    for (let i = 1; i <= 6; i++) {
+      chain.items!.push({ key: `t:g${i}@0`, name: `Good ${i}` });
+      chain.maps!.push({ id: `gt.recipe.m${i}`, name: `Map ${i}` });
+      chain.machines!.push({ mteId: 400 + i, name: `Basic Machine ${i}`, tier: 1, maps: [`gt.recipe.m${i}`] });
+      chain.recipes!.push({ id: `s${i}`, map: `gt.recipe.m${i}`, in: [[`t:g${i - 1}@0`, 1]], out: [[`t:g${i}@0`, 1]], eut: 16 });
+    }
+    const plan = await planLine(packFromSpec(withPriceGap(chain, [401, 402, 403, 404, 405, 406])), S({ target: 't:g6@0' }), emptyContext());
+    expect(ids(plan)).toEqual(['s1', 's2', 's3', 's4', 's5', 's6']);
+    expect(plan.cost?.unpriced).toBe(6);
+    expect(plan.warnings.filter((w) => w.code === 'build-cost-unknown')).toEqual([{ code: 'build-cost-unknown',
+      text: 'Not counted in the build cost: Basic Machine 1, Basic Machine 2, Basic Machine 3, Basic Machine 4, Basic Machine 5 and 1 more (their price could not be worked out)' }]);
+  });
+
+  it("words an owned-only warning without a good as the line's", () => {
+    // solve.ts keys an owned-only warning by the step's main output, which every step recipe of a line's walk has, so
+    // planLine never meets one without; its wording is checked all the same.
+    const pack = miniGt();
+    const graph = { recipes: [], goods: new Map(), targets: [], blocked: new Map(), warnings: [] } as unknown as Parameters<typeof namedSolverWarning>[1];
+    const sol = { status: 'infeasible', runs: new Map(), buys: new Map(), sinks: new Map(), rawCost: 0, leastRawCost: 0, blockers: [], warnings: [] } as Solution;
+    const text = '2× Basic Macerator, which cannot be built here (no recipe in this pack)';
+    expect(namedSolverWarning(pack, graph, sol, { code: 'owned-only', text })).toEqual({ code: 'owned-only', text: `The line needs more than your ${text}` });
+    expect(namedSolverWarning(pack, graph, sol, { code: 'owned-only', key: 't:iron_plate@0', text }))
+      .toEqual({ code: 'owned-only', key: 't:iron_plate@0', text: `Iron Plate needs more than your ${text}` });
+  });
+
+  it('runs crafting-table steps on Auto Workbenches by default, priced and powered like any machine', async () => {
+    // The default settings (`automateCrafting` true): Mini-GT's cable and hull, crafting-table recipes, each on an Auto
+    // Workbench (LV) of its own (no two crafting recipes share one: the sharing key holds the recipe), 32 EU/t × 64 t a
+    // craft; build 2 Basic Bending Machines (17 each) and 2 Auto Workbenches (an LV hull 9 and 2 circuits 6: 15 each).
+    const pack = packFromSpec(withAutoWorkbenches(MINI_GT, [1]));
+    const plan = await planLine(pack, { ...defaultSettings(), target: 't:hull_lv@0', tier: 1, amount: 2 }, emptyContext());
+    expect(plan.status).toBe('ok');
+    expect(plan.steps.map((s) => [s.id, s.machine.name, s.count, s.euPerTick, s.durationTicks, s.handCraft])).toEqual([
+      ['bend-plate', 'Basic Bending Machine', 2, 24, 100, false], ['cable', 'Auto Workbench (LV)', 1, 32, 64, false],
+      ['hull-lv', 'Auto Workbench (LV)', 1, 32, 64, false]]);
+    expect(codes(plan)).not.toContain('hand-step');
+    expect(plan.cost).toEqual({ runPerHour: 1080, build: 64, horizonHours: 24 });
+    expect(plan.power.peakEUt).toBe(2 * 24 + 32 + 32);
+    expect(plan.buildList.find((l) => l.key === 'machine:31091@0')).toMatchObject({ amount: 2, group: 'machines' });
+  });
+});
+
 describe('assignOwned', () => {
-  const units = (n: number): Map<number, null[]> => new Map([[1, new Array<null>(n).fill(null)]]);
+  const units = (n: number): Map<import('../../../src/shared/ids.ts').MachineId, null[]> => new Map([['gt:1', new Array<null>(n).fill(null)]]);
 
   it('assigns owned units deterministically', () => {
-    const a = { id: 'a', mteId: 1, load: 0.5 };
-    const b = { id: 'b', mteId: 1, load: 1.5 };
+    const a = { stepId: 'a', id: 'gt:1', load: 0.5 };
+    const b = { stepId: 'b', id: 'gt:1', load: 1.5 };
     // Direct: the larger load first, whole units (ceil(1.5) = 2).
     const direct = assignOwned([a, b], units(2), false);
     expect(direct.get('b')).toEqual({ units: [0, 1], added: 0 });
@@ -686,24 +826,24 @@ describe('assignOwned', () => {
     expect(keyed.get('b')).toEqual({ units: [0, 1], added: 0 });
     expect(keyed.get('a')).toEqual({ units: [], added: 1 });
     // 0.6 fits one unit; unit 1 stays free.
-    const light = assignOwned([{ id: 'a', mteId: 1, load: 0.3, key: 'k' }, { id: 'b', mteId: 1, load: 0.3, key: 'k' }], units(2), true);
+    const light = assignOwned([{ stepId: 'a', id: 'gt:1', load: 0.3, key: 'k' }, { stepId: 'b', id: 'gt:1', load: 0.3, key: 'k' }], units(2), true);
     expect(light.get('a')).toEqual({ units: [0], added: 0, pool: 'pool:a' });
     expect(light.get('b')).toEqual({ units: [0], added: 0, pool: 'pool:a' });
     // A running step needs a machine, however small its load.
-    const tiny = { id: 'a', mteId: 1, load: 1e-12 };
+    const tiny = { stepId: 'a', id: 'gt:1', load: 1e-12 };
     for (const shared of [false, true]) {
       expect(assignOwned([tiny], new Map(), shared).get('a')).toEqual({ units: [], added: 1 });
       expect(assignOwned([tiny], units(1), shared).get('a')).toEqual({ units: [0], added: 0 });
     }
     // The owned machines of another option a step also runs on (`also`) take their share first.
-    const beside = assignOwned([{ id: 'c', mteId: 1, load: 1, share: 1, also: true }, b], units(2), false);
-    expect(beside.get('c')).toEqual({ units: [], added: 0, others: [{ mteId: 1, units: [0] }] });
+    const beside = assignOwned([{ stepId: 'c', id: 'gt:1', load: 1, share: 1, also: true }, b], units(2), false);
+    expect(beside.get('c')).toEqual({ units: [], added: 0, others: [{ id: 'gt:1', units: [0] }] });
     expect(beside.get('b')).toEqual({ units: [1], added: 1 });
-    const room = assignOwned([{ id: 'c', mteId: 1, load: 0.4, share: 0.4, also: true, key: 'k' }, { id: 'd', mteId: 1, load: 0.5, key: 'k' }], units(1), true);
-    expect(room.get('c')?.others).toEqual([{ mteId: 1, units: [0] }]);
+    const room = assignOwned([{ stepId: 'c', id: 'gt:1', load: 0.4, share: 0.4, also: true, key: 'k' }, { stepId: 'd', id: 'gt:1', load: 0.5, key: 'k' }], units(1), true);
+    expect(room.get('c')?.others).toEqual([{ id: 'gt:1', units: [0] }]);
     expect(room.get('d')).toEqual({ units: [0], added: 0 });   // 0.4 and 0.5 fit the one unit
     // A step that can only use owned machines goes first.
-    const onlyOwned = assignOwned([{ id: 'a', mteId: 1, load: 1, ownedOnly: true }, b], units(2), false);
+    const onlyOwned = assignOwned([{ stepId: 'a', id: 'gt:1', load: 1, ownedOnly: true }, b], units(2), false);
     expect(onlyOwned.get('a')).toEqual({ units: [0], added: 0 });
     expect(onlyOwned.get('b')).toEqual({ units: [1], added: 1 });
   });

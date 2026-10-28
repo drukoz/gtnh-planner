@@ -4,7 +4,11 @@
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import {
-  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_STEP_CHARGE, LogisticsMode, STEP_CHARGE_BEFORE_V3, type PlanSettings,
+  defaultFarmSettings, FARM_KINDS, FERTILIZER_CHOICES, TGS_MODE_ORDER, TOOL_MATERIALS, type CropStats, type FarmSettings,
+} from '../types/farm.ts';
+import {
+  DEFAULT_BUILD_HORIZON_HOURS, DEFAULT_EXCLUDED_CATEGORIES, DEFAULT_OBJECTIVE, DEFAULT_RAW_CAP, DEFAULT_STEP_CHARGE, LogisticsMode,
+  PLAN_OBJECTIVES, STEP_CHARGE_BEFORE_V3, type PlanObjective, type PlanSettings,
 } from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
@@ -18,6 +22,8 @@ export const MAX_AVOID_ENTRY_LENGTH = 300;
  * build cost counted a new machine block costs half of it over the horizon ("Fewest machines", the default).
  */
 export const MAX_STEP_CHARGE = 0.5;
+/** The largest `PlanSettings.rawCap` (fix wave 3 (A)): ten times the leanest line's raw material on top of it. */
+export const MAX_RAW_CAP = 10;
 /** The longest `PlanSettings.buildHorizonHours` (architecture §11.39): a year of running. */
 export const MAX_BUILD_HORIZON_HOURS = 8760;
 /** Characters of a pinned option (`PlanSettings.optionChoice` values, fix spec §3). */
@@ -27,6 +33,26 @@ const OPTION_SLOT = /^[^#]{1,100}#\d{1,4}$/;
 /** Entries of `PlanSettings.ownedManual` ("Machines we have", architecture §11.29), and the machines one may count. */
 export const MAX_OWNED_MANUAL_ENTRIES = 200;
 export const MAX_OWNED_MANUAL_COUNT = 10_000;
+/**
+ * Farms the group already runs (`FarmSettings.running`, add-on 17), the outputs one lists, and the most one output gives
+ * a minute.
+ */
+export const MAX_RUNNING_FARMS = 20;
+export const MAX_FARM_OUTPUTS = 10;
+export const MAX_FARM_PER_MINUTE = 1e6;
+/**
+ * Layers of crop sticks under one Crop Manager (`FarmSettings.crops.layers`): a layer is a soil block with crop sticks on
+ * it, two blocks high, and a Crop Manager reaches 2 blocks up and down, so 3 fit.
+ */
+export const MAX_CROP_LAYERS = 3;
+/** Crop Managers exist for LV to UMV only (mteIds 28001–28012). */
+export const MAX_CROP_MANAGER_TIER = 12;
+/** A crop seed's growth, gain and resistance (farms.md §2.2). */
+export const MAX_CROP_STAT = 31;
+/** The crop's liked biome tags the farm's biome may have (`FarmSettings.crops.likedTags`). */
+export const MAX_LIKED_TAGS = 2;
+/** Keys of "Only these come in" (`PlanSettings.inputsOnly`, plan 12 fix wave 3 (B)). */
+export const MAX_INPUTS_ONLY = 50;
 
 const MAX_TIER = 14;
 const MAX_AMOUNT = 1e9;
@@ -44,11 +70,14 @@ const MULTIBLOCK_CHOICES: readonly unknown[] = ['allow', 'only-required'] satisf
 /**
  * The version of the defaults new settings are made under (`PlanSettings.settingsVersion`, architecture §11.32): 2 since
  * supporting lines (`routeDerived: true`) became the default (plan 09), 3 since "Fewest machines" (`DEFAULT_STEP_CHARGE`
- * 0.5) did (plan 12 fix wave 2, the user's answer of 2026-10-20). Settings stored before 2 read as version 1.
+ * 0.5) did (plan 12 fix wave 2, the user's answer of 2026-10-20), 4 since the raw cap (`DEFAULT_RAW_CAP`, fix wave 3 (A),
+ * the user's answer of 2026-10-22). Settings stored before 2 read as version 1.
  */
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 /** What `normalizeSettings` gives settings stored before `settingsVersion` existed. */
 const FIRST_SETTINGS_VERSION = 1;
+/** What `normalizeSettings` gives settings stored before `objective` existed (add-on 17): add-on 12 planned them cheapest. */
+const FIRST_OBJECTIVE: PlanObjective = 'cheapest';
 
 export function defaultSettings(): PlanSettings {
   return {
@@ -57,27 +86,73 @@ export function defaultSettings(): PlanSettings {
     machineTier: {}, excludedCategories: [...DEFAULT_EXCLUDED_CATEGORIES], coilHeat: null, automateCrafting: true,
     avoid: [], declineReuse: [], settingsVersion: SETTINGS_VERSION, haveSupply: [], stepCharge: DEFAULT_STEP_CHARGE,
     optionChoice: {}, reuseOwned: true, ownedManual: [], buildHorizonHours: DEFAULT_BUILD_HORIZON_HOURS, buildTier: null, multiblocks: 'allow',
+    objective: DEFAULT_OBJECTIVE, farms: defaultFarmSettings(), useSurplus: true,
+    rawCap: DEFAULT_RAW_CAP,
+    inputsOnly: [],
   };
 }
 
 /**
- * Fills the fields an older stored project lacks (later plans add settings), `dims` field by field, and drops repeated
- * avoid entries and sums repeated machines of the "Machines we have" list. A missing `settingsVersion` is 1, not the
- * default: the project was stored before it, and the server switches such projects to the new defaults once
+ * Fills the fields an older stored project lacks (later plans add settings), `dims` and `farms` field by field, and drops
+ * repeated avoid entries and sums repeated machines of the "Machines we have" list. A missing `settingsVersion` is 1, not
+ * the default: the project was stored before it, and the server switches such projects to the new defaults once
  * (`ProjectStore.migrateSettings`); every stored value, a stored `routeDerived: false` or `buildHorizonHours: null`
  * ("Ignore build cost") among them, is kept — but `automateCrafting`, which reads true whatever was stored (the user's
  * ruling 180 of 2026-10-20: crafting steps are automatic, with no switch for them), so a project stored "by hand" plans
  * its crafting on Auto Workbenches at once, with no recorded change. `planLine` still plans an explicit false by hand.
+ * The planning mode (add-on 17) is the stored one, or cheapest for a project stored before it, except that a rate
+ * project with a null horizon plans least raw material whatever was stored beside it, as the planner reads it (add-on
+ * 12's "Ignore build cost"); farms and other projects' surplus are on unless stored off.
  */
 export function normalizeSettings(s: Partial<PlanSettings> | undefined): PlanSettings {
   const defaults = defaultSettings();
   const merged = { ...defaults, ...definedOnly(s ?? {}) };
   merged.dims = { ...defaults.dims, ...definedOnly(s?.dims ?? {}) };
+  merged.farms = filledFarms(s?.farms);
   merged.avoid = withoutRepeats(merged.avoid);
+  merged.inputsOnly = withoutRepeats(merged.inputsOnly ?? []);
   merged.ownedManual = summedOwned(merged.ownedManual ?? []);
   merged.automateCrafting = true;
   if (s?.settingsVersion === undefined) merged.settingsVersion = FIRST_SETTINGS_VERSION;
+  if (s?.objective === undefined) merged.objective = FIRST_OBJECTIVE;
+  if (merged.mode === 'rate' && merged.buildHorizonHours === null) merged.objective = 'least-raw';
   return merged;
+}
+
+/**
+ * Stored farm settings over `defaultFarmSettings()`, field by field at every depth (as `dims`): farm settings stored with
+ * fewer fields keep their own and get the defaults of the rest.
+ */
+function filledFarms(stored: Partial<FarmSettings> | undefined): FarmSettings {
+  const d = defaultFarmSettings();
+  const f: Partial<FarmSettings> = definedOnly(stored ?? {});
+  const tgs: Partial<FarmSettings['tgs']> = definedOnly(f.tgs ?? {});
+  const crops: Partial<FarmSettings['crops']> = definedOnly(f.crops ?? {});
+  return {
+    ...d, ...f,
+    tgs: { ...d.tgs, ...tgs, tools: { ...d.tgs.tools, ...definedOnly(tgs.tools ?? {}) } },
+    crops: { ...d.crops, ...crops, stats: { ...d.crops.stats, ...definedOnly(crops.stats ?? {}) } },
+  };
+}
+
+/**
+ * `{ ...before, ...patch }` with the planning-mode rules of a settings patch (add-on 17, architecture §11.45 (1)), in this
+ * order: (1) a patch that sets a null horizon ("Ignore build cost", a stale tab) and names no mode plans least raw;
+ * (2) one that sets a horizon and names no mode on a least-raw project plans cheapest (a stale tab that picks a horizon);
+ * (3) a result planning cheapest or best multi-output with a null horizon counts build cost against the default
+ * `DEFAULT_BUILD_HORIZON_HOURS`. A settings op and a new project's settings (`ProjectStore.create`) take them; never
+ * changes its inputs.
+ */
+export function withObjectiveRules(before: PlanSettings, patch: Partial<PlanSettings>): PlanSettings {
+  const after: PlanSettings = { ...before, ...patch };
+  if (patch.objective === undefined && patch.buildHorizonHours !== undefined) {
+    if (patch.buildHorizonHours === null) after.objective = 'least-raw';           // (1)
+    else if (before.objective === 'least-raw') after.objective = 'cheapest';      // (2)
+  }
+  if ((after.objective === 'cheapest' || after.objective === 'multi-output') && after.buildHorizonHours === null) {   // (3)
+    after.buildHorizonHours = DEFAULT_BUILD_HORIZON_HOURS;
+  }
+  return after;
 }
 
 /** `list` with each value only where it first appears. */
@@ -99,15 +174,17 @@ function summedOwned(list: NonNullable<PlanSettings['ownedManual']>): NonNullabl
  * The settings patch that brings `s` (as `normalizeSettings` reads it) from its `settingsVersion` to `SETTINGS_VERSION`
  * (`ProjectStore.migrateSettings` records it once, as the planner): from before 2, supporting lines on (plan 09); from
  * before 3, a step charge of exactly the old default (`STEP_CHARGE_BEFORE_V3`, 0.02) becomes the new one (0.5, "Fewest
- * machines"), any other stored value staying; and the version. Null for settings of this version, which it never
- * touches, so a later deliberate value sticks.
+ * machines"), any other stored value staying; from before 4, the raw cap at its default (`DEFAULT_RAW_CAP`, fix wave 3
+ * (A)) where none is stored; and the version. Null for settings of this version, which it never touches, so a later
+ * deliberate value (a 2 % step charge, "No limit") sticks.
  */
 export function settingsUpgrade(s: PlanSettings): Partial<PlanSettings> | null {
   const from = s.settingsVersion ?? FIRST_SETTINGS_VERSION;
   if (from >= SETTINGS_VERSION) return null;
   const patch: Partial<PlanSettings> = {};
   if (from < 2) patch.routeDerived = true;
-  if (s.stepCharge === STEP_CHARGE_BEFORE_V3) patch.stepCharge = DEFAULT_STEP_CHARGE;
+  if (from < 3 && s.stepCharge === STEP_CHARGE_BEFORE_V3) patch.stepCharge = DEFAULT_STEP_CHARGE;
+  if (from < 4) patch.rawCap = s.rawCap === undefined ? DEFAULT_RAW_CAP : s.rawCap;
   patch.settingsVersion = SETTINGS_VERSION;
   return patch;
 }
@@ -124,10 +201,12 @@ export function applyOp(p: Project, op: ProjectOp, by: string, at: string): Proj
     case 'rename':
       return { ...next, name: op.name.trim() };
     case 'settings': {
-      // Records and arrays in the patch replace the old value whole; an avoid list keeps the first of repeated entries,
-      // and the "Machines we have" list sums the counts of a repeated machine.
-      const settings = { ...p.settings, ...op.patch };
+      // Records and arrays in the patch replace the old value whole (farm settings too); the planning mode and the build
+      // horizon follow `withObjectiveRules`; an avoid list keeps the first of repeated entries, and the "Machines we have"
+      // list sums the counts of a repeated machine.
+      const settings = withObjectiveRules(p.settings, op.patch);
       if (op.patch.avoid !== undefined) settings.avoid = withoutRepeats(op.patch.avoid);
+      if (op.patch.inputsOnly !== undefined) settings.inputsOnly = withoutRepeats(op.patch.inputsOnly);
       if (op.patch.ownedManual !== undefined) settings.ownedManual = summedOwned(op.patch.ownedManual);
       return { ...next, settings };
     }
@@ -170,9 +249,20 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const isTier = (v: unknown): boolean => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= MAX_TIER;
 const isStringOfLength = (v: unknown, min: number, max: number): v is string =>
   typeof v === 'string' && v.length >= min && v.length <= max;
+/** An item or fluid key as a setting names one (`target`, a running farm's output). */
+const isKeyText = (v: unknown): v is string => isStringOfLength(v, 1, MAX_TARGET_LENGTH);
 
 function oneOf(field: string, allowed: readonly unknown[]): Check {
   return (v) => (allowed.includes(v) ? null : `${field} must be one of ${allowed.map((a) => JSON.stringify(a)).join(', ')}`);
+}
+
+/** As `oneOf`, naming the allowed words plainly: "objective must be one of least-raw, cheapest, multi-output". */
+function oneOfNames(field: string, allowed: readonly string[]): Check {
+  return (v) => ((allowed as readonly unknown[]).includes(v) ? null : `${field} must be one of ${allowed.join(', ')}`);
+}
+
+function wholeNumber(field: string, min: number, max: number): Check {
+  return (v) => (Number.isInteger(v) && (v as number) >= min && (v as number) <= max ? null : `${field} must be a whole number from ${min} to ${max}`);
 }
 
 function booleanField(field: string): Check {
@@ -194,9 +284,67 @@ function isOwnedEntry(v: unknown): boolean {
     && Number.isInteger(v.count) && (v.count as number) >= 1 && (v.count as number) <= MAX_OWNED_MANUAL_COUNT;
 }
 
+/**
+ * Farm settings (add-on 17) whole, as `defaultFarmSettings()` makes them: a patch's records replace the stored value
+ * whole, so a patch never leaves a project with part of them.
+ */
+function checkFarms(v: unknown): string | null {
+  if (!isRecord(v)) return 'farms must be an object';
+  const known = (kind: unknown): boolean => (FARM_KINDS as readonly unknown[]).includes(kind);
+  if (!Array.isArray(v.kinds) || !v.kinds.every(known) || new Set(v.kinds).size !== v.kinds.length) {
+    return `farms.kinds must be a list of ${FARM_KINDS.join(', ')}, each at most once`;
+  }
+  return checkTreeFarm(v.tgs) ?? checkCropFarm(v.crops) ?? checkRunningFarms(v.running);
+}
+
+/** The Tree Growth Simulator: its energy hatch tier (LV and up), whether its input bus holds each mode's tool, their material. */
+function checkTreeFarm(v: unknown): string | null {
+  if (!isRecord(v)) return 'farms.tgs must be an object';
+  const { tools } = v;
+  return wholeNumber('farms.tgs.tier', 1, MAX_TIER)(v.tier)
+    ?? (isRecord(tools) && TGS_MODE_ORDER.every((mode) => typeof tools[mode] === 'boolean')
+      ? null : `farms.tgs.tools must be true or false for each of ${TGS_MODE_ORDER.join(', ')}`)
+    ?? oneOfNames('farms.tgs.toolMaterial', TOOL_MATERIALS)(v.toolMaterial);
+}
+
+/** The Crop Manager: its tier, the seeds' stats, the layers of crop sticks, the liked biome tags, open sky and fertilizer. */
+function checkCropFarm(v: unknown): string | null {
+  if (!isRecord(v)) return 'farms.crops must be an object';
+  const { stats } = v;
+  const stat = (name: keyof CropStats): string | null => (isRecord(stats)
+    ? wholeNumber(`farms.crops.stats.${name}`, 1, MAX_CROP_STAT)(stats[name]) : 'farms.crops.stats must be an object');
+  return wholeNumber('farms.crops.tier', 1, MAX_CROP_MANAGER_TIER)(v.tier)
+    ?? stat('growth') ?? stat('gain') ?? stat('resistance')
+    ?? wholeNumber('farms.crops.layers', 1, MAX_CROP_LAYERS)(v.layers)
+    ?? wholeNumber('farms.crops.likedTags', 0, MAX_LIKED_TAGS)(v.likedTags)
+    ?? booleanField('farms.crops.sky')(v.sky)
+    ?? oneOfNames('farms.crops.fertilizer', FERTILIZER_CHOICES)(v.fertilizer);
+}
+
+/**
+ * The farms the group runs: at most `MAX_RUNNING_FARMS`, each named as a project is, listing at most `MAX_FARM_OUTPUTS`
+ * goods, each with what it gives a minute (above 0 and at most `MAX_FARM_PER_MINUTE`).
+ */
+function checkRunningFarms(v: unknown): string | null {
+  if (!Array.isArray(v) || v.length > MAX_RUNNING_FARMS) return `farms.running must be a list of at most ${MAX_RUNNING_FARMS} farms`;
+  for (const farm of v) {
+    if (!isRecord(farm) || !isStringOfLength(farm.name, 1, MAX_NAME_LENGTH)) return `farms.running names must be 1 to ${MAX_NAME_LENGTH} characters`;
+    if (!Array.isArray(farm.outputs) || farm.outputs.length > MAX_FARM_OUTPUTS || !farm.outputs.every(isFarmOutput)) {
+      return `farms.running: ${JSON.stringify(farm.name)} must list at most ${MAX_FARM_OUTPUTS} outputs, each a key of 1 to `
+        + `${MAX_TARGET_LENGTH} characters with a perMinute above 0 and at most ${MAX_FARM_PER_MINUTE}`;
+    }
+  }
+  return null;
+}
+
+function isFarmOutput(v: unknown): boolean {
+  return isRecord(v) && isKeyText(v.key) && typeof v.perMinute === 'number' && Number.isFinite(v.perMinute)
+    && v.perMinute > 0 && v.perMinute <= MAX_FARM_PER_MINUTE;
+}
+
 /** One check per setting; a setting added to `PlanSettings` must get its check here (and its default above). */
 const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
-  target: (v) => (v === null || isStringOfLength(v, 1, MAX_TARGET_LENGTH) ? null : `target must be empty or 1 to ${MAX_TARGET_LENGTH} characters`),
+  target: (v) => (v === null || isKeyText(v) ? null : `target must be empty or 1 to ${MAX_TARGET_LENGTH} characters`),
   mode: oneOf('mode', ['rate', 'makeN']),
   amount: (v) =>
     typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= MAX_AMOUNT ? null : `amount must be above 0 and at most ${MAX_AMOUNT}`,
@@ -243,6 +391,15 @@ const SETTING_CHECKS: { readonly [K in keyof PlanSettings]-?: Check } = {
   // null = the cheapest tier; a tier above the project's is kept and clamped by the planner.
   buildTier: (v) => (v === null || (isTier(v) && (v as number) >= 1) ? null : `buildTier must be empty or a whole number from 1 to ${MAX_TIER}`),
   multiblocks: oneOf('multiblocks', MULTIBLOCK_CHOICES),
+  objective: oneOfNames('objective', PLAN_OBJECTIVES),
+  farms: checkFarms,
+  useSurplus: booleanField('useSurplus'),
+  // null = no limit (fix wave 3 (A)).
+  rawCap: (v) => (v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= MAX_RAW_CAP)
+    ? null : `rawCap must be empty or a number from 0 to ${MAX_RAW_CAP}`),
+  // Counted as sent, repeats included: applyOp drops the repeats.
+  inputsOnly: (v) => (Array.isArray(v) && v.length <= MAX_INPUTS_ONLY && v.every((x) => isStringOfLength(x, 1, MAX_TARGET_LENGTH))
+    ? null : `inputsOnly must be a list of at most ${MAX_INPUTS_ONLY} keys of 1 to ${MAX_TARGET_LENGTH} characters`),
 };
 
 const SETTING_KEYS: ReadonlySet<string> = new Set(Object.keys(defaultSettings()));

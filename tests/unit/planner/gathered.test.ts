@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { sandSpec } from '../../helpers/build-fixtures.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { gatheredRecipesOn, planBasis } from '../../../src/server/planner/basis.ts';
 import { buildBom } from '../../../src/server/planner/bom.ts';
 import { buildKeys, itemPrices } from '../../../src/server/planner/build-cost.ts';
@@ -65,7 +66,7 @@ describe('gathered blocks the walk may make', () => {
 
   it('digs gathered blocks for machine prices and build materials', async () => {
     // 4 sand dug at 1 beside the hull's 9; never 9 through free cobblestone and hammers.
-    const prices = await itemPrices(pack, lv, ctx, buildKeys(pack, [pack.machines.get(491)!]));
+    const prices = await itemPrices(pack, lv, ctx, buildKeys(pack, [machineByMteId(pack, 491)!]));
     expect(prices.cost('machine:491@0')).toBe(13);
     const bom = await buildBom(pack, [stepOn(491, 'Basic Sifter')], { settings: lv, env: basis.env, leaf: leafOf(true), ctx });
     expect(bom.totals.find((t) => t.key === SAND)?.amount).toBe(4);

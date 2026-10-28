@@ -1,0 +1,354 @@
+// The Notes tab's focus (ledger ruling P2-R68, Task F3): a button the user presses that goes, or is disabled, hands the focus on, so the
+// keyboard never falls to the page's body. Delete hands it on before its note goes (ledger ruling P2-R57's pattern): to the next note's
+// Delete, else the previous note's, else the "Add a note" field. Add note, whose button the cleared field disables, hands it to that field.
+// Save and Cancel, whose form goes, give it back to the note's Edit. Each test counts the focus left on the body two frames on (helpers.ts),
+// which must be none, and the browser dialogs it meets, none: a note's Delete asks nothing (Task 10), its toast's Undo takes it back. A held
+// Enter deletes one note (ledger ruling P2-R69), and acts once wherever its first press puts the focus (P2-R69a); the toast's Undo brings the
+// note back, with the focus on its Delete if the Undo left it on the page's main or to be lost (P2-R74), else where it is, across a tab switch
+// too.
+
+import { test, expect, type Locator, type Page } from '@playwright/test';
+import { addNote, bodyFocusCount, createProject, login, noDialogs, setName, watchBodyFocus } from './helpers.ts';
+
+/** A project of its own with `texts` as notes, in that order, open at its Notes tab with every note drawn; resolves with its id. */
+async function withNotes(page: Page, name: string, texts: string[]): Promise<string> {
+  await login(page); await setName(page, 'Ann');
+  const id = await createProject(page, name);
+  for (const [i, text] of texts.entries()) await addNote(page, id, { id: `n${i + 1}`, text }, 'Bob');
+  await page.goto(`/p/${id}#notes`);
+  await expect(page.locator('.note-text')).toHaveText(texts);
+  return id;
+}
+
+/** The note that says `text`. */
+const noteOf = (page: Page, text: string): Locator => page.locator('.note').filter({ has: page.locator('.note-text', { hasText: text }) });
+
+test('a note\'s Delete hands the focus to the next note\'s Delete, else the previous note\'s, else the field to add one', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes focus', ['first', 'second', 'third']);
+  await watchBodyFocus(page);
+  // the pointer's Delete, in the middle: the next note's Delete
+  await noteOf(page, 'second').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'third']);
+  await expect(noteOf(page, 'third').getByRole('button', { name: 'Delete' })).toBeFocused();
+  // the keyboard's Delete, on the last note: the previous note's Delete
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first']);
+  await expect(noteOf(page, 'first').getByRole('button', { name: 'Delete' })).toBeFocused();
+  // the last note left: the field to add one
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note')).toHaveCount(0);
+  await expect(page.getByLabel('Add a note')).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+test('a Delete skips a note being edited, which has no Delete, for the next one that has', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes focus, editing', ['first', 'second', 'third']);
+  await noteOf(page, 'second').getByRole('button', { name: 'Edit' }).click();
+  await expect(page.getByLabel('Note text')).toBeFocused();
+  await watchBodyFocus(page);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note')).toHaveCount(2);
+  await expect(noteOf(page, 'third').getByRole('button', { name: 'Delete' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+test('Add note, which the cleared field disables, hands the focus to that field, from the pointer and from the keyboard', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes focus, adding', ['first']);
+  await watchBodyFocus(page);
+  const field = page.getByLabel('Add a note');
+  const add = page.getByRole('button', { name: 'Add note' });
+  await field.fill('by the pointer');
+  await add.click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'by the pointer']);
+  await expect(add).toBeDisabled();
+  await expect(field).toBeFocused();
+  await field.fill('by the keyboard');
+  await expect(add).toBeEnabled();                                                        // a disabled button takes no focus
+  await add.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first', 'by the pointer', 'by the keyboard']);
+  await expect(field).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+test('Save and Cancel, whose form goes, give the focus back to the note\'s Edit', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes focus, editing one', ['first', 'second']);
+  await watchBodyFocus(page);
+  const second = noteOf(page, 'second');
+  await second.getByRole('button', { name: 'Edit' }).click();
+  const text = page.getByLabel('Note text');
+  await expect(text).toBeFocused();
+  await text.fill('second, edited');
+  await page.locator('form.note-edit').getByRole('button', { name: 'Save', exact: true }).click();
+  const edited = noteOf(page, 'second, edited');
+  await expect(edited.getByRole('button', { name: 'Edit' })).toBeFocused();
+  // the keyboard's Cancel
+  await page.keyboard.press('Enter');
+  await expect(text).toBeFocused();
+  await page.keyboard.press('Tab');                                                       // Save
+  await page.keyboard.press('Tab');                                                       // Cancel
+  await expect(page.locator('form.note-edit').getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(text).toHaveCount(0);
+  await expect(edited.getByRole('button', { name: 'Edit' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// ledger ruling P2-R69: Chromium presses a focused button again on each auto-repeat of a held Enter, and Delete hands the focus to the next
+// note's Delete, so a held Enter would delete note after note. A repeated Enter is ignored there: one held press deletes one note. The
+// second keydown is the key's auto-repeat (Playwright sends it with `repeat` set, as the keyboard does).
+test('a held Enter deletes one note, not the next one its Delete hands the focus to', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes held', ['first', 'second']);
+  await watchBodyFocus(page);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).focus();
+  await page.keyboard.down('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  const next = noteOf(page, 'second').getByRole('button', { name: 'Delete' });
+  await expect(next).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the next note's Delete
+  await page.keyboard.up('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await expect(next).toBeFocused();
+  await expect(page.locator('.toast', { hasText: 'Note deleted' })).toHaveCount(1);
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// fix round 1, M8: a note deleted from the keyboard comes back with its toast's Undo, reached by the keyboard. From the next note's Delete,
+// Tab goes to the field to add a note and then to the toasts, after the page. The focus came into them from that field, which takes typing,
+// so the Undo does not give it back there (ledger ruling P2-R57), and with no other toast showing it would go to the page's main: the note
+// it restored takes it instead, its Delete, once its row is back (ledger ruling P2-R74; fix round 2 changed this test's last focus check)
+test('a note deleted from the keyboard comes back with its toast\'s Undo, reached by the keyboard, the focus on its Delete', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes undone', ['first', 'second']);
+  await watchBodyFocus(page);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await expect(noteOf(page, 'second').getByRole('button', { name: 'Delete' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('Add a note')).toBeFocused();
+  await page.keyboard.press('Tab');
+  const toast = page.getByRole('region', { name: 'Notifications' }).getByRole('listitem').filter({ hasText: 'Note deleted' });
+  await expect(toast.getByRole('button', { name: 'Undo' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(toast).toHaveCount(0);
+  await expect(noteOf(page, 'first').getByRole('button', { name: 'Delete' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// ledger ruling P2-R74: the pointer's Undo moves no focus (Chromium leaves it on the button it pressed, to be lost as its toast goes); the note it
+// restored takes it, its Delete, once its row is back
+test('a note\'s Undo by the pointer gives the focus to the note it restored', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes undone by the pointer', ['first', 'second']);
+  await watchBodyFocus(page);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  const toast = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' });
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(page.locator('section.toasts li', { hasText: 'Note deleted' })).toHaveCount(0);   // its toast has gone, with its button
+  await expect(noteOf(page, 'first').getByRole('button', { name: 'Delete' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// P2-R74: a focus anywhere else stays where it is. Here the Notes tab: P2-R57 gives back there the focus that came into the toasts from it
+// (the keyboard's Undo), and a press that moves no focus (a script's, or an assistive technology's, click on the Undo) leaves it there
+test('a note\'s Undo leaves a focus that is elsewhere where it is', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes undone elsewhere', ['first', 'second']);
+  await watchBodyFocus(page);
+  const tab = page.getByRole('tab', { name: 'Notes' });
+  const undo = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' });
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await tab.focus();
+  await undo.focus();                                                                     // into the toasts from the Notes tab
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(tab).toBeFocused();
+  await noteOf(page, 'second').getByRole('button', { name: 'Delete' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first']);
+  await tab.focus();
+  await undo.evaluate((button) => (button as HTMLElement).click());                       // a press with no click count that moves no focus
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(tab).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 3, item 1: the page draws the Notes view anew on each tab switch, while a note toast's Undo outlives the view it was made in.
+// The Undo still finds the note's row once it is back, and gives its Delete the focus, from the pointer and from the keyboard (P2-R74)
+test('a note\'s Undo gives the focus to the note it restored after a switch to another tab and back', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes undone across tabs', ['first', 'second']);
+  await watchBodyFocus(page);
+  const notesTab = page.getByRole('tab', { name: 'Notes' });
+  const mapTab = page.getByRole('tab', { name: 'Map' });
+  const undo = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' });
+  // the pointer's Undo
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await mapTab.click();
+  await notesTab.click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await undo.click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(noteOf(page, 'first').getByRole('button', { name: 'Delete' })).toBeFocused();
+  // the keyboard's Undo, reached by Tab from the Notes tab: the focus comes into the toasts from the field to add a note, which P2-R57 skips
+  await noteOf(page, 'second').getByRole('button', { name: 'Delete' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first']);
+  await mapTab.click();
+  await notesTab.click();
+  await expect(page.locator('.note-text')).toHaveText(['first']);
+  for (let tabs = 0; tabs < 12 && !(await undo.evaluate((el) => el === document.activeElement)); tabs++) await page.keyboard.press('Tab');
+  await expect(undo).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(noteOf(page, 'second').getByRole('button', { name: 'Delete' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// P2-R74's lost branch: an Undo that finds the focus on the body (nothing has it) gives it to the note it restored. The focus is blurred to the
+// body and the Undo pressed by a click that moves no focus (a script's, or an assistive technology's)
+test('a note\'s Undo that finds the focus lost gives it to the note it restored', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes undone, the focus lost', ['first', 'second']);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body), 'the focus is lost').toBe(true);
+  await watchBodyFocus(page);
+  const undo = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' });
+  await undo.evaluate((button) => (button as HTMLElement).click());
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(noteOf(page, 'first').getByRole('button', { name: 'Delete' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is not left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// ledger ruling P2-R69a: a held key acts once, wherever the focus goes. The last note's Delete hands the focus to the field to add a note, where
+// the held Enter's auto-repeats would type line breaks: they are not the field's, as the press began on the Delete
+test('a held Enter on the last note\'s Delete deletes it and leaves the field to add a note empty', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes held, the last', ['only']);
+  await watchBodyFocus(page);
+  await noteOf(page, 'only').getByRole('button', { name: 'Delete' }).focus();
+  await page.keyboard.down('Enter');
+  await expect(page.locator('.note')).toHaveCount(0);
+  const field = page.getByLabel('Add a note');
+  await expect(field).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the field
+  await page.keyboard.up('Enter');
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue('');
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// P2-R69a's control: a press held where it began repeats as before: Enter held in the field to add a note types a line break each time
+test('Enter held in the field to add a note types a line break each time', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes held, typing', ['first']);
+  const field = page.getByLabel('Add a note');
+  await field.focus();
+  await watchBodyFocus(page);
+  await page.keyboard.down('Enter');
+  await page.keyboard.down('Enter');                                                      // a repeat, where the press began
+  await page.keyboard.up('Enter');
+  await expect(field).toHaveValue('\n\n');
+  await expect(field).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 4, M2: a held Enter on a note's Undo whose hand-off ends on the note it restored, its Delete (P2-R74): the repeats are not that
+// Delete's (P2-R69a), so the note stays. The focus comes into the toasts from nowhere, so P2-R57 leaves it on the page's main for P2-R74
+test('a held Enter on a note\'s Undo leaves the note it restored, its Delete focused', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  await withNotes(page, 'Notes held undo', ['only']);
+  await noteOf(page, 'only').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note')).toHaveCount(0);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' }).focus();
+  await watchBodyFocus(page);
+  await page.keyboard.down('Enter');
+  const restored = noteOf(page, 'only').getByRole('button', { name: 'Delete' });
+  await expect(restored).toBeFocused();
+  await page.keyboard.down('Enter');                                                      // the held key repeats, on the restored Delete
+  await page.keyboard.up('Enter');
+  await expect(page.locator('.note-text')).toHaveText(['only']);
+  await expect(restored).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 4, M3: an Undo run while another tab is shown finds no row of its note (P2-R74 moves nothing); the focus stays where P2-R57 put
+// it. From the Map tab, Tab goes through the tabs and the Map's own controls, the last its "Scan the world" link, then to the toasts: the
+// Undo gives the focus back to that link. The note is back on the Notes tab
+test('a note\'s Undo run from another tab leaves the focus where it came from, and the note is back on its tab', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await withNotes(page, 'Notes undone from the map', ['first', 'second']);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await page.getByRole('tab', { name: 'Map' }).click();
+  const scan = page.getByRole('link', { name: 'Scan the world' });
+  await expect(scan).toBeVisible();
+  const undo = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' });
+  for (let tabs = 0; tabs < 20 && !(await undo.evaluate((el) => el === document.activeElement)); tabs++) await page.keyboard.press('Tab');
+  await expect(undo).toBeFocused();
+  await watchBodyFocus(page);
+  await page.keyboard.press('Enter');
+  await expect(scan).toBeFocused();
+  await page.getByRole('tab', { name: 'Notes' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  await expect(noteOf(page, 'first').getByRole('button', { name: 'Delete' })).not.toBeFocused();
+  await expect(page.getByRole('tab', { name: 'Notes' })).toBeFocused();
+  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
+  expect(errors).toEqual([]);
+  expect(dialogs).toEqual([]);
+});
+
+// F3 fix round 5, item 4: the same with the focus lost, which opens P2-R74's gate (a focus on the body is one to give back) while the note's row
+// is not drawn: the Undo finds no row, moves nothing and throws nothing, and the note is back once the Notes tab is shown
+test('a note\'s Undo run from another tab with the focus lost moves nothing, and the note is back on its tab', async ({ page }) => {
+  const dialogs = noDialogs(page);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await withNotes(page, 'Notes undone from the map, lost', ['first', 'second']);
+  await noteOf(page, 'first').getByRole('button', { name: 'Delete' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['second']);
+  await page.getByRole('tab', { name: 'Map' }).click();
+  await expect(page.getByRole('link', { name: 'Scan the world' })).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body), 'the focus is lost').toBe(true);
+  const undo = page.locator('section.toasts li[data-state="open"]', { hasText: 'Note deleted' }).getByRole('button', { name: 'Undo' });
+  await undo.evaluate((button) => (button as HTMLElement).click());                       // a press with no click count that moves no focus
+  await expect(page.locator('section.toasts li', { hasText: 'Note deleted' })).toHaveCount(0);
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));   // its frame has run
+  expect(await page.evaluate(() => document.activeElement === document.body), 'the Undo moved no focus').toBe(true);
+  expect(errors).toEqual([]);
+  await page.getByRole('tab', { name: 'Notes' }).click();
+  await expect(page.locator('.note-text')).toHaveText(['first', 'second']);
+  expect(errors).toEqual([]);
+  expect(dialogs).toEqual([]);
+});

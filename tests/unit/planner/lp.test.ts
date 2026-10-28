@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { solveLp } from '../../../src/server/planner/lp.ts';
+import { Worker } from 'node:worker_threads';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  highsOptions, MIP_FEASIBILITY_TOLERANCE, solveBuildRuns, solveBuildRunsAside, solveLp, solveLpAside, yieldToEventLoop, type BuildRunsJob, type LpModel,
+} from '../../../src/server/planner/lp.ts';
 
 describe('solveLp', () => {
   it('solves a small minimisation', async () => {
@@ -54,6 +57,34 @@ describe('solveLp', () => {
     expect(bounded.bound).toBeGreaterThanOrEqual(bounded.objective - 1e-9);
     expect(await solveLp({ ...knapsack, maxNodes: 100_000, maxIterations: 50 })).toEqual(bounded);
   });
+  it('gives a MIP its node limit, gaps and tolerance, and turns strong branching off only when asked (fix wave 3 (F))', () => {
+    const lp = { sense: 'min' as const, colCost: [1], colLower: [0], colUpper: [1], rows: [] };
+    expect(MIP_FEASIBILITY_TOLERANCE).toBe(1e-10);
+    expect(highsOptions(lp)).toEqual({ output_flag: false });
+    expect(highsOptions({ ...lp, timeLimit: 30 })).toEqual({ output_flag: false, time_limit: 30 });
+    expect(highsOptions({ ...lp, integer: [true], maxNodes: 1 }))
+      .toEqual({ output_flag: false, mip_max_nodes: 1, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-10 });
+    expect(highsOptions({ ...lp, integer: [true], maxNodes: 50, feasibilityTolerance: 1e-9, strongBranching: false }))
+      .toEqual({ output_flag: false, mip_max_nodes: 50, mip_rel_gap: 0, mip_abs_gap: 0, mip_feasibility_tolerance: 1e-9, mip_pscost_minreliable: 0 });
+  });
+  it('keeps the improving whole solutions of a MIP in order, and stops on a failed root LP only when it fails', async () => {
+    const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+    const values = weights.map((w, i) => w + ((i * 104729) % 97));
+    const knapsack = {
+      sense: 'max' as const, colCost: values, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+      rows: [{ lower: -Infinity, upper: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), entries: weights.map((w, i): [number, number] => [i, w]) }],
+      integer: new Array<boolean>(40).fill(true), start: new Array<number>(40).fill(0),
+    };
+    const r = await solveLp({ ...knapsack, maxNodes: 200, maxIterations: 50_000, strongBranching: false, keepImproving: true, stopOnRootLpFailure: true });
+    expect(r.status === 'optimal' || r.stop === 'limit').toBe(true);
+    expect(r.rootLpFailed).toBeUndefined();   // its LP relaxation solves
+    const worth = (x: readonly number[]): number => x.reduce((sum, v, i) => sum + (values[i] as number) * v, 0);
+    const seen = (r.improving ?? []).map(worth);
+    expect(seen.length).toBeGreaterThan(0);
+    for (let i = 1; i < seen.length; i++) expect(seen[i] as number).toBeGreaterThanOrEqual((seen[i - 1] as number) - 1e-9);
+    expect(seen[seen.length - 1] as number).toBeCloseTo(r.objective, 6);
+    expect((await solveLp({ ...knapsack, maxNodes: 200 })).improving).toBeUndefined();
+  });
   it('accepts a start solution', async () => {
     const r = await solveLp({ sense: 'max', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity],
       rows: [{ lower: -Infinity, upper: 3, entries: [[0, 2], [1, 2]] }], integer: [true, true], maxNodes: 100, start: [1, 0] });
@@ -89,5 +120,197 @@ describe('solveLp', () => {
     await expect(solveLp(model([[1, 1]]))).rejects.toThrow(RangeError);
     await expect(solveLp(model([[0, 1], [0, 2]]))).rejects.toThrow(RangeError);
     await expect(solveLp(model([[0, Infinity]]))).rejects.toThrow(RangeError);
+  });
+});
+
+describe('solveLpAside (fix wave 3 Task 7 review, controller OQ1)', () => {
+  // The build stage solves the leanest line's MIP on the solver thread while plan 09's plan solves on this one, so a
+  // build-cost plan waits for the longer of the two instead of their sum; the plan must not change.
+  const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+  const values = weights.map((w, i) => w + ((i * 104729) % 97));
+  const knapsack: LpModel = {
+    sense: 'max', colCost: values, colLower: new Array<number>(40).fill(0), colUpper: new Array<number>(40).fill(1),
+    rows: [{ lower: -Infinity, upper: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), entries: weights.map((w, i): [number, number] => [i, w]) }],
+    integer: new Array<boolean>(40).fill(true), start: new Array<number>(40).fill(0),
+  };
+
+  it("gives exactly what solveLp gives: an LP, an infeasible one, and a MIP with its start, limits and improving solutions", async () => {
+    const models: LpModel[] = [
+      { sense: 'min', colCost: [1, 1], colLower: [0, 0], colUpper: [Infinity, Infinity], rows: [{ lower: 4, upper: Infinity, entries: [[0, 1], [1, 2]] }] },
+      { sense: 'min', colCost: [1], colLower: [0], colUpper: [3], rows: [{ lower: 5, upper: Infinity, entries: [[0, 1]] }] },
+      { ...knapsack, maxNodes: 200, maxIterations: 50_000, strongBranching: false, keepImproving: true, stopOnRootLpFailure: true },
+      { ...knapsack, maxNodes: 1 },
+    ];
+    for (const model of models) expect(await solveLpAside(model)).toStrictEqual(await solveLp(model));
+  });
+
+  it('leaves this thread free while it solves', async () => {
+    // Solved here, the knapsack (4,719 nodes, about half a second) would hold this thread for all of it after one turn.
+    let settled = false;
+    const aside = solveLpAside({ ...knapsack, maxNodes: 100_000 }).then((r) => {
+      settled = true;
+      return r;
+    });
+    let turns = 0;
+    while (!settled) {
+      await yieldToEventLoop();
+      turns++;
+    }
+    expect(turns).toBeGreaterThan(10);
+    expect((await aside).status).toBe('optimal');
+  });
+
+  it('throws what solveLp throws on a malformed model', async () => {
+    await expect(solveLpAside({ sense: 'min', colCost: [1, 1], colLower: [0, 0], colUpper: [1, 1], rows: [], start: [1] })).rejects.toThrow(RangeError);
+    await expect(solveLpAside({ sense: 'min', colCost: [1], colLower: [0], colUpper: [1], rows: [{ lower: 0, upper: 1, entries: [[1, 1]] }] }))
+      .rejects.toThrow(RangeError);
+  });
+});
+
+describe('solveBuildRunsAside (release gate round 2, G1)', () => {
+  // The leanest line's build MIP solves on the solver thread while plan 09's plan solves on this one. Its solves after the
+  // first (fix wave 3 (F)'s retry, 12 x 17 F4's solve without the start) run there one after another, so none waits for
+  // this thread to finish a solve of its own (Duty plate: the leanest line's retry waited 1.7 s for plan 09's charge MIP).
+  // A cover whose start is its optimum: under a 1-iteration cap its solve ends at the root on the start after its LP
+  // relaxation solved, so the job solves once more without the start: two solves.
+  const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+  const cover: LpModel = {
+    sense: 'min', colCost: weights.map((w, i) => w + ((i * 104729) % 97)), colLower: new Array<number>(40).fill(0),
+    colUpper: new Array<number>(40).fill(1), integer: new Array<boolean>(40).fill(true),
+    rows: [{ lower: Math.floor(weights.reduce((a, b) => a + b, 0) / 2), upper: Infinity, entries: weights.map((w, i): [number, number] => [i, w]) }],
+  };
+  const jobOf = async (): Promise<BuildRunsJob> => ({
+    model: { ...cover, maxNodes: 50, maxIterations: 1, timeLimit: 30, strongBranching: false, keepImproving: true },
+    start: (await solveLp({ ...cover, maxNodes: 100_000 })).x, retryTolerance: 1e-9, tiny: 1e-9,
+  });
+
+  it('gives exactly what solveBuildRuns gives on this thread', async () => {
+    const job = await jobOf();
+    const here = await solveBuildRuns(job);
+    expect(here.runs).toHaveLength(2);
+    expect(here.bare).toBe('kept');
+    expect(await solveBuildRunsAside(job)).toStrictEqual(here);
+  });
+
+  it('hands the solver thread all of its solves at once', async () => {
+    const job = await jobOf();
+    await solveLpAside(cover);   // the solver thread started
+    const posted = vi.spyOn(Worker.prototype, 'postMessage');
+    try {
+      const { runs } = await solveBuildRunsAside(job);
+      expect(runs).toHaveLength(2);
+      expect(posted).toHaveBeenCalledTimes(1);
+    } finally {
+      posted.mockRestore();
+    }
+  });
+
+  // The retry Duty plate's leanest line takes (its first solve stops at 0.16 s, its root LP relaxation unsolved at
+  // MIP_FEASIBILITY_TOLERANCE, then the retry at 1e-9). No small planner model reaches that path, so this is a synthetic
+  // one: the 30 x 30 Hilbert matrix (about as ill-conditioned as a matrix gets), all integer, its equalities met by every
+  // third column at 1, and no start. At 1e-10 HiGHS stops its first solve with no finite dual bound (`rootLpFailed`); at
+  // 1e-9 it proves the optimum, 65.
+  const n = 30;
+  const hilbert: LpModel = {
+    sense: 'min', colCost: Array.from({ length: n }, (_, j) => (j % 2 === 1 ? 1e-12 : 1 + j)),
+    colLower: new Array<number>(n).fill(0), colUpper: new Array<number>(n).fill(1e4), integer: new Array<boolean>(n).fill(true),
+    rows: Array.from({ length: n }, (_, i) => {
+      const entries = Array.from({ length: n }, (_, j): [number, number] => [j, 1 / (i + j + 1)]);
+      const b = entries.reduce((sum, [j, h]) => sum + (j % 3 === 0 ? h : 0), 0);
+      return { lower: b, upper: b, entries };
+    }),
+  };
+  const retryJob: BuildRunsJob = {
+    model: { ...hilbert, maxNodes: 50, maxIterations: 50_000, timeLimit: 30, strongBranching: false, keepImproving: true },
+    retryTolerance: 1e-9, tiny: 1e-9,
+  };
+
+  it('retries where the root LP relaxation did not solve, and gives exactly that on the solver thread in one job', async () => {
+    const here = await solveBuildRuns(retryJob);
+    expect(here.retried).toBe(true);
+    expect(here.runs).toHaveLength(2);
+    expect(here.runs[0]?.rootLpFailed).toBe(true);
+    expect(here.runs[1]?.rootLpFailed).toBeUndefined();
+    expect(here.runs[1]?.status).toBe('optimal');
+    await solveLpAside(cover);   // the solver thread started
+    const posted = vi.spyOn(Worker.prototype, 'postMessage');
+    try {
+      expect(await solveBuildRunsAside(retryJob)).toStrictEqual(here);
+      expect(posted).toHaveBeenCalledTimes(1);
+    } finally {
+      posted.mockRestore();
+    }
+  });
+});
+
+describe('a MIP with a cutoff (release gate round 2, G1: the lite start)', () => {
+  // The build stage's lite start hands HiGHS a plan's objective as the cutoff (`objectiveBound`, HiGHS `objective_bound`)
+  // in place of that plan as a start: with no incumbent HiGHS runs the root heuristics its LP relaxation leads, and its
+  // LP solves stop at the cutoff, so it prunes every node no better than the plan (Duty plate's build MIP 4.3-5.1 s
+  // against 10.6 s from plan 09's start). A knapsack cover of 40 binaries, and the same weights to an exact total.
+  const weights = Array.from({ length: 40 }, (_, i) => 1000 + ((i * 7919) % 1000));
+  const half = Math.floor(weights.reduce((a, b) => a + b, 0) / 2);
+  const base = {
+    sense: 'min' as const, colCost: weights.map((w, i) => w + ((i * 104729) % 97)), colLower: new Array<number>(40).fill(0),
+    colUpper: new Array<number>(40).fill(1), integer: new Array<boolean>(40).fill(true),
+  };
+  const cover: LpModel = { ...base, rows: [{ lower: half, upper: Infinity, entries: weights.map((w, i): [number, number] => [i, w]) }] };
+  const exact: LpModel = { ...base, rows: [{ lower: half + 1, upper: half + 1, entries: weights.map((w, i): [number, number] => [i, w]) }] };
+  const limits = { maxNodes: 50, timeLimit: 30, strongBranching: false, keepImproving: true } as const;
+
+  it('passes the cutoff to HiGHS, and prunes nothing below it: the optimum where that is below it', async () => {
+    expect(highsOptions({ ...cover, objectiveBound: 7 })).toMatchObject({ objective_bound: 7 });
+    expect(highsOptions(cover)).not.toHaveProperty('objective_bound');
+    // and a MIP that may not restart its root (the lite start's build MIP)
+    expect(highsOptions({ ...cover, allowRestart: false })).toMatchObject({ mip_allow_restart: false });
+    expect(highsOptions(cover)).not.toHaveProperty('mip_allow_restart');
+    const best = await solveLp({ ...cover, maxNodes: 100_000 });
+    expect(best.status).toBe('optimal');
+    const below = await solveLp({ ...cover, ...limits, objectiveBound: best.objective + 1 });
+    expect(below.objective).toBeCloseTo(best.objective, 9);
+  });
+
+  it('reports a whole solution no better than the cutoff as its answer, never among improving, and infeasible where it pruned every node first', async () => {
+    // HiGHS's heuristics may find a whole solution no better than the cutoff: HiGHS 1.15.3 then answers with it, never
+    // among `improving` (`pickBuild` keeps the start). Below the LP relaxation nothing is, and the search ends: `optimal`.
+    const relaxed = await solveLp({ sense: cover.sense, colCost: cover.colCost, colLower: cover.colLower, colUpper: cover.colUpper, rows: cover.rows });
+    const none = await solveLp({ ...cover, ...limits, objectiveBound: relaxed.objective - 1 });
+    expect(none).toMatchObject({ status: 'optimal', improving: [] });
+    expect(none.objective).toBeGreaterThan(relaxed.objective - 1);
+    // Just below the optimum its 50 nodes end first: `feasible`.
+    const best = await solveLp({ ...cover, maxNodes: 100_000 });
+    const short = await solveLp({ ...cover, ...limits, objectiveBound: best.objective - 0.5 });
+    expect(short).toMatchObject({ status: 'feasible', stop: 'limit', nodes: 50, improving: [] });
+    expect(short.objective).toBeGreaterThan(best.objective - 0.5);
+    // Far below the optimum the search prunes every node before any whole solution: `infeasible`.
+    expect(await solveLp({ ...cover, ...limits, objectiveBound: 1 })).toMatchObject({ status: 'infeasible', x: [], improving: [] });
+  });
+
+  it('says its limits stopped it where it found no whole solution, and only with a cutoff', async () => {
+    const capped = { ...exact, ...limits, maxIterations: 1 };
+    expect(await solveLp({ ...capped, objectiveBound: 1e9 })).toMatchObject({ status: 'error', stop: 'limit', x: [] });
+    // the build MIP's 50 nodes, which HiGHS reports as its solution limit (no iteration cap here)
+    expect(await solveLp({ ...exact, ...limits, objectiveBound: 1e9 })).toMatchObject({ status: 'error', stop: 'limit', x: [], nodes: 50 });
+    const plain = await solveLp(capped);
+    expect(plain.status).toBe('error');
+    expect(plain.stop).toBeUndefined();
+  });
+
+  it('hands every solve of a build MIP job its cutoff, no start, and runs none without it', async () => {
+    const calls: LpModel[] = [];
+    const solver = async (m: LpModel) => {
+      calls.push(m);
+      return m.stopOnRootLpFailure === true
+        ? { status: 'error' as const, objective: NaN, x: [], nodes: 0, rootLpFailed: true as const }
+        : { status: 'error' as const, objective: NaN, x: [], nodes: 0, stop: 'limit' as const };
+    };
+    const runs = await solveBuildRuns({ model: { ...cover, ...limits }, cutoff: 1234, retryTolerance: 1e-9, tiny: 1e-9 }, solver);
+    expect(calls).toHaveLength(2);   // the first, then fix wave 3 (F)'s retry; no solve without the cutoff
+    for (const m of calls) {
+      expect(m.objectiveBound).toBe(1234);
+      expect(m.start).toBeUndefined();
+    }
+    expect(runs.retried).toBe(true);
+    expect(runs.bare).toBeUndefined();
   });
 });

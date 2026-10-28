@@ -9,11 +9,13 @@
 // leaf module: candidates.ts and machine-options.ts both read it.
 
 import { BENCH_LEAST_CRAFTS, BENCH_SAFE_SLOTS, benchSlots } from '../../shared/gt/feeding.ts';
+import { compareMachineId } from '../../shared/ids.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { Machine, Pack, Recipe } from '../../shared/types/pack.ts';
 import type { PlanSettings } from '../../shared/types/plan.ts';
 import { SINGLE_USE_TOOL_ID } from '../pack/bench-tools.ts';
 import { GT_TOOL_ITEM_IDS } from '../pack/recipes.ts';
+import { allMachineIds, machineOf } from '../pack/lookup.ts';
 
 /** GT++'s Electric Auto Workbench, by its simple class name (architecture §11.19): mteIds 31091–31098, LV–UV, on 2.9. */
 const AUTO_WORKBENCH_CLASS = 'MTEElectricAutoWorkbench';
@@ -33,11 +35,16 @@ export function isAutoWorkbench(m: Machine | undefined): boolean {
 
 const AUTO_WORKBENCHES = new WeakMap<Pack, readonly Machine[]>();
 
-/** The pack's Electric Auto Workbenches (`isAutoWorkbench`), by tier then mteId; once per pack. */
+/** The pack's Electric Auto Workbenches (`isAutoWorkbench`), by tier then id; once per pack. */
 export function autoWorkbenches(pack: Pack): readonly Machine[] {
   let list = AUTO_WORKBENCHES.get(pack);
   if (list === undefined) {
-    list = [...pack.machines.values()].filter(isAutoWorkbench).sort((a, b) => tierOf(a) - tierOf(b) || a.mteId - b.mteId);
+    const found: Machine[] = [];
+    for (const id of allMachineIds(pack)) {
+      const m = machineOf(pack, id);
+      if (m !== undefined && isAutoWorkbench(m)) found.push(m);
+    }
+    list = found.sort((a, b) => tierOf(a) - tierOf(b) || compareMachineId(a.id, b.id));
     AUTO_WORKBENCHES.set(pack, list);
   }
   return list;

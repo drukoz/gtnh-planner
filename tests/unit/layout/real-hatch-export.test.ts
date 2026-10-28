@@ -3,7 +3,8 @@
 // definitions say, they agree with the hand table (hatch-rules.ts) wherever both have rules apart from the controller
 // logic listed in EXPORT_WIDER, and the plan 09 corpus (tests/helpers/real-corpus.ts) lays out in every logistics mode
 // with every hatch on a cell GregTech takes it on and no more hatch_cells_short or hatch_notes_unfit warnings than the
-// table-ruled layout of the same export gives. A fusion reactor, which takes energy hatches only at its own tier or
+// table-ruled layout of the same export gives (with build cost counted, plan 12's default, two of its lines planned again
+// with it ignored for the multiblocks only they still place: IGNORING_BUILD_COST). A fusion reactor, which takes energy hatches only at its own tier or
 // above, lays out electric with no energy hatch and hatch_energy_exotic. It runs only with GTNH_LOCAL=1 and is skipped
 // everywhere else. It prints counts, codes and the export's machine names only (pack data), never anything from a world.
 
@@ -14,6 +15,7 @@ import { exportedCells, grownCells, KIND_SOURCES } from '../../../src/server/lay
 import { elementMap, elementTakes, hatchRuleFor, ruleFits } from '../../../src/server/layout/hatch-rules.ts';
 import { emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
+import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { simpleClassName } from '../../../src/server/world/facts.ts';
 import { exportKindOfClass, type ExportHatchKind } from '../../../src/shared/gt/hatch-kinds.ts';
@@ -33,6 +35,16 @@ const LAYOUT_KINDS = Object.keys(KIND_SOURCES) as HatchKind[];
 const ALL_SIX: readonly ExportHatchKind[] = ['input_bus', 'output_bus', 'input_hatch', 'output_hatch', 'energy', 'maintenance'];
 /** The multiblocks the corpus places: EBF, Distillation Tower, Oil Cracking Unit, LCR, Vacuum Freezer, Pyrolyse Oven, Coke Oven, Bricked Blast Furnace. */
 const CORPUS_MULTIBLOCKS: readonly number[] = [1000, 1126, 1160, 1169, 1002, 15546, 236, 140];
+/**
+ * Corpus lines planned again with build cost ignored (plan 12 Task 8, the controller's ruling after the merge e2efd36):
+ * with build cost counted, the default, the corpus plans no Oil Cracking Unit (1160) and no Pyrolyse Oven (15546) — it
+ * buys or makes their goods with fewer machines — while these lines still need them where build cost is ignored (measured
+ * on the 2.9 export: the cracker in the Advanced Circuit a minute, the oven in it with supporting lines).
+ */
+const IGNORING_BUILD_COST: ReadonlyArray<{ target: string; variant: (typeof VARIANTS)[number]['label'] }> = [
+  { target: 'Advanced Circuit', variant: 'per minute' },   // the cracker
+  { target: 'Advanced Circuit', variant: 'per minute with supporting lines' },   // the oven
+];
 /** The fusion controllers Mk I–III and the tier of the energy hatch each takes at the least (MTEFusionComputer.tier()). */
 const FUSION: ReadonlyArray<readonly [mteId: number, tier: number]> = [[1193, 6], [1194, 7], [1195, 8]];
 
@@ -95,14 +107,14 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
 
   /** The kinds GregTech's check took on the element of machine `mteId` with character `ch`; fails when it has none. */
   function takes(mteId: number, ch: string): ExportHatchKind[] {
-    const element = pack.machines.get(mteId)?.structure?.elements?.find((e) => e.ch === ch);
+    const element = machineByMteId(pack, mteId)?.structure?.elements?.find((e) => e.ch === ch);
     expect(element, `machine ${mteId} has an element '${ch}'`).toBeDefined();
     return [...element!.hatches];
   }
 
   it("carries GregTech's hatch rules", () => {
     const manifest = pack.manifest;
-    const machines = [...pack.machines.values()];
+    const machines = allMachines(pack);
     const ruled = machines.filter((m) => m.structure?.elements !== undefined);
     console.log(`real-hatch-export: exporter ${manifest.exporterVersion}, hatchRules ${manifest.counts.hatchRules} of `
       + `${machines.filter((m) => m.structure !== undefined).length} structures (${ruled.length} machines with elements)`);
@@ -110,16 +122,16 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     expect(manifest.exporterVersion).toBe('0.6.0');
     expect(manifest.counts.hatchRules).toBeGreaterThanOrEqual(300);
     expect(manifest.counts.hatchRules).toBe(ruled.length);
-    const bbf = pack.machines.get(140);
+    const bbf = machineByMteId(pack, 140);
     expect(bbf?.structure, 'the Bricked Blast Furnace has a structure').toBeDefined();
     expect(bbf?.structure?.elements, 'the Bricked Blast Furnace has no hatch rules').toBeUndefined();
     for (const id of [3013, 15411]) {
-      const st = pack.machines.get(id)?.structure;
+      const st = machineByMteId(pack, id)?.structure;
       expect(st?.truncated, `${id} is truncated`).toBe(true);
       expect(st?.elements, `${id} has no hatch rules`).toBeUndefined();
     }
     // the item slot counts of GT's basic machines (exporter 0.6.0, architecture §11.49 (5))
-    const slots = (id: number): Array<number | undefined> => [pack.machines.get(id)?.itemInSlots, pack.machines.get(id)?.itemOutSlots];
+    const slots = (id: number): Array<number | undefined> => [machineByMteId(pack, id)?.itemInSlots, machineByMteId(pack, id)?.itemOutSlots];
     expect(slots(302), 'the Advanced Macerator').toEqual([1, 1]);
     expect(slots(211)[0], 'the LV Assembler').toBe(6);
     expect(slots(212)[0], 'the MV Assembler').toBe(9);
@@ -150,12 +162,12 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     expect(takes(1169, 'c')).toEqual(ALL_SIX);
     expect(takes(1169, 'x')).toEqual(ALL_SIX);
     expect(takes(1169, 'P')).toEqual([]);
-    const coke = pack.machines.get(236)?.structure?.elements ?? [];
+    const coke = machineByMteId(pack, 236)?.structure?.elements ?? [];
     console.log(`real-hatch-export: Coke Oven 236 elements: ${coke.map(elementText).join('; ') || 'none'}`);
     expect(coke.some((e) => e.hatches.includes('coke_oven_hatch')), 'some element of the Coke Oven takes a Coke Oven Hatch').toBe(true);
     // for review, not asserted: with Task 2's verdict these are steam multiblocks and data-stick machines
     const special: ReadonlySet<ExportHatchKind> = new Set(['steam_input_bus', 'steam_output_bus', 'steam_hatch', 'data_access']);
-    const marked = [...pack.machines.values()].filter((m) => m.structure?.elements?.some((e) => e.hatches.some((h) => special.has(h))));
+    const marked = allMachines(pack).filter((m) => m.structure?.elements?.some((e) => e.hatches.some((h) => special.has(h))));
     console.log(`real-hatch-export: ${marked.length} machines with an element taking a steam kind or data_access: `
       + marked.map((m) => {
         const kinds = [...new Set(m.structure!.elements!.flatMap((e) => e.hatches.filter((h) => special.has(h))))];
@@ -167,7 +179,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     const problems: string[] = [];
     const matched = new Map<string, number>(EXPORT_WIDER.map((w) => [wider(w.cls, w.ch, w.kind), 0]));
     const cellCounts: string[] = [];
-    for (const m of pack.machines.values()) {
+    for (const m of allMachines(pack)) {
       const st = m.structure;
       const cells = exportedCells(m);
       const row = hatchRuleFor(m);
@@ -216,7 +228,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
    */
   function checkUnit(u: Unit): string[] {
     if (UNPROBED.has(u.mteId)) return [];
-    const m = pack.machines.get(u.mteId)!;
+    const m = machineByMteId(pack, u.mteId)!;
     const cells = exportedCells(m);
     if (cells === null) return ['its structure has no hatch rules in the export'];
     if (u.manual !== undefined) return [];          // run by hand: no hatch cells
@@ -230,7 +242,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     const bad: string[] = [];
     for (const c of u.cells) {
       if (c.role !== 'hatch') continue;
-      const hatch = c.block.mteId === undefined ? undefined : pack.machines.get(c.block.mteId);
+      const hatch = c.block.mteId === undefined ? undefined : machineByMteId(pack, c.block.mteId);
       const kind = hatch === undefined ? null : exportKindOfClass(simpleClassName(hatch.cls) ?? '', hatch.metaName);
       const key = posKey(c.pos);
       const ch = grown.charOf.get(key);
@@ -262,42 +274,47 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     const metIds = new Set<number>();
     const ruledCodes = new Map<LogisticsMode, Map<string, number>>(MODES.map((mode) => [mode, new Map()]));
     const tableCodes = new Map<LogisticsMode, Map<string, number>>(MODES.map((mode) => [mode, new Map()]));
-    for (const t of CORPUS) {
-      for (const v of VARIANTS) {
-        const at = `${t.name} ${v.label}`;
-        const plan: Plan = await planLine(pack, { ...defaultSettings(), target: t.key, amount: t.amount, per: v.per, tier: t.tier, routeDerived: v.routeDerived },
-          emptyContext());
-        if (plan.status !== 'ok') {
-          problems.push(`${at} - -: the plan is ${plan.status}`);
-          continue;
+    const lines = [
+      ...CORPUS.flatMap((t) => VARIANTS.map((v) => ({ t, v, ignoring: false }))),
+      ...IGNORING_BUILD_COST.map(({ target, variant }) => ({
+        t: CORPUS.find((c) => c.name === target)!, v: VARIANTS.find((x) => x.label === variant)!, ignoring: true,
+      })),
+    ];
+    for (const { t, v, ignoring } of lines) {
+      const at = `${t.name} ${v.label}${ignoring ? ', build cost ignored' : ''}`;
+      const plan: Plan = await planLine(pack, {
+        ...defaultSettings(), target: t.key, amount: t.amount, per: v.per, tier: t.tier, routeDerived: v.routeDerived, ...(ignoring ? { buildHorizonHours: null } : {}),
+      }, emptyContext());
+      if (plan.status !== 'ok') {
+        problems.push(`${at} - -: the plan is ${plan.status}`);
+        continue;
+      }
+      const machineOf = (stepId: string | undefined): string => {
+        const s = plan.steps.find((x) => x.id === stepId);
+        return s === undefined ? `step ${stepId ?? '?'}` : `${s.machine.name} (${s.machine.mteId})`;
+      };
+      for (const u of unitsFromPlan(pack, plan).units) {
+        if (!u.multiblock) continue;
+        bump(met, `${u.name} (${u.mteId})`);
+        metIds.add(u.mteId);
+        for (const p of checkUnit(u)) problems.push(`${at} units ${u.name} (${u.mteId}): ${p}`);
+      }
+      for (const mode of MODES) {
+        const ruled: Layout = await layoutLine(pack, plan, emptyScan(), makeProject({ logistics: mode }));
+        const table: Layout = await layoutLine(tablePack, plan, emptyScan(), makeProject({ logistics: mode }));
+        for (const w of ruled.warnings) bump(ruledCodes.get(mode)!, w.code);
+        for (const w of table.warnings) bump(tableCodes.get(mode)!, w.code);
+        for (const w of ruled.warnings) {
+          if (w.code !== 'hatch_rules_unknown') continue;
+          const mteId = plan.steps.find((s) => s.id === w.stepId)?.machine.mteId;
+          if (mteId === undefined || !UNPROBED.has(mteId)) problems.push(`${at} ${mode} ${machineOf(w.stepId)}: hatch_rules_unknown: ${w.text}`);
         }
-        const machineOf = (stepId: string | undefined): string => {
-          const s = plan.steps.find((x) => x.id === stepId);
-          return s === undefined ? `step ${stepId ?? '?'}` : `${s.machine.name} (${s.machine.mteId})`;
-        };
-        for (const u of unitsFromPlan(pack, plan).units) {
-          if (!u.multiblock) continue;
-          bump(met, `${u.name} (${u.mteId})`);
-          metIds.add(u.mteId);
-          for (const p of checkUnit(u)) problems.push(`${at} units ${u.name} (${u.mteId}): ${p}`);
-        }
-        for (const mode of MODES) {
-          const ruled: Layout = await layoutLine(pack, plan, emptyScan(), makeProject({ logistics: mode }));
-          const table: Layout = await layoutLine(tablePack, plan, emptyScan(), makeProject({ logistics: mode }));
-          for (const w of ruled.warnings) bump(ruledCodes.get(mode)!, w.code);
-          for (const w of table.warnings) bump(tableCodes.get(mode)!, w.code);
-          for (const w of ruled.warnings) {
-            if (w.code !== 'hatch_rules_unknown') continue;
-            const mteId = plan.steps.find((s) => s.id === w.stepId)?.machine.mteId;
-            if (mteId === undefined || !UNPROBED.has(mteId)) problems.push(`${at} ${mode} ${machineOf(w.stepId)}: hatch_rules_unknown: ${w.text}`);
-          }
-          for (const code of ['hatch_cells_short', 'hatch_notes_unfit']) {
-            const before = perStep(table.warnings, code);
-            for (const [stepId, ws] of perStep(ruled.warnings, code)) {
-              const n = before.get(stepId)?.length ?? 0;
-              if (ws.length > n) {
-                problems.push(`${at} ${mode} ${machineOf(stepId)}: ${ws.length} ${code} where the table-ruled layout has ${n}: ${ws.map((w) => w.text).join(' | ')}`);
-              }
+        for (const code of ['hatch_cells_short', 'hatch_notes_unfit']) {
+          const before = perStep(table.warnings, code);
+          for (const [stepId, ws] of perStep(ruled.warnings, code)) {
+            const n = before.get(stepId)?.length ?? 0;
+            if (ws.length > n) {
+              problems.push(`${at} ${mode} ${machineOf(stepId)}: ${ws.length} ${code} where the table-ruled layout has ${n}: ${ws.map((w) => w.text).join(' | ')}`);
             }
           }
         }
@@ -320,7 +337,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules of the 0.6.0 export
     expect(recipe, `a recipe of ${map}`).toBeDefined();
     expect(recipe!.euPerTick).toBeGreaterThan(0);
     for (const [id, tier] of FUSION) {
-      const m = pack.machines.get(id)!;
+      const m = machineByMteId(pack, id)!;
       const elements = m.structure?.elements;
       console.log(`real-hatch-export: ${m.name} (${id}) elements: ${(elements ?? []).map(elementText).join('; ') || 'none'}`);
       expect(elements, `${m.name} has hatch rules`).toBeDefined();

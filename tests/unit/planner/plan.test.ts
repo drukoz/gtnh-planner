@@ -73,12 +73,15 @@ describe('planLine', () => {
     expect(p.steps[0]).toMatchObject({ recipeId: 'bend-ti', owned: 1 });
   });
   it('plans Make N with time and totals, hammering the plates a new bender would not pay for in 10', async () => {
-    const p = await planLine(pack, S({ target: 't:circuit@0', mode: 'makeN', amount: 10, tier: 1 }), emptyContext());
+    const p = await planLine(pack, S({ target: 't:circuit@0', mode: 'makeN', amount: 10, tier: 1, rawCap: null }), emptyContext());
     expect(p.makeN?.totalSeconds).toBeCloseTo(115, 6);       // assembler 10 × 200 t = 100 s, plus 15 s to fill the chain
     // Ruling R3: 10 copper ingots (circuit-lv takes 2 copper wire, wire makes 2 per copper ingot). Plan 12: a batch
     // always weighs build cost, and a new Basic Bending Machine (17 raw) costs more than the 10 extra iron ingots that
     // hammering the plates takes, so they are hammered (2 ingots each).
     expect(p.rawInputs.map((r) => [r.key, r.total])).toEqual([['t:copper_ingot@0', 10], ['t:iron_ingot@0', 20], ['t:redstone@0', 10]]);
+    // At the default +25 % raw cap the bender wins: the leanest line charges the hammer step as the project does (U2, F3b).
+    const capped = await planLine(pack, S({ target: 't:circuit@0', mode: 'makeN', amount: 10, tier: 1 }), emptyContext());
+    expect(capped.rawInputs.map((r) => [r.key, r.total])).toEqual([['t:copper_ingot@0', 10], ['t:iron_ingot@0', 10], ['t:redstone@0', 10]]);
   });
   it('Make N lists only added machines in the build list', async () => {
     const ctx = { ...emptyContext(), ownedMachines: [{ mteId: 121, count: 2 }, { mteId: 101, count: 1 }] };

@@ -17,7 +17,9 @@ import { aeRunShares } from '../../../src/server/layout/modes/ae2.ts';
 import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { projectorPayload } from '../../../src/server/projector/payload.ts';
+import { gtMachineId } from '../../../src/shared/ids.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
+import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import type { PatternSpec } from '../../../src/shared/types/feed.ts';
 import type { Pack, Product, Recipe } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanStep } from '../../../src/shared/types/plan.ts';
@@ -165,8 +167,10 @@ describe('AE2 feeding', () => {
     };
     const p = pack();
     p.items.set(COBBLE, { key: COBBLE, id: 'minecraft:cobblestone', meta: 0, name: 'Cobblestone', oreDict: [] });
-    p.machines.set(ROCK_BREAKER, { ...p.machines.get(IDS.MACERATOR)!, mteId: ROCK_BREAKER, name: 'Basic Rock Breaker',
-      metaName: 'basicmachine.rockbreaker.tier.01', itemKey: `gregtech:gt.blockmachines@${ROCK_BREAKER}` });
+    const rb = { ...machineByMteId(p, IDS.MACERATOR)!, id: gtMachineId(ROCK_BREAKER), mteId: ROCK_BREAKER, name: 'Basic Rock Breaker',
+      metaName: 'basicmachine.rockbreaker.tier.01', itemKey: `gregtech:gt.blockmachines@${ROCK_BREAKER}` };
+    p.machines.set(rb.id, rb);
+    p.machineByMteId.set(ROCK_BREAKER, rb);
     // the loader's rock breaker supply recipe, its display item gone (pack supply.ts)
     expect(takesNothing(p, ROCK_BREAKER, 'rock-breaker')).toEqual([{ code: 'ae2_no_pattern', stepId: 'r', text: 'AE2 cannot plan the Basic Rock '
       + 'Breaker: it takes nothing, it runs on the water and lava beside it, so no pattern has anything to push into it. What it makes goes back '

@@ -3,6 +3,7 @@
 // Pure TypeScript shared by server and browser: nothing from node:* may be imported here.
 
 import type { StuffKey } from '../keys.ts';
+import type { FarmSettings, FarmStep } from './farm.ts';
 import type { Product } from './pack.ts';
 
 /** Spec §3.6 modes 1–4; `enderio` is architecture §11.30. */
@@ -53,6 +54,23 @@ export const STEP_CHARGE_BEFORE_V3 = 0.02;
  */
 export const DEFAULT_BUILD_HORIZON_HOURS = 24;
 
+/**
+ * The planning modes a project picks under "Plan for" (design spec §3.3, architecture §11.45 (1)): `least-raw`, raw
+ * material per item while the line runs, machines not counted (add-on 12's "Ignore build cost"); `cheapest`, raw material
+ * over the build horizon plus the machines the group does not have (add-on 12's objective); `multi-output`, cheapest with
+ * a weight on each different raw material the line must be supplied with.
+ */
+export const PLAN_OBJECTIVES = ['least-raw', 'cheapest', 'multi-output'] as const;
+export type PlanObjective = (typeof PLAN_OBJECTIVES)[number];
+/** Every project's mode unless it picks another (the user's ruling of 2026-10-20: machine build cost counts). */
+export const DEFAULT_OBJECTIVE: PlanObjective = 'cheapest';
+
+/**
+ * The default `PlanSettings.rawCap` (fix wave 3 (A), the user's answer of 2026-10-22: "still pick fewest machines, but
+ * never more than 25 % more raw material than the leanest line; a setting you can change per project").
+ */
+export const DEFAULT_RAW_CAP = 0.25;
+
 export interface PlanSettings {
   target: StuffKey | null; mode: 'rate' | 'makeN'; amount: number; per: 'min' | 'hour';   // per ignored for makeN
   tier: number | null;                     // null = from world scan (fallback LV = 1)
@@ -82,8 +100,9 @@ export interface PlanSettings {
   /**
    * Which defaults the settings were made under (`SETTINGS_VERSION` in apply-op.ts; architecture §11.32): 2 from plan 09,
    * when supporting lines (`routeDerived: true`) became the default, 3 from plan 12's fix wave 2, when "Fewest machines"
-   * (`DEFAULT_STEP_CHARGE` 0.5) did. `defaultSettings()` sets the current version and `normalizeSettings()` fills a
-   * missing one with 1 (a project stored before it), which the server switches once.
+   * (`DEFAULT_STEP_CHARGE` 0.5) did, 4 from its fix wave 3 (A), when the raw cap (`DEFAULT_RAW_CAP`) was added.
+   * `defaultSettings()` sets the current version and `normalizeSettings()` fills a missing one with 1 (a project stored
+   * before it), which the server switches once.
    */
   settingsVersion?: number;
   // optional addition
@@ -152,6 +171,35 @@ export interface PlanSettings {
    * `defaultSettings()` and `normalizeSettings()` always fill it; readers treat only `only-required` as on.
    */
   multiblocks?: 'allow' | 'only-required';
+  // optional addition
+  /** The planning mode (add-on 17, §11.45 (1)); in rate mode a null `buildHorizonHours` plans least raw whatever it says. */
+  objective?: PlanObjective;
+  // optional addition
+  /** The farms the planner may build or reuse, and those the group runs (add-on 17, farm.ts); readers use `?? defaultFarmSettings()`. */
+  farms?: FarmSettings;
+  // optional addition
+  /** "Use other projects' surplus" (add-on 17, §11.45 (4)): on by default; readers treat only `false` as off. */
+  useSurplus?: boolean;
+  // optional addition (fix wave 3 (A))
+  /**
+   * "Raw material for fewer machines": wherever build cost counts and the step charge is above 0, the plan uses at most
+   * (1 + this) × the raw material of the leanest line — the plan "Least raw material" makes with the same settings, the
+   * raw material over the horizon plus its machines' build at its least — and within that the step charge decides; null =
+   * no limit. 0 to `MAX_RAW_CAP` (apply-op.ts). With build cost ignored it is not read. `defaultSettings()` and
+   * `normalizeSettings()` always fill it (`DEFAULT_RAW_CAP`) and keep a stored null.
+   */
+  rawCap?: number | null;
+  // optional addition (plan 12 fix wave 3 (B))
+  /**
+   * "Only these come in" (fix wave 3 (B)): empty = off. Otherwise the line buys nothing outside these keys and the free
+   * inputs (`FREE_KEYS`, which keep their own rules, `haveSupply` among them): every other good is made, or the plan is
+   * blocked with "Nothing makes <good> from your base materials"; a stop item outside the list is made, with a
+   * `stop-outside-inputs` warning. A listed key keeps its usual decision: the list only takes leaves away, so a good the
+   * line would make (a derived fluid) is still made unless it is a stop item too. Only the line's own graphs read it:
+   * machine prices, the build list and the layout's parts do not (`LinePricing.buildLeaf`). At most `MAX_INPUTS_ONLY`
+   * keys (apply-op.ts), no repeats. `defaultSettings()` and `normalizeSettings()` always fill it; readers use `?? []`.
+   */
+  inputsOnly?: StuffKey[];
 }
 
 /** Where one of the group's machines stands (a world scan's `PlacedMachine`): its dimension id and block position. */
@@ -222,6 +270,12 @@ export interface RawInput {
   // optional addition
   /** Some recipe the group can run at this tier makes it (fix spec R7); false for free and gathered goods. */
   canMake?: boolean;
+  // optional addition
+  /** Where a capped free supply comes from (add-on 17): another project's surplus or a farm the group runs; a row of its own beside a bought row of the key. */
+  from?: { kind: 'project' | 'farm'; id: string; name: string };
+  // optional addition
+  /** A farm's tool wear (add-on 17): priced upkeep, never a raw source of best multi-output. */
+  upkeep?: true;
 }
 
 export interface PlanStep {
@@ -311,6 +365,9 @@ export interface PlanStep {
    * `reused.units`, and its machines are counted once. Set only for a pool of two or more steps.
    */
   pool?: { id: string /* 'pool:' + its smallest step id */; steps: string[] /* every step id it runs, sorted, this one included */ };
+  // optional addition
+  /** A farm step's farm (add-on 17, farm.ts): what it plants and its words; the layout keeps an area for it. */
+  farm?: FarmStep;
 }
 
 export interface PlanFlow { from: string /* step id | 'raw' */; to: string /* step id | 'out' | 'sink' */; key: StuffKey; perSecond: number }
@@ -396,7 +453,16 @@ export interface Plan {
   // it uses a second against the least any plan of its graph needs (rate mode)
   target?: StuffKey;
   targetPerSecond?: number;
-  rawCost?: { perSecond: number; leastPerSecond: number };
+  rawCost?: {
+    perSecond: number; leastPerSecond: number;
+    // optional addition (fix wave 3 (A))
+    /**
+     * Where build cost counts: the raw material a second of the leanest line (the plan the build stage makes at step
+     * charge 0, what "Least raw material" plans), which `PlanSettings.rawCap` and the step charge are measured against;
+     * absent at No limit where the leanest line cannot change the step charge.
+     */
+    leanestPerSecond?: number;
+  };
   // optional addition
   /**
    * What the plan costs in raw material (architecture §11.28, §11.39; every `ok` plan): to run it an hour (Make N: the
@@ -417,6 +483,47 @@ export interface Plan {
   // optional addition
   /** The swap list of every made build part (architecture §11 entry 41 (3)), by key; absent when there is none. */
   buildAlternatives?: Record<StuffKey, PlanStep['alternatives']>;
+  // optional addition
+  /** The planning mode the plan was made in (add-on 17): its settings' mode as the planner reads it (`objectiveOf`). */
+  objective?: PlanObjective;
+  // optional addition
+  /** The different raw goods the plan buys (cost above 0, upkeep aside), which best multi-output keeps few (add-on 17). */
+  rawSources?: number;
+  // optional addition
+  /** Byproducts of the line's own runs credited to other projects that need them (best multi-output, add-on 17), per second. */
+  credits?: Array<{ to: string; name: string; key: StuffKey; perSecond: number }>;
+  // optional addition
+  /** Who takes this plan's surplus (add-on 17): each live project's draw on it, oldest project first, per second. */
+  drawnBy?: Array<{ by: string; name: string; key: StuffKey; perSecond: number }>;
+  // optional addition
+  /** The hash of what the plan read from other projects' summaries (add-on 17); absent when it read nothing. */
+  crossHash?: string;
+  // optional addition (plan 12's final review)
+  /**
+   * The goods a rate plan with build cost counted makes two or more ways, or buys beside the steps that make them, on
+   * purpose (`planLine`), by code, then key: the plan index (`indexPlan`) gives such a good's `multi-producer` or
+   * `bought-and-made` as a note (`PlanIndex.notes`), not as an integrity issue. Absent where there is none.
+   */
+  deliberate?: DeliberateSplit[];
+}
+
+/**
+ * A good a build-cost plan makes two or more ways, or buys beside the steps that make it, on purpose (`Plan.deliberate`;
+ * plan 12's final review, the plan-side counterpart of controller ruling 249's `needsMachine`). `full`: the machines of
+ * the steps in `full` are full, and no maker can be dropped within the plan's machines — the other makers have too little
+ * room for its share at no more raw material a unit (a step by hand or on a pseudo machine has room for any share); a
+ * purchase: every step making the good is full — so making the rest one way, or making what it buys, needs another
+ * machine, which the build stage weighed as dearer than the raw material it saves. `raw-cap`: the build stage's plan
+ * uses all the raw material the raw cap allows (`PlanSettings.rawCap`) and its ways (a purchase: the purchase and its
+ * makers) differ in raw material a unit, so the cap, not a tie, sets how much each makes.
+ */
+export interface DeliberateSplit {
+  key: StuffKey;
+  /** The integrity issue it would otherwise be (balance.ts `PlanIssueCode`). */
+  code: 'multi-producer' | 'bought-and-made';
+  why: 'full' | 'raw-cap';
+  /** With `full`: the steps whose machines are full, in the order the plan index lists the good's makers (largest first). */
+  full?: string[];
 }
 
 export interface PlanContext {           // filled from a world scan by Plan 4; Plan 2 works with an empty one
