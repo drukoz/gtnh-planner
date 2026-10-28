@@ -268,15 +268,29 @@ describe('a MIP with a cutoff (release gate round 2, G1: the lite start)', () =>
     expect(best.status).toBe('optimal');
     const below = await solveLp({ ...cover, ...limits, objectiveBound: best.objective + 1 });
     expect(below.objective).toBeCloseTo(best.objective, 9);
-    // Below its LP relaxation nothing is: whatever HiGHS reports is no better than the cutoff.
+  });
+
+  it('reports a whole solution no better than the cutoff as its answer, never among improving, and infeasible where it pruned every node first', async () => {
+    // HiGHS's heuristics may find a whole solution no better than the cutoff: HiGHS 1.15.3 then answers with it, never
+    // among `improving` (`pickBuild` keeps the start). Below the LP relaxation nothing is, and the search ends: `optimal`.
     const relaxed = await solveLp({ sense: cover.sense, colCost: cover.colCost, colLower: cover.colLower, colUpper: cover.colUpper, rows: cover.rows });
     const none = await solveLp({ ...cover, ...limits, objectiveBound: relaxed.objective - 1 });
-    expect(none.x.length === 0 || none.objective >= relaxed.objective - 1).toBe(true);
+    expect(none).toMatchObject({ status: 'optimal', improving: [] });
+    expect(none.objective).toBeGreaterThan(relaxed.objective - 1);
+    // Just below the optimum its 50 nodes end first: `feasible`.
+    const best = await solveLp({ ...cover, maxNodes: 100_000 });
+    const short = await solveLp({ ...cover, ...limits, objectiveBound: best.objective - 0.5 });
+    expect(short).toMatchObject({ status: 'feasible', stop: 'limit', nodes: 50, improving: [] });
+    expect(short.objective).toBeGreaterThan(best.objective - 0.5);
+    // Far below the optimum the search prunes every node before any whole solution: `infeasible`.
+    expect(await solveLp({ ...cover, ...limits, objectiveBound: 1 })).toMatchObject({ status: 'infeasible', x: [], improving: [] });
   });
 
   it('says its limits stopped it where it found no whole solution, and only with a cutoff', async () => {
     const capped = { ...exact, ...limits, maxIterations: 1 };
     expect(await solveLp({ ...capped, objectiveBound: 1e9 })).toMatchObject({ status: 'error', stop: 'limit', x: [] });
+    // the build MIP's 50 nodes, which HiGHS reports as its solution limit (no iteration cap here)
+    expect(await solveLp({ ...exact, ...limits, objectiveBound: 1e9 })).toMatchObject({ status: 'error', stop: 'limit', x: [], nodes: 50 });
     const plain = await solveLp(capped);
     expect(plain.status).toBe('error');
     expect(plain.stop).toBeUndefined();

@@ -1533,9 +1533,10 @@ export async function pickBuild(
   const last = runs[runs.length - 1] as LpResult;
   const retried = again === true ? { retried: true as const } : {};
   const given = job.cutoff !== undefined && start !== undefined ? start : undefined;
-  // With a cutoff and no whole solution below it — none is (`infeasible`), its limits stopped it first, or it reports one
-  // no better (HiGHS's LP solves stop at the cutoff, but its heuristics may still report such a solution, which stays a
-  // pick candidate below) — the start, but where the time guard stopped it or HiGHS failed (no plan, as from a start).
+  // With a cutoff and no whole solution below it, the start: none is (`infeasible`), its limits stopped it first, or it
+  // reports one no better as its answer (`optimal` or `feasible`: HiGHS's LP solves stop at the cutoff, but its
+  // heuristics may still find such a solution), which HiGHS never counts among `improving`, so that one is no pick
+  // candidate below. Not where the time guard stopped it or HiGHS failed: no plan, as from a start.
   const beaten = wholeBuild(last) && last.objective < objective;
   const kept = given !== undefined && !beaten
     && (wholeBuild(last) || last.status === 'infeasible' || (last.status === 'error' && last.stop === 'limit'));
@@ -1915,15 +1916,21 @@ async function liteLine(lp: MainLp, plain: BuildMipInput, limit: number, opts: S
  * measured on the user's live board, from the lite plan with restarts its 50 nodes ended where the board's supply
  * columns moved them and the board fell into a 2-cycle (Duty plate 41 steps at 11.58 raw a minute, then 38 at 10.36);
  * with the lite plan as its cutoff instead the board settled but real-board's A3 (b) did not hold (10.36 against 11.11 on
- * the board x 0.999); without restarts both held. Where another start costs no more, each MIP solves from it as without
- * the lite start: from the sparse plan as its cutoff the leanest line of Electronic Circuit MV on Project Red with two of
- * every machine owned found nothing below it (1.032 against 0.884 as the incumbent, its root LP relaxation unsolved
- * within the iteration cap), its raw material 13 % above. Where the leanest line's raw material to 9 digits
- * is the lite plan's, that MIP is the build MIP of the true cap, from the same starts, so it is kept (`beside`: `kept`):
- * the plan is the one `sequentialLean` solves after the leanest line; else it is solved again at the leanest line's
+ * the board x 0.999); without restarts both held. Where another start costs no more, each MIP takes it as without the
+ * lite start, as its incumbent with restarts allowed: from the sparse plan as its cutoff the leanest line of Electronic
+ * Circuit MV on Project Red with two of every machine owned found nothing below it (1.032 against 0.884 as the
+ * incumbent, its root LP relaxation unsolved within the iteration cap), its raw material 13 % above. The build MIP is
+ * still not exactly the one off the lite path there: wherever the lite gives a plan, its cap and step charge's base come
+ * from a raw material to 9 significant digits (`sig9`), where off the lite path they come from the leanest line's
+ * unrounded figure, which differs from about the 10th digit on (well within BIG_M_SLACK and S3_TOLERANCE); only off the
+ * lite path (below LITE_MIN_INTEGERS, say) and where the lite gives no plan do both MIPs solve exactly as before. Where
+ * the leanest line's raw material to 9 digits is the lite plan's, that MIP is the build MIP of the true cap, from the
+ * same starts, so it is kept (`beside`: `kept`): the plan is the one `sequentialLean` solves after the leanest line;
+ * else it is solved again at the leanest line's
  * (`re-solved`). The 9 digits make the two match where the leanest line keeps the lite plan's recipes but moves its
- * machines (Duty plate: 9.64027777777862 against 9.640277777777778). Where the lite gives no plan, the leanest line and
- * the build MIP run as without it. Every decision reads the solves' results only, never their timing.
+ * machines (Duty plate: 9.64027777777862 against 9.640277777777778). Where the lite gives no plan, or fails (its model
+ * or its solve throws), the leanest line and the build MIP run as without it. Every decision reads the solves' results
+ * only, never their timing.
  */
 async function liteStaged(
   lp: MainLp, s1: LpResult, plain: BuildMipInput, leanMip: ReturnType<typeof buildMip>, sparse: readonly number[] | null, cap: number,
@@ -1932,7 +1939,8 @@ async function liteStaged(
   lean: { raw: number; x?: readonly number[] }; ignoredPlan: Awaited<ReturnType<typeof finish>>; input: BuildMipInput;
   others: ReadonlyArray<readonly number[] | null | undefined>; cheapest: SolvedMip; beside?: 'kept' | 're-solved';
 }> {
-  const [liteX, ignoredPlan] = await Promise.all([liteLine(lp, plain, limit, opts), finish(lp, s1, [], opts)]);
+  // A lite that fails (its model or its solve) is a lite without a plan: the line plans as without the lite start.
+  const [liteX, ignoredPlan] = await Promise.all([liteLine(lp, plain, limit, opts).catch(() => undefined), finish(lp, s1, [], opts)]);
   if (liteX === undefined) {
     const lean = await leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false) ?? { raw: s1.objective };
     const input: BuildMipInput = { ...plain, leanRaw: lean.raw, rawBound: (1 + cap) * lean.raw };
@@ -1942,9 +1950,12 @@ async function liteStaged(
   const at = (raw: number): BuildMipInput => ({ ...plain, leanRaw: raw, rawBound: (1 + cap) * raw });
   const others = [sparse, ignoredPlan.x, liteX];
   const guess = sig9(Math.max(rawOf(lp, liteX), s1.objective));
-  const leaning = leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false, liteX);
-  const early = opts.sequentialLean === true ? undefined : await solvedMip(lp, at(guess), others, limit, opts, liteX);
-  const lean = await leaning ?? { raw: s1.objective };
+  // Both awaited together: a failure of either fails this plan only, and the other's later failure has a handler too.
+  const [leaning, early] = await Promise.all([
+    leanestLine(lp, s1, plain, leanMip, sparse, limit, opts, false, liteX),
+    opts.sequentialLean === true ? undefined : solvedMip(lp, at(guess), others, limit, opts, liteX),
+  ]);
+  const lean = leaning ?? { raw: s1.objective };
   const raw = sig9(lean.raw);
   const input = at(raw);
   if (early !== undefined && raw === guess) return { lean, ignoredPlan, input, others, cheapest: early, beside: 'kept' };

@@ -57,9 +57,12 @@ export interface LpModel {
   /**
    * A MIP's cutoff (HiGHS `objective_bound`): its LP solves stop where their objective reaches this, so its search prunes
    * every node no better than it — the objective of a plan known beside the solve, which then needs no start
-   * (`BuildRunsJob.cutoff`). Its heuristics may still report a whole solution no better than it; with none it is
-   * `infeasible` where its root LP relaxation is no better, and `error` with `stop` where its limits (or the time guard)
-   * ended it first.
+   * (`BuildRunsJob.cutoff`). Its heuristics may still find a whole solution no better than it, which HiGHS then reports
+   * as its answer, `optimal` where its search ended or `feasible` where its limits did (also where its root LP relaxation
+   * is no better than the cutoff), but never among `improving`, which holds only those below the cutoff. With no whole
+   * solution it is `infeasible` where its search pruned every node first (a cutoff far below the optimum), `error` with
+   * `stop` where its limits (or the time guard) ended it first, and a plain `error` (no `stop`) where HiGHS failed, as
+   * without a cutoff. Measured on HiGHS 1.15.3 (lp.test.ts).
    */
   objectiveBound?: number;
   /** False: a MIP never restarts its root after it fixes columns (HiGHS `mip_allow_restart`); absent: HiGHS's default (it may). */
@@ -275,8 +278,15 @@ export async function solveLp(model: LpModel): Promise<LpResult> {
             stop: status === statuses.timeLimit ? 'time' : 'limit',
           });
         }
-        // With a cutoff: its limits (or the time guard) ended it before a whole solution below it.
-        return withRun(model.objectiveBound === undefined ? notOptimal('error') : { ...notOptimal('error'), stop: status === statuses.timeLimit ? 'time' : 'limit' });
+        // With a cutoff: its limits ended it before a whole solution (the iteration cap's interrupt, the node limit, which
+        // HiGHS reports as its solution limit, its simplex iteration limit), or the time guard did. Any other status is
+        // HiGHS failing: no plan, as without a cutoff.
+        if (model.objectiveBound !== undefined && status === statuses.timeLimit) return withRun({ ...notOptimal('error'), stop: 'time' });
+        if (model.objectiveBound !== undefined
+          && (status === statuses.interrupted || status === statuses.solutionLimit || status === statuses.iterationLimit)) {
+          return withRun({ ...notOptimal('error'), stop: 'limit' });
+        }
+        return withRun(notOptimal('error'));
     }
   });
 }
