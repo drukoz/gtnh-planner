@@ -12,6 +12,7 @@ import { allMachines } from '../pack/lookup.ts';
 import { expandBomLines, partName, type BomMake } from '../planner/bom.ts';
 import { bomBuildCost } from '../planner/build-cost.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
+import { linePricing } from '../planner/pricing.ts';
 import { partSteps } from '../planner/steps.ts';
 import { emptyScan, layoutLine, type LayoutDeps } from './layout.ts';
 import { isOptional, mergeLayoutIntoPlan, subtractReplaced } from './merge.ts';
@@ -64,6 +65,13 @@ export interface LayoutServiceDeps {
    * context, the plan's `cost.layout`; without it a finished plan gets none.
    */
   layoutCost?(pack: Pack, lines: BomLine[], project: Project): Promise<number>;
+  // optional addition (add-on 14 × add-on 17)
+  /**
+   * The pack a placed line's build steps are worded on, as `planLine` words the plan's own: the line's farm pack
+   * (`LinePricing.pack`), whose farm recipes say what its crop farms plant (`partSteps`); without it, or where the line
+   * has no farms, the export pack.
+   */
+  linePack?(pack: Pack, project: Project): Promise<Pack>;
 }
 
 export interface LayoutService {
@@ -185,7 +193,9 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       const pack = await deps.pack();
       const expansion = await expansionOf(entry, pack, layout, project, plan);
       const cost = costOf(entry, pack, layout, project);
-      const parts = partSteps(pack, { steps: plan.steps, bom: { lines: expansion.lines, totals: expansion.totals, makes: expansion.makes ?? [] }, tier: plan.tier })
+      const stepsPack = deps.linePack === undefined ? pack : await deps.linePack(pack, project);
+      const bom = { lines: expansion.lines, totals: expansion.totals, makes: expansion.makes ?? [] };
+      const parts = partSteps(stepsPack, { steps: plan.steps, bom, tier: plan.tier })
         .map((s, i): BuildStep => ({ ...s, order: i + 1 }));
       const nameOf = (k: string): string => (k.startsWith('map:') ? pack.maps.get(k.slice(4))?.name ?? k.slice(4) : partName(pack, k));
       return mergeLayoutIntoPlan(plan, layout, { ...expansion, parts }, nameOf, cost === null ? undefined : await cost);
@@ -197,7 +207,7 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
  * The app's layout service (`app.services.layout`), created on first use: the active pack, the plan the plan route
  * serves (`planForProject`) for a caller that brings none, scans and voxels from the world service, and the whole build
  * broken down (with the plan's steps) and the layout's parts priced in the project's world context
- * (`app.services.planContext`, else an empty one).
+ * (`app.services.planContext`, else an empty one), and the build steps worded on the line's farm pack (`linePack`).
  */
 export function layoutService(app: AppContext): LayoutService {
   const existing = app.services.layout as LayoutService | undefined;
@@ -212,6 +222,10 @@ export function layoutService(app: AppContext): LayoutService {
     // the layout's parts at the prices the plan's machines are priced at (plan 12: `cost.layout`)
     layoutCost: async (pack, lines, project) =>
       bomBuildCost(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), lines),
+    // the line's farm pack from its pricing (memoized: the plan route priced the line), so its build steps say what its
+    // crop farms plant as the plan's own do (add-on 17)
+    linePack: async (pack, project) =>
+      (await linePricing(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext())))?.pack ?? pack,
   });
   app.services.layout = service;
   return service;

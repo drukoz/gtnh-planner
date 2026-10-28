@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { createLayoutService, LAYOUT_CACHE_SIZE, layoutKey, type LayoutServiceDeps } from '../../../src/server/layout/service.ts';
 import { layoutLine } from '../../../src/server/layout/layout.ts';
 import { isOptional, subtractReplaced } from '../../../src/server/layout/merge.ts';
-import type { BomLine, PlanStep } from '../../../src/shared/types/plan.ts';
+import { expandBomLines } from '../../../src/server/planner/bom.ts';
+import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
+import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import type { BomLine, Plan, PlanStep } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
+import { farmPack } from '../../helpers/farm-fixtures.ts';
 import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS } from '../../helpers/layout-fixtures.ts';
 
 const twoStep = () => makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 's2', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 }]);
@@ -161,6 +166,31 @@ describe('layout service', () => {
     expect(recorded).toEqual([layout.bom.filter((l) => !l.why.startsWith('optional:') && !hatches.includes(l.key)).map((l) => l.key)]);
     const unpriced = await createLayoutService(deps({ plan: async () => plan })).finishPlan(plan, makeProject());
     expect(unpriced.cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24 });
+  });
+
+  it('words what a placed line\'s crop farms plant, as the plan does', async () => {
+    // add-on 14 × add-on 17: the finished plan's part steps are worded on the line's farm pack (`linePack`), whose farm
+    // recipes say what each crop farm plants, as `planLine` words the plan's own; on the export pack alone they would
+    // say the crop sticks and the dirt stay in the machine and that the seeds must be imported
+    const pack = farmPack();
+    const settings = { ...defaultSettings(), target: 't:rubber_dust@0', per: 'min' as const, tier: 1, objective: 'least-raw' as const, buildHorizonHours: null };
+    const plan = await planLine(pack, settings, emptyContext());
+    const project = { ...makeProject(), settings };
+    const finish = (over: Partial<LayoutServiceDeps>): Promise<Plan> => createLayoutService(deps({
+      pack: async () => pack, plan: async () => plan, scan: async () => makeScan({ power: [] }),
+      expand: async (p, lines, _project, steps) => expandBomLines(p, lines, settings, emptyContext(), steps === undefined ? undefined : { steps }), ...over,
+    })).finishPlan(plan, project);
+    const planted = ['craft:cropsnh:cropSticks@0', 'craft:minecraft:dirt@0', 'craft:t:cane_seed@0'];
+    const text = (p: Plan, id: string): string | undefined => p.buildSteps.find((s) => s.id === id)?.text;
+    const done = await finish({ linePack: async (p) => (await linePricing(p, settings, emptyContext()))?.pack ?? p });
+    expect(done.buildSteps.some((s) => s.id.startsWith('layout:'))).toBe(true);
+    expect(planted.map((id) => text(done, id))).toEqual(planted.map((id) => text(plan, id)));
+    expect(planted.map((id) => text(done, id))).toEqual([
+      'Craft 2× Crop Sticks (to plant in the Resin Cane farm) from 1× Oak Planks at a crafting table',
+      'Get 2× Dirt as soil for the Resin Cane farm', 'Take 2× Resin Cane Seeds from your seed bank for the Resin Cane farm',
+    ]);
+    // without the dep, the export pack's words
+    expect(text(await finish({}), 'craft:minecraft:dirt@0')).toBe('Make 2× Dirt (stays in the machine)');
   });
 
   it('does not keep a failed parts breakdown', async () => {
