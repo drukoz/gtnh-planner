@@ -475,19 +475,28 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
      * 33.562427797 -> 34.522190074 and 27.699827544 -> 28.343800736 (buildStage's JSDoc records the same 1/h flip for
      * another changed start). At 400 nodes and 3,000,000 simplex iterations they reach 33.383123261 and 27.173435929,
      * below the old pins.
+     * Add-on 14's recycling rule (architecture §11 entry 41 (7), the controller's ruling 173 at its Task 8: Task 2's
+     * `smeltsBack` stands as built, and on the merged tree what it moves is re-measured and re-pinned) prices the iron parts
+     * of a machine honestly, no longer through magnetic-part smelts. On main 893b8e8 merged with it: Electronic Circuit MV
+     * 12.451591979 -> 12.451605035 and the three Electronic Circuit LV picks 17.240499791 -> 17.241619496, 17.259551046 ->
+     * 17.260683800 and 15.856850743 -> 15.857789902 (Project Red, AE2), each the same decision as with the old rule (every
+     * step's machine option and new machines; only machine prices moved; MV now stops at the node limit, 50, where the old
+     * prices proved it in 19, and LV on AE2 takes 17 nodes); and Advanced Circuit HV 1/min with supporting lines 28.343800736
+     * -> 30.716937674, another decision: on the new prices the 50-node search stops on another incumbent (a search outcome,
+     * noted to plan 12's controller with its build-MIP pick). The old rule's body on the same tree gives the old pins exactly.
      */
     const PINNED: ReadonlyArray<[string, PlanSettings, number]> = [
-      ['Electronic Circuit MV', atOff(ELECTRONIC_CIRCUIT, 2, 1), 12.451591979],
+      ['Electronic Circuit MV', atOff(ELECTRONIC_CIRCUIT, 2, 1), 12.451605035],
       ['Electronic Circuit MV on Project Red', atOff(ELECTRONIC_CIRCUIT, 2, 1, { logistics: 'routed' }), 12.451594296],
       ['Good Electronic Circuit HV', atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 1), 17.294139328],
       ['Polyethylene Bar MV', atOff(POLYETHYLENE_BAR, 2, 1), 8.410411920],
       ['Steel Ingot MV x10', atOff(STEEL_INGOT, 2, 10), 11.924229250],
-      ['Electronic Circuit LV', atOff(ELECTRONIC_CIRCUIT, 1, 1), 17.240499791],
-      ['Electronic Circuit LV on Project Red', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.259551046],
-      ['Electronic Circuit LV on AE2', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.856850743],
+      ['Electronic Circuit LV', atOff(ELECTRONIC_CIRCUIT, 1, 1), 17.241619496],
+      ['Electronic Circuit LV on Project Red', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'routed' }), 17.260683800],
+      ['Electronic Circuit LV on AE2', atOff(ELECTRONIC_CIRCUIT, 1, 1, { logistics: 'ae2' }), 15.857789902],
       ['Advanced Circuit HV 1/min', atOff(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false }), 22.294776901],
       ['Advanced Circuit HV 1/h', atOff(ADVANCED_CIRCUIT, 3, 1, { routeDerived: false, per: 'hour' }), 34.522190074],
-      ['Advanced Circuit HV 1/min, supporting lines', atOff(ADVANCED_CIRCUIT, 3, 1), 28.343800736],
+      ['Advanced Circuit HV 1/min, supporting lines', atOff(ADVANCED_CIRCUIT, 3, 1), 30.716937674],
     ];
     const statsOf = (run: BuildRun): NonNullable<Solution['buildStats']> => run.sol.buildStats as NonNullable<Solution['buildStats']>;
     const logPick = (name: string, stats: NonNullable<Solution['buildStats']>): void => {
@@ -503,20 +512,25 @@ describe.skipIf(!local)('build cost on the real 2.9 export', () => {
       expect(stats.objective as number).toBeLessThanOrEqual(pinned * (1 + 1e-6));
     }, 300_000);
 
-    it('plans 2 Good Electronic Circuits a minute at HV on AE2 in at most 29 new machines, at most 17.447792929 by the build MIP', async () => {
+    it('plans 2 Good Electronic Circuits a minute at HV on AE2 in at most 29 new machines, at most 15.953418446 by the build MIP', async () => {
       // Pinned at its pick after 12 x 17 F7b (ruling A; before it at most 16.371 and 28 new machines, retried): F7b fixes
       // every virtual good's sink at 0, which leaves S1 the same (0.541250173) but changes which of its equal-raw solutions
       // HiGHS returns, and so the MIP's start and search. Since F7b its root LP relaxation solves at 1e-10, so it runs no
       // second time at BUILD_MIP_RETRY_TOLERANCE (fix wave 3 (F); build-pick.test.ts keeps that path), and its simplex
       // iteration cap stops the search at 13 nodes. At 400 nodes and 3,000,000 simplex iterations it reaches 15.947785088.
+      // Add-on 14's recycling rule (architecture §11 entry 41 (7); the controller's ruling 173 at its Task 8: re-measured and
+      // re-pinned on main 893b8e8 merged with it, each assertion named in its commit) prices the iron parts of a machine
+      // honestly: on those prices the root LP relaxation no longer solves at 1e-10, so the MIP runs again at
+      // BUILD_MIP_RETRY_TOLERANCE, and that search reaches 15.953418446 at its 50-node limit, 28 new machines (17.447792929 at
+      // 13 nodes, 29, with the old rule's body on the same tree): a search outcome, noted to plan 12's controller.
       const s = atOff(GOOD_ELECTRONIC_CIRCUIT, 3, 2, { logistics: 'ae2' });
       const run = await runAlone({ ...s, rawCap: null }, false);
       const stats = statsOf(run);
       logPick('Good Electronic Circuit HV x2 on AE2', stats);
       logPick('Good Electronic Circuit HV x2 on AE2, farms on (S15, logged)', statsOf(await runAlone({ ...s, rawCap: null, farms: defaultFarmSettings() }, false)));
-      expect(stats.retried).toBeUndefined();   // since F7b its root LP relaxation solves at 1e-10
+      expect(stats.retried).toBe(true);   // add-on 14's prices (above): its root LP relaxation no longer solves at 1e-10
       expect(stats.status === 'optimal' || stats.stop === 'limit', `${stats.status}/${stats.stop}`).toBe(true);
-      expect(stats.objective as number).toBeLessThanOrEqual(17.447792929 * (1 + 1e-6));
+      expect(stats.objective as number).toBeLessThanOrEqual(15.953418446 * (1 + 1e-6));
       // Its new machines from that same solve (controller ruling on fix wave 3 (C), item 5): planLine also prices
       // byproduct-only goods beyond the group's stock, so its plan is another, measured after F7b at 28 new machines
       // against the solve's 29; that plan is logged.
