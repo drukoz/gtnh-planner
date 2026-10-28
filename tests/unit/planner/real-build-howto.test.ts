@@ -10,10 +10,12 @@
 //
 // Measured on export 2.9.0-RC-1_20261020-204809 (2026-10-23): the Electronic Circuit line has 94 make, 31 craft and 0
 // gather part steps and 0 unmade parts, and every bound of its cases held. The live projects' builds keep the EC line's
-// bounds but its two fluid ceilings: there a fluid total, free or not, fails above LIVE_FLUID_MAX (the controller's
-// ruling on ruling 94's bounds), as a live build may take more of a free fluid, or of another fluid, than the EC line's
-// ceilings by a strictly cheaper route (free inputs cost nothing, spec §3.3); a live total above the EC line's free-fluid
-// or other-fluid ceiling is printed and written to the audit file per project and view, by bound and fluid, never failed.
+// bounds but its two fluid ceilings and its item ceiling: there a fluid total, free or not, fails above LIVE_FLUID_MAX
+// (the controller's ruling on ruling 94's bounds), as a live build may take more of a free fluid, or of another fluid,
+// than the EC line's ceilings by a strictly cheaper route (free inputs cost nothing, spec §3.3); and an item total fails
+// above ITEM_LIVE_MAX (the controller's ruling after the merge of main, the same approach for items), as a live line
+// larger than the EC line builds with more of one material. A live total above the EC line's free-fluid, other-fluid or
+// item ceiling is printed and written to the audit file per project and view, by bound and class, never failed.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -72,6 +74,16 @@ const EMPTY_CELL_MAX = 64;
  * tie-break, which this block still catches on real data.
  */
 const LIVE_FLUID_MAX = 10_000_000;
+/**
+ * Units of any one item a live project's build may call for (the controller's ruling after the merge of main 893b8e8, ruling
+ * 94's fluid approach for items): the smallest round bound above every item total measured on the live builds (the
+ * database copy of Task 8 and the live projects of 2026-10-27, an ore dust and a wood the builds of the larger lines take),
+ * below every item total of the older defects measured on them (a recycling-priced ingot and a rubber chip at 82ee70f, each
+ * more than twice this bound). Cost if wrong: a live line that grows a little more turns the local-only audit red for a
+ * real need (re-measure, then rule), and an item inflated below this bound shows only as a report line where it breaks no
+ * Empty Cell, leaf or pooled-demand check.
+ */
+const ITEM_LIVE_MAX = 3_000;
 /** The gather step names this many base materials (steps.ts), then "(and N more)". */
 const GATHER_SHOWN = 8;
 /** How a make step words a machine the line builds whose own build needs the part. */
@@ -158,22 +170,29 @@ function poolingViolations(pack: Pack, totals: readonly BomLine[], makes: readon
 }
 
 /** Each total above its ceiling: Empty Cells, an item, a free fluid (`freeFluidMax`), any other fluid (`fluidMax`). */
-function ceilingViolations(pack: Pack, totals: readonly BomLine[], freeFluidMax = FREE_FLUID_MAX, fluidMax = FLUID_MAX): string[] {
+function ceilingViolations(
+  pack: Pack, totals: readonly BomLine[], freeFluidMax = FREE_FLUID_MAX, fluidMax = FLUID_MAX, itemMax = ITEM_MAX,
+): string[] {
   return totals.flatMap((t) => {
-    const max = t.key === EMPTY_CELL ? EMPTY_CELL_MAX : !isFluidKey(t.key) ? ITEM_MAX : FREE.has(t.key) ? freeFluidMax : fluidMax;
+    const max = t.key === EMPTY_CELL ? EMPTY_CELL_MAX : !isFluidKey(t.key) ? itemMax : FREE.has(t.key) ? freeFluidMax : fluidMax;
     return t.amount > max ? [`${qty(pack, t.key, t.amount)} above ${amountText(max)}`] : [];
   });
 }
 
 /**
- * The fluid totals above the EC line's ceiling of their class, by bound, then fluid: a live build reports them and never
- * fails on them (the controller's ruling on ruling 94's bounds).
+ * The totals above the EC line's ceiling of their class, by bound, then good: free fluids, other fluids and items (the
+ * Empty Cell, which keeps its own ceiling, aside). A live build reports them and never fails on them (the controller's
+ * rulings on ruling 94's bounds: the fluids at Task 8, the items after the merge of main).
  */
-function fluidReports(pack: Pack, totals: readonly BomLine[]): string[] {
-  const fluids = totals.filter((t) => isFluidKey(t.key));
-  return ([['free', FREE_FLUID_MAX, true], ['other', FLUID_MAX, false]] as const).flatMap(([kind, max, free]) => {
-    const above = fluids.filter((t) => FREE.has(t.key) === free && t.amount > max).map((t) => qty(pack, t.key, t.amount));
-    return above.length === 0 ? [] : [`${kind} fluid above ${amountText(max)} L: ${above.join(', ')}`];
+function ceilingReports(pack: Pack, totals: readonly BomLine[]): string[] {
+  const classes = [
+    ['free fluid', FREE_FLUID_MAX, ' L', (t: BomLine) => isFluidKey(t.key) && FREE.has(t.key)],
+    ['other fluid', FLUID_MAX, ' L', (t: BomLine) => isFluidKey(t.key) && !FREE.has(t.key)],
+    ['item', ITEM_MAX, '', (t: BomLine) => !isFluidKey(t.key) && t.key !== EMPTY_CELL],
+  ] as const;
+  return classes.flatMap(([kind, max, unit, inClass]) => {
+    const above = totals.filter((t) => inClass(t) && t.amount > max).map((t) => qty(pack, t.key, t.amount));
+    return above.length === 0 ? [] : [`${kind} above ${amountText(max)}${unit}: ${above.join(', ')}`];
   });
 }
 
@@ -504,14 +523,15 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
 
   /**
    * Every bound a build of project `p` breaks: `label` names the plan or the finished plan. Its fluids are held to
-   * LIVE_FLUID_MAX, free or not; above the EC line's ceilings they are reported (`fluidReports`), not failed.
+   * LIVE_FLUID_MAX, free or not, and its items to ITEM_LIVE_MAX; above the EC line's ceilings they are reported
+   * (`ceilingReports`), not failed.
    */
   const violations = (
     p: LiveProject, label: string, totals: readonly BomLine[], tree: readonly BomLine[], lines: readonly BomLine[], makes: readonly BomMake[],
   ): string[] => {
     const filled = filledContainers(pack);
     return [
-      ...ceilingViolations(pack, totals, LIVE_FLUID_MAX, LIVE_FLUID_MAX),
+      ...ceilingViolations(pack, totals, LIVE_FLUID_MAX, LIVE_FLUID_MAX, ITEM_LIVE_MAX),
       ...totals.filter((t) => filled.has(t.key) && !p.stops.has(t.key)).map((t) => `${qty(pack, t.key, t.amount)} is a filled container`),
       ...tree.filter((l) => itemIn(l.key, CIRCUIT_STAND_IN_IDS)).map((l) => `${partName(pack, l.key)} is a circuit stand-in in the build list`),
       ...leafViolations(pack, totals, p.leaf),
@@ -530,7 +550,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
           `project ${p.index}, ${label}:`,
           ...buildFigures(pack, totals, plan.buildSteps, plan.buildList),
           `Empty Cells: ${amountText(demand)} needed, ${amountText(made)} made, ${amountText(bought)} bought`,
-          `above the EC line's fluid ceilings (reported, not failed): ${fluidReports(pack, totals).join('; ') || 'none'}`,
+          `above the EC line's fluid and item ceilings (reported, not failed): ${ceilingReports(pack, totals).join('; ') || 'none'}`,
         ].map((row, i) => (i === 0 ? row : `  ${row}`));
       };
       const f = p.finished;
