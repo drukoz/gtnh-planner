@@ -25,7 +25,7 @@ import { createLayoutService } from '../../../src/server/layout/service.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { CIRCUIT_STAND_IN_IDS } from '../../../src/server/pack/stand-ins.ts';
-import { buildBom, expandBomLines, partName, type Bom, type BomMake } from '../../../src/server/planner/bom.ts';
+import { buildBom, expandBomLines, fromSeedBank, partName, seedBankParts, type Bom, type BomMake } from '../../../src/server/planner/bom.ts';
 import { itemPrices, minimalHatch, NOTHING_TO_PLACE, structureParts } from '../../../src/server/planner/build-cost.ts';
 import { EXCLUSION_RULES, type LeafOracle } from '../../../src/server/planner/candidates.ts';
 import { makePrices } from '../../../src/server/planner/costs.ts';
@@ -196,11 +196,15 @@ function ceilingReports(pack: Pack, totals: readonly BomLine[]): string[] {
   });
 }
 
-/** Each total that is no leaf of the breakdown and not unmade (a made good counted as a base material), or a circuit stand-in. */
-function leafViolations(pack: Pack, totals: readonly BomLine[], leaf: LeafOracle): string[] {
+/**
+ * Each total that is no leaf of the breakdown and not unmade (a made good counted as a base material), or a circuit
+ * stand-in. What the group takes from its seed bank (`bank`, `seedBankParts`: a crop's seeds, a new tree farm's sapling) is
+ * a leaf of the build, as its step says (the controller's ruling after the merge of main).
+ */
+function leafViolations(pack: Pack, totals: readonly BomLine[], leaf: LeafOracle, bank: ReadonlySet<StuffKey> = new Set()): string[] {
   return totals.flatMap((t) => {
     const d = leaf(t.key);
-    const isLeaf = d.buyable || d.leafClass === 'unavailable' || FREE.has(t.key);
+    const isLeaf = d.buyable || d.leafClass === 'unavailable' || FREE.has(t.key) || bank.has(t.key);
     return [
       ...(isLeaf || t.unmade !== undefined ? [] : [`${partName(pack, t.key)} is made, yet a total`]),
       ...(itemIn(t.key, CIRCUIT_STAND_IN_IDS) ? [`${partName(pack, t.key)} is a circuit stand-in`] : []),
@@ -459,9 +463,14 @@ interface LiveProject {
   index: number;
   stops: ReadonlySet<StuffKey>;
   leaf: LeafOracle;
+  /** What the group takes from its seed bank for the line's farms (`seedBankParts` on the line's farm pack). */
+  bank: ReadonlySet<StuffKey>;
   plan: Plan;
   seconds: number;
-  /** The plan's top-level lines broken down again with its steps (`expandBomLines`, as `buildBom` does), for its make plan. */
+  /**
+   * The plan's top-level lines broken down again with its steps (`expandBomLines`, then `fromSeedBank`, as `buildBom`
+   * does), for its make plan.
+   */
   own: { lines: BomLine[]; totals: BomLine[]; makes: BomMake[] };
   /** The plan as the plan route finishes it (no scan), the whole build it broke down, and its make plan; or why finishing failed. */
   finished: { plan: Plan; lines: BomLine[]; makes: BomMake[] } | { error: string } | null;
@@ -486,6 +495,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
       const seconds = (performance.now() - started) / 1000;
       const tops = plan.buildList.map(({ key, amount, why, group }): BomLine => ({ key, amount, why, ...(group === undefined ? {} : { group }) }));
       const own = await expandBomLines(pack, tops, settings, emptyContext(), { steps: plan.steps });
+      const bank = new Set(seedBankParts((await linePricing(pack, settings, emptyContext()))?.pack ?? pack, plan.steps).keys());
       let finished: LiveProject['finished'] = null;
       if (plan.status === 'ok') {
         // One service per project, as the plan route finishes a plan: the whole build it breaks down is the one kept here.
@@ -502,6 +512,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
             seen.whole = { lines, makes: whole.makes ?? [] };
             return whole;
           },
+          // the line's farm pack, as the app's layout service words a finished plan's steps (its farms' plantings and seeds)
+          linePack: async (p, of) => (await linePricing(p, of.settings, emptyContext()))?.pack ?? p,
         });
         try {
           const done = await service.finishPlan(plan, project);
@@ -511,8 +523,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
         }
       }
       projects.push({
-        index: index + 1, stops: new Set(settings.stopItems), leaf: (await lineLeaf(pack, settings, emptyContext())).leaf, plan, seconds,
-        own: { lines: tops, totals: own.totals, makes: own.makes ?? [] }, finished,
+        index: index + 1, stops: new Set(settings.stopItems), leaf: (await lineLeaf(pack, settings, emptyContext())).leaf, bank, plan, seconds,
+        own: { lines: tops, totals: fromSeedBank(own.totals, bank), makes: own.makes ?? [] }, finished,
       });
     }
   }, 600_000);
@@ -534,7 +546,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1' || !existsSync(DB_COPY))("the bui
       ...ceilingViolations(pack, totals, LIVE_FLUID_MAX, LIVE_FLUID_MAX, ITEM_LIVE_MAX),
       ...totals.filter((t) => filled.has(t.key) && !p.stops.has(t.key)).map((t) => `${qty(pack, t.key, t.amount)} is a filled container`),
       ...tree.filter((l) => itemIn(l.key, CIRCUIT_STAND_IN_IDS)).map((l) => `${partName(pack, l.key)} is a circuit stand-in in the build list`),
-      ...leafViolations(pack, totals, p.leaf),
+      ...leafViolations(pack, totals, p.leaf, p.bank),
       ...poolingViolations(pack, totals, makes, pooledDemand(lines, makes)),
     ].map((v) => `project ${p.index} (${label}): ${v}`);
   };

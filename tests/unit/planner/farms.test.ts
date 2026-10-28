@@ -11,7 +11,7 @@ import type { StuffKey } from '../../../src/shared/keys.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { defaultFarmSettings, type FarmSettings } from '../../../src/shared/types/farm.ts';
 import type { Pack, Recipe } from '../../../src/shared/types/pack.ts';
-import type { Plan, PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
+import type { BomLine, Plan, PlanContext, PlanSettings } from '../../../src/shared/types/plan.ts';
 import { recipeId } from '../../../src/server/pack/recipe-id.ts';
 import { machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
@@ -32,6 +32,7 @@ import { farmSetup, type FarmSetup } from '../../../src/server/planner/farms/set
 import { opt, solvedWithBuild, twoFreeSpec } from '../../helpers/build-fixtures.ts';
 import { FIELD_FLAX, RESIN_CANE, RUBBER_BONSAI, ORE_FERN, farmPack, farmSpec } from '../../helpers/farm-fixtures.ts';
 import { packFromSpec, type PackSpec } from '../../helpers/pack-spec.ts';
+import { buildRows } from '../../../src/client/views/materials-model.ts';
 
 const SAW = 'gregtech:gt.metatool.01@10';
 const KNIFE = 'gregtech:gt.metatool.01@34';
@@ -45,6 +46,11 @@ const LINEN = 't:linen@0';
 const FARMLAND = 'minecraft:farmland@0';
 const ENCHANTED_EARTH = 't:enchanted_earth@0';
 const GARDEN_SOIL = 't:garden_soil@0';
+/** Every node of a build tree, depth first. */
+function nodesOf(lines: readonly BomLine[] | undefined): BomLine[] {
+  return (lines ?? []).flatMap((l) => [l, ...nodesOf(l.children)]);
+}
+
 /** The integrity warnings of a plan's flows (`indexPlan`): none in a plan that adds up. */
 const INTEGRITY = ['orphan-input', 'short-input', 'multi-producer', 'bought-and-made'];
 
@@ -508,6 +514,12 @@ describe('farms in the line', () => {
       ['craft', 'Take 2× Resin Cane Seeds from your seed bank for the Resin Cane farm'],
     ]);
     expect(plan.buildSteps.some((b) => b.text.includes('stays in the machine'))).toBe(false);
+    // the controller's ruling after the merge of main (add-on 14 × 17): the seeds come from the seed bank, so neither their
+    // build-list line nor their total is a part to import, and their Materials row carries no "import it" marker
+    const seedLines = [...nodesOf(plan.buildList), ...(plan.buildTotals ?? [])].filter((l) => l.key === 't:cane_seed@0');
+    expect(seedLines.length).toBeGreaterThan(0);
+    expect(seedLines.map((l) => l.unmade)).toEqual(seedLines.map(() => undefined));
+    expect(buildRows(plan.buildList, plan.names ?? {}, new Set()).find((r) => r.key === 't:cane_seed@0')?.unmade).toBeUndefined();
     expect(plan.buildList.find((l) => l.key === 'machine:28001@0')).toMatchObject({ amount: 1, group: 'machines' });
     expect(plan.names?.[`map:${CROP_MANAGER_MAP}`]).toBe('Crop Manager');
     expect(plan.warnings.filter((w) => INTEGRITY.includes(w.code))).toEqual([]);
@@ -530,10 +542,15 @@ describe('farms in the line', () => {
     expect(plan.status).toBe('ok');
     expect(farmStep(plan, 'tgs')).toMatchObject({ count: 1, owned: 0 });
     expect(plan.buildList.filter((l) => l.group === 'one-off').map((l) => [l.key, l.amount, l.why])).toEqual([['t:rubber_sapling@0', 1, 'Rubber Sapling farm']]);
-    // add-on 14 (architecture §11 entry 41 (2), (5)): only the export's fake tree-farm rows make a sapling, so the build
-    // list cannot make it here and its step says to import it, still in the machine
-    expect(plan.buildSteps.find((b) => b.id === 'craft:t:rubber_sapling@0')?.text)
-      .toBe('Get 1× Rubber Sapling (stays in the machine): nothing at HV can make it, so import it (mark it "we already make this")');
+    // the controller's ruling after the merge of main (add-on 14 × 17): only the export's fake tree-farm rows make a sapling,
+    // and the group takes it from its seed bank as it takes a crop's seeds, so it is no part to import: its step says so in
+    // the seed bank's words, and neither its line nor its total is unmade
+    expect(plan.buildSteps.find((b) => b.id === 'craft:t:rubber_sapling@0')).toMatchObject({
+      kind: 'craft', text: 'Take 1× Rubber Sapling (stays in the machine) from your seed bank for the Rubber Sapling farm',
+    });
+    const saplingLines = [...nodesOf(plan.buildList), ...(plan.buildTotals ?? [])].filter((l) => l.key === 't:rubber_sapling@0');
+    expect(saplingLines.length).toBeGreaterThan(0);
+    expect(saplingLines.map((l) => l.unmade)).toEqual(saplingLines.map(() => undefined));
   });
 
   it("words a new farm with the project's own farm settings, not the defaults", async () => {

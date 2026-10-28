@@ -180,6 +180,46 @@ export function recipeParts(
   };
 }
 
+/** What the group takes from its own seed bank for a farm of the line (add-on 17): a crop's seeds or a new tree farm's sapling. */
+export interface SeedBankPart { part: 'seed' | 'sapling'; farms: string[] }
+
+/**
+ * What the group takes from its own seed bank for `steps`' farms (add-on 17), by key: each crop farm's seeds
+ * (`plantingParts`) and each new Tree Growth Simulator's sapling, which stays in its controller, with the farms they are
+ * for, in step order (`the <crop> farm`, `the <sapling> farm`); none a step keeps in a machine or crafts with. `pack` is
+ * the line's farm pack, whose farm recipes say it (the export pack knows none). Nothing imports them (the controller's
+ * ruling after the merge of main into add-on 14): the build list marks none of them `unmade` (`fromSeedBank`) and the
+ * build steps say to take them from the seed bank (steps.ts `partSteps`).
+ */
+export function seedBankParts(pack: Pack, steps: readonly PlanStep[], avoid?: HeldAvoid): Map<StuffKey, SeedBankPart> {
+  const kept = new Set(steps.flatMap((s) => [...stepOneOffs(pack, s, avoid).map((o) => o.key), ...stepTools(pack, s, avoid)]));
+  const out = new Map<StuffKey, SeedBankPart>();
+  const add = (key: StuffKey, part: SeedBankPart['part'], farm: string): void => {
+    if (kept.has(key)) return;
+    const found = out.get(key);
+    if (found === undefined) out.set(key, { part, farms: [farm] });
+    else if (!found.farms.includes(farm)) found.farms.push(farm);
+  };
+  for (const step of steps) {
+    const farm = step.farm === undefined ? undefined : pack.recipeById.get(step.recipeId)?.meta.farm;
+    if (farm?.kind === 'crop' && farm.crop !== undefined && (step.farm?.sticks ?? 0) > 0) {
+      for (const p of plantingParts(farm)) if (p.part === 'seed') add(p.key, 'seed', `the ${farm.crop.name} farm`);
+    } else if (farm?.kind === 'tgs' && farm.sapling !== undefined && step.count - step.owned > 0) {
+      add(farm.sapling, 'sapling', `the ${pack.nameOf(farm.sapling)} farm`);
+    }
+  }
+  return out;
+}
+
+/** `lines` (a build tree or its totals) with no node of a key in `keys` marked `unmade`: what the seed bank holds is no import. */
+export function fromSeedBank(lines: readonly BomLine[], keys: ReadonlySet<StuffKey>): BomLine[] {
+  return lines.map((line) => {
+    const { unmade: _unmade, ...kept } = line;
+    const own: BomLine = keys.has(line.key) ? kept : line;
+    return line.children === undefined ? own : { ...own, children: fromSeedBank(line.children, keys) };
+  });
+}
+
 /**
  * The build list of a line's steps: per step its new machines (`count − owned`; pseudo machines skipped) and, for a
  * multiblock, the blocks of their structures (`structureParts`: each structure hatch at the lowest tier of its class);
@@ -281,7 +321,12 @@ export async function buildBom(
     .map((d) => ({ key: d.key, amount: round9(d.amount), why: d.whys.join('; '), group: d.group }))
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || byString(a.key, b.key));
   const expanded = await expandWith(base, lines, { ...opts, steps });
-  return { lines: expanded.lines, totals: expanded.totals, warnings: [...warnings, ...expanded.warnings], alternatives: expanded.alternatives, makes: expanded.makes };
+  // what the group takes from its seed bank is no import (`seedBankParts`, on the line's farm pack)
+  const bank = new Set(seedBankParts(pack, steps, opts.avoid).keys());
+  return {
+    lines: fromSeedBank(expanded.lines, bank), totals: fromSeedBank(expanded.totals, bank), warnings: [...warnings, ...expanded.warnings],
+    alternatives: expanded.alternatives, makes: expanded.makes,
+  };
 }
 
 /**

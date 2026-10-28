@@ -11,6 +11,8 @@ import type { Project } from '../../../src/shared/types/project.ts';
 import { farmPack } from '../../helpers/farm-fixtures.ts';
 import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS } from '../../helpers/layout-fixtures.ts';
 
+/** Every node of a build tree, depth first. */
+const nodes = (lines: readonly BomLine[] | undefined): BomLine[] => (lines ?? []).flatMap((l) => [l, ...nodes(l.children)]);
 const twoStep = () => makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 's2', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 }]);
 const vox = flatVoxels({ origin: [-40, 50, -40], size: [100, 30, 100], groundY: 63 });
 const deps = (over: Partial<LayoutServiceDeps> = {}): LayoutServiceDeps => ({
@@ -189,6 +191,11 @@ describe('layout service', () => {
       'Craft 2× Crop Sticks (to plant in the Resin Cane farm) from 1× Oak Planks at a crafting table',
       'Get 2× Dirt as soil for the Resin Cane farm', 'Take 2× Resin Cane Seeds from your seed bank for the Resin Cane farm',
     ]);
+    // and the seeds, which the group takes from its seed bank, are no part to import in the finished build list either (the
+    // controller's ruling after the merge of main): no line or total of theirs is unmade
+    const seeds = [...nodes(done.buildList), ...(done.buildTotals ?? [])].filter((l) => l.key === 't:cane_seed@0');
+    expect(seeds.length).toBeGreaterThan(0);
+    expect(seeds.map((l) => l.unmade)).toEqual(seeds.map(() => undefined));
     // without the dep, the export pack's words
     expect(text(await finish({}), 'craft:minecraft:dirt@0')).toBe('Make 2× Dirt (stays in the machine)');
   });
