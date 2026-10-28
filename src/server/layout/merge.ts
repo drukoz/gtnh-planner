@@ -7,7 +7,7 @@
 
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Layout } from '../../shared/types/layout.ts';
-import type { BomLine, BuildStep, Plan, PlanWarning } from '../../shared/types/plan.ts';
+import type { BomLine, BuildStep, Plan, PlanStep, PlanWarning } from '../../shared/types/plan.ts';
 
 // ---- Small helpers ----
 
@@ -25,12 +25,14 @@ export function isOptional(line: BomLine): boolean {
 
 /**
  * A line being merged: the distinct non-empty whys in the order first seen, the first `have`, children and group set,
- * and what each build line needs of it (`BomLine.neededFor`, architecture §11.36) summed per key in the order first
- * seen — null once a merged line has no `neededFor`, as the amounts would no longer add up to `amount`.
+ * what each build line needs of it (`BomLine.neededFor`, architecture §11.36) summed per key in the order first
+ * seen — null once a merged line has no `neededFor`, as the amounts would no longer add up to `amount` — and how it is
+ * made, or why it cannot be (`made` or `unmade`, architecture §11 entry 41 (1)–(2)), from the first line that says.
  */
 interface Draft {
   key: StuffKey; amount: number; whys: string[]; have?: BomLine['have']; children?: BomLine[]; group?: BomLine['group'];
   neededFor: Map<StuffKey, number> | null;
+  made?: BomLine['made']; unmade?: BomLine['unmade']; seedBank?: true;
 }
 
 function draftOf(line: BomLine): Draft {
@@ -51,6 +53,15 @@ function addTo(draft: Draft, line: BomLine): void {
   if (draft.group === undefined && line.group !== undefined) draft.group = line.group;
   if (line.neededFor === undefined) draft.neededFor = null;
   else if (draft.neededFor !== null) for (const n of line.neededFor) draft.neededFor.set(n.key, (draft.neededFor.get(n.key) ?? 0) + n.amount);
+  if (draft.made === undefined && draft.unmade === undefined) {
+    if (line.made !== undefined) draft.made = line.made;
+    else if (line.unmade !== undefined) draft.unmade = line.unmade;
+  }
+  // a part from the seed bank is no import (architecture §11 entry 41 (10)): that mark wins over an unmade line of its key
+  if (line.seedBank === true) {
+    draft.seedBank = true;
+    delete draft.unmade;
+  }
 }
 
 function lineOf(d: Draft): BomLine {
@@ -60,6 +71,9 @@ function lineOf(d: Draft): BomLine {
     ...(d.children === undefined ? {} : { children: d.children.map((c) => ({ ...c })) }),
     ...(d.group === undefined ? {} : { group: d.group }),
     ...(d.neededFor === null ? {} : { neededFor: [...d.neededFor].map(([key, amount]) => ({ key, amount })) }),
+    ...(d.made === undefined ? {} : { made: d.made }),
+    ...(d.unmade === undefined || d.seedBank === true ? {} : { unmade: d.unmade }),
+    ...(d.seedBank === true ? { seedBank: true as const } : {}),
   };
 }
 
@@ -69,7 +83,9 @@ function lineOf(d: Draft): BomLine {
  * One line per key over `a` then `b`: amounts summed, the distinct non-empty whys joined with "; " in the order first
  * seen, and the first `have`, `children` and group set (architecture §11.13); sorted by key. A total of base materials
  * keeps `neededFor` (architecture §11.36): the build lines that need it, by key in the order first seen, each one's
- * amounts summed, so they still add up to the merged amount; it is left out when one of the merged lines has none.
+ * amounts summed, so they still add up to the merged amount; it is left out when one of the merged lines has none. A
+ * line keeps how it is made (`made`) or why it cannot be (`unmade`, architecture §11 entry 41 (1)–(2)), as the first
+ * line that says has it; one a line marks from the seed bank (`seedBank`, entry 41 (10)) keeps that mark and no `unmade`.
  */
 export function mergeBom(a: readonly BomLine[], b: readonly BomLine[]): BomLine[] {
   const drafts = new Map<StuffKey, Draft>();
@@ -129,12 +145,12 @@ function addOptional(lines: readonly BomLine[], optional: readonly BomLine[]): B
 
 // ---- Build steps ----
 
-const BEFORE_LAYOUT: ReadonlySet<BuildStep['kind']> = new Set<BuildStep['kind']>(['gather', 'craft']);
+const BEFORE_LAYOUT: ReadonlySet<BuildStep['kind']> = new Set<BuildStep['kind']>(['gather', 'craft', 'make']);
 const AFTER_LAYOUT: ReadonlySet<BuildStep['kind']> = new Set<BuildStep['kind']>(['configure', 'handcraft', 'test']);
 
 /**
- * With layout steps: the plan's gather and craft steps, the layout steps, then the plan's configure, handcraft and
- * test steps — Plan 2's generic place, power and logistics steps are left out, since the layout's say where — with
+ * With layout steps: the plan's gather, craft and make steps, the layout steps, then the plan's configure, handcraft
+ * and test steps — Plan 2's generic place, power and logistics steps are left out, since the layout's say where — with
  * `order` renumbered from 1. Without layout steps the plan's steps as they are.
  */
 export function mergeBuildSteps(planSteps: readonly BuildStep[], layoutSteps: readonly BuildStep[]): BuildStep[] {
@@ -153,9 +169,9 @@ function warningKey(w: PlanWarning): string {
   return `${w.code}\n${w.text}`;
 }
 
-/** Every key of `lines` and of their children. */
+/** Every key of `lines` and of their children, at any depth. */
 function keysOf(lines: readonly BomLine[]): StuffKey[] {
-  return lines.flatMap((l) => [l.key, ...(l.children ?? []).map((c) => c.key)]);
+  return lines.flatMap((l) => [l.key, ...keysOf(l.children ?? [])]);
 }
 
 /**
@@ -165,15 +181,31 @@ function keysOf(lines: readonly BomLine[]): StuffKey[] {
  * expanded parts in `buildTotals`, the layout's build steps, its warnings not already there (code + text) and a name
  * (`nameOf`) for every key it adds; and with `layoutCost` (plan 12, architecture §11 entry 39: the raw material of the
  * layout's parts other than its hatches) a plan that has a `cost` gets it as `cost.layout`. A plan whose status is not
- * `ok` is returned unchanged.
+ * `ok` is returned unchanged. With `expanded.parts` (architecture §11 entry 41 (9); `finishPlan` always passes them)
+ * `expanded` is the whole build — the plan's top-level lines less the replaced casings, then the layout's required parts,
+ * broken down and pooled once — so the build list is its lines plus the optional lines, `buildTotals` its totals,
+ * `buildAlternatives` its swap lists, and its part steps (`partSteps`: gather, then one step per part) take the place of
+ * the plan's gather, craft and make steps; every key it adds is named, at any depth, and so are the swap lists' goods and
+ * maps. Without them it merges as before.
  */
-export function mergeLayoutIntoPlan(plan: Plan, layout: Layout, expanded: { lines: BomLine[]; totals: BomLine[] } | null,
+export function mergeLayoutIntoPlan(plan: Plan, layout: Layout, expanded: {
+  lines: BomLine[]; totals: BomLine[];
+  // optional addition
+  alternatives?: Record<StuffKey, PlanStep['alternatives']>;
+  // optional addition
+  parts?: BuildStep[];
+} | null,
   nameOf: (k: StuffKey) => string, layoutCost?: number): Plan {
   if ((plan.status ?? 'ok') !== 'ok') return plan;
   const required = layout.bom.filter((l) => !isOptional(l));
   const optional = layout.bom.filter(isOptional);
-  const buildList = addOptional(mergeBom(subtractReplaced(plan.buildList, layout.replaced ?? []), expanded?.lines ?? required), optional);
-  const buildTotals = mergeBom(plan.buildTotals ?? [], expanded?.totals ?? []);
+  // With part steps the expansion is the whole build, the plan's own lines in it (architecture §11 entry 41 (9)).
+  const whole = expanded !== null && expanded.parts !== undefined ? expanded : null;
+  const buildList = whole !== null
+    ? addOptional(mergeBom(whole.lines, []), optional)
+    : addOptional(mergeBom(subtractReplaced(plan.buildList, layout.replaced ?? []), expanded?.lines ?? required), optional);
+  const buildTotals = whole !== null ? whole.totals : mergeBom(plan.buildTotals ?? [], expanded?.totals ?? []);
+  const alternatives = whole?.alternatives;
   const seen = new Set(plan.warnings.map(warningKey));
   const warnings = [...plan.warnings];
   for (const w of layout.warnings) {
@@ -182,9 +214,22 @@ export function mergeLayoutIntoPlan(plan: Plan, layout: Layout, expanded: { line
     warnings.push(w);
   }
   const names: Record<string, string> = { ...plan.names };
-  for (const key of [...keysOf(buildList), ...keysOf(buildTotals)]) if (!Object.hasOwn(names, key)) names[key] = nameOf(key);
+  const keys = [...keysOf(buildList), ...keysOf(buildTotals)];
+  for (const list of Object.values(alternatives ?? {})) {
+    for (const a of list) {
+      keys.push(`map:${a.mapId}`);
+      for (const p of a.inputs ?? []) for (const o of p.options ?? [p]) keys.push(o.key);
+      for (const p of a.outputs ?? []) keys.push(p.key);
+    }
+  }
+  for (const key of keys) if (!Object.hasOwn(names, key)) names[key] = nameOf(key);
+  const planSteps = whole !== null
+    ? [...(whole.parts as BuildStep[]), ...plan.buildSteps.filter((s) => s.kind !== 'gather' && s.kind !== 'craft' && s.kind !== 'make')]
+      .map((s, i): BuildStep => ({ ...s, order: i + 1 }))
+    : plan.buildSteps;
   return {
-    ...plan, power: layout.power ?? plan.power, buildList, buildTotals, buildSteps: mergeBuildSteps(plan.buildSteps, layout.buildSteps), warnings, names,
+    ...plan, power: layout.power ?? plan.power, buildList, buildTotals, buildSteps: mergeBuildSteps(planSteps, layout.buildSteps), warnings, names,
+    ...(alternatives === undefined || Object.keys(alternatives).length === 0 ? {} : { buildAlternatives: alternatives }),
     ...(plan.cost === undefined || layoutCost === undefined ? {} : { cost: { ...plan.cost, layout: layoutCost } }),
   };
 }

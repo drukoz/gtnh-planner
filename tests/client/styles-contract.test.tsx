@@ -1083,11 +1083,19 @@ const SLOT_VEIL = '.item-icon::after';
 const LIT_SLOT = '.item-icon:hover::after, .search-hit.active .item-icon::after';
 const FLOW_SLOT = 'svg .item-icon';
 const ACTIVE_HIT = ".search-hit.active, .search-hit[aria-selected='true']";
-/** The pixel caret of the build toggle and of the two inline disclosures, which share one rule, and the same three turned down. */
-const CARETS = 'button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before';
-const CARETS_DOWN = "button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before";
-const INLINE_SUMMARY = '.mat-have summary, .mat-needed summary';
-const INLINE_CARET = '.mat-have summary::before, .mat-needed summary::before';
+/**
+ * The pixel caret of the build toggle and of the inline disclosures, which share one rule, and the same turned down. Add-on 14's recipe
+ * swap of a made build part joins the stock and the why (the controller's ruling after the merge of main: the same caret).
+ */
+const CARETS = 'button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before, .mat-swap summary::before';
+const CARETS_DOWN = "button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before, "
+  + '.mat-swap[open] summary::before';
+const INLINE_SUMMARY = '.mat-have summary, .mat-needed summary, .mat-swap summary';
+const INLINE_CARET = '.mat-have summary::before, .mat-needed summary::before, .mat-swap summary::before';
+/** Add-on 14's recipe swap of a made build part, the third inline disclosure of a Materials row: its summary and caret. */
+const SWAP_SUMMARY = '.mat-swap summary';
+const SWAP_CARET = '.mat-swap summary::before';
+const SWAP_CARET_DOWN = '.mat-swap[open] summary::before';
 /** Phase 2 Task 6b (spec §3.3, ruling R16): the two inline disclosures, which fold as a settings section does. */
 const MAT_DISCLOSURES = 'details.mat-have, details.mat-needed';
 /** The rules of that fold: one for the pair, then a rule of its own for each content box and for each open one (R28: no pseudo-element in a list). */
@@ -1243,6 +1251,17 @@ describe('the Machine GUI Materials & steps tab', () => {
     for (const property of ['background', 'border', 'box-shadow', 'min-height', 'display']) {
       expect(declared(INLINE_SUMMARY, property), `${INLINE_SUMMARY} { ${property} }`).toBeUndefined();
     }
+  });
+
+  it('gives the recipe swap of a build row the caret of the inline disclosures, in their own rules', () => {
+    // add-on 14 (the controller's ruling after the merge of main): the swap's summary joins the stock's and the why's rules, so it is the
+    // same inline text that opens, with the same pixel caret before it, turned down while it is open, and the same forced-colours paint
+    for (const [rule, swap] of [[CARETS, SWAP_CARET], [CARETS_DOWN, SWAP_CARET_DOWN], [INLINE_SUMMARY, SWAP_SUMMARY], [INLINE_CARET, SWAP_CARET]]) {
+      expect(position(rule), rule).toBeGreaterThan(-1);
+      expect(rule.split(', '), rule).toContain(swap);
+    }
+    // and no rule of its own that could drift from theirs
+    for (const swap of [SWAP_SUMMARY, SWAP_CARET, SWAP_CARET_DOWN]) expect(position(swap), swap).toBe(-1);
   });
 
   it('opens and closes the Materials disclosures with an animated height', () => {

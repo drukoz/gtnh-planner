@@ -31,10 +31,10 @@ import { allMachineIds, allMachines, machineByMteId, machineOf } from '../pack/l
 import { hatchRulesOf, KIND_CLASS, ruleNeeds, rulePower, ruleTakes, type HatchRule, type HatchSource } from '../layout/hatch-rules.ts';
 import { basisContextKey, effectiveTier, planBasis, settingsHash } from './basis.ts';
 import { buildCandidates, type CandidateGraph, type LeafDecision, type LeafOracle } from './candidates.ts';
-import { isOreBlock, makeLeafOracle } from './costs.ts';
+import { isOreBlock, makeLeafOracle, stopFloor } from './costs.ts';
 import { yieldToEventLoop } from './lp.ts';
 import { sig9 } from './round.ts';
-import { deadEnds, deadEndsAlone, makeableGoods, makeableWith, standalonePrices } from './solve.ts';
+import { deadEnds, deadEndsAlone, makeableGoods, makeableWith, standaloneCosts, standalonePrices } from './solve.ts';
 
 /**
  * The most entries each of the two per-pack pricing memos keeps, the least recently used dropped first: the price
@@ -134,6 +134,26 @@ function gapOf(pack: Pack, graph: CandidateGraph, key: StuffKey, mined: (key: St
 }
 
 /**
+ * What each "we already make this" item of `s` without a key override costs to build with (architecture §11 entry 41 (6)),
+ * as a line prices it: what making it on its own costs (`standaloneCosts` over the graph walked from those items alone,
+ * with no stop items; byproducts thrown away; machine prices have no target to keep out), never below `stopFloor`; its
+ * plain price when nothing here makes it. Worked out once per pack and pricing context, whatever keys are asked: the
+ * leaf oracle of its price graph (`priceGraph`, memoized per context) reads it.
+ */
+async function stopItemCosts(pack: Pack, s: PlanSettings, basis: ReturnType<typeof planBasis>): Promise<(key: StuffKey) => number> {
+  const stops = s.stopItems.filter((key) => !Object.hasOwn(s.costOverrides, key));
+  if (stops.length === 0) return (key) => basis.prices.price(key);
+  const open: PlanSettings = { ...s, stopItems: [] };
+  const graph = buildCandidates(pack, open, basis.env, makeLeafOracle(pack, open, basis.avail, basis.prices), stops);
+  const made = await standaloneCosts(graph, stops, [], pack.fluidContainers ?? []);
+  const floor = stopFloor(pack, basis.prices);
+  return (key) => {
+    const cost = made.get(key)?.cost;
+    return cost !== undefined && Number.isFinite(cost) ? Math.max(cost, floor(key)) : basis.prices.price(key);
+  };
+}
+
+/**
  * Every key a build or a layout prices at `tier` (fix wave 3 (D)): `buildKeys` of every machine at or below it (one
  * without a tier counts) other than cables and pipes, every cable rated up to one tier above it, every item and fluid
  * pipe, every hatch and transformer up to it, the conveyor and pump covers up to it (LV at least) and every layout part
@@ -223,7 +243,7 @@ function priceGraph(pack: Pack, settings: PlanSettings, ctx: PlanContext): Promi
     await yieldToEventLoop();
     const s = pricingSettings(settings, ctx);
     const basis = planBasis(pack, s, ctx);
-    const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices);
+    const leaf = makeLeafOracle(pack, s, basis.avail, basis.prices, await stopItemCosts(pack, s, basis));
     let graph = buildCandidates(pack, s, basis.env, leaf, priceKeys(pack, basis.tier).filter((key) => !leaf(key).buyable));
     if (Object.keys(s.costOverrides).length > 0) graph = unitedGraph(graph, (await priceGraph(pack, { ...settings, costOverrides: {} }, ctx)).graph, leaf);
     return { s, basis, leaf, graph, priced: new Map() };
@@ -259,19 +279,19 @@ async function orePrice(pack: Pack, entry: PriceGraph, graph: CandidateGraph, ke
 
 /**
  * The prices of `keys` in the pricing context of `settings` in `ctx` (fix wave 3 (D)): a buyable key costs its leaf's
- * cost (the leaf oracle of the context's basis with no `supplied` option, so water, air, cobblestone and lava stay leaves
- * at 0 as in every build-material breakdown (plan 09 Task 3), and without gathered recipes, so sand and gravel are dug at
- * their price — the analysis counts no machines: free cobblestone and hammers would price them at 0); stop items are
- * leaves at their override or price. Any other key costs the least raw material that makes one unit of it on its own
- * (`standalonePrices`: its byproducts sunk) on the context's price graph (`priceGraph`), or on its own walk when the
- * price graph never reached it — with cost overrides united with its own walk in the same context without them, as the
- * price graph is, so there too an override that makes a good cheaper never drops the producers the walk without it
- * keeps — or, for a part only ore processing makes, what `orePrice` gives. Each price is worked out once per context
- * and key, so it never depends on the other keys asked: the cost analysis of one candidate graph per key set that this
- * replaced (`analyzeCosts`, which shares a recipe's cost among its outputs by what else the graph holds) priced the
- * Advanced Distillery at HV at 33.39 alone, 34.59 beside the Large Chemical Reactor and 42.40 beside it and the
- * Distillation Tower (all 42.59 now), and 16x Redstone Alloy Cable at MV at 12.38 alone and 6.48 beside every cable
- * (13.05 now).
+ * cost (the leaf oracle of the context's basis with no `supplied` option, so water, air, cobblestone and lava stay
+ * leaves at 0 as in every build-material breakdown (plan 09 Task 3), and without gathered recipes, so sand and gravel
+ * are dug at their price — the analysis counts no machines: free cobblestone and hammers would price them at 0); stop
+ * items are leaves at their override, else what making them on their own costs (`stopItemCosts`, change request 6). Any
+ * other key costs the least raw material that makes one unit of it on its own (`standalonePrices`: its byproducts sunk)
+ * on the context's price graph (`priceGraph`), or on its own walk when the price graph never reached it — with cost
+ * overrides united with its own walk in the same context without them, as the price graph is, so there too an override
+ * that makes a good cheaper never drops the producers the walk without it keeps — or, for a part only ore processing
+ * makes, what `orePrice` gives. Each price is worked out once per context and key, so it never depends on the other
+ * keys asked: the cost analysis of one candidate graph per key set that this replaced (`analyzeCosts`, which shares a
+ * recipe's cost among its outputs by what else the graph holds) priced the Advanced Distillery at HV at 33.39 alone,
+ * 34.59 beside the Large Chemical Reactor and 42.40 beside it and the Distillation Tower (all 42.59 now), and 16x
+ * Redstone Alloy Cable at MV at 12.38 alone and 6.48 beside every cable (13.05 now).
  */
 async function computePrices(pack: Pack, settings: PlanSettings, ctx: PlanContext, keys: readonly StuffKey[]): Promise<ItemPrices> {
   const entry = await priceGraph(pack, settings, ctx);

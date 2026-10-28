@@ -1319,15 +1319,16 @@ button.mat-toggle { display: inline-grid; place-content: center; }
 button.mat-toggle:hover { background: var(--press); }
 /* Like a link, it has no dark edge for the yellow ring to touch, so its ring takes the focus ink of the surface it is on. */
 button.mat-toggle:focus-visible { outline-color: var(--ink-focus); }
-/* The caret of the toggle and of the two inline disclosures below: the pixel caret of a settings summary, in the colour of the text it
+/* The caret of the toggle and of the inline disclosures below (the stock, the why and, add-on 14, the recipe swap): the pixel caret of a settings summary, in the colour of the text it
    belongs to, turned a quarter to point down while what it opens is open. Only a button has one: the span of a leaf row has no state. */
-button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before {
+button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before, .mat-swap summary::before {
   content: ''; width: 9px; height: 9px; background: currentColor;
   clip-path: polygon(2px 0px, 3px 0px, 3px 1px, 4px 1px, 4px 2px, 5px 2px, 5px 3px, 6px 3px, 6px 4px, 7px 4px, 7px 5px,
     6px 5px, 6px 6px, 5px 6px, 5px 7px, 4px 7px, 4px 8px, 3px 8px, 3px 9px, 2px 9px);
   transition: transform var(--dur-fast) var(--ease-out);
 }
-button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before {
+button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before, .mat-needed[open] summary::before,
+.mat-swap[open] summary::before {
   transform: rotate(90deg);
 }
 .mat-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -1335,11 +1336,11 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
    24px slot of the icon and the row's 8px gap. */
 .mat-taken { padding-left: 32px; color: var(--ink-muted); }
 .mat-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-/* The stock and the why of a row stay inline text that opens: the caret above sits before the line, in place of the browser's own
+/* The stock, the why and the recipe swap of a row stay inline text that opens: the caret above sits before the line, in place of the browser's own
    marker, which is dropped. Not the full-width button of a settings section. */
-.mat-have summary, .mat-needed summary { cursor: pointer; list-style: none; }
-.mat-have summary::-webkit-details-marker, .mat-needed summary::-webkit-details-marker { display: none; }
-.mat-have summary::before, .mat-needed summary::before { display: inline-block; margin-right: 6px; vertical-align: -1px; }
+.mat-have summary, .mat-needed summary, .mat-swap summary { cursor: pointer; list-style: none; }
+.mat-have summary::-webkit-details-marker, .mat-needed summary::-webkit-details-marker, .mat-swap summary::-webkit-details-marker { display: none; }
+.mat-have summary::before, .mat-needed summary::before, .mat-swap summary::before { display: inline-block; margin-right: 6px; vertical-align: -1px; }
 .mat-where { margin: 2px 0 0; padding-left: 18px; }
 .mat-sources, .mat-unlock, .mat-actions { flex-basis: 100%; }
 .mat-sources { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
@@ -1350,6 +1351,11 @@ button.mat-toggle[aria-expanded='true']::before, .mat-have[open] summary::before
 .mat-missing .tick-label { color: var(--ink-error); font-weight: 600; }
 /* A missing marker is the dark chip of the shared `.badge` rule in red: colour only, and it comes after that rule (both are one class). */
 .missing-badge { color: #ff5555; }
+/* A made build part: how it is made and its recipe swap (an inline disclosure with the caret above), each on a line of its own. A part
+   to import is a warning: the dark chip of the shared `.badge` rule in amber, colour only, after that rule as the missing marker. */
+.mat-made { flex-basis: 100%; overflow-wrap: anywhere; }
+.mat-swap { flex-basis: 100%; }
+.unmade-badge { color: #ffaa00; }
 .step-list { margin: 0; padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
 .step-list li::marker { font-family: var(--font-digits); font-size: 16px; line-height: 20.3px; font-size-adjust: cap-height 0.56; }
 .step-row { padding: 3px 0; }
@@ -1943,7 +1949,7 @@ details.mat-needed[open]::details-content { block-size: auto; }
   :where(input[type=checkbox], input[type=radio]) { border: 1px solid ButtonText; }
   :where(input[type=checkbox], input[type=radio])::before { background: Highlight; }
   details.settings-section > summary::before, details.disclosure > summary::before { background: ButtonText; }
-  button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before { background: CanvasText; }
+  button.mat-toggle::before, .mat-have summary::before, .mat-needed summary::before, .mat-swap summary::before { background: CanvasText; }
   :where(input[type=range])::-webkit-slider-runnable-track { border: 1px solid ButtonText; }
   :where(input[type=range])::-moz-range-track { border: 1px solid ButtonText; }
   :where(progress)::-webkit-progress-value { background: Highlight; }

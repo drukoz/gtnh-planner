@@ -8,15 +8,18 @@
 // read 0: tiny rates read "1 every N days" (fix spec §6.1). The build list can also be drawn as an inventory grid (Phase 2
 // spec §9): its top-level lines as slots in their groups, each item split into stacks of 64, with what a group still needs,
 // the stacks gathered, and what each slot's tip says.
+// A made build part says how it is made and carries its swap list; a part nothing here can make says why (§11 entry 41).
 
 import { tierName } from '../../shared/gt/tiers.ts';
 import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
 import type { BomLine, LeafClass, Plan, PlanStep, RawInput, SourceInfo, StorageWhere } from '../../shared/types/plan.ts';
 import type { Mark } from '../../shared/types/project.ts';
-import { formatNumber, formatPercent, formatRate } from '../format.ts';
+import { formatNumber, formatPercent, formatRate, withArticle } from '../format.ts';
 
 type BuildGroup = NonNullable<BomLine['group']>;
+/** A row of a swap list (`SwapRecipe`'s `Alternative`), on the shared type: this model imports no `.tsx`, so server tests can check it. */
+type Alternative = PlanStep['alternatives'][number];
 type Have = { total: number; reachable: number; where?: StorageWhere[] };
 
 /** The short word next to each base material: what kind of leaf of the plan it is. */
@@ -50,6 +53,8 @@ const WHOLE_TOLERANCE = 1e-9;
 const SMALLEST_TWO_DECIMALS = 0.01;
 /** The pack's Programmed Circuit (the loader's PROGRAMMED_CIRCUIT_ID): one item per configuration, the meta. */
 const PROGRAMMED_CIRCUIT_ID = 'gregtech:gt.integrated_circuit';
+/** How the ids of a placed line's own build steps start (Plan 5's layout steps: `layout:site`, `layout:place:<step>`, …). */
+const LAYOUT_STEP_PREFIX = 'layout:';
 
 // A fixed locale, so every friend's browser (and the tests) writes `1,440` the same way.
 const WHOLE = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
@@ -121,12 +126,28 @@ export interface BuildRow {
   avoid?: true;
   /** On a total of base materials (`BomLine.neededFor`, fix spec D15): each build line that needs it, and how much. */
   neededFor?: Array<{ key: StuffKey; name: string; amount: string }>;
+  /**
+   * How the build list makes it (`BomLine.made`, architecture §11 entry 41 (1)): in words (`madeText`), its recipe, and
+   * every way to make it (`Plan.buildAlternatives`) for the recipe swap.
+   */
+  made?: { text: string; recipeId: string; alternatives: Alternative[] };
+  /** A part the line cannot buy and the breakdown cannot make here, and why (`BomLine.unmade`, entry 41 (2)): the row says to import it. */
+  unmade?: 'no-recipe' | 'own-chain';
+  /** A part the group takes from its own seed bank (`BomLine.seedBank`, entry 41 (10)): the row says so, never to import it. */
+  seedBank?: true;
 }
 
 const NONE: ReadonlySet<StuffKey> = new Set();
 
 /** What the avoid marker says of a good the line uses although the avoid list covers it: its title in the List, a line of its slot's tip in the grid. */
 export const AVOID_NOTE = 'On the avoid list or made from it, but no recipe at this tier avoids it';
+/** Why a build part must be imported (`BomLine.unmade`, architecture §11 entry 41 (2)): its marker's title and its slot's tip. */
+export const UNMADE_NOTES: Readonly<Record<NonNullable<BomLine['unmade']>, string>> = {
+  'no-recipe': 'Nothing at this tier makes it: import it, or mark it "we already make this"',
+  'own-chain': 'Every recipe for it here needs a part of its own chain: swap the recipe of a part it goes into, or import it',
+};
+/** A part the group takes from its own seed bank (`BomLine.seedBank`, entry 41 (10)): its marker's title and its slot's tip. */
+export const SEED_BANK_NOTE = 'Take it from your seed bank: no part to import';
 
 /** The goods the plan uses although the avoid list covers them, as nothing at its tier avoids them (spec §3.3). */
 export function unavoidableKeys(plan: Plan): Set<StuffKey> {
@@ -144,11 +165,43 @@ function stockOf(have: Have | undefined): { have?: string; where?: string[] } {
 }
 
 /**
+ * How the build list makes a part, in words (architecture §11 entry 41 (1)): "made at a crafting table from LV Machine
+ * Hull, Basic Circuit", else "made in" the group's own machine ("your Basic Wiremill"), the one this line builds ("the
+ * Basic Assembler this line builds") or one still to get ("a Basic Fluid Extractor"); from what goes in (its children,
+ * in their order: none for a node the tree cuts at its depth cap or a recipe that consumes nothing); then the recipe's
+ * programmed circuit and cleanroom, those it needs ("(circuit 8; in a cleanroom)"). Undefined for a part that is not made.
+ */
+export function madeText(line: BomLine, names: Record<string, string>): string | undefined {
+  const { made } = line;
+  if (made === undefined) return undefined;
+  const { machine } = made;
+  let where: string;
+  if (machine === 'crafting table') where = 'at a crafting table';
+  else if (machine.source === 'owned') where = `in your ${machine.name}`;
+  else if (machine.source === 'line') where = `in the ${machine.name} this line builds`;
+  else where = `in ${withArticle(machine.name)}`;
+  const inputs = (line.children ?? []).map((child) => names[child.key] ?? child.key);
+  const notes = [...(made.circuit === undefined ? [] : [`circuit ${made.circuit}`]), ...(made.cleanroom === true ? ['in a cleanroom'] : [])];
+  return `made ${where}${inputs.length > 0 ? ` from ${inputs.join(', ')}` : ''}${notes.length > 0 ? ` (${notes.join('; ')})` : ''}`;
+}
+
+/**
+ * The build counts the placed line's parts (the controller's ruling on open question 3): the plan's build steps hold a
+ * layout step, as they do once Plan 5 merged the layout's parts into the build list and pooled them into its breakdown
+ * (architecture §11 entry 41 (9)), so a part's recipe or amount can differ from the unplaced line's.
+ */
+export function withLinePlaced(plan: Plan): boolean {
+  return plan.buildSteps.some((step) => step.id.startsWith(LAYOUT_STEP_PREFIX));
+}
+
+/**
  * The build tree as rows, depth first: each line, then its children when its `path` (`<parent path>/<key>`, a top-level
- * line's path is its key) is in `expanded`; a row of a good in `unavoidable` is marked `avoid`.
+ * line's path is its key) is in `expanded`; a row of a good in `unavoidable` is marked `avoid`. A made part says how it
+ * is made, with its swap list from `alternatives` (`Plan.buildAlternatives`); a part to import says why.
  */
 export function buildRows(
   lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>, unavoidable: ReadonlySet<StuffKey> = NONE,
+  alternatives?: Record<StuffKey, Alternative[]>,
 ): BuildRow[] {
   const rows: BuildRow[] = [];
   const visit = (line: BomLine, parentPath: string | null, depth: number, group: BuildGroup): void => {
@@ -162,6 +215,10 @@ export function buildRows(
     if (line.neededFor !== undefined && line.neededFor.length > 0) {
       row.neededFor = line.neededFor.map((n) => ({ key: n.key, name: buildName(n.key, names), amount: amountText(n.amount) }));
     }
+    const text = madeText(line, names);
+    if (line.made !== undefined && text !== undefined) row.made = { text, recipeId: line.made.recipeId, alternatives: alternatives?.[line.key] ?? [] };
+    if (line.unmade !== undefined) row.unmade = line.unmade;
+    if (line.seedBank === true) row.seedBank = true;
     rows.push(row);
     if (expanded.has(path)) for (const child of children) visit(child, path, depth + 1, group);
   };
@@ -172,9 +229,10 @@ export function buildRows(
 /** The build list split into its groups (a line without one is a machine), in `BUILD_GROUPS` order; empty groups are left out. */
 export function groupBuildRows(
   lines: BomLine[], names: Record<string, string>, expanded: ReadonlySet<string>, unavoidable: ReadonlySet<StuffKey> = NONE,
+  alternatives?: Record<StuffKey, Alternative[]>,
 ): Array<{ id: BuildGroup; label: string; rows: BuildRow[] }> {
   return BUILD_GROUPS
-    .map(({ id, label }) => ({ id, label, rows: buildRows(lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id), names, expanded, unavoidable) }))
+    .map(({ id, label }) => ({ id, label, rows: buildRows(lines.filter((line) => (line.group ?? DEFAULT_GROUP) === id), names, expanded, unavoidable, alternatives) }))
     .filter((group) => group.rows.length > 0);
 }
 
@@ -223,6 +281,9 @@ export interface SlotItem {
   why: string; have?: string; where?: string[];
   /** A good on the avoid list the line still uses, as nothing at the tier avoids it (`unavoidableKeys`). */
   avoid?: true;
+  /** A part to import, and why (`BomLine.unmade`), or one from the seed bank (`BomLine.seedBank`), as the List's row marks it. */
+  unmade?: NonNullable<BomLine['unmade']>;
+  seedBank?: true;
   fluid: boolean;
 }
 
@@ -246,6 +307,8 @@ function slotItem(line: BomLine, group: BuildGroup, names: Record<string, string
     stacks: fluid ? [1] : stackSplit(line.amount), stackCount: fluid ? 1 : stackCount(line.amount), why: line.why, ...stockOf(line.have), fluid,
   };
   if (unavoidable.has(line.key)) item.avoid = true;
+  if (line.unmade !== undefined) item.unmade = line.unmade;
+  if (line.seedBank === true) item.seedBank = true;
   return item;
 }
 
@@ -270,13 +333,16 @@ export function stillNeeded(items: readonly SlotItem[], marks: Readonly<Record<s
 
 /**
  * A slot's tip after its name (Phase 2 spec §9.4): what the build needs, and what the scanned world holds; why; the avoid marker's words,
- * for a good nothing at the tier avoids; and who marked the row, and when (`when` writes the time).
+ * for a good nothing at the tier avoids; a part to import and why, or one from the seed bank, as the List's row marks it (add-on 14);
+ * and who marked the row, and when (`when` writes the time).
  */
 export function slotTipLines(item: SlotItem, mark: Mark | undefined, when: (iso: string) => string): string[] {
   return [
     item.have === undefined ? `need ${item.amount}` : `need ${item.amount} · ${item.have}`,
     item.why,
     ...(item.avoid === true ? [AVOID_NOTE] : []),
+    ...(item.unmade === undefined ? [] : [`import it: ${UNMADE_NOTES[item.unmade]}`]),
+    ...(item.seedBank === true ? [SEED_BANK_NOTE] : []),
     ...(mark === undefined ? [] : [`✓ ${mark.by}, ${when(mark.at)}`]),
   ];
 }

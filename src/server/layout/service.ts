@@ -9,22 +9,34 @@ import type { AppContext } from '../app.ts';
 import { planForProject } from '../http/routes/projects.ts';
 import { worldService } from '../http/routes/world.ts';
 import { allMachines } from '../pack/lookup.ts';
-import { expandBomLines } from '../planner/bom.ts';
+import { expandBomLines, fromSeedBank, partName, seedBankKeys, type BomMake } from '../planner/bom.ts';
 import { bomBuildCost } from '../planner/build-cost.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
+import { linePricing } from '../planner/pricing.ts';
+import { partSteps } from '../planner/steps.ts';
 import { emptyScan, layoutLine, type LayoutDeps } from './layout.ts';
-import { isOptional, mergeLayoutIntoPlan } from './merge.ts';
+import { isOptional, mergeLayoutIntoPlan, subtractReplaced } from './merge.ts';
+import type { StuffKey } from '../../shared/keys.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { BomLine, Plan } from '../../shared/types/plan.ts';
+import type { BomLine, BuildStep, Plan, PlanStep } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import type { BBox, Voxels, WorldScan } from '../../shared/types/world.ts';
 
 /** Layouts kept, the least recently used dropped first. */
 export const LAYOUT_CACHE_SIZE = 16;
 
-/** The layout's required parts broken down to base materials (`expandBomLines`). */
-interface Expansion { lines: BomLine[]; totals: BomLine[] }
+/**
+ * The whole build of a placed line broken down to base materials (`expandBomLines`, architecture §11 entry 41 (9)): the
+ * plan's top-level lines less the casings the layout's hatches replace, then the layout's required parts.
+ */
+interface Expansion {
+  lines: BomLine[]; totals: BomLine[];
+  // optional addition: the pooled make plan; a breakdown without one makes nothing
+  makes?: BomMake[];
+  // optional addition: the swap list of every good the build makes, absent when there is none
+  alternatives?: Record<StuffKey, PlanStep['alternatives']>;
+}
 
 export interface LayoutServiceDeps {
   pack(): Promise<Pack>;
@@ -38,7 +50,13 @@ export interface LayoutServiceDeps {
   /** Null unless the scan is done. */
   scan(scanId: string): Promise<WorldScan | null>;
   readArea(scanId: string, dim: number, bbox: BBox): Promise<Voxels>;
-  expand(pack: Pack, lines: BomLine[], project: Project): Promise<Expansion>;
+  /**
+   * The whole build of a placed line — the plan's top-level lines, less the replaced casings, then the layout's required
+   * parts — broken down with the plan's steps (`expandBomLines`).
+   */
+  expand(pack: Pack, lines: BomLine[], project: Project,
+    // optional addition (architecture §11 entry 41 (9))
+    steps?: readonly PlanStep[]): Promise<Expansion>;
   /** Tests inject failures; `layoutLine` by default. */
   layout?: typeof layoutLine;
   // optional addition (plan 12, architecture §11 entry 39)
@@ -47,6 +65,13 @@ export interface LayoutServiceDeps {
    * context, the plan's `cost.layout`; without it a finished plan gets none.
    */
   layoutCost?(pack: Pack, lines: BomLine[], project: Project): Promise<number>;
+  // optional addition (add-on 14 × add-on 17)
+  /**
+   * The pack a placed line's build steps are worded on, as `planLine` words the plan's own: the line's farm pack
+   * (`LinePricing.pack`), whose farm recipes say what its crop farms plant (`partSteps`); without it, or where the line has
+   * no farms, the export pack.
+   */
+  linePack?(pack: Pack, project: Project): Promise<Pack>;
 }
 
 export interface LayoutService {
@@ -87,7 +112,7 @@ export function layoutKey(plan: Plan, project: Project): string {
 /**
  * Layouts by `layoutKey`, at most `LAYOUT_CACHE_SIZE`. Callers that ask for a key while it is being laid out share
  * that computation; one that fails is not kept, so the next caller tries again. The same holds for the expansion of a
- * layout's parts, kept next to its layout.
+ * placed line's whole build (the key covers the plan it was finished with), kept next to its layout.
  */
 export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
   const layOut = deps.layout ?? layoutLine;
@@ -128,10 +153,12 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
     return entry;
   }
 
-  /** The required parts of `layout` (its entry's) broken down to base materials, started on first use. */
-  function expansionOf(entry: Entry, pack: Pack, layout: Layout, project: Project): Promise<Expansion> {
+  /** The whole build of `plan` placed as `layout` (its entry's), broken down once (architecture §11 entry 41 (9)), started on first use. */
+  function expansionOf(entry: Entry, pack: Pack, layout: Layout, project: Project, plan: Plan): Promise<Expansion> {
     if (entry.expansion !== null) return entry.expansion;
-    const expansion = deps.expand(pack, layout.bom.filter((l) => !isOptional(l)), project);
+    const tops = plan.buildList.map(({ key, amount, why, group }): BomLine => ({ key, amount, why, ...(group === undefined ? {} : { group }) }));
+    const whole = [...subtractReplaced(tops, layout.replaced ?? []), ...layout.bom.filter((l) => !isOptional(l))];
+    const expansion = deps.expand(pack, whole, project, plan.steps);
     entry.expansion = expansion;
     expansion.catch(() => {
       if (entry.expansion === expansion) entry.expansion = null;
@@ -164,17 +191,27 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       const entry = await entryFor(project, plan);
       const layout = await entry.layout;
       const pack = await deps.pack();
-      const expansion = await expansionOf(entry, pack, layout, project);
+      const expansion = await expansionOf(entry, pack, layout, project, plan);
       const cost = costOf(entry, pack, layout, project);
-      return mergeLayoutIntoPlan(plan, layout, expansion, (k) => pack.nameOf(k), cost === null ? undefined : await cost);
+      const stepsPack = deps.linePack === undefined ? pack : await deps.linePack(pack, project);
+      // what the group takes from its seed bank is no import, as the plan's breakdown decided it (its `seedBank` lines)
+      const bank = seedBankKeys(plan.buildList);
+      const lines = fromSeedBank(expansion.lines, bank);
+      const totals = fromSeedBank(expansion.totals, bank);
+      const bom = { lines, totals, makes: expansion.makes ?? [] };
+      const parts = partSteps(stepsPack, { steps: plan.steps, bom, tier: plan.tier })
+        .map((s, i): BuildStep => ({ ...s, order: i + 1 }));
+      const nameOf = (k: string): string => (k.startsWith('map:') ? pack.maps.get(k.slice(4))?.name ?? k.slice(4) : partName(pack, k));
+      return mergeLayoutIntoPlan(plan, layout, { ...expansion, lines, totals, parts }, nameOf, cost === null ? undefined : await cost);
     },
   };
 }
 
 /**
  * The app's layout service (`app.services.layout`), created on first use: the active pack, the plan the plan route
- * serves (`planForProject`) for a caller that brings none, scans and voxels from the world service, and parts broken
- * down and priced in the project's world context (`app.services.planContext`, else an empty one).
+ * serves (`planForProject`) for a caller that brings none, scans and voxels from the world service, and the whole build
+ * broken down (with the plan's steps) and the layout's parts priced in the project's world context
+ * (`app.services.planContext`, else an empty one), and the build steps worded on the line's farm pack (`linePack`).
  */
 export function layoutService(app: AppContext): LayoutService {
   const existing = app.services.layout as LayoutService | undefined;
@@ -184,11 +221,15 @@ export function layoutService(app: AppContext): LayoutService {
     plan: (project) => planForProject(app, project),
     scan: (scanId) => worldService(app).getScan(scanId),
     readArea: (scanId, dim, bbox) => worldService(app).readArea(scanId, dim, bbox),
-    expand: async (pack, lines, project) =>
-      expandBomLines(pack, lines, project.settings, await (app.services.planContext?.(project) ?? emptyContext())),
+    expand: async (pack, lines, project, steps) =>
+      expandBomLines(pack, lines, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), steps === undefined ? undefined : { steps }),
     // the layout's parts at the prices the plan's machines are priced at (plan 12: `cost.layout`)
     layoutCost: async (pack, lines, project) =>
       bomBuildCost(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), lines),
+    // the line's farm pack from its pricing (memoized: the plan route priced the line), so its build steps say what its
+    // crop farms plant as the plan's own do (add-on 17)
+    linePack: async (pack, project) =>
+      (await linePricing(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext())))?.pack ?? pack,
   });
   app.services.layout = service;
   return service;

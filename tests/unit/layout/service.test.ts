@@ -1,9 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { createLayoutService, LAYOUT_CACHE_SIZE, layoutKey, type LayoutServiceDeps } from '../../../src/server/layout/service.ts';
 import { layoutLine } from '../../../src/server/layout/layout.ts';
+import { isOptional, subtractReplaced } from '../../../src/server/layout/merge.ts';
+import { expandBomLines } from '../../../src/server/planner/bom.ts';
+import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
+import { linePricing } from '../../../src/server/planner/pricing.ts';
+import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
+import type { BomLine, Plan, PlanStep } from '../../../src/shared/types/plan.ts';
 import type { Project } from '../../../src/shared/types/project.ts';
+import { farmPack } from '../../helpers/farm-fixtures.ts';
 import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS } from '../../helpers/layout-fixtures.ts';
 
+/** Every node of a build tree, depth first. */
+const nodes = (lines: readonly BomLine[] | undefined): BomLine[] => (lines ?? []).flatMap((l) => [l, ...nodes(l.children)]);
 const twoStep = () => makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 's2', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 }]);
 const vox = flatVoxels({ origin: [-40, 50, -40], size: [100, 30, 100], groundY: 63 });
 const deps = (over: Partial<LayoutServiceDeps> = {}): LayoutServiceDeps => ({
@@ -78,22 +87,70 @@ describe('layout service', () => {
   });
 
   it('keeps what each build line needs of every total it merges (architecture §11.36)', async () => {
+    // Architecture §11 entry 41 (9): the totals come from the one breakdown of the whole build, the plan's own lines and the
+    // layout's parts pooled, so the plan's own totals (6 iron, 1 tin) are among them and not added again.
     const plan = { ...twoStep(), buildTotals: [
       { key: 't:iron@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] },
       { key: 't:tin@0', amount: 1, why: 'for Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2002', amount: 1 }] }] };
-    const svc = createLayoutService(deps({
-      plan: async () => plan,
-      expand: async (_pack, lines) => ({ lines, totals: [
-        { key: 't:copper@0', amount: 2, why: 'for 1x Copper Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1366', amount: 2 }] },
-        { key: 't:tin@0', amount: 5, why: 'for 2x Tin Cable, 1x Tin Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@1246', amount: 2 }] }] }),
-    }));
-    const done = await svc.finishPlan(plan, makeProject());
-    expect(done.buildTotals).toEqual([
+    const whole: BomLine[] = [
       { key: 't:copper@0', amount: 2, why: 'for 1x Copper Cable', neededFor: [{ key: 'gregtech:gt.blockmachines@1366', amount: 2 }] },
       { key: 't:iron@0', amount: 6, why: 'for Basic Macerator, Basic Assembler', neededFor: [{ key: 'gregtech:gt.blockmachines@2001', amount: 4 }, { key: 'gregtech:gt.blockmachines@2002', amount: 2 }] },
-      { key: 't:tin@0', amount: 6, why: 'for Basic Assembler; for 2x Tin Cable, 1x Tin Cable', neededFor: [
-        { key: 'gregtech:gt.blockmachines@2002', amount: 1 }, { key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@1246', amount: 2 }] }]);
+      { key: 't:tin@0', amount: 6, why: 'for Basic Assembler, 2x Tin Cable, 1x Tin Cable', neededFor: [
+        { key: 'gregtech:gt.blockmachines@2002', amount: 1 }, { key: 'gregtech:gt.blockmachines@1247', amount: 3 }, { key: 'gregtech:gt.blockmachines@1246', amount: 2 }] }];
+    const svc = createLayoutService(deps({ plan: async () => plan, expand: async (_pack, lines) => ({ lines, totals: whole }) }));
+    const done = await svc.finishPlan(plan, makeProject());
+    expect(done.buildTotals).toEqual(whole);
     for (const total of done.buildTotals!) expect(total.neededFor!.reduce((sum, n) => sum + n.amount, 0)).toBe(total.amount);
+    // M6(c): the gather step names exactly those totals (none is unmade), with their amounts, in their order
+    expect(done.buildSteps.filter((s) => s.kind === 'gather').map((s) => [s.id, s.text])).toEqual([
+      ['gather', 'Gather the base materials: 2× t:copper, 6× t:iron, 6× t:tin']]);
+  });
+
+  it('breaks the whole build of a placed line down once', async () => {
+    // Architecture §11 entry 41 (9): the plan's top-level lines without their children, less the casings the hatches stand
+    // on, then the layout's required parts, broken down in one call with the plan's steps.
+    const plan = { ...makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120 }]), buildList: [
+      { key: 'gregtech:gt.blockcasings5@1', amount: 16, why: 'structure of 1× Electric Blast Furnace', group: 'machines' as const },
+      { key: 'gregtech:gt.blockcasings@11', amount: 17, why: 'structure of 1× Electric Blast Furnace', group: 'machines' as const,
+        children: [{ key: 't:steel@0', amount: 34, why: 'for Heat Proof Machine Casing' }] }] };
+    const asked: Array<{ lines: BomLine[]; steps: readonly PlanStep[] | undefined }> = [];
+    const svc = createLayoutService(deps({
+      plan: async () => plan,
+      expand: async (_pack, lines, _project, steps) => { asked.push({ lines, steps }); return { lines, totals: [], makes: [] }; },
+    }));
+    const done = await svc.finishPlan(plan, makeProject());
+    const layout = await svc.layoutFor(makeProject());
+    const replaced = (key: string): number => (layout.replaced ?? []).filter((r) => r.key === key).reduce((sum, r) => sum + r.amount, 0);
+    expect(replaced('gregtech:gt.blockcasings@11')).toBeGreaterThan(0);
+    const tops = plan.buildList.map(({ key, amount, why, group }) => ({ key, amount, why, group }));
+    expect(asked).toEqual([{ lines: [...subtractReplaced(tops, layout.replaced ?? []), ...layout.bom.filter((l) => !isOptional(l))], steps: plan.steps }]);
+    // the fake breakdown makes nothing, so each casing line is one craft step, for what the hatches leave, before the layout's
+    const ids = done.buildSteps.map((s) => s.id);
+    const text = (id: string): string | undefined => done.buildSteps.find((s) => s.id === id)?.text;
+    expect(text('craft:gregtech:gt.blockcasings5@1')).toBe('Craft 16× gregtech:gt.blockcasings5 (meta 1)');
+    expect(text('craft:gregtech:gt.blockcasings@11')).toBe(`Craft ${17 - replaced('gregtech:gt.blockcasings@11')}× gregtech:gt.blockcasings (meta 11)`);
+    for (const id of ['craft:gregtech:gt.blockcasings5@1', 'craft:gregtech:gt.blockcasings@11']) expect(ids.indexOf(id)).toBeLessThan(ids.indexOf('layout:site'));
+    expect(done.names?.['gregtech:gt.blockcasings@11']).toBe('gregtech:gt.blockcasings (meta 11)');
+    await svc.finishPlan(plan, makeProject());
+    expect(asked).toHaveLength(1);
+  });
+
+  it('names the swap lists of a placed line by their maps and parts', async () => {
+    // Architecture §11 entry 41 (8)–(9): a `map:<id>` key reads as the pack's map (its id when the pack has none), a part as
+    // its steps name it (`partName`).
+    const alt = (recipeId: string, mapId: string) => ({ recipeId, rawCost: 2, mapId, inputs: [{ key: 't:steel@0', amount: 2 }], outputs: [{ key: 't:out_s1@0', amount: 1 }] });
+    const alternatives = { 't:out_s1@0': [alt('a', 'gt.recipe.assembler'), alt('b', 'gt.recipe.gone')] };
+    const svc = createLayoutService(deps({
+      pack: async () => {
+        const pack = layoutPack();
+        pack.maps.set('gt.recipe.assembler', { id: 'gt.recipe.assembler', name: 'Assembler', amps: 1, specialValue: 'none', aliases: [] });
+        return pack;
+      },
+      expand: async (_pack, lines) => ({ lines, totals: [], makes: [], alternatives }),
+    }));
+    const done = await svc.finishPlan(twoStep(), makeProject());
+    expect(done.buildAlternatives).toEqual(alternatives);
+    expect(['map:gt.recipe.assembler', 'map:gt.recipe.gone', 't:steel@0'].map((k) => done.names?.[k])).toEqual(['Assembler', 'gt.recipe.gone', 't:steel']);
   });
 
   it('prices the layout parts of a finished plan', async () => {
@@ -111,6 +168,36 @@ describe('layout service', () => {
     expect(recorded).toEqual([layout.bom.filter((l) => !l.why.startsWith('optional:') && !hatches.includes(l.key)).map((l) => l.key)]);
     const unpriced = await createLayoutService(deps({ plan: async () => plan })).finishPlan(plan, makeProject());
     expect(unpriced.cost).toEqual({ runPerHour: 1, build: 10, horizonHours: 24 });
+  });
+
+  it('words what a placed line\'s crop farms plant, as the plan does', async () => {
+    // add-on 14 × add-on 17: the finished plan's part steps are worded on the line's farm pack (`linePack`), whose farm
+    // recipes say what each crop farm plants, as `planLine` words the plan's own; on the export pack alone they would
+    // say the crop sticks and the dirt stay in the machine and that the seeds must be imported
+    const pack = farmPack();
+    const settings = { ...defaultSettings(), target: 't:rubber_dust@0', per: 'min' as const, tier: 1, objective: 'least-raw' as const, buildHorizonHours: null };
+    const plan = await planLine(pack, settings, emptyContext());
+    const project = { ...makeProject(), settings };
+    const finish = (over: Partial<LayoutServiceDeps>): Promise<Plan> => createLayoutService(deps({
+      pack: async () => pack, plan: async () => plan, scan: async () => makeScan({ power: [] }),
+      expand: async (p, lines, _project, steps) => expandBomLines(p, lines, settings, emptyContext(), steps === undefined ? undefined : { steps }), ...over,
+    })).finishPlan(plan, project);
+    const planted = ['craft:cropsnh:cropSticks@0', 'craft:minecraft:dirt@0', 'craft:t:cane_seed@0'];
+    const text = (p: Plan, id: string): string | undefined => p.buildSteps.find((s) => s.id === id)?.text;
+    const done = await finish({ linePack: async (p) => (await linePricing(p, settings, emptyContext()))?.pack ?? p });
+    expect(done.buildSteps.some((s) => s.id.startsWith('layout:'))).toBe(true);
+    expect(planted.map((id) => text(done, id))).toEqual(planted.map((id) => text(plan, id)));
+    expect(planted.map((id) => text(done, id))).toEqual([
+      'Craft 2× Crop Sticks (to plant in the Resin Cane farm) from 1× Oak Planks at a crafting table',
+      'Get 2× Dirt as soil for the Resin Cane farm', 'Take 2× Resin Cane Seeds from your seed bank for the Resin Cane farm',
+    ]);
+    // and the seeds, which the group takes from its seed bank, are no part to import in the finished build list either (the
+    // controller's ruling after the merge of main): no line or total of theirs is unmade
+    const seeds = [...nodes(done.buildList), ...(done.buildTotals ?? [])].filter((l) => l.key === 't:cane_seed@0');
+    expect(seeds.length).toBeGreaterThan(0);
+    expect(seeds.map((l) => [l.unmade, l.seedBank])).toEqual(seeds.map(() => [undefined, true]));
+    // without the dep, the export pack's words
+    expect(text(await finish({}), 'craft:minecraft:dirt@0')).toBe('Make 2× Dirt (stays in the machine)');
   });
 
   it('does not keep a failed parts breakdown', async () => {

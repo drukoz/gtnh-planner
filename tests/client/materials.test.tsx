@@ -2,8 +2,8 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
-  buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys, missingRows,
-  gatheredStacks, groupBuildSlots, MAX_STACKS_SHOWN, slotTipLines, stackCount, stackSplit, stillNeeded,
+  buildRows, groupBuildRows, runRows, sourceText, amountText, haveText, whereLines, unavoidableKeys, missingRows, madeText, withLinePlaced,
+  gatheredStacks, groupBuildSlots, MAX_STACKS_SHOWN, slotTipLines, stackCount, stackSplit, stillNeeded, SEED_BANK_NOTE, UNMADE_NOTES,
 } from '../../src/client/views/materials-model.ts';
 import { StepsView } from '../../src/client/views/StepsView.tsx';
 import { MaterialsView, UsedByChips } from '../../src/client/views/MaterialsView.tsx';
@@ -13,7 +13,8 @@ import { localTime } from '../../src/client/format.ts';
 import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts';
 import { MATERIALS_VIEW_KEY, getMaterialsView, setMaterialsView } from '../../src/client/state/materials-view.ts';
 import { indexPlan } from '../../src/shared/plan/balance.ts';
-import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
+import { defaultSettings } from '../../src/shared/project/apply-op.ts';
+import type { BomLine, Plan, PlanStep } from '../../src/shared/types/plan.ts';
 import { keepIn } from './storage-stub.ts';
 
 /** What a reader sees: the markup without its tags and comments, entities decoded. */
@@ -38,7 +39,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const names = { 'machine:111@0': 'Basic Wiremill', 't:hull_lv@0': 'LV Machine Hull', 't:iron_ingot@0': 'Iron Ingot', 't:titanium_ingot@0': 'Titanium Ingot', 'dim:overworld': 'Overworld', 'dim:moon': 'Moon', 'dimId:0': 'Overworld' };
+const names = { 'machine:111@0': 'Basic Wiremill', 't:hull_lv@0': 'LV Machine Hull', 't:iron_ingot@0': 'Iron Ingot', 't:titanium_ingot@0': 'Titanium Ingot', 'dim:overworld': 'Overworld', 'dim:moon': 'Moon', 'dimId:0': 'Overworld',
+  'fluid:molten.tin': 'Molten Tin', 't:tin_dust@0': 'Tin Dust', 't:cupronickel_ingot@0': 'Cupronickel Ingot', 't:cupro_wire@0': '2x Cupronickel Wire', 't:mica_foil@0': 'Mica Insulator Foil',
+  't:circuit@0': 'Basic Circuit', 't:copper_wire@0': '1x Copper Wire', 't:redstone@0': 'Redstone', 't:coil@0': 'Cupronickel Coil Block', 'machine:1000@0': 'Electric Blast Furnace', 't:v@0': 'Part V' };
 const plan = {
   status: 'ok', names,
   buildList: [{ key: 'machine:111@0', amount: 1, why: '1× Basic Wiremill', children: [{ key: 't:hull_lv@0', amount: 1, why: 'for Basic Wiremill' }] }],
@@ -233,6 +236,116 @@ describe('views', () => {
     const html = renderToStaticMarkup(<MaterialsView project={stopping} plan={batch} send={() => {}} me="Ann" />);
     for (const s of ['Left over', 'LV Machine Hull', '3×', 'Takes about 2 min', 'Stop treating as made', 'We&#x27;ll make it ourselves']) expect(html).toContain(s);
     expect(renderToStaticMarkup(<MaterialsView project={project} plan={batch} send={() => {}} me="Ann" />)).not.toContain('Stop treating as made');   // not in stopItems any more
+  });
+});
+
+describe('how the build parts are made', () => {
+  const coilA = { recipeId: 'assemble-coil', rawCost: 11, mapId: 'gt.recipe.assembler' };
+  const coilB = { recipeId: 'assemble-coil-b', rawCost: 12, mapId: 'gt.recipe.assembler' };
+  const view = (p: Plan): string => renderToStaticMarkup(<MaterialsView project={{ id: 'p', name: 'x', createdAt: '', createdBy: '', rev: 3,
+    settings: { ...defaultSettings() }, world: { scanId: null, baseId: null }, placement: null, notes: [], marks: {} } as never} plan={p} send={() => {}} me="Ann" />);
+  /** The list row of `html` whose tick is `id` (its first one). */
+  const row = (html: string, id: string): string => new RegExp(`<li class="mat-row"(?:(?!</li>).)*data-row="${id}"(?:(?!</li>).)*</li>`, 's').exec(html)?.[0] ?? '';
+  /** The recipes `html` offers a radio for. */
+  const recipeRadios = (html: string): string[] => [...html.matchAll(/<label class="check swap-option" title="recipe ([^"]*)"><input type="radio"/g)].map((m) => m[1]!);
+
+  it('says how each build part is made', () => {
+    const tin: BomLine = { key: 'fluid:molten.tin', amount: 576, why: 'for Cupronickel Coil Block',
+      made: { recipeId: 'melt-tin', mapId: 'gt.recipe.fluidextractor', machine: { mteId: 131, name: 'Basic Fluid Extractor', tier: 1, source: 'new' }, runs: 4 },
+      children: [{ key: 't:tin_dust@0', amount: 4, why: 'for Molten Tin' }] };
+    const made = tin.made!;
+    expect(madeText(tin, names)).toBe('made in a Basic Fluid Extractor from Tin Dust');
+    expect(madeText({ ...tin, made: { ...made, machine: { mteId: 111, name: 'Basic Wiremill', tier: 1, source: 'owned' }, circuit: 2 },
+      children: [{ key: 't:cupronickel_ingot@0', amount: 1, why: 'for 2x Cupronickel Wire' }] }, names)).toBe('made in your Basic Wiremill from Cupronickel Ingot (circuit 2)');
+    expect(madeText({ ...tin, made: { ...made, machine: { mteId: 211, name: 'Basic Assembler', tier: 1, source: 'line' }, circuit: 8 },
+      children: [{ key: 'fluid:molten.tin', amount: 144, why: 'for Cupronickel Coil Block' }, { key: 't:cupro_wire@0', amount: 8, why: 'for Cupronickel Coil Block' },
+        { key: 't:mica_foil@0', amount: 8, why: 'for Cupronickel Coil Block' }] }, names))
+      .toBe('made in the Basic Assembler this line builds from Molten Tin, 2x Cupronickel Wire, Mica Insulator Foil (circuit 8)');
+    expect(madeText({ ...tin, made: { ...made, machine: 'crafting table' },
+      children: [{ key: 't:hull_lv@0', amount: 1, why: 'for Basic Wiremill' }, { key: 't:circuit@0', amount: 2, why: 'for Basic Wiremill' }] }, names))
+      .toBe('made at a crafting table from LV Machine Hull, Basic Circuit');
+    expect(madeText({ ...tin, made: { ...made, machine: { mteId: 122, name: 'Advanced Assembler', tier: 2, source: 'new' }, cleanroom: true },
+      children: [{ key: 't:copper_wire@0', amount: 4, why: 'for Basic Circuit' }, { key: 't:redstone@0', amount: 1, why: 'for Basic Circuit' }] }, names))
+      .toBe('made in an Advanced Assembler from 1x Copper Wire, Redstone (in a cleanroom)');
+    // A machine only this line's own unit could be, both notes, and a node the tree cuts at its depth (no children): no inputs named.
+    expect(madeText({ key: 't:coil@0', amount: 1, why: 'for Electric Blast Furnace', made: { ...made, machine: { mteId: 211, name: 'Basic Assembler', tier: 1, source: 'first' },
+      circuit: 3, cleanroom: true } }, names)).toBe('made in a Basic Assembler (circuit 3; in a cleanroom)');
+    expect(madeText({ key: 't:tin_dust@0', amount: 4, why: 'for Molten Tin' }, names)).toBeUndefined();
+  });
+  it('says when the build counts the placed line\'s parts', () => {
+    const placed = { ...plan, buildSteps: [{ id: 'layout:site', order: 1, text: 'Clear', kind: 'place' }] } as Plan;
+    const unplaced = { ...plan, buildSteps: [{ id: 'gather', order: 1, text: 'Gather', kind: 'gather' }] } as Plan;
+    expect([withLinePlaced(placed), withLinePlaced(unplaced)]).toEqual([true, false]);
+    const html = view(placed);
+    expect(html).toContain('To build (once), with the line placed');
+    expect(html).toContain('Base materials for the build, with the line placed');
+    const plain = view(unplaced);
+    expect(plain).not.toContain('with the line placed');
+    expect(plain).toContain('<h3 id="to-build-title">To build (once)</h3>');
+    expect(plain).toContain('<h3 id="build-totals-title">Base materials for the build</h3>');
+  });
+  it('offers the recipe swap on a made build row and flags what must be imported', () => {
+    const coil: BomLine = { key: 't:coil@0', amount: 16, why: '16× Cupronickel Coil Block',
+      made: { recipeId: 'assemble-coil', mapId: 'gt.recipe.assembler', machine: { mteId: 211, name: 'Basic Assembler', tier: 1, source: 'new' }, runs: 16, circuit: 8 },
+      children: [{ key: 'fluid:molten.tin', amount: 2304, why: 'for Cupronickel Coil Block' }, { key: 't:cupro_wire@0', amount: 128, why: 'for Cupronickel Coil Block' },
+        { key: 't:mica_foil@0', amount: 128, why: 'for Cupronickel Coil Block' }] };
+    const ebf: BomLine = { key: 'machine:1000@0', amount: 1, why: '1× Electric Blast Furnace', unmade: 'no-recipe' };
+    const partV: BomLine = { key: 't:v@0', amount: 1, why: 'for Part W', unmade: 'own-chain' };
+    const swapping = { ...plan, buildList: [coil, ebf, partV], buildTotals: [...plan.buildTotals!, partV], buildAlternatives: { 't:coil@0': [coilA, coilB] } } as Plan;
+    const coilText = 'made in a Basic Assembler from Molten Tin, 2x Cupronickel Wire, Mica Insulator Foil (circuit 8)';
+    expect(buildRows(swapping.buildList, names, new Set(), undefined, swapping.buildAlternatives).map((r) => [r.key, r.made, r.unmade])).toEqual([
+      ['t:coil@0', { text: coilText, recipeId: 'assemble-coil', alternatives: [coilA, coilB] }, undefined],
+      ['machine:1000@0', undefined, 'no-recipe'], ['t:v@0', undefined, 'own-chain']]);
+    expect(groupBuildRows(swapping.buildList, names, new Set(), undefined, swapping.buildAlternatives)[0]?.rows[0]?.made?.alternatives).toEqual([coilA, coilB]);
+
+    const html = view(swapping);
+    const made = row(html, 'build:t:coil@0');
+    expect(made).toContain(`<span class="mat-made muted small">${coilText}</span>`);
+    expect(made).toContain('>16× Cupronickel Coil Block<');
+    expect(made.indexOf('>16× Cupronickel Coil Block<')).toBeLessThan(made.indexOf('mat-made'));   // after its why
+    expect(made).toContain('<details class="mat-swap">');
+    expect(made).toContain('<summary>Swap recipe</summary>');
+    expect(made).toContain('Recipe for Cupronickel Coil Block');
+    expect(made).toContain('Let the planner choose');
+    expect(recipeRadios(made)).toEqual(['assemble-coil', 'assemble-coil-b']);
+    expect(made).not.toContain('unmade-badge');
+    const noRecipe = row(html, 'build:machine:1000@0');
+    expect(noRecipe).toContain('unmade-badge');
+    expect(noRecipe).toContain('>import it</span>');
+    expect(noRecipe).toContain('title="Nothing at this tier makes it: import it, or mark it &quot;we already make this&quot;"');
+    expect(noRecipe).not.toContain('mat-made');
+    expect(row(html, 'build:t:v@0')).toContain('title="Every recipe for it here needs a part of its own chain: swap the recipe of a part it goes into, or import it"');
+    // The totals carry the badge too.
+    const totals = /<section[^>]*aria-labelledby="build-totals-title"[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? '';
+    expect(row(totals, 'build:t:v@0')).toContain('unmade-badge');
+    expect(row(totals, 'build:t:iron_ingot@0')).not.toContain('unmade-badge');
+    // One way to make it, or none listed: nothing to swap, the row still says how it is made.
+    for (const buildAlternatives of [{ 't:coil@0': [coilA] }, undefined]) {
+      const single = row(view({ ...swapping, buildAlternatives } as Plan), 'build:t:coil@0');
+      expect(single).toContain(coilText);
+      expect(single).not.toContain('mat-swap');
+    }
+  });
+  it('marks a part from the seed bank as such, never as one to import, in the List and in the Grid', () => {
+    // the controller's ruling after the merge of main (add-on 14 × 17): what the breakdown marks `seedBank` (a crop's seeds, a new tree
+    // farm's sapling) is no import: its row says it comes from the seed bank, as its step does
+    const seeds: BomLine = { key: 't:cane_seed@0', amount: 2, why: 'Resin Cane farm', group: 'one-off', seedBank: true };
+    const ebf: BomLine = { key: 'machine:1000@0', amount: 1, why: '1× Electric Blast Furnace', unmade: 'no-recipe' };
+    const banked = { ...plan, buildList: [ebf, seeds], buildTotals: [...plan.buildTotals!, seeds] } as Plan;
+    const rows = buildRows(banked.buildList, names, new Set());
+    expect(rows.map((r) => [r.key, r.unmade, r.seedBank])).toEqual([['machine:1000@0', 'no-recipe', undefined], ['t:cane_seed@0', undefined, true]]);
+    const html = view(banked);
+    const seedRow = row(html, 'build:t:cane_seed@0');
+    expect(seedRow).toContain(`<span class="badge seed-badge" title="${SEED_BANK_NOTE}">seed bank</span>`);
+    expect(seedRow).not.toContain('unmade-badge');
+    const totals = /<section[^>]*aria-labelledby="build-totals-title"[^>]*>.*?<\/section>/s.exec(html)?.[0] ?? '';
+    expect(row(totals, 'build:t:cane_seed@0')).toContain('seed-badge');
+    // the Grid's slot tip says the same: what to import and why, what comes from the seed bank
+    const tips = groupBuildSlots(banked.buildList, names).flatMap((g) => g.items).map((item) => [item.key, slotTipLines(item, undefined, () => '')]);
+    expect(tips).toEqual([
+      ['machine:1000@0', ['need 1×', '1× Electric Blast Furnace', `import it: ${UNMADE_NOTES['no-recipe']}`]],
+      ['t:cane_seed@0', ['need 2×', 'Resin Cane farm', SEED_BANK_NOTE]],
+    ]);
   });
 });
 

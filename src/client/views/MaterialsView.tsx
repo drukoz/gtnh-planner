@@ -8,6 +8,9 @@
 // have-counts from the world scan sit next to each line (spec §3.4, §11.20). A row of a good on the avoid list that
 // nothing at the tier avoids carries a small "avoid" marker (spec §3.3). "To build (once)" can also be shown as an
 // inventory grid (Phase 2 spec §9, MaterialsGrid.tsx), a choice of this browser's; the List stays the default.
+// A made build part says how it is made and, with a choice of recipes, opens the flow view's recipe swap; a part nothing
+// here can make says to import it, one from the seed bank says so (the List's row and the Grid's slot tip alike); and once the
+// build counts the placed line's parts, its headings say so (§11 entry 41).
 
 import { Fragment, useMemo, useState, type ReactElement } from 'react';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
@@ -18,6 +21,7 @@ import type { Mark } from '../../shared/types/project.ts';
 import { Figs } from '../components/Figs.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
+import { SwapRecipe } from '../components/SwapRecipe.tsx';
 import { Tick } from '../components/Tick.tsx';
 import { formatRate } from '../format.ts';
 import { showInFlow } from '../state/flow-focus.ts';
@@ -25,8 +29,8 @@ import { useMaterialsView } from '../state/materials-view.ts';
 import { makeHerePatch } from './flow-model.ts';
 import { BuildGrid, GatherMeter, ViewToggle } from './MaterialsGrid.tsx';
 import {
-  amountText, AVOID_NOTE, buildRows, gatheredStacks, groupBuildRows, groupBuildSlots, missingRows, quantity, runRows, takenRows, unavoidableKeys,
-  type BuildRow, type MissingRow, type RunRow, type TakenRow, type UsedBy,
+  amountText, AVOID_NOTE, buildRows, gatheredStacks, groupBuildRows, groupBuildSlots, missingRows, quantity, runRows, SEED_BANK_NOTE, takenRows,
+  unavoidableKeys, UNMADE_NOTES, withLinePlaced, type BuildRow, type MissingRow, type RunRow, type TakenRow, type UsedBy,
 } from './materials-model.ts';
 import { buildTotalLine } from './plan-cost.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
@@ -47,11 +51,29 @@ function marker(send: Send, row: string): (on: boolean) => void {
 }
 
 /**
+ * What the build headings add once the build counts the placed line's parts (`withLinePlaced`, the controller's ruling on
+ * open question 3): a part's recipe or amount can differ from the unplaced line's.
+ */
+function placedWords(plan: Plan): string {
+  return withLinePlaced(plan) ? ', with the line placed' : '';
+}
+
+/**
  * The marker of a good on the avoid list, or a derived material made from one (`Plan.avoided` `madeFrom`), that the
  * line still uses (`BuildRow.avoid`, `RunRow.avoid`).
  */
 function AvoidMarker(): ReactElement {
   return <span className="badge avoid-badge" title={AVOID_NOTE}>avoid</span>;
+}
+
+/** The marker of a build part the line cannot buy and nothing here can make (`BuildRow.unmade`): import it, why on its hover. */
+function UnmadeMarker(props: { cause: NonNullable<BuildRow['unmade']> }): ReactElement {
+  return <span className="badge unmade-badge" title={UNMADE_NOTES[props.cause]}>import it</span>;
+}
+
+/** The marker of a part the group takes from its own seed bank (`BuildRow.seedBank`, entry 41 (10)): no import. */
+function SeedBankMarker(): ReactElement {
+  return <span className="badge seed-badge" title={SEED_BANK_NOTE}>seed bank</span>;
 }
 
 /** The have-count; when the scan says where the stock sits, it opens to one line per storage block. */
@@ -83,8 +105,13 @@ function NeededFor(props: { row: BuildRow }): ReactElement {
   );
 }
 
-function BuildItem(props: { row: BuildRow; marks: Marks; send: Send; expanded?: boolean; onExpand?: () => void }): ReactElement {
-  const { row, marks, send, expanded, onExpand } = props;
+/**
+ * A row of the build list or its totals: its amount, why, stock and markers; a made part also says how it is made and,
+ * with a choice of recipes, opens the flow view's recipe swap (spec §3.10); a part nothing here makes says to import it.
+ */
+function BuildItem(props: { row: BuildRow; names: Record<string, string>; marks: Marks; settings: PlanSettings; send: Send; expanded?: boolean; onExpand?: () => void }): ReactElement {
+  const { row, names, marks, settings, send, expanded, onExpand } = props;
+  const { made } = row;
   return (
     <li className="mat-row" data-depth={row.depth} style={{ paddingLeft: `${row.depth * DEPTH_INDENT}em` }}>
       {row.hasChildren && onExpand !== undefined ? (
@@ -103,9 +130,21 @@ function BuildItem(props: { row: BuildRow; marks: Marks; send: Send; expanded?: 
       <ItemIcon itemKey={row.key} size={ICON_SIZE} name={row.name} />
       <Tick row={row.row} mark={marks[row.row]} label={row.name} onToggle={marker(send, row.row)}>
         <span className="mat-amount">{quantity(row.key, row.amount)}</span>
+        {row.unmade !== undefined && <UnmadeMarker cause={row.unmade} />}
+        {row.seedBank === true && <SeedBankMarker />}
         {row.avoid === true && <AvoidMarker />}
         <NeededFor row={row} />
         <Stock have={row.have} where={row.where} />
+        {made !== undefined && <span className="mat-made muted small">{made.text}</span>}
+        {made !== undefined && made.alternatives.length >= 2 && (
+          <details className="mat-swap">
+            <summary>Swap recipe</summary>
+            <SwapRecipe
+              good={row.key} inUse={made.recipeId} alternatives={made.alternatives} legend={`Recipe for ${row.name}`} settings={settings}
+              nameOf={(k) => names[k] ?? k} patch={(p) => send([{ op: 'settings', patch: p }])}
+            />
+          </details>
+        )}
       </Tick>
     </li>
   );
@@ -115,8 +154,8 @@ function BuildItem(props: { row: BuildRow; marks: Marks; send: Send; expanded?: 
  * "To build (once)": its head (the title, the Grid / List toggle and, in Grid, the meter of the stacks gathered; neither when there is
  * nothing to build), the total of what it all takes, and the build list as the List's tree or as the inventory grid (Phase 2 spec §9.2).
  */
-function BuildSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; send: Send; unavoidable: ReadonlySet<StuffKey> }): ReactElement {
-  const { plan, names, marks, send, unavoidable } = props;
+function BuildSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; settings: PlanSettings; send: Send; unavoidable: ReadonlySet<StuffKey> }): ReactElement {
+  const { plan, names, marks, settings, send, unavoidable } = props;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(NOTHING_EXPANDED);
   const view = useMaterialsView();
   const toggle = (path: string): void => {
@@ -127,7 +166,7 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
       return next;
     });
   };
-  const groups = groupBuildRows(plan.buildList, names, expanded, unavoidable);
+  const groups = groupBuildRows(plan.buildList, names, expanded, unavoidable, plan.buildAlternatives);
   const some = groups.length > 0;
   const slots = some && view === 'grid' ? groupBuildSlots(plan.buildList, names, unavoidable) : null;
   // What it all takes in raw material, the layout's power and logistics parts included (plan 12).
@@ -135,7 +174,7 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
   return (
     <section className="materials-section" aria-labelledby="to-build-title">
       <div className="mat-head">
-        <h3 id="to-build-title">To build (once)</h3>
+        <h3 id="to-build-title">{`To build (once)${placedWords(plan)}`}</h3>
         {some && <ViewToggle view={view} />}
         {slots !== null && <GatherMeter {...gatheredStacks(slots, marks)} />}
       </div>
@@ -146,7 +185,9 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
           <h4>{group.label}</h4>
           <ul className="mat-list">
             {group.rows.map((row) => (
-              <BuildItem key={row.path} row={row} marks={marks} send={send} expanded={expanded.has(row.path)} onExpand={() => toggle(row.path)} />
+              <BuildItem
+                key={row.path} row={row} names={names} marks={marks} settings={settings} send={send} expanded={expanded.has(row.path)} onExpand={() => toggle(row.path)}
+              />
             ))}
           </ul>
         </div>
@@ -155,17 +196,17 @@ function BuildSection(props: { plan: Plan; names: Record<string, string>; marks:
   );
 }
 
-function TotalsSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; send: Send; unavoidable: ReadonlySet<StuffKey> }): ReactElement {
-  const { plan, names, marks, send, unavoidable } = props;
+function TotalsSection(props: { plan: Plan; names: Record<string, string>; marks: Marks; settings: PlanSettings; send: Send; unavoidable: ReadonlySet<StuffKey> }): ReactElement {
+  const { plan, names, marks, settings, send, unavoidable } = props;
   const rows = buildRows(plan.buildTotals ?? [], names, NOTHING_EXPANDED, unavoidable);
   return (
     <section className="materials-section" aria-labelledby="build-totals-title">
-      <h3 id="build-totals-title">Base materials for the build</h3>
+      <h3 id="build-totals-title">{`Base materials for the build${placedWords(plan)}`}</h3>
       {rows.length === 0 ? (
         <p className="muted">No base materials to gather for the build.</p>
       ) : (
         <ul className="mat-list">
-          {rows.map((row) => <BuildItem key={row.path} row={row} marks={marks} send={send} />)}
+          {rows.map((row) => <BuildItem key={row.path} row={row} names={names} marks={marks} settings={settings} send={send} />)}
         </ul>
       )}
     </section>
@@ -326,8 +367,8 @@ export function MaterialsView(props: ProjectViewProps): ReactElement {
   return (
     <div className="materials">
       <WhatChanged previous={props.previousPlan} plan={plan} />
-      <BuildSection plan={plan} names={names} marks={marks} send={send} unavoidable={unavoidable} />
-      <TotalsSection plan={plan} names={names} marks={marks} send={send} unavoidable={unavoidable} />
+      <BuildSection plan={plan} names={names} marks={marks} settings={project.settings} send={send} unavoidable={unavoidable} />
+      <TotalsSection plan={plan} names={names} marks={marks} settings={project.settings} send={send} unavoidable={unavoidable} />
       <RunSection plan={plan} mode={mode} marks={marks} settings={project.settings} send={send} />
       <LeftOverSection plan={plan} names={names} />
       <StepsView {...props} />

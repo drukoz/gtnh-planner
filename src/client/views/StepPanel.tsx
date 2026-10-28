@@ -12,7 +12,7 @@
 // A step's panel opens on one run of its recipe as NEI draws it (Phase 2 spec §8: the slots, the progress arrow, the
 // power, the readouts and the overclock chips; hovering a slot lights its good as a row does).
 
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react';
+import { useId, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { tierName, V } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { indexPlan, NOTE_CODES, ORPHAN_REL, SHORT_INPUT_SHARE, type PlanIndex } from '../../shared/plan/balance.ts';
@@ -22,9 +22,9 @@ import {
   type StepTier,
 } from '../../shared/types/plan.ts';
 import { Figs } from '../components/Figs.tsx';
-import { focusLost, focusOn } from '../components/focus.ts';
 import { GtArrow } from '../components/GtArrow.tsx';
 import { ItemIcon } from '../components/ItemIcon.tsx';
+import { amountWords, mapName, SwapRecipe } from '../components/SwapRecipe.tsx';
 import { formatDuration, formatNumber, formatPercent, formatRate } from '../format.ts';
 import { endHoverFlowFocus, hoverFlowFocus } from '../state/flow-focus.ts';
 import {
@@ -32,6 +32,8 @@ import {
   optionSlotKey, powerShare, recipeSlots, recipeStats, reusePatch, stackText, tierText, useOnlyPatch, type RecipeSlot,
 } from './flow-model.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
+
+export { RAW_UNIT_TITLE, shownWays } from '../components/SwapRecipe.tsx';
 
 type Send = ProjectViewProps['send'];
 type NameOf = (key: string) => string;
@@ -44,10 +46,6 @@ const MAX_FOUND_AT = 3;
 const MAX_REUSED_AT = 3;
 /** The overworld's Minecraft dimension id: a reused machine there is given by its position alone. */
 const OVERWORLD_ID = 0;
-/** Swap options shown before "more…" (the one in use and a pinned one always show). */
-const SWAP_SHOWN = 5;
-/** Swap options each "more…" adds: a product can have a thousand ways (Wood Pulp), too many to list at once. */
-const SWAP_PAGE = 25;
 const PORT_ICON_SIZE = 16;
 /** A recipe card's slot: a 32 px item icon is a 36 px slot, its 2 px frame round it (Phase 2 spec §8.1). */
 const SLOT_ICON_SIZE = 32;
@@ -55,8 +53,6 @@ const TICKS_PER_SECOND = 20;
 const RAW = 'raw';
 const OUT = 'out';
 const SINK = 'sink';
-/** What "raw/unit" means (fix spec §6.3). */
-export const RAW_UNIT_TITLE = 'raw-material units per unit made (1 base item, 144 L molten metal or 1,000 L other fluid = 1)';
 
 const LEAF_TEXT: Record<LeafClass, string> = {
   free: 'Free: water, air, cobblestone and lava cost nothing',
@@ -89,27 +85,9 @@ function listed(parts: readonly string[]): string {
   return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1) as string}`;
 }
 
-/** A recipe map id in words: `gt.recipe.assembler` → `Assembler`, for a plan whose names have no `map:` entry. */
-function mapLabel(mapId: string): string {
-  const words = mapId.replace(/^.*?recipe\./, '').replace(/[._-]+/g, ' ').trim();
-  return words === '' ? mapId : words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-/** The machine a recipe map runs on, by the plan's name for the map. */
-function mapName(mapId: string, nameOf: NameOf): string {
-  const name = nameOf(`map:${mapId}`);
-  return name === `map:${mapId}` ? mapLabel(mapId) : name;
-}
-
 /** "Wiremill (1x Copper Wire)": a step by its machine and what it makes. */
 function stepWords(step: PlanStep, nameOf: NameOf): string {
   return step.mainOutput === undefined ? step.machine.name : `${step.machine.name} (${nameOf(step.mainOutput)})`;
-}
-
-/** "72 L Molten Tin", "2× Redstone", "Redstone": an amount of a good. */
-function amountWords(key: StuffKey, amount: number, nameOf: NameOf): string {
-  if (isFluidKey(key)) return `${formatNumber(amount)} L ${nameOf(key)}`;
-  return amount === 1 ? nameOf(key) : `${formatNumber(amount)}× ${nameOf(key)}`;
 }
 
 function rateOf(perSecond: number, per: Per, key: StuffKey): string {
@@ -128,26 +106,6 @@ function unitWord(name: string): string {
   const last = words.at(-1) ?? '';
   if (last === '') return 'unit';
   return /^[A-Z0-9]+$/.test(last) ? last : last.toLowerCase();
-}
-
-type Alternative = PlanStep['alternatives'][number];
-
-/** "2× Copper Wire, 72 L Molten Soldering Alloy / 144 L Molten Tin": goods with their amounts per run, every option of a slot. */
-function partsText(parts: Alternative['inputs'], nameOf: NameOf): string {
-  return (parts ?? []).map((p) => (p.options !== undefined && p.options.length > 1 ? p.options : [p]).map((o) => amountWords(o.key, o.amount, nameOf)).join(' / ')).join(', ');
-}
-
-/** One swap option in words: its machine and what a run takes and makes. */
-function alternativeText(a: Alternative, nameOf: NameOf): string {
-  const takes = partsText(a.inputs, nameOf);
-  const makes = partsText(a.outputs, nameOf);
-  const what = takes === '' && makes === '' ? '' : `: ${takes === '' ? 'nothing' : takes} → ${makes}`;
-  return `${mapName(a.mapId, nameOf)}${what}`;
-}
-
-/** "raw/unit", with what it means on hover. */
-function RawUnit(): ReactElement {
-  return <abbr className="unit-hint" title={RAW_UNIT_TITLE}>raw/unit</abbr>;
 }
 
 function PanelHead(props: { itemKey: StuffKey | null; itemName?: string; title: string; onClose(): void }): ReactElement {
@@ -657,41 +615,11 @@ export function sharedMachineText(step: PlanStep, plan: Plan): string | null {
 }
 
 /**
- * The swap rows shown while `limit` rows are open (the server sorts them: usable ways first, each group by raw material
- * use): the first `limit`, plus the one in use and a pinned one wherever they are; "more…" raises the limit a page at a
- * time (`SWAP_SHOWN`, then `SWAP_PAGE` more), so every way can be reached however many there are.
- */
-export function shownWays<T extends { recipeId: string }>(ways: readonly T[], limit: number, inUse: string, pinned: string | undefined): T[] {
-  return ways.filter((a, i) => i < limit || a.recipeId === inUse || a.recipeId === pinned);
-}
-
-/**
- * Every way the export knows to make the step's product (controller rulings of plan 09): those the group can use with a
- * radio each, the others greyed with why not; the first few, then pages of "more…"; last, importing the product instead.
- * A "more…" that shows the rest goes with its own press: before it goes, it hands the focus it had to the first way it
- * shows, else to the panel, never to the body (ledger ruling P2-R124, P2-R57's rule).
+ * Every way the export knows to make the step's product (controller rulings of plan 09), as `SwapRecipe` lists the ways
+ * to make any good; a step without a main product has nothing to pin a recipe for.
  */
 function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: NameOf; patch: Patch }): ReactElement {
   const { step, settings, nameOf, patch } = props;
-  const group = useId();
-  const [limit, setLimit] = useState(SWAP_SHOWN);
-  const fieldRef = useRef<HTMLFieldSetElement | null>(null);
-  /**
-   * A "more…" that shows the rest was pressed: where the first way it shows stands among the ways shown (null when that way takes no focus:
-   * one the group cannot use), for the focus its button had; undefined otherwise.
-   */
-  const handOn = useRef<number | null | undefined>(undefined);
-  useLayoutEffect(() => {
-    const at = handOn.current;
-    if (at === undefined) return;
-    handOn.current = undefined;
-    // a press made while another element had the focus leaves it there (a pointer's, in Safari or Firefox on macOS, focuses no button); one
-    // made with nothing focused hands it on all the same
-    if (!focusLost()) return;
-    const field = fieldRef.current;
-    const way = at === null ? null : field?.querySelectorAll(':scope > .swap-option')[at]?.querySelector('input') ?? null;
-    if (!focusOn(way)) focusOn(field?.closest('aside'), { preventScroll: true });
-  }, [limit]);
   const main = step.mainOutput;
   if (main === undefined) {
     return (
@@ -701,71 +629,11 @@ function SwapSection(props: { step: PlanStep; settings: PlanSettings; nameOf: Na
       </section>
     );
   }
-  const choices = settings.recipeChoice;
-  const pinned = Object.hasOwn(choices, main) ? choices[main] : undefined;
-  const choose = (recipeId: string | null): void => {
-    const next = { ...choices };
-    if (recipeId === null) delete next[main];
-    else next[main] = recipeId;
-    patch({ recipeChoice: next });
-  };
-  const alternatives = step.alternatives;
-  const usable = alternatives.filter((a) => a.unusable === undefined);
-  const pinUsable = pinned === undefined || usable.some((a) => a.recipeId === pinned);
-  const shown = shownWays(alternatives, limit, step.recipeId, pinned);
-  const hidden = alternatives.length - shown.length;
-  const more = (): void => {
-    if (hidden <= SWAP_PAGE) {
-      // the rest comes, and the button goes: the first way it brings takes the focus, a way the group can use (the server sorts those first)
-      const next = shownWays(alternatives, limit + SWAP_PAGE, step.recipeId, pinned);
-      const first = next.findIndex((a) => !shown.includes(a));
-      handOn.current = first >= 0 && next[first]?.unusable === undefined ? first : null;
-    }
-    setLimit((n) => n + SWAP_PAGE);
-  };
-  // A product the line imports is counted at the cheapest way the group can make it (the stop item's price).
-  const importCost = usable.reduce((least, a) => Math.min(least, a.rawCost), Number.POSITIVE_INFINITY);
-  const ways = step.ways;
   return (
-    <fieldset ref={fieldRef} className="flow-panel-section" data-swap="">
-      <legend className="flow-panel-title">Swap recipe</legend>
-      {ways !== undefined && (
-        <p className="muted small">{`${ways.total} ${ways.total === 1 ? 'way' : 'ways'} to make ${nameOf(main)}: ${ways.usable} you can use now`}</p>
-      )}
-      <label className="check">
-        <input type="radio" name={group} checked={pinned === undefined} onChange={() => choose(null)} />
-        Let the planner choose
-      </label>
-      {shown.map((a) => (a.unusable === undefined ? (
-        <label key={a.recipeId} className="check swap-option" title={`recipe ${a.recipeId}`}>
-          <input type="radio" name={group} checked={pinned === a.recipeId} onChange={() => choose(a.recipeId)} />
-          <span className="swap-text">{`${alternativeText(a, nameOf)} · ${formatNumber(a.rawCost)} `}<RawUnit /></span>
-          {a.recipeId === step.recipeId && <span className="badge">in use</span>}
-        </label>
-      ) : (
-        <div key={a.recipeId} className="swap-option unusable" title={`recipe ${a.recipeId}`}>
-          <span className="swap-text">{`${alternativeText(a, nameOf)} · ${formatNumber(a.rawCost)} `}<RawUnit />{` — ${a.unusable.join('; ')}`}</span>
-        </div>
-      )))}
-      {hidden > 0 && (
-        <div className="row">
-          <button type="button" className="small" onClick={more}>
-            <Figs text={hidden <= SWAP_PAGE ? `${hidden} more…` : `${SWAP_PAGE} more… (${hidden} not shown)`} />
-          </button>
-        </div>
-      )}
-      {main !== settings.target && (
-        <label className="check swap-option">
-          <input type="radio" name={group} checked={settings.stopItems.includes(main)} onChange={() => patch(importInsteadPatch(settings, main))} />
-          <span className="swap-text">
-            {Number.isFinite(importCost) ? `Import it (counted at ${formatNumber(importCost)} ` : 'Import it'}
-            {Number.isFinite(importCost) && <><RawUnit />)</>}
-          </span>
-        </label>
-      )}
-      {!pinUsable && <p className="muted small">{`The pinned recipe ${pinned} is not usable now, so the planner chose another.`}</p>}
-      {usable.length <= 1 && <p className="muted small">{`No other recipe for ${nameOf(main)} is usable here.`}</p>}
-    </fieldset>
+    <SwapRecipe
+      good={main} inUse={step.recipeId} alternatives={step.alternatives} legend="Swap recipe" {...(step.ways === undefined ? {} : { ways: step.ways })}
+      settings={settings} nameOf={nameOf} patch={patch}
+    />
   );
 }
 
