@@ -31,8 +31,8 @@ Run them from the repository root.
 - Setup: `npm ci`. A new worktree has no `node_modules/`.
 - Typecheck: `npx tsc -b`. No output means clean. Node runs the `.ts` sources directly, so this is the only compile
   step for the server.
-- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `093dda3cf` it gives 240 files passed | 18 skipped,
-  3984 tests passed | 188 skipped.
+- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `8874367bb` it gives 241 files passed | 18 skipped,
+  3996 tests passed | 188 skipped.
 - One file or folder: `npx vitest run tests/unit/layout/power-loss.test.ts`, or `npx vitest run tests/unit/layout`.
 - Browser tests: `npm run e2e`. It builds the client, then runs Chromium against a real server on 127.0.0.1:18787,
   with data that `tests/e2e/prepare.ts` writes to `data/e2e/`. It needs Playwright's Chromium
@@ -91,5 +91,10 @@ Run them from the repository root.
 
 ## Known flaky tests
 
-Two wall-clock assertions fail at random under load: `tests/unit/layout/feed-ae2.test.ts` and
-`tests/unit/layout/path.test.ts` (RUK-125). Re-run the file before you chase a failure there.
+Wall-clock assertions fail at random under load, and with several agents testing on this Mac at once, load is
+common. Two are tracked as RUK-125: `tests/unit/layout/feed-ae2.test.ts` and `tests/unit/layout/path.test.ts`.
+Three more failed under load on 2026-10-30 and passed when run alone: `tests/client/link-geometry.test.tsx` (a
+1,000-block line's link geometry in under a second, a pick in under 6 ms), `tests/unit/layout/feeding/check.test.ts`
+(a 1,200-block line checked in under a second) and `tests/unit/planner/candidates.test.ts` (vitest's 5 s default
+timeout). Re-run the file alone before you chase a failure there, and say so in your hand-over.
+`npx vitest run --maxWorkers=2` runs the whole suite under less load.
