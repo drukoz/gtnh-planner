@@ -7,11 +7,11 @@ import { deliveredVolts } from '../../../src/server/layout/power.ts';
 import { runX } from '../../../src/server/layout/internal.ts';
 import { lossLine, measureLoss, overlaps, SUPPLY_TIER, tierContacts } from '../../helpers/power-loss.ts';
 
-// measured 2026-10-27 on this branch, rounded up to two decimals; may only ever be lowered
+// measured 2026-10-30 on this branch (RUK-124, commit 10883cace), rounded up to two decimals; may only ever be lowered
 const BUDGET: Readonly<Record<string, number>> = {
-  '10 direct': 0.80, '10 routed': 1.01, '10 ae2': 1.68, '10 enderio': 0.80,
-  '20 direct': 1.01, '20 routed': 1.81, '20 ae2': 18.26, '20 enderio': 1.01,
-  '40 direct': 1.81, '40 routed': 19.09, '40 ae2': 45.63, '40 enderio': 1.81,
+  '10 direct': 2.44, '10 routed': 2.57, '10 ae2': 3.71, '10 enderio': 2.44,
+  '20 direct': 2.57, '20 routed': 3.84, '20 ae2': 25.64, '20 enderio': 2.57,
+  '40 direct': 3.84, '40 routed': 26.75, '40 ae2': 49.73, '40 enderio': 3.84,
 };
 
 const GT_VOLTS = (tier: number): number => 8 * 4 ** tier;   // ULV 8, LV 32, MV 128
@@ -44,10 +44,12 @@ describe('line cable loss baseline', () => {
   for (const n of COUNTS) {
     for (const mode of MODES) {
       it(`the ${n}-machine ${mode} line stays within its loss budget`, async () => {
-        const report = await measureLoss(n, mode);
-        const { layout } = await lossLine(n, mode);
+        const { report, layout } = await measureLoss(n, mode);
         expect(layout.status).toBe('ok');
         expect(overlaps(layout.blocks)).toEqual([]);
+        // a line that fell back to an unplaced site or could not reach the tap measures nothing real
+        expect(report.codes, `${n} ${mode}: no site was clear`).not.toContain('site_not_clear');
+        expect(report.codes, `${n} ${mode}: no hookup routed`).not.toContain('no_path');
         expect(report.cableCells).toBeGreaterThan(0);
         expect(report.share).toBeLessThanOrEqual(BUDGET[`${n} ${mode}`]!);
       });

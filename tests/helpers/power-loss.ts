@@ -3,8 +3,7 @@
 // (`layoutLine`); nothing here fakes a layout. `tierContacts` lives here (moved from internal.test.ts) so the loss
 // tests can run the same wiring checks the internal route is held to.
 //
-// The loss figure comes from `Layout.power.detail` because this branch has no structured loss on the layout.
-// TODO(RUK-112): read Layout.loss.totalEUt once it lands.
+// The loss figure comes from `Layout.loss.totalEUt`, the structured loss RUK-116 put on the layout.
 
 import { DIRS, posKey, step } from '../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
@@ -29,7 +28,7 @@ export interface LossReport {
   size: [number, number, number];
   /** EU/t the placed electric machines draw (the plan's average). */
   drawEUt: number;
-  /** EU/t the line's cables and transformers lose, read out of `Layout.power.detail`. */
+  /** EU/t the power need counts — the banks' emitter loss, the line's cables, the supply run and the hookup — read off `Layout.loss.totalEUt`. */
   lossEUt: number;
   /** `lossEUt / drawEUt`, rounded to two decimals. */
   share: number;
@@ -53,7 +52,11 @@ export function lossPlan(n: number): Plan {
   return makePlan(spreadSteps(n));
 }
 
-/** The scan a loss line is laid on: an MV network with a huge surplus and a fat tap, plus the mode's logistics net. */
+/**
+ * The scan a loss line is laid on: an MV network with a huge surplus and a fat tap, plus the mode's logistics net.
+ * The macerator and the power tap sit clear of the ground the longest line (40 ae2, ~85 blocks along one axis from
+ * the base centre) stands on, and the tap is far enough down +z that the site search box reaches the whole line.
+ */
 export function lossScan(mode: LogisticsMode): WorldScan {
   const logistics: ScanSpec['logistics'] = mode === 'direct' ? []
     : mode === 'routed' ? [{ kind: 'routed', taps: [[26, 64, 12]] }]
@@ -61,9 +64,9 @@ export function lossScan(mode: LogisticsMode): WorldScan {
         : [{ kind: 'enderio', taps: [[26, 64, 12]] }];
   return makeScan({
     base: { center: [20, 64, 20], bbox: { minX: 16, minY: 64, minZ: 16, maxX: 24, maxY: 65, maxZ: 24 } },
-    machines: [{ pos: [18, 64, 18], mteId: IDS.MACERATOR }],
+    machines: [{ pos: [40, 64, 20], mteId: IDS.MACERATOR }],
     power: [{ voltageTier: 2, average: 1_000_000, loadEUt: 0, storedEU: 100_000_000,
-      taps: [{ pos: [16, 64, 30], freeAmps: 1000, cableAmps: 1000 }] }],
+      taps: [{ pos: [24, 64, 110], freeAmps: 1000, cableAmps: 1000 }] }],
     ...(logistics.length === 0 ? {} : { logistics }),
   });
 }
@@ -73,8 +76,8 @@ export function lossGround(): LayoutDeps {
   const gt = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
   return { readArea: areaReader(flatVoxels({
     origin: [-160, 50, -160], size: [400, 30, 400], groundY: 63,
-    boxes: [{ from: [18, 64, 18], to: [18, 64, 18], block: gt(IDS.MACERATOR) },
-      { from: [16, 64, 30], to: [16, 64, 30], block: gt(IDS.ANNEALED_2X) }],
+    boxes: [{ from: [40, 64, 20], to: [40, 64, 20], block: gt(IDS.MACERATOR) },
+      { from: [24, 64, 110], to: [24, 64, 110], block: gt(IDS.ANNEALED_2X) }],
   })) };
 }
 
@@ -133,28 +136,25 @@ export function tierContacts(blocks: LocalBlock[], cables: Array<{ tier: number;
   return out;
 }
 
-/** The loss figure `fitPower` writes into `Layout.power.detail`, as an integer, or null when the string is not its shape. */
-function parseLoss(detail: string): number | null {
-  const m = /Needs ([\d,]+) EU\/t on average \(([\d,]+) \+ ([\d,]+) loss\)/.exec(detail);
-  return m === null ? null : Number(m[3]!.replaceAll(',', ''));
-}
-
 const round2 = (x: number): number => Math.round(x * 100) / 100;
 
 /**
  * Lay `n` machines in `mode` end to end and measure what the cables lose: the line's footprint, the plan's draw,
- * the loss out of `Layout.power.detail` (TODO(RUK-112): `Layout.loss`), their ratio to two decimals, the cable
- * cells and the codes.
- * Throws when the layout does not report a loss figure.
+ * the loss the power need counts (`Layout.loss.totalEUt`), their ratio to two decimals, the cable cells and the
+ * codes. Returns the layout it laid out, so a test asserts on the same one it measured.
+ * Throws when the layout reports no loss figure.
  */
-export async function measureLoss(n: number, mode: LogisticsMode): Promise<LossReport> {
+export async function measureLoss(n: number, mode: LogisticsMode): Promise<{ report: LossReport; layout: Layout }> {
   const { layout, plan } = await lossLine(n, mode);
-  const lossEUt = parseLoss(layout.power?.detail ?? '');
-  if (lossEUt === null) throw new Error(`no loss figure in power detail: ${layout.power?.detail ?? '(none)'}`);
+  const lossEUt = layout.loss?.totalEUt;
+  if (lossEUt === undefined) throw new Error(`the ${n}-machine ${mode} line reports no loss figure`);
   const drawEUt = plan.power.averageEUt;
   return {
-    machines: n, mode, size: layout.size, drawEUt, lossEUt, share: round2(lossEUt / drawEUt),
-    cableCells: layout.blocks.filter((b) => b.role === 'cable').length,
-    codes: [...new Set(layout.warnings.map((w) => w.code))].sort(),
+    report: {
+      machines: n, mode, size: layout.size, drawEUt, lossEUt, share: round2(lossEUt / drawEUt),
+      cableCells: layout.blocks.filter((b) => b.role === 'cable').length,
+      codes: [...new Set(layout.warnings.map((w) => w.code))].sort(),
+    },
+    layout,
   };
 }
