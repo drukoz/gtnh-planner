@@ -160,22 +160,42 @@ function cableOrder(a: CableMachine, b: CableMachine): number {
     || a.cable.voltage - b.cable.voltage || a.cable.amps - b.cable.amps || compareMachineId(a.id, b.id);
 }
 
-/**
- * The cable for packets of `need.volts` carrying `need.amps`: among cables rated for the volts, the first in
- * `cableOrder` that carries the amps; when none does, the first of the highest-amp ones with `ampsShort` (the caller
- * lays parallel runs). Null when no cable takes the volts.
- */
-export function pickCable(pack: Pack, need: { volts: number; amps: number }): { cable: Machine; ampsShort: boolean } | null {
+/** Every cable in the pack rated for `volts`, in `cableOrder`. */
+function cablesRated(pack: Pack, volts: number): CableMachine[] {
   const rated: CableMachine[] = [];
   for (const id of allMachineIds(pack)) {
     const m = machineOf(pack, id);
-    if (m !== undefined && m.kind === 'cable' && m.cable !== undefined && m.cable.voltage >= need.volts) rated.push(m as CableMachine);
+    if (m !== undefined && m.kind === 'cable' && m.cable !== undefined && m.cable.voltage >= volts) rated.push(m as CableMachine);
   }
+  return rated.sort(cableOrder);
+}
+
+/**
+ * The cable for packets of `need.volts` carrying `need.amps`: among cables rated for the volts, the first in
+ * `cableOrder` that carries the amps; when none does, the first of the highest-amp ones with `ampsShort` (the caller
+ * lays parallel runs). Null when no cable takes the volts. `runs`: how many parallel runs of `cable` the amps need
+ * (1 unless `ampsShort`).
+ */
+export function pickCable(pack: Pack, need: { volts: number; amps: number }): { cable: Machine; ampsShort: boolean; runs: number } | null {
+  const rated = cablesRated(pack, need.volts);
   if (rated.length === 0) return null;
   const enough = rated.filter((m) => m.cable.amps >= need.amps);
-  if (enough.length > 0) return { cable: enough.sort(cableOrder)[0]!, ampsShort: false };
-  const most = Math.max(...rated.map((m) => m.cable.amps));
-  return { cable: rated.filter((m) => m.cable.amps === most).sort(cableOrder)[0]!, ampsShort: true };
+  if (enough.length > 0) return { cable: enough[0]!, ampsShort: false, runs: 1 };
+  const best = rated.filter((m) => m.cable.amps === Math.max(...rated.map((m) => m.cable.amps)))[0]!;
+  return { cable: best, ampsShort: true, runs: Math.max(1, Math.ceil(need.amps / best.cable.amps)) };
+}
+
+/**
+ * The cable to lay instead of `current` to lose less at `need.volts` and `need.amps` (RUK-116, design G2): among the
+ * cables rated for both that lose less per block than `current`, the first in `cableOrder` — so insulated before a bare
+ * cable that loses even less, the same preference `pickCable` applies. Null when the pack has nothing rated for both
+ * that loses less than `current`, which is the caller's "nothing in this export loses less" case.
+ */
+export function lowerLossCable(pack: Pack, need: { volts: number; amps: number }, current: Machine): Machine | null {
+  const loss = current.cable?.lossPerBlock;
+  if (loss === undefined) return null;
+  const better = cablesRated(pack, need.volts).filter((m) => m.cable.amps >= need.amps && m.cable.lossPerBlock < loss);
+  return better.length > 0 ? better[0]! : null;
 }
 
 /** The candidate with the smallest capacity ≥ `rate`, else the one with the largest; ties by id. */

@@ -17,7 +17,8 @@ import {
 import { FACES } from '../../shared/types/assets.ts';
 import type { FeedSpec } from '../../shared/types/feed.ts';
 import type {
-  ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutPowerContext, LayoutStatus, LayoutTap, Pin, ReservedArea,
+  ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutLoss, LayoutPowerContext, LayoutStatus, LayoutTap, Pin, ReservedArea,
+  TierLoss,
 } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, Plan, PlanContext, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
@@ -32,10 +33,10 @@ import { addedBlocks, attachCovers, placeUnits, replacedCasings, unitsFromPlan, 
 import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
 import { feedingWarnings } from './feed-rules.ts';
 import {
-  carryingTaps, chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, powerHookup, reachableTap,
+  carryingTaps, chooseLogisticsNetwork, choosePowerNetwork, choosePowerTap, ghostBlocks, logisticsHookup, nearestTap, parallelHookupParts, powerHookup, reachableTap,
   tapCableAmps, type HookupBuild, type PowerHookupBuild, type RouteWorld,
 } from './hookups.ts';
-import { fluidNets, headWidthFor, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
+import { fluidNets, headWidthFor, parallelRunParts, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
 import { buildMode, PORT_SPACING, type ModeResult } from './modes/mode.ts';
 import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } from './parts.ts';
 import type { PathBounds } from './path.ts';
@@ -459,6 +460,10 @@ interface Hookups {
   noPathAt: Map<string, Vec3>;
 }
 
+/** The landing cells the power hookup is searched to: the ones with the least loss inside the line. Bounded because
+ * each candidate costs one A* search in `bestPowerHookup`, so a long line's hookup costs at most this many plus one. */
+const POWER_LANDING_CANDIDATES = 3;
+
 /**
  * The world posKeys a hookup of item conduits that ends on a conduit face routes around: every cell face-adjacent to
  * a line block holding an Item Conduit (plan 11, ruling R14: EnderIO joins touching item conduits into one network, so
@@ -481,8 +486,45 @@ export function hookupKeepOff(lineBlocks: readonly LayoutBlock[], port: Vec3): S
 }
 
 /**
+ * The power hookup that loses least in total: the route to all the landing cells (as the line laid it until the
+ * landing-cell choice task), and one route to each of the `POWER_LANDING_CANDIDATES` cells with the least loss inside
+ * the line, each priced by its own loss plus the line's loss from where it lands (`supplyRunLoss`). A found route
+ * always beats a dashed guide; of equal totals the cheapest-inside-the-line candidate wins, and the all-cells route
+ * is last in the tie order, so the result is never worse than the plain route to all the cells. The search stops at the
+ * first shortlist cell whose loss alone reaches the best found total, as no farther cell can beat it.
+ */
+function bestPowerHookup(input: {
+  pack: Pack; tap: LayoutTap; world: RouteWorld; supplyTier: number; amps: number; maxNodes: number | undefined; line: LocalLine; frame: Frame;
+}): PowerHookupBuild {
+  const { pack, tap, world, supplyTier, amps, maxNodes, line, frame } = input;
+  const ports = line.internal.supplyRun.map((c) => worldPos(c, frame));
+  const price = (build: PowerHookupBuild, order: number) => ({
+    build, order, total: build.lossEUt + supplyRunLoss(line.internal.supply, landingIndex(line, frame, build.hookup)).lossEUt,
+  });
+  // the landing cells the hookup is searched to, the ones that lose least inside the line first (ties by position)
+  const shortlist = ports
+    .map((_, i) => ({ i, loss: supplyRunLoss(line.internal.supply, i).lossEUt }))
+    .sort((a, b) => a.loss - b.loss || a.i - b.i)
+    .slice(0, POWER_LANDING_CANDIDATES);
+  // the plain route to all the cells is searched first, so the candidates are priced against a found total from the
+  // start; a route's own loss is positive, so a candidate whose run loss alone reaches the best found total loses, and
+  // so does every cell after it in the shortlist — a found route's total bounds the rest of the searches
+  const ranked = [price(powerHookup({ pack, tap, ports, world, supplyTier, amps, maxNodes }), shortlist.length)];
+  let best = ranked[0]!.build.found ? ranked[0]!.total : Number.POSITIVE_INFINITY;
+  for (const [order, c] of shortlist.entries()) {
+    if (c.loss >= best) break;
+    const cand = price(powerHookup({ pack, tap, ports: [ports[c.i]!], world, supplyTier, amps, maxNodes }), order);
+    ranked.push(cand);
+    if (cand.build.found) best = Math.min(best, cand.total);
+  }
+  ranked.sort((a, b) => (a.build.found === b.build.found ? 0 : a.build.found ? -1 : 1) || a.total - b.total || a.order - b.order);
+  return ranked[0]!.build;
+}
+
+/**
  * Spec §3.5, §3.6, §3.8: the power hookup from the supply-tier tap whose cable can carry the line and that a route can
- * leave (`powerTapFor`) to the supply run, and the logistics hookup from the network's tap nearest the logistics port.
+ * leave (`powerTapFor`) to the supply run's best landing cell (`bestPowerHookup`), and the logistics hookup from the
+ * network's tap nearest the logistics port.
  * Each goes round the line's box (never through it, so it ends beside its port), the multiblocks' air cells, the areas
  * kept for the line's farms (`areas`, add-on 17: a hookup never reaches them) and the hookups laid before it; the power
  * hookup also keeps off everything of another tier, in the line and in the base, and a logistics hookup that ends on a
@@ -526,9 +568,7 @@ function buildHookups(input: {
       if (tap !== null) {
         const keepAway = new Set([...lineKeepAway, ...baseKeepAway(pack, scan, dim, supplyTier, tap.pos)]);
         const world: RouteWorld = { vox, line: routeLine, box, keepAway, areas };
-        const build = powerHookup({
-          pack, tap, ports: line.internal.supplyRun.map((c) => worldPos(c, frame)), world, supplyTier, amps: stages.supplyAmps, maxNodes,
-        });
+        const build = bestPowerHookup({ pack, tap, world, supplyTier, amps: stages.supplyAmps, maxNodes, line, frame });
         add(build, tap);
         out.power = { build, tap };
       }
@@ -564,8 +604,8 @@ function buildHookups(input: {
   return out;
 }
 
-/** The supply-run cell (its index z) the power hookup's last cell touches; null without a power hookup. */
-function landingZ(line: LocalLine, frame: Frame, hookup: Hookup | undefined): number | null {
+/** The index in `internal.supplyRun` of the cell the power hookup's last cell touches; null without a power hookup. */
+function landingIndex(line: LocalLine, frame: Frame, hookup: Hookup | undefined): number | null {
   const last = hookup?.path.at(-1);
   if (last === undefined) return null;
   const z = line.internal.supplyRun.findIndex((c) => sideToward(last, worldPos(c, frame)) !== -1);
@@ -579,6 +619,11 @@ function withIdleDraw(power: PowerSummary, idle: number): PowerSummary {
 
 function idleDetail(power: PowerSummary, idle: number): PowerSummary {
   return idle > 0 ? { ...power, detail: `${power.detail ?? ''}; AE2 parts idle: ${fmtRate(idle)} EU/t` } : power;
+}
+
+/** What the line's cables and hookup lose (RUK-116, design G2), in the power card's detail. */
+function lossDetail(power: PowerSummary, lossEUt: number): PowerSummary {
+  return lossEUt > 0 ? { ...power, detail: `${power.detail ?? ''}; cables and hookup lose ${fmtInt(lossEUt)} EU/t` } : power;
 }
 
 // ---- Parts (stage 10) ----
@@ -728,6 +773,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: [], hookups: [], pins, buildSteps,
       bom: bomFromBlocks([], fit?.optional ?? []), warnings, status,
       power: fit?.power ?? { ...plan.power },
+      // nothing of its own to wire, so nothing to lose
+      loss: { tiers: [], hookupEUt: 0, banksEUt: 0, totalEUt: 0 },
       ...(reserved.length === 0 ? {} : { reserved }),
     };
   }
@@ -765,14 +812,21 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const idle = ae2IdleEUt(blocks, parts);
   const need = withIdleDraw(plan.power, idle);
   // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
-  const supplyRun = supplyRunLoss(line.internal.supply, landingZ(line, frame, hooked?.power?.build.hookup));
+  const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
   // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
   const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
+  // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
+  // highest tier, so the list stays tier descending
+  const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
+  const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
+  const banksEUt = stages?.lossEUt ?? 0;
+  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt };
   const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
 
   // stages 10–11 (parts and warnings first: the warning pins come from them)
   // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
-  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...addedBlocks(units), ...(fit?.optional ?? [])]);
+  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...parallelRunParts(line.internal.cables),
+    ...(hooked?.power == null ? [] : parallelHookupParts(hooked.power.build)), ...addedBlocks(units), ...(fit?.optional ?? [])]);
   // without a base the warning that says to pick one comes first (Review Focus 1)
   // the static feeding rules read the line as laid out (architecture §11 entry 51)
   const warnings = dedupeWarnings([
@@ -831,7 +885,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   return {
     dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: assignBuildSteps(blocks, buildSteps, stepsInput, hookups),
     hookups, pins, buildSteps, bom, warnings, status: finish.status,
-    power: fit === null ? need : idleDetail(fit.power, idle),
+    power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
+    loss,
     ...(replaced.length === 0 ? {} : { replaced }),
     ...(reserved.length === 0 ? {} : { reserved }),
   };
