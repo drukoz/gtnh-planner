@@ -54,8 +54,9 @@ export function lossPlan(n: number): Plan {
 
 /**
  * The scan a loss line is laid on: an MV network with a huge surplus and a fat tap, plus the mode's logistics net.
- * The macerator and the power tap sit clear of the ground the longest line (40 ae2, ~85 blocks along one axis from
- * the base centre) stands on, and the tap is far enough down +z that the site search box reaches the whole line.
+ * The site search reads only the base box and `SITE_MARGIN` around it (and the nearest tap), whatever the line's
+ * length, so the base box runs down +z far enough to hold the longest line (40 ae2, 5x1x83). The tap stays a few
+ * blocks from the base, so the hookup stays short and the loss is mostly the line's own; the macerator sits clear.
  */
 export function lossScan(mode: LogisticsMode): WorldScan {
   const logistics: ScanSpec['logistics'] = mode === 'direct' ? []
@@ -63,10 +64,10 @@ export function lossScan(mode: LogisticsMode): WorldScan {
       : mode === 'ae2' ? [{ kind: 'ae2', taps: [[26, 64, 12]], channelsUsed: 0, channelsMax: 128 }]
         : [{ kind: 'enderio', taps: [[26, 64, 12]] }];
   return makeScan({
-    base: { center: [20, 64, 20], bbox: { minX: 16, minY: 64, minZ: 16, maxX: 24, maxY: 65, maxZ: 24 } },
+    base: { center: [20, 64, 20], bbox: { minX: 16, minY: 64, minZ: 16, maxX: 24, maxY: 65, maxZ: 64 } },
     machines: [{ pos: [40, 64, 20], mteId: IDS.MACERATOR }],
     power: [{ voltageTier: 2, average: 1_000_000, loadEUt: 0, storedEU: 100_000_000,
-      taps: [{ pos: [24, 64, 110], freeAmps: 1000, cableAmps: 1000 }] }],
+      taps: [{ pos: [16, 64, 30], freeAmps: 1000, cableAmps: 1000 }] }],
     ...(logistics.length === 0 ? {} : { logistics }),
   });
 }
@@ -77,7 +78,7 @@ export function lossGround(): LayoutDeps {
   return { readArea: areaReader(flatVoxels({
     origin: [-160, 50, -160], size: [400, 30, 400], groundY: 63,
     boxes: [{ from: [40, 64, 20], to: [40, 64, 20], block: gt(IDS.MACERATOR) },
-      { from: [24, 64, 110], to: [24, 64, 110], block: gt(IDS.ANNEALED_2X) }],
+      { from: [16, 64, 30], to: [16, 64, 30], block: gt(IDS.ANNEALED_2X) }],
   })) };
 }
 

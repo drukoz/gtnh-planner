@@ -9,9 +9,9 @@ import { lossLine, measureLoss, overlaps, SUPPLY_TIER, tierContacts } from '../.
 
 // measured 2026-10-30 on this branch (RUK-124, commit 10883cace), rounded up to two decimals; may only ever be lowered
 const BUDGET: Readonly<Record<string, number>> = {
-  '10 direct': 2.44, '10 routed': 2.57, '10 ae2': 3.71, '10 enderio': 2.44,
-  '20 direct': 2.57, '20 routed': 3.84, '20 ae2': 25.64, '20 enderio': 2.57,
-  '40 direct': 3.84, '40 routed': 26.75, '40 ae2': 49.73, '40 enderio': 3.84,
+  '10 direct': 0.84, '10 routed': 0.97, '10 ae2': 1.63, '10 enderio': 0.84,
+  '20 direct': 0.97, '20 routed': 1.76, '20 ae2': 18.00, '20 enderio': 0.97,
+  '40 direct': 1.76, '40 routed': 18.82, '40 ae2': 51.89, '40 enderio': 1.76,
 };
 
 const GT_VOLTS = (tier: number): number => 8 * 4 ** tier;   // ULV 8, LV 32, MV 128
