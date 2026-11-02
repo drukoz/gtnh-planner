@@ -10,6 +10,7 @@ import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../src/shared/types/plan.ts';
 import type { StuffKey } from '../../../src/shared/keys.ts';
 import { layoutPack, makePlan, makeProject, makeScan, flatVoxels, areaReader, IDS, STONE, type StepSpec } from '../../helpers/layout-fixtures.ts';
+import { lossLine } from '../../helpers/power-loss.ts';
 import { mergeLayoutIntoPlan } from '../../../src/server/layout/merge.ts';
 import { planBasis } from '../../../src/server/planner/basis.ts';
 import { buildBom } from '../../../src/server/planner/bom.ts';
@@ -628,5 +629,14 @@ describe('layoutLine: shared machines and structure hatches', () => {
 describe('headSplits (RUK-121)', () => {
   it('tries a quarter, a third, two fifths and half of the units, each rounded down to an even count', () => {
     expect([0, 3, 4, 8, 10, 20, 40].map((n) => headSplits(n))).toEqual([[], [], [2], [2, 4], [2, 4], [4, 6, 8, 10], [10, 12, 16, 20]]);
+  });
+});
+
+describe('the power head choice (RUK-121)', () => {
+  it('keeps the west head when a middle head would leave transformers to place by hand', async () => {
+    // the 8-machine ae2 line: a middle head cuts its loss, but its bank has room for only 2 of the 5 transformers it needs
+    const { layout, placement } = await lossLine(8, 'ae2');
+    expect(placement.headX).toBe(0);
+    expect(layout.warnings.map((w) => w.code)).not.toContain('transformer_bank');
   });
 });

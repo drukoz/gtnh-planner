@@ -8,10 +8,10 @@ import { runX } from '../../../src/server/layout/internal.ts';
 import { lossLine, measureLoss, overlaps, SUPPLY_TIER, tierContacts } from '../../helpers/power-loss.ts';
 
 // measured 2026-10-30 on this branch (RUK-124, commit 10883cace), rounded up to two decimals; may only ever be lowered.
-// Lowered 2026-11-02 (RUK-507) on the seven lines whose power head now stands in the middle (RUK-121).
+// Lowered 2026-11-02 (RUK-507) on the five lines whose power head now stands in the middle (RUK-121).
 const BUDGET: Readonly<Record<string, number>> = {
-  '10 direct': 0.84, '10 routed': 0.97, '10 ae2': 1.27, '10 enderio': 0.84,
-  '20 direct': 0.97, '20 routed': 1.25, '20 ae2': 3.18, '20 enderio': 0.97,
+  '10 direct': 0.84, '10 routed': 0.97, '10 ae2': 1.63, '10 enderio': 0.84,
+  '20 direct': 0.97, '20 routed': 1.76, '20 ae2': 3.18, '20 enderio': 0.97,
   '40 direct': 1.23, '40 routed': 3.68, '40 ae2': 20.82, '40 enderio': 1.23,
 };
 

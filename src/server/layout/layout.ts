@@ -265,11 +265,21 @@ function lineLoss(line: LocalLine): number {
 }
 
 /**
+ * What a line leaves to finish by hand inside its own grid (RUK-121): the connections it could not lay (`route_failed`)
+ * and the transformers its banks have no room for (`transformer_bank`).
+ */
+function handWork(line: LocalLine): { unwired: number; transformers: number } {
+  const needed = line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0;
+  const placed = line.internal.blocks.filter((b) => b.role === 'transformer').length;
+  return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
+}
+
+/**
  * The line in its own grid, its power head where the line loses least (RUK-121). The line is laid with the head at its
- * west end and, given the stages, again with each of `headSplits` of its units west of a head in the middle. The middle
- * head with the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 − `MIDDLE_HEAD_MIN_CUT`)
- * of the west-end line's, which must lose something; otherwise the line is the west-end one, exactly the line laid before
- * RUK-121.
+ * west end and, given the stages, again with each of `headSplits` of its units west of a head in the middle. A middle
+ * head that leaves more to finish by hand (`handWork`) than the west-end line is never kept. Of the others, the one with
+ * the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 − `MIDDLE_HEAD_MIN_CUT`) of the
+ * west-end line's, which must lose something; otherwise the line is the west-end one, exactly the line laid before RUK-121.
  */
 function buildLocal(input: LocalInput): LocalLine {
   const west = buildLocalAt(input, 0);
@@ -278,10 +288,15 @@ function buildLocal(input: LocalInput): LocalLine {
   // head cannot cut that, and would only make the line taller and longer
   const westLoss = lineLoss(west);
   if (westLoss <= 0) return west;
+  // a middle head's bank has room on one side of the spine only: a middle head that leaves more to finish by hand than
+  // the west head (a transformer, a connection) is never kept, whatever it saves
+  const westHand = handWork(west);
   let middle: LocalLine | null = null;
   let middleLoss = Infinity;
   for (const westUnits of headSplits(input.units.filter((u) => u.manual === undefined).length)) {
     const line = buildLocalAt(input, westUnits);
+    const hand = handWork(line);
+    if (hand.unwired > westHand.unwired || hand.transformers > westHand.transformers) continue;
     const loss = lineLoss(line);
     if (loss < middleLoss) {
       middle = line;
