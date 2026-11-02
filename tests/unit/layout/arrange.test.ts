@@ -187,19 +187,18 @@ describe('placement', () => {
 describe('placement: tiers apart, front and output side apart', () => {
   it('keeps machines fed at different tiers a column apart, also from the power head', () => {
     const { units } = unitsFromPlan(layoutPack(), twoStep());
-    // MV supply, head in the middle (RUK-121): half the units west of the head (the head at x 2 to 4), half east; the
-    // head ends with the LV run, so the LV macerators stand next to it (x 0 west, x 5 east) and the MV assembler at 6
+    // MV supply: the head ends with the LV run, so the LV macerators stand at x 3 and the MV assembler at 5, not 4
     const p = placeUnits(units, { headWidth: 3, portSpacing: 0, supplyTier: 2 });
-    expect(p.units.map((u) => [u.stepId, u.row, u.at[0]])).toEqual([['s1', 'N', 0], ['s1', 'N', 5], ['s2', 'S', 6]]);
-    expect(p.units.map((u) => u.ports.power)).toEqual([[0, 0, 0], [5, 0, 0], [6, 0, 4]]);
+    expect(p.units.map((u) => [u.stepId, u.row, u.at[0]])).toEqual([['s1', 'N', 3], ['s1', 'S', 3], ['s2', 'N', 5]]);
+    expect(p.units.map((u) => u.ports.power)).toEqual([[3, 0, 0], [3, 0, 4], [5, 0, 0]]);
     // an LV supply feeds all three at LV: no gap
-    expect(placeUnits(units, { headWidth: 1, portSpacing: 0, supplyTier: 1 }).units.map((u) => u.at[0])).toEqual([0, 2, 2]);
+    expect(placeUnits(units, { headWidth: 1, portSpacing: 0, supplyTier: 1 }).units.map((u) => u.at[0])).toEqual([1, 1, 2]);
     // the first unit of a row fed at another tier than the head's last run keeps a column away from it (the LV
-    // macerator stands west of the head; the MV assembler stands a column off the head's east end)
+    // macerator now stands first, next to the head; the MV assembler starts row S)
     const mvFirst = unitsFromPlan(layoutPack(), makePlan([{ id: 'a', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
       { id: 'b', mteId: IDS.MACERATOR, count: 1, euPerTick: 30 }], { flows: [] })).units;
     expect(placeUnits(mvFirst, { headWidth: 3, portSpacing: 0, supplyTier: 2 }).units.map((u) => [u.stepId, u.row, u.at[0]]))
-      .toEqual([['b', 'N', 0], ['a', 'N', 6]]);
+      .toEqual([['b', 'N', 3], ['a', 'S', 4]]);
   });
 
   it('stands the lowest feed tier next to the power head whatever the flow order, and leaves a steam machine in its place', () => {
@@ -218,10 +217,10 @@ describe('placement: tiers apart, front and output side apart', () => {
     ]);
     const { units } = unitsFromPlan(pack, plan);
     expect(units.map((u) => [u.stepId, u.electric])).toEqual([['h', true], ['m', true], ['m', true], ['s', false], ['l', true]]);
-    // HV supply, head in the middle: the lowest-fed half of the electric units (LV, then MV in flow order) stand west
-    // of the head, the rest east of it; the steam macerator keeps its own slot east (it has no feed tier)
+    // HV supply: the electric units take the electric units' slots LV first, then MV in flow order, then HV; the steam
+    // macerator keeps its own slot (it has no feed tier)
     const hv = placeUnits(units, { headWidth: 5, portSpacing: 0, supplyTier: 3 });
-    expect(hv.units.map((u) => [u.stepId, u.index, u.row, u.at[0]])).toEqual([['l', 0, 'N', 0], ['m', 0, 'S', 0], ['m', 1, 'N', 8], ['s', 0, 'S', 7], ['h', 0, 'S', 8]]);
+    expect(hv.units.map((u) => [u.stepId, u.index, u.row, u.at[0]])).toEqual([['l', 0, 'N', 5], ['m', 0, 'S', 6], ['m', 1, 'N', 7], ['s', 0, 'S', 7], ['h', 0, 'N', 9]]);
     // MV supply: the HV reactor is fed at MV, so it keeps its flow place among the MV machines
     expect(placeUnits(units, { headWidth: 3, portSpacing: 0, supplyTier: 2 }).units.map((u) => u.stepId)).toEqual(['l', 'h', 'm', 's', 'm']);
     // without the supply tier the units keep their flow order

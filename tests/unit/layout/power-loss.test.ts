@@ -70,7 +70,7 @@ describe('loss lines stay wired', () => {
           const feedTier = Math.min(u.tier, SUPPLY_TIER);
           const entry = internal.cables.find((c) => c.tier === feedTier);
           expect(entry, `${u.name}: no ${feedTier}-tier cable run`).toBeDefined();
-          const hops = hopsToRun(internal.blocks, u.ports.power!, entry!.cable.name, runX(placement.headX!, SUPPLY_TIER, feedTier));
+          const hops = hopsToRun(internal.blocks, u.ports.power!, entry!.cable.name, runX(SUPPLY_TIER, feedTier));
           expect(hops, `${u.name}: port cable does not reach the ${feedTier}-tier run`).not.toBeNull();
           const amps = Math.ceil(u.euPerTick / deliveredVolts(GT_VOLTS(feedTier), 0));
           const volts = deliveredVolts(GT_VOLTS(feedTier), amps * hops! * (entry!.cable.cable?.lossPerBlock ?? 0));

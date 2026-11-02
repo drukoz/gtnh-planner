@@ -265,33 +265,33 @@ describe('GT item pipes', () => {
   it('finds today\'s machine-to-machine tail leaking', async () => {
     const { pack, plan } = chain2();
     const model = readLine({ pack, plan, layout: await layFeed(pack, plan, 'direct') });
-    const chest = 'Chest (output) at 7 64 3';
-    // the tail pipe 7,0,2 imports 16 Alpha every 100 ticks from 100 through its north side's LV conveyor; each waits one
+    const chest = 'Chest (output) at 6 64 3';
+    // the tail pipe 6,0,2 imports 16 Alpha every 100 ticks from 100 through its north side's LV conveyor; each waits one
     // check in the pipe, and the output chest on the pipe's own south side (Item Filter cover) is its nearest taker
     const early = both(model, { ticks: 2_000, restartAt: 2_000 });
-    expect(early.stats.arrivals('7,0,3')).toEqual(Array.from({ length: 19 }, (_, i) => [119 + 100 * i, 't:a@0', 16]));
-    const macerators = ['Basic Macerator at 0 64 1', 'Basic Macerator at 5 64 1'];
+    expect(early.stats.arrivals('6,0,3')).toEqual(Array.from({ length: 19 }, (_, i) => [119 + 100 * i, 't:a@0', 16]));
+    const macerators = ['Basic Macerator at 3 64 1', 'Basic Macerator at 3 64 3'];
     expect(early.findings.map((f) => [f.code, f.machine, f.key, f.count, f.text])).toEqual([
       ...macerators.map((m) => ['feed_starved', m, 't:a@0', undefined, `${m} never gets Alpha: its pipe hands Alpha to ${chest} first, which is nearer`]),
-      ['feed_starved', 'Advanced Assembler at 6 64 3', 't:x@0', undefined, 'Advanced Assembler at 6 64 3 never gets Ex: nothing pushes Ex into its pipe'],
+      ['feed_starved', 'Advanced Assembler at 5 64 1', 't:x@0', undefined, 'Advanced Assembler at 5 64 1 never gets Ex: nothing pushes Ex into its pipe'],
       ['feed_leak', chest, 't:a@0', 304, `Alpha meant for ${macerators[0]} reached ${chest}`],
     ]);
 
     // over the default 20 minutes the chest fills with 27 stacks of Alpha at its 108th arrival; then Alpha reaches the
     // macerators (3 hops) and Ex the assembler, whose Why finds no room in the full chest
     const long = both(model, { ticks: DEFAULT_TICKS, restartAt: DEFAULT_TICKS });
-    const filled = long.stats.arrivals('7,0,3');
+    const filled = long.stats.arrivals('6,0,3');
     expect(filled).toEqual(Array.from({ length: 108 }, (_, i) => [119 + 100 * i, 't:a@0', 16]));
     expect(filled.at(-1)![0]).toBe(10_819);
-    expect(long.stats.final('7,0,3')).toEqual(Array.from({ length: 27 }, () => ['t:a@0', 64]));
-    expect(long.stats.final('6,0,3').at(-1)).toEqual(['t:y@0', 64]);
+    expect(long.stats.final('6,0,3')).toEqual(Array.from({ length: 27 }, () => ['t:a@0', 64]));
+    expect(long.stats.final('5,0,1').at(-1)).toEqual(['t:y@0', 64]);
     expect(long.findings.filter((f) => f.code === 'feed_no_route' && f.key === 't:y@0').map((f) => [f.machine, f.text])).toEqual([[
-      'Advanced Assembler at 6 64 3',
-      `Nothing takes Why out of Advanced Assembler at 6 64 3: its pipe's only taker for Why, ${chest}, is full`,
+      'Advanced Assembler at 5 64 1',
+      `Nothing takes Why out of Advanced Assembler at 5 64 1: its pipe's only taker for Why, ${chest}, is full`,
     ]]);
     // so the macerators' Ex has nowhere to go: the stopped assembler holds 64 Ex in its one slot of Ex, and the chest is full
     expect(long.findings.filter((f) => f.code === 'feed_no_route' && f.key === 't:x@0').map((f) => [f.machine, f.text])).toEqual(macerators.map((m) => [
-      m, `Nothing takes Ex out of ${m}: its pipe's only takers for Ex, Advanced Assembler at 6 64 3 and ${chest}, have no room`,
+      m, `Nothing takes Ex out of ${m}: its pipe's only takers for Ex, Advanced Assembler at 5 64 1 and ${chest}, have no room`,
     ]));
   });
 });

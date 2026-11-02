@@ -1111,14 +1111,15 @@ function placeSide(ordered: readonly Unit[], opts: {
 }
 
 /**
- * Two rows along x facing a spine at z = `spineZ`, on both sides of a power head of `headWidth` columns standing in the
- * middle of the line, at `headX`. Units are placed in the order given (flow order).
- * With `supplyTier`, the head carries the supply run on its west face and the lowest fed tier's run on its east face,
- * so it stands between the two halves of the line: the first half of the units (the lowest feed tiers first, flow order
- * within a tier: `lowestFeedFirst`) stands west of it, facing east, the rest east of it, facing west. A tier's cable
- * tree then reaches its machines from the nearer head face, so the lowest tier's worst path, whose loss is per cable
- * block, halves. The head's first column is `headX = ` the west side's reach, so the west side fits exactly.
- * Without one the units all stand after the head, as before, and `headX` is 0.
+ * Two rows along x facing a spine at z = `spineZ`, after a power head of `headWidth` columns at the line's west end
+ * (`headX` 0, `firstX` = `headWidth`), or on both sides of the head when it stands in the middle of the line. Units are
+ * placed in the order given (flow order).
+ * With `supplyTier` and `westUnits` > 0 (RUK-121), the head stands in the middle, its supply run on its west face and
+ * the lowest fed tier's run on its east face: the first `westUnits` of the units placed by feed tier (the lowest feed
+ * tiers first, flow order within a tier: `lowestFeedFirst`) stand west of it, facing east, the rest east of it, facing
+ * west, so a tier's cable tree reaches its machines from the nearer head face. The head's first column is `headX` =
+ * the west side's reach, so the west side fits exactly, and `firstX` is 0. Without `westUnits`, or with 0, the units
+ * all stand after the head, exactly as before RUK-121.
  * The electric units are placed by feed tier (`min(tier, supplyTier)`), lowest first: the lowest feed tier stands next
  * to its run, so a tier's cable tree never has to get past a higher tier's machines, or the tree that crosses the spine
  * to them, to reach its own (Task 6 grows the trees lowest first). Units fed at different tiers never stand side by
@@ -1132,7 +1133,7 @@ function placeSide(ordered: readonly Unit[], opts: {
  * above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe` waits while a cover or a block with a hit box is
  * there) and the one behind it (its steam inlet) kept empty.
  */
-export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number }): Placement {
+export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number; westUnits?: number }): Placement {
   const { headWidth, portSpacing, supplyTier } = opts;
   const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
   const nonManual = lowestFeedFirst(units.filter((u) => u.manual === undefined), feedTier);
@@ -1140,9 +1141,9 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   const feeds = [...nonManual, ...handUnits].map(feedTier).filter((t): t is number => t !== null);
   // the head's east face is the run of the lowest feed tier (Task 6 lays one run per fed tier, lowest last)
   const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
-  // a head of runs (`supplyTier`) moves to the middle of the line: the first half of the units stands west of it,
-  // mirrored, facing its west face; the units run by hand stay last, east of it, near the tail chests
-  const split = supplyTier !== undefined && headWidth > 0 ? Math.floor(nonManual.length / 2) : 0;
+  // with `westUnits`, a head of runs (`supplyTier`) stands in the middle of the line: the first `westUnits` units stand
+  // west of it, mirrored, facing its west face; the units run by hand stay last, east of it, near the tail chests
+  const split = supplyTier !== undefined && headWidth > 0 ? Math.min(Math.max(0, Math.floor(opts.westUnits ?? 0)), nonManual.length) : 0;
   // the head's west face is its supply run, its east face the lowest fed tier's run
   const west = placeSide(nonManual.slice(0, split), { portSpacing, feedTier, headTier: supplyTier ?? headTier, supplyTier });
   const east = placeSide([...nonManual.slice(split), ...handUnits], { portSpacing, feedTier, headTier, supplyTier });

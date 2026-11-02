@@ -79,19 +79,19 @@ describe('readLine', () => {
   it('reads a routed line from its chip text', async () => {
     const { pack, plan } = chain2();
     const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'routed') });
-    expect(m.nodes.map((n) => `${n.kind} ${n.id}`)).toEqual(['basic 0,0,1', 'basic 5,0,1', 'basic 6,0,3', 'chest 7,0,1', 'chest 7,0,3']);
+    expect(m.nodes.map((n) => `${n.kind} ${n.id}`)).toEqual(['basic 3,0,1', 'basic 4,0,3', 'basic 5,0,1', 'chest 6,0,1', 'chest 6,0,3']);
     const net = m.networks.find((n): n is RoutedNet => n.kind === 'routed')!;
-    expect(net.pipes.find((p) => p.id === '0,0,2')).toMatchObject({
-      target: { node: '0,0,1', side: 3 },
+    expect(net.pipes.find((p) => p.id === '3,0,2')).toMatchObject({
+      target: { node: '3,0,1', side: 3 },
       chips: [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: [] } }],
     });
-    expect(net.pipes.find((p) => p.id === '7,1,1')).toMatchObject({ target: { node: '7,0,1', side: 1 }, chips: [{ kind: 'extractor', filter: { mode: 'whitelist', keys: [] } }] });
-    expect(net.hops['0,0,2']!['7,1,3']).toBe(9);
-    expect(m.unknowns.filter((u) => u.code === 'extractor_new').map((u) => u.pos)).toEqual([[0, 64, 2], [5, 64, 2], [6, 64, 2], [7, 65, 1]]);
+    expect(net.pipes.find((p) => p.id === '6,1,1')).toMatchObject({ target: { node: '6,0,1', side: 1 }, chips: [{ kind: 'extractor', filter: { mode: 'whitelist', keys: [] } }] });
+    expect(net.hops['3,0,2']!['6,1,3']).toBe(5);
+    expect(m.unknowns.filter((u) => u.code === 'extractor_new').map((u) => u.pos)).toEqual([[3, 64, 2], [4, 64, 2], [5, 64, 2], [6, 65, 1]]);
     expect([m.supply, m.sinks, m.planned]).toEqual([['t:a@0'], ['t:y@0'], { s1: { 't:a@0': 0.5 }, s2: { 't:x@0': 1 } }]);
     // and what each machine gives: the two macerators share s1's 1 Ex a second
     expect(m.plannedOut).toEqual({ s1: { 't:x@0': 0.5 }, s2: { 't:y@0': 1 } });
-    expect((m.nodes[0] as BasicNode)).toMatchObject({ inSlots: 1, outSlots: 1, outputSide: 3, front: 5, settings: { multiStack: null, inputFromOutputSide: true } });
+    expect((m.nodes[0] as BasicNode)).toMatchObject({ inSlots: 1, outSlots: 1, outputSide: 3, front: 4, settings: { multiStack: null, inputFromOutputSide: true } });
   });
 
   it('reads AE2 patterns from the plan steps', async () => {
@@ -99,12 +99,12 @@ describe('readLine', () => {
     const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'ae2') });
     const nets = m.networks.filter((n): n is Ae2Net => n.kind === 'ae2');
     expect(nets).toHaveLength(1);
-    expect(nets[0]!.interfaces.map((i) => i.id)).toEqual(['0,0,2', '5,0,2', '7,0,2']);
+    expect(nets[0]!.interfaces.map((i) => i.id)).toEqual(['3,0,2', '5,0,2', '7,0,2']);
     const last = nets[0]!.interfaces[2]!;
-    expect(last.targets).toEqual([{ node: '7,0,3', side: 2 }]);
+    expect(last.targets).toEqual([{ node: '7,0,1', side: 3 }]);
     expect(last.spec).toEqual({ patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: false, lock: 'none' });
-    expect(m.covers).toContainEqual({ host: '7,0,3', side: 2, kind: 'conveyor', export: true, allowInput: true, op: { tickRate: 100, stacks: 1, items: 16 } });
-    expect(unknownsAt(m, 'ae2_pattern_text')).toEqual([[0, 64, 2], [5, 64, 2], [7, 64, 2]]);
+    expect(m.covers).toContainEqual({ host: '7,0,1', side: 3, kind: 'conveyor', export: true, allowInput: true, op: { tickRate: 100, stacks: 1, items: 16 } });
+    expect(unknownsAt(m, 'ae2_pattern_text')).toEqual([[3, 64, 2], [5, 64, 2], [7, 64, 2]]);
     expect(m.nodes.filter((n) => n.kind === 'chest')).toEqual([]);
   });
 
@@ -115,14 +115,14 @@ describe('readLine', () => {
     expect(nets).toHaveLength(1);
     const face = (id: string) => nets[0]!.faces.find((f) => f.id === id);
     // 1 item/s needs no speed upgrade
-    expect(face('7,0,2:2')).toMatchObject({
-      target: { node: '7,0,1', side: 3 },
+    expect(face('6,0,2:2')).toMatchObject({
+      target: { node: '6,0,1', side: 3 },
       extract: { color: 'red', filter: { whitelist: true, keys: ['t:a@0'] }, max: 4, roundRobin: true, selfFeed: false, redstone: 'ignore' },
     });
-    // each macerator sits on its own conduit cell
-    expect(face('0,0,2:2')).toMatchObject({ target: { node: '0,0,1', side: 3 }, insert: { priority: 1, filter: { keys: ['t:a@0'] } }, extract: { filter: { keys: ['t:x@0'] } } });
-    expect(face('5,0,2:2')).toMatchObject({ target: { node: '5,0,1', side: 3 }, insert: { priority: 1, filter: { keys: ['t:a@0'] } }, extract: { filter: { keys: ['t:x@0'] } } });
-    expect(nets[0]!.hops['0,0,2']!['7,0,2']).toBe(7);
+    // the two macerators share a conduit cell
+    expect(face('3,0,2:2')).toMatchObject({ target: { node: '3,0,1', side: 3 }, insert: { priority: 1, filter: { keys: ['t:a@0'] } }, extract: { filter: { keys: ['t:x@0'] } } });
+    expect(face('3,0,2:3')).toMatchObject({ target: { node: '3,0,3', side: 2 }, insert: { priority: 1, filter: { keys: ['t:a@0'] } }, extract: { filter: { keys: ['t:x@0'] } } });
+    expect(nets[0]!.hops['3,0,2']!['6,0,2']).toBe(3);
   });
 
   it('reads machine-to-machine pipes', async () => {
@@ -130,29 +130,29 @@ describe('readLine', () => {
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'direct') });
     const nets = m.networks.filter((n): n is GtPipeNet => n.kind === 'gtpipe');
     expect(nets).toHaveLength(1);
-    expect(nets[0]!.pipes.map((p) => [p.id, p.capacity])).toEqual([['0,0,2', 1], ['1,0,2', 1], ['2,0,2', 1], ['3,0,2', 1], ['4,0,2', 1], ['5,0,2', 1], ['6,0,2', 1], ['7,0,2', 1]]);
-    expect(nets[0]!.pipes.find((p) => p.id === '7,0,2')!.sides).toEqual([{ side: 2, target: { node: '7,0,1', side: 3 } }, { side: 3, target: { node: '7,0,3', side: 2 } }]);
+    expect(nets[0]!.pipes.map((p) => [p.id, p.capacity])).toEqual([['3,0,2', 1], ['4,0,2', 1], ['5,0,2', 1], ['6,0,2', 1]]);
+    expect(nets[0]!.pipes.find((p) => p.id === '6,0,2')!.sides).toEqual([{ side: 2, target: { node: '6,0,1', side: 3 } }, { side: 3, target: { node: '6,0,3', side: 2 } }]);
     // the tail pipe's import conveyor from the input chest and its filter cover toward the output chest
-    expect(m.covers).toContainEqual(expect.objectContaining({ host: '7,0,2', side: 2, kind: 'conveyor', export: false }));
-    expect(m.covers).toContainEqual(expect.objectContaining({ host: '7,0,2', side: 3, kind: 'filter', filter: { mode: 'whitelist', keys: ['t:y@0'] } }));
+    expect(m.covers).toContainEqual(expect.objectContaining({ host: '6,0,2', side: 2, kind: 'conveyor', export: false }));
+    expect(m.covers).toContainEqual(expect.objectContaining({ host: '6,0,2', side: 3, kind: 'filter', filter: { mode: 'whitelist', keys: ['t:y@0'] } }));
     expect(m.nodes.filter((n): n is BasicNode => n.kind === 'basic').map((n) => n.settings.inputFilter)).toEqual([true, true, true]);
   });
 
   it('prefers the structured config over the text', async () => {
     const { pack, plan } = chain2();
     const layout = await layLegacy(pack, plan, 'routed');
-    blockAt(layout, [0, 64, 2]).feed = { chips: [{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }] };   // its config.chips kept
-    blockAt(layout, [6, 64, 2]).config = { chips: 'Item Responder Chip (whitelist: Nothing Known)' };
+    blockAt(layout, [3, 64, 2]).feed = { chips: [{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }] };   // its config.chips kept
+    blockAt(layout, [5, 64, 2]).config = { chips: 'Item Responder Chip (whitelist: Nothing Known)' };
     const m = readLine({ pack, plan, layout });
     const net = routedNet(m);
-    expect(net.pipes.find((p) => p.id === '0,0,2')!.chips).toEqual([{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]);
-    expect(unknownsAt(m, 'text_ignored')).toEqual([[0, 64, 2]]);
+    expect(net.pipes.find((p) => p.id === '3,0,2')!.chips).toEqual([{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]);
+    expect(unknownsAt(m, 'text_ignored')).toEqual([[3, 64, 2]]);
     // the name reads as nothing the plan names, so the responder whitelists the assembler's own input
-    expect(net.pipes.find((p) => p.id === '6,0,2')!.chips).toEqual([{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]);
-    expect(unknownsAt(m, 'text_unread')).toEqual([[6, 64, 2]]);
+    expect(net.pipes.find((p) => p.id === '5,0,2')!.chips).toEqual([{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]);
+    expect(unknownsAt(m, 'text_unread')).toEqual([[5, 64, 2]]);
     // the structured pipe is not read from its text
-    expect(unknownsAt(m, 'routed_text')).toEqual([[5, 64, 2], [6, 64, 2], [7, 65, 1], [7, 65, 3]]);
-    expect(unknownsAt(m, 'extractor_new')).toEqual([[5, 64, 2], [7, 65, 1]]);
+    expect(unknownsAt(m, 'routed_text')).toEqual([[4, 64, 2], [5, 64, 2], [6, 65, 1], [6, 65, 3]]);
+    expect(unknownsAt(m, 'extractor_new')).toEqual([[4, 64, 2], [6, 65, 1]]);
   });
 
   it('reads a rotated line in the local frame', async () => {
@@ -166,13 +166,13 @@ describe('readLine', () => {
           // the world face toward the assembler, as the writer turns it with the line
           const iface = layout.blocks.find((b) => b.role === 'interface' && posKey(fromWorld(b.pos, layout)) === '7,0,2')! as FeedBlock;
           iface.feed = { interface: { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: false,
-            targets: [rotateFace('south', rotation)] } };
+            targets: [rotateFace('north', rotation)] } };
         }
         const m = readLine({ pack, plan, layout });
         for (const n of m.nodes) expect(fromWorld(n.pos, layout)).toEqual(n.local);
         if (mode === 'ae2') {
           const net = m.networks.find((n): n is Ae2Net => n.kind === 'ae2')!;
-          expect(net.interfaces.find((i) => i.id === '7,0,2')!.targets).toEqual([{ node: '7,0,3', side: 2 }]);
+          expect(net.interfaces.find((i) => i.id === '7,0,2')!.targets).toEqual([{ node: '7,0,1', side: 3 }]);
           // its pattern text is still on the block: the structured config wins
           expect(m.unknowns.filter((u) => u.code === 'text_ignored').map((u) => fromWorld(u.pos!, layout))).toEqual([[7, 0, 2]]);
         }
@@ -186,19 +186,19 @@ describe('readLine', () => {
     const { pack, plan } = twoSteps(FEED_IDS.STEAM);
     const layout = await layLegacy(pack, plan, 'routed');
     const m = readLine({ pack, plan, layout });
-    expect(m.nodes.find((n) => n.id === '0,0,1')).toMatchObject({ kind: 'basic', steam: true, outputSide: 1, front: 5, inSlots: 1, outSlots: 1 });
-    expect(m.unknowns.filter((u) => u.code === 'slots_unknown')).toEqual([expect.objectContaining({ pos: [0, 64, 1], stepId: 's1' })]);
-    expect(blockAt(layout, [0, 64, 2]).config?.chips).toBe('Item Responder Chip (whitelist: Alpha) + Item Extractor Chip');
-    expect(routedNet(m).pipes.find((p) => p.id === '0,0,2')).toMatchObject({
-      target: { node: '0,0,1', side: 3 },
+    expect(m.nodes.find((n) => n.id === '1,0,1')).toMatchObject({ kind: 'basic', steam: true, outputSide: 1, front: 4, inSlots: 1, outSlots: 1 });
+    expect(m.unknowns.filter((u) => u.code === 'slots_unknown')).toEqual([expect.objectContaining({ pos: [1, 64, 1], stepId: 's1' })]);
+    expect(blockAt(layout, [1, 64, 2]).config?.chips).toBe('Item Responder Chip (whitelist: Alpha) + Item Extractor Chip');
+    expect(routedNet(m).pipes.find((p) => p.id === '1,0,2')).toMatchObject({
+      target: { node: '1,0,1', side: 3 },
       chips: [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: [] } }],
     });
     // Ex is made on the line
     expect(m.supply).toEqual(['t:a@0']);
     // GT lets only primitive covers onto a steam machine (E17): a conveyor there is not read
-    blockAt(layout, [0, 64, 1]).covers = [{ face: 'south', item: 'gregtech:gt.metaitem.01@32630', settings: { mode: 'export', allowInput: true } }];
+    blockAt(layout, [1, 64, 1]).covers = [{ face: 'south', item: 'gregtech:gt.metaitem.01@32630', settings: { mode: 'export', allowInput: true } }];
     const covered = readLine({ pack, plan, layout });
-    expect([covered.covers, unknownsAt(covered, 'cover_unknown')]).toEqual([[], [[0, 64, 1]]]);
+    expect([covered.covers, unknownsAt(covered, 'cover_unknown')]).toEqual([[], [[1, 64, 1]]]);
   });
 
   it("runs main's hand-run multiblocks by hand", async () => {
@@ -269,13 +269,13 @@ describe('readLine', () => {
   it('reads an ME Export Bus', async () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'ae2');
-    layout.blocks.push({ pos: [0, 65, 1], block: { id: 'appliedenergistics2:item.ItemMultiPart', meta: 260 }, role: 'interface', label: 'ME Export Bus',
+    layout.blocks.push({ pos: [3, 65, 1], block: { id: 'appliedenergistics2:item.ItemMultiPart', meta: 260 }, role: 'interface', label: 'ME Export Bus',
       config: { exportFilter: 'Alpha' } });
     const m = readLine({ pack, plan, layout });
     const net = m.networks.find((n): n is Ae2Net => n.kind === 'ae2')!;
-    expect(net.exportBuses).toEqual([{ id: '0,1,1', label: 'ME Export Bus at 0 65 1', keys: ['t:a@0'], amount: 1, target: { node: '0,0,1', side: 1 } }]);
-    expect(unknownsAt(m, 'export_bus_text')).toEqual([[0, 65, 1]]);
-    expect(net.interfaces.map((i) => i.id)).toEqual(['0,0,2', '5,0,2', '7,0,2']);
+    expect(net.exportBuses).toEqual([{ id: '3,1,1', label: 'ME Export Bus at 3 65 1', keys: ['t:a@0'], amount: 1, target: { node: '3,0,1', side: 1 } }]);
+    expect(unknownsAt(m, 'export_bus_text')).toEqual([[3, 65, 1]]);
+    expect(net.interfaces.map((i) => i.id)).toEqual(['3,0,2', '5,0,2', '7,0,2']);
   });
 
   it('skips a machine whose step the plan lacks', async () => {
@@ -283,13 +283,13 @@ describe('readLine', () => {
     const layout = await layFeed(pack, plan, 'routed');
     const older = { ...plan, steps: plan.steps.filter((s) => s.id !== 's2') };
     const m = readLine({ pack, plan: older, layout });
-    expect(m.nodes.map((n) => n.id)).not.toContain('6,0,3');
-    expect(m.unknowns.filter((u) => u.code === 'step_missing')).toEqual([{ code: 'step_missing', text: expect.any(String), pos: [6, 64, 3], stepId: 's2' }]);
+    expect(m.nodes.map((n) => n.id)).not.toContain('5,0,1');
+    expect(m.unknowns.filter((u) => u.code === 'step_missing')).toEqual([{ code: 'step_missing', text: expect.any(String), pos: [5, 64, 1], stepId: 's2' }]);
     // a machine the pack does not know is skipped too
-    blockAt(layout, [0, 64, 1]).block = { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 9999 };
+    blockAt(layout, [3, 64, 1]).block = { id: 'gregtech:gt.blockmachines', meta: 0, mteId: 9999 };
     const unknownMachine = readLine({ pack, plan, layout });
-    expect(unknownMachine.nodes.map((n) => n.id)).toEqual(['5,0,1', '6,0,3', '7,0,1', '7,0,3']);
-    expect(unknownsAt(unknownMachine, 'machine_unknown')).toEqual([[0, 64, 1]]);
+    expect(unknownMachine.nodes.map((n) => n.id)).toEqual(['4,0,3', '5,0,1', '6,0,1', '6,0,3']);
+    expect(unknownsAt(unknownMachine, 'machine_unknown')).toEqual([[3, 64, 1]]);
   });
 
   it('falls back to the recipes for slots', async () => {
@@ -310,7 +310,7 @@ describe('readLine', () => {
     const steam = twoSteps(FEED_IDS.STEAM);
     Object.assign(machineByMteId(steam.pack, FEED_IDS.STEAM)!, { itemInSlots: 1, itemOutSlots: 1 });
     const sm = readLine({ pack: steam.pack, plan: steam.plan, layout: await layFeed(steam.pack, steam.plan, 'routed') });
-    expect(sm.nodes.find((n) => n.id === '0,0,1')).toMatchObject({ kind: 'basic', steam: true, inSlots: 1, outSlots: 1 });
+    expect(sm.nodes.find((n) => n.id === '1,0,1')).toMatchObject({ kind: 'basic', steam: true, inSlots: 1, outSlots: 1 });
     expect(unknownsAt(sm, 'slots_unknown')).toEqual([]);
   });
 
@@ -408,9 +408,9 @@ describe('readLine', () => {
       ...(hookup === undefined ? {} : { hookup }),
     });
     // a tap's ghost beside the tail pipe, and a hookup pipe on it, both linked toward it
-    layout.blocks.push(tinPipe([8, 64, 2], 'ghost', 1 << 4), tinPipe([7, 65, 2], 'pipe', 1 << 0, 0));
+    layout.blocks.push(tinPipe([7, 64, 2], 'ghost', 1 << 4), tinPipe([6, 65, 2], 'pipe', 1 << 0, 0));
     const m = readLine({ pack, plan, layout });
-    expect(m.networks.filter((n): n is GtPipeNet => n.kind === 'gtpipe').map((n) => n.pipes.map((p) => p.id))).toEqual([['0,0,2', '1,0,2', '2,0,2', '3,0,2', '4,0,2', '5,0,2', '6,0,2', '7,0,2']]);
+    expect(m.networks.filter((n): n is GtPipeNet => n.kind === 'gtpipe').map((n) => n.pipes.map((p) => p.id))).toEqual([['3,0,2', '4,0,2', '5,0,2', '6,0,2']]);
   });
 
   it('reads chip lists as main wrote them', async () => {
@@ -419,16 +419,16 @@ describe('readLine', () => {
     pack.items.set('t:zz@0', { key: 't:zz@0', id: 't:zz', meta: 0, name: 'Salt and Pepper', oreDict: [] });
     plan.flows.push({ from: 'raw', to: 's2', key: 't:zz@0', perSecond: 1 });
     const layout = await layLegacy(pack, plan, 'routed');
-    expect(blockAt(layout, [6, 64, 2]).config?.chips).toBe('Item Responder Chip (whitelist: Ex and Salt and Pepper) + Item Extractor Chip');
-    blockAt(layout, [5, 64, 2]).config = { chips: 'Item Responder Chip (whitelist: Alpha, Ex and Salt and Pepper) + Item Crafting Chip + Item Broadcaster Chip' };
+    expect(blockAt(layout, [5, 64, 2]).config?.chips).toBe('Item Responder Chip (whitelist: Ex and Salt and Pepper) + Item Extractor Chip');
+    blockAt(layout, [4, 64, 2]).config = { chips: 'Item Responder Chip (whitelist: Alpha, Ex and Salt and Pepper) + Item Crafting Chip + Item Broadcaster Chip' };
     const m = readLine({ pack, plan, layout });
     const chipsOf = (id: string) => routedNet(m).pipes.find((p) => p.id === id)!.chips;
-    expect(chipsOf('6,0,2')[0]).toEqual({ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:x@0', 't:zz@0'] } });
+    expect(chipsOf('5,0,2')[0]).toEqual({ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:x@0', 't:zz@0'] } });
     // a new broadcaster offers everything (research §2.2); a chip the checker does not know is left out
-    expect(chipsOf('5,0,2')).toEqual([
+    expect(chipsOf('4,0,2')).toEqual([
       { kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0', 't:x@0', 't:zz@0'] } }, { kind: 'broadcaster', filter: { mode: 'blacklist', keys: [] } },
     ]);
-    expect(m.unknowns.filter((u) => u.code === 'text_unread').map((u) => [u.pos, u.text.includes('"Item Crafting Chip"')])).toEqual([[[5, 64, 2], true]]);
+    expect(m.unknowns.filter((u) => u.code === 'text_unread').map((u) => [u.pos, u.text.includes('"Item Crafting Chip"')])).toEqual([[[4, 64, 2], true]]);
   });
 
   it('reads Limited Item Filters', async () => {
@@ -449,14 +449,14 @@ describe('readLine', () => {
   it('reads an ore dictionary filter as its exact items, and says so', async () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'enderio');
-    const face = blockAt(layout, [6, 64, 2]).conduits![0]!.faces[0]!;
+    const face = blockAt(layout, [5, 64, 2]).conduits![0]!.faces[0]!;
     face.insert!.filter = { ...face.insert!.filter!, oreDict: true };
     const m = readLine({ pack, plan, layout });
-    const read = m.networks.find((n): n is EioNet => n.kind === 'enderio')!.faces.find((f) => f.id === '6,0,2:3')!;
+    const read = m.networks.find((n): n is EioNet => n.kind === 'enderio')!.faces.find((f) => f.id === '5,0,2:2')!;
     // the simulation reads its items as they are (Task 7 rule 4); the ore dictionary is left to the unknown
     expect(read.insert!.filter).toMatchObject({ keys: ['t:x@0'], oreDict: true });
-    expect(m.unknowns.filter((u) => u.code === 'eio_oredict').map((u) => [u.pos, u.text])).toEqual([[[6, 64, 2],
-      'Item Conduit at 6 64 2: the item filter on its south face\'s insert side matches by ore dictionary, which the checker reads as the exact items it lists']]);
+    expect(m.unknowns.filter((u) => u.code === 'eio_oredict').map((u) => [u.pos, u.text])).toEqual([[[5, 64, 2],
+      'Item Conduit at 5 64 2: the item filter on its north face\'s insert side matches by ore dictionary, which the checker reads as the exact items it lists']]);
   });
 
   it('reads every cover it knows and names the others', async () => {
@@ -474,13 +474,13 @@ describe('readLine', () => {
   it('stocks supply no input chest lists and reads a chest without its side as an output chest', async () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'routed');
-    blockAt(layout, [7, 64, 1]).tail = { side: 'input', keys: [] };
-    delete blockAt(layout, [7, 64, 3]).tail;
+    blockAt(layout, [6, 64, 1]).tail = { side: 'input', keys: [] };
+    delete blockAt(layout, [6, 64, 3]).tail;
     const m = readLine({ pack, plan, layout });
     expect(m.nodes.filter((n) => n.kind === 'chest')).toEqual([
-      expect.objectContaining({ id: '7,0,1', side: 'input', keys: ['t:a@0'] }), expect.objectContaining({ id: '7,0,3', side: 'output', keys: [] }),
+      expect.objectContaining({ id: '6,0,1', side: 'input', keys: ['t:a@0'] }), expect.objectContaining({ id: '6,0,3', side: 'output', keys: [] }),
     ]);
-    expect(['supply_not_listed', 'chest_side_unknown'].map((code) => unknownsAt(m, code))).toEqual([[[7, 64, 1]], [[7, 64, 3]]]);
+    expect(['supply_not_listed', 'chest_side_unknown'].map((code) => unknownsAt(m, code))).toEqual([[[6, 64, 1]], [[6, 64, 3]]]);
   });
 
   it('gives each bus to the nearest controller of its step', async () => {
@@ -488,7 +488,7 @@ describe('readLine', () => {
     const { pack, plan } = feedPlan([{ id: 'e', mteId: IDS.EBF, count: 2, inputs: [['t:a@0', 1], ['t:b@0', 1]], outputs: [['t:x@0', 1]] }]);
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
     expect(m.nodes.filter((n): n is MultiNode => n.kind === 'multi').map((n) => [n.id, n.inBuses.map((b) => b.id), n.outBuses.map((b) => b.id)]))
-      .toEqual([['1,0,3', ['0,0,3'], ['2,0,3']], ['5,0,3', ['6,0,3'], ['4,0,3']]]);
+      .toEqual([['2,0,3', ['3,0,3'], ['1,0,3']], ['3,0,5', ['2,0,5'], ['4,0,5']]]);
   });
 
   it('notes Input Separation left unset on two input buses', async () => {
@@ -510,11 +510,11 @@ describe('readLine', () => {
     const bus = (pos: Vec3, more: Partial<FeedBlock>): FeedBlock => ({
       pos, block: { id: 'appliedenergistics2:item.ItemMultiPart', meta: 260 }, role: 'interface', label: 'ME Export Bus', ...more,
     });
-    layout.blocks.push(bus([5, 65, 1], { facing: 0, feed: { exportBus: { keys: ['t:x@0'], cards: 2 } } }), bus([3, 66, 1], { config: { exportFilter: 'Alpha and Nothing Known' } }));
+    layout.blocks.push(bus([5, 65, 3], { facing: 0, feed: { exportBus: { keys: ['t:x@0'], cards: 2 } } }), bus([3, 66, 1], { config: { exportFilter: 'Alpha and Nothing Known' } }));
     const m = readLine({ pack, plan, layout });
     expect(m.networks.find((n): n is Ae2Net => n.kind === 'ae2')!.exportBuses).toEqual([
       { id: '3,2,1', label: 'ME Export Bus at 3 66 1', keys: ['t:a@0'], amount: 1, target: null },
-      { id: '5,1,1', label: 'ME Export Bus at 5 65 1', keys: ['t:x@0'], amount: 32, target: { node: '5,0,1', side: 1 } },
+      { id: '5,1,3', label: 'ME Export Bus at 5 65 3', keys: ['t:x@0'], amount: 32, target: { node: '5,0,3', side: 1 } },
     ]);
     expect(['export_bus_text', 'text_unread', 'export_target_unknown'].map((code) => unknownsAt(m, code))).toEqual([[[3, 66, 1]], [[3, 66, 1]], [[3, 66, 1]]]);
   });
@@ -526,10 +526,10 @@ describe('readLine', () => {
     const { pack, plan } = chain2();
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'routed') });
     const chipsAt = (id: string) => routedNet(m).pipes.find((p) => p.id === id)!.chips;
-    expect(chipsAt('0,0,2')).toEqual([{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]);
+    expect(chipsAt('3,0,2')).toEqual([{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }]);
     // the input chest's extractor lists what enters the line; the output chest takes what leaves it on an Item Terminator Chip
-    expect(chipsAt('7,1,1')).toEqual([{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:a@0'] } }]);
-    expect(chipsAt('7,1,3')).toEqual([{ kind: 'terminator', filter: { mode: 'whitelist', keys: ['t:y@0'] } }]);
+    expect(chipsAt('6,1,1')).toEqual([{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:a@0'] } }]);
+    expect(chipsAt('6,1,3')).toEqual([{ kind: 'terminator', filter: { mode: 'whitelist', keys: ['t:y@0'] } }]);
     // nothing is read from text, and nothing is left unknown
     expect(m.unknowns).toEqual([]);
   });
@@ -537,8 +537,8 @@ describe('readLine', () => {
   it('reads the chips main gives a steam machine and a multiblock\'s buses', async () => {
     const steam = twoSteps(FEED_IDS.STEAM);
     const m = readLine({ pack: steam.pack, plan: steam.plan, layout: await layFeed(steam.pack, steam.plan, 'routed') });
-    expect(routedNet(m).pipes.find((p) => p.id === '0,0,2')).toMatchObject({
-      target: { node: '0,0,1', side: 3 },
+    expect(routedNet(m).pipes.find((p) => p.id === '1,0,2')).toMatchObject({
+      target: { node: '1,0,1', side: 3 },
       chips: [{ kind: 'responder', filter: { mode: 'whitelist', keys: ['t:a@0'] } }, { kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }],
     });
     expect(m.unknowns.map((u) => u.code)).toEqual(['slots_unknown']);
@@ -556,8 +556,8 @@ describe('readLine', () => {
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'ae2') });
     const makeEx = { patterns: [{ inputs: [{ key: 't:a@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true };
     expect(ae2Net(m).interfaces.map((i) => [i.id, i.targets, i.spec])).toEqual([
-      ['0,0,2', [{ node: '0,0,1', side: 3 }], makeEx], ['5,0,2', [{ node: '5,0,1', side: 3 }], makeEx],
-      ['7,0,2', [{ node: '7,0,3', side: 2 }], { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: true }],
+      ['3,0,2', [{ node: '3,0,1', side: 3 }], makeEx], ['5,0,2', [{ node: '5,0,3', side: 2 }], makeEx],
+      ['7,0,2', [{ node: '7,0,1', side: 3 }], { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: true }],
     ]);
     expect(m.unknowns).toEqual([]);
   });
@@ -589,31 +589,31 @@ describe('readLine', () => {
     const layout = await layFeed(pack, plan, 'ae2');
     const m = readLine({ pack, plan, layout });
     // an AE2 part on the spine's cable, facing the extractor, its filter the extractor's input; no card moves 1 item an operation
-    expect(ae2Net(m).exportBuses).toEqual([{ id: '2,0,2', label: 'ME Export Bus at 2 64 2', keys: ['t:x@0'], amount: 1, target: { node: '2,0,1', side: 3 } }]);
-    expect(ae2Net(m).interfaces.map((i) => i.id)).toEqual(['0,0,2']);
+    expect(ae2Net(m).exportBuses).toEqual([{ id: '3,0,2', label: 'ME Export Bus at 3 64 2', keys: ['t:x@0'], amount: 1, target: { node: '3,0,3', side: 2 } }]);
+    expect(ae2Net(m).interfaces.map((i) => i.id)).toEqual(['1,0,2']);
     // the bus is no unknown cover: only the extractor's own fluid cover is left unread
-    expect(unknownsAt(m, 'cover_unknown')).toEqual([[2, 64, 1]]);
+    expect(unknownsAt(m, 'cover_unknown')).toEqual([[3, 64, 3]]);
     // its Acceleration Cards set what it moves an operation
-    const cable = blockAt(layout, [2, 64, 2]);
+    const cable = blockAt(layout, [3, 64, 2]);
     cable.feed = { exportBus: { keys: ['t:x@0'], cards: 2 } };
     expect(ae2Net(readLine({ pack, plan, layout })).exportBuses[0]!.amount).toBe(32);
     // without the feed, the bus cover's own filter and cards
     delete cable.feed;
     cable.covers![0]!.settings = { mode: 'me_export', accelerationCards: 3 };
-    expect(ae2Net(readLine({ pack, plan, layout })).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'], amount: 64, target: { node: '2,0,1', side: 3 } })]);
+    expect(ae2Net(readLine({ pack, plan, layout })).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'], amount: 64, target: { node: '3,0,3', side: 2 } })]);
     // a text filter beside the bus cover is ignored, as it is beside feed.exportBus
     expect(cable.config).toBeUndefined();
     cable.config = { exportFilter: 'Alpha' };
     const texted = readLine({ pack, plan, layout });
     expect(ae2Net(texted).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'] })]);
     expect(texted.unknowns.filter((u) => u.code === 'text_ignored' || u.code === 'export_bus_text').map((u) => [u.code, u.pos, u.text]))
-      .toEqual([['text_ignored', [2, 64, 2], 'ME Export Bus at 2 64 2: its structured filter is read, and its text "Alpha" is ignored']]);
+      .toEqual([['text_ignored', [3, 64, 2], 'ME Export Bus at 3 64 2: its structured filter is read, and its text "Alpha" is ignored']]);
     delete cable.config;
     // a bus that faces no inventory feeds nothing the checker knows
     cable.covers![0]!.face = 'up';
     const lost = readLine({ pack, plan, layout });
     expect(ae2Net(lost).exportBuses[0]!.target).toBeNull();
-    expect(unknownsAt(lost, 'export_target_unknown')).toEqual([[2, 64, 2]]);
+    expect(unknownsAt(lost, 'export_target_unknown')).toEqual([[3, 64, 2]]);
   });
 
   it('reads an export bus in front of an input bus in the local frame', async () => {

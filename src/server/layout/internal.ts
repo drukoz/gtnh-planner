@@ -103,10 +103,14 @@ function uniquePositions(ps: readonly Vec3[]): Vec3[] {
   return [...byKey.values()].sort(comparePos);
 }
 
-/** True when `p` lies on the outer boundary of a line of `size`: an end column, a side row, or the top layer. */
+/**
+ * True when `p` lies on a side face of a line of `size`: an end column or a side row. Not the top layer: a hookup comes
+ * in from beside the line, never over it, so a cell on top of the line's middle is no landing cell, and a guide to one
+ * would have to cross the line (RUK-121).
+ */
 function onBoundary(p: Vec3, size: Vec3): boolean {
-  const [w, h, l] = size;
-  return p[0] === 0 || p[0] === w - 1 || p[2] === 0 || p[2] === l - 1 || p[1] === h - 1;
+  const [w, , l] = size;
+  return p[0] === 0 || p[0] === w - 1 || p[2] === 0 || p[2] === l - 1;
 }
 
 function voltsOf(tier: number): number {
@@ -135,8 +139,11 @@ export function headWidthFor(stages: Stages | null): number {
   return stages === null ? 1 : 1 + 2 * stages.stages.length;
 }
 
-/** The x of the cable run of `tier`: the supply run at the head's first column `headX`, each lower tier two columns further on. */
-export function runX(headX: number, supplyTier: number, tier: number): number {
+/**
+ * The x of the cable run of `tier`: the supply run at the head's first column `headX` (0: the head at the line's west
+ * end), each lower tier two columns further on.
+ */
+export function runX(supplyTier: number, tier: number, headX = 0): number {
   return headX + 2 * (supplyTier - tier);
 }
 
@@ -240,10 +247,11 @@ class Grid {
 
 /**
  * The runs (supply first, then each stage's lower tier, each across the whole length) and the bank columns between
- * them, on the head's columns at `placement.headX`, in the middle of the line (`placeUnits`). The head stands in the
- * middle of the line's spine, so each run skips the spine's row on the floor and bridges it with three cells one
- * above (below the spine row, above it, and above the spine cell): a tier's cable runs unbroken along z, while the
- * spine's row stays free for the logistics spine (`placeUnits`'s rows and the modes' spines).
+ * them, on the head's columns at `placement.headX`. At the line's west end (`headX` 0) each run lies on the floor, as
+ * it always has. In the middle of the line (`placeUnits` with `westUnits`) the head crosses the line's spine, so each
+ * run skips the spine's row on the floor and bridges it with three cells one above (below the spine row, above it,
+ * and above the spine cell): a tier's cable runs unbroken along z, while the spine's row stays free for the logistics
+ * spine (`placeUnits`'s rows and the modes' spines).
  */
 function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run[]; banks: Bank[]; headX: number } {
   const { pack, placement } = input;
@@ -251,15 +259,18 @@ function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run
   const supply = stages.supplyTier;
   const headX = placement.headX;
   const runs = [supply, ...stages.stages.map((s) => s.toTier)].map((tier): Run => {
-    const x = runX(headX, supply, tier);
+    const x = runX(supply, tier, headX);
     const cells: Vec3[] = [];
-    for (let z = 0; z < spineZ; z++) cells.push([x, 0, z]);
-    cells.push([x, 1, spineZ - 1], [x, 1, spineZ], [x, 1, spineZ + 1]);
-    for (let z = spineZ + 1; z < length; z++) cells.push([x, 0, z]);
+    if (headX === 0) for (let z = 0; z < length; z++) cells.push([x, 0, z]);
+    else {
+      for (let z = 0; z < spineZ; z++) cells.push([x, 0, z]);
+      cells.push([x, 1, spineZ - 1], [x, 1, spineZ], [x, 1, spineZ + 1]);
+      for (let z = spineZ + 1; z < length; z++) cells.push([x, 0, z]);
+    }
     for (const c of cells) grid.take(c);
     return { tier, x, cells, rated: pickCable(pack, { volts: voltsOf(tier), amps: 1 }) !== null };
   });
-  const banks = stages.stages.map((s, stage): Bank => ({ stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(headX, supply, s.toTier) - 1 }));
+  const banks = stages.stages.map((s, stage): Bank => ({ stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(supply, s.toTier, headX) - 1 }));
   return { runs, banks, headX };
 }
 
@@ -286,10 +297,12 @@ function warnUnderVoltage(units: readonly PlacedUnit[], supply: number, warnings
  * the supply tier), and each higher tier's tree, grown after the trees below it, goes over them to its machines further
  * along. Its cells keep off `keepOff`, the bank columns, the ports of other feed tiers and the cells on top of a bank
  * that sends another tier, and never touch another tier's run, tree or port or a machine of a lower tier; the box
- * reaches H + 1 high, so a tree crosses a lower run two blocks up, and two blocks higher for every run past the first,
- * so each tier gets its own lane and can also pass over the lower tiers' crossings. The cells are taken but not yet
- * laid: the cables are chosen once
- * the trees give the lengths. Units that cannot be reached (or whose tier has no run) get `route_failed`.
+ * reaches H + 1 high, so a tree crosses a lower run two blocks up, and two blocks higher for every run past the second,
+ * so it can also pass over the lower tiers' crossings. A head in the middle of the line (`placement.headX` > 0) is
+ * crossed by the trees of the units west of it: there the box is two blocks taller still (every run past the first),
+ * each tier keeps to a lane of its own (`laneFloorY`), and a tree keeps off the rim of a higher tier's port. The cells
+ * are taken but not yet laid: the cables are chosen once the trees give the lengths. Units that cannot be reached (or
+ * whose tier has no run) get `route_failed`.
  */
 function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, keepOff: ReadonlySet<string>,
   grid: Grid, warnings: WarningList): Tree[] {
@@ -315,7 +328,9 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
       onBank.set(posKey([b.x, 1, z]), b.toTier);
     }
   }
-  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - 1), l - 1] };
+  // a head in the middle of the line is crossed by the trees west of it (RUK-121); one at the west end keeps the old search
+  const crossing = placement.headX > 0;
+  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - (crossing ? 1 : 2)), l - 1] };
   const unwired = (unit: PlacedUnit) => {
     warnings.add({ code: 'route_failed', stepId: unit.stepId, text: `Could not wire ${unit.name} inside the line — connect it by hand` });
   };
@@ -335,7 +350,7 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
     for (const [key, tier] of portTier) {
       if (tier === run.tier) continue;
       avoid.add(key);
-      if (tier > run.tier) {
+      if (crossing && tier > run.tier) {
         // a cable beside a higher tier's port rims it in for the tree that must feed it later: keep off the rim,
         // except cells that touch a port (a cable beside those cannot wall the port in any further)
         const [px, py, pz] = key.split(',').map(Number) as [number, number, number];
@@ -355,9 +370,7 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
       // a z leg running along the lanes (y >= 2) walls the lane above off from the taller trees to come, so price it
       // above a climb to the lane's own height: 2x the vertical move it replaces; z legs below this tier's own plane
       // (2 + 2 per tier below it, with a free plane between) cost more still, so each tier lanes on its own plane
-      laneWallCost: 4,
-      laneFloorY: 2 + 2 * lane,
-      midPlaneCost: 16,
+      ...(crossing ? { laneWallCost: 4, laneFloorY: 2 + 2 * lane, midPlaneCost: 16 } : {}),
       passable: (p) => {
         const key = posKey(p);
         const tier = portTier.get(key);
@@ -380,11 +393,16 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
 }
 
 /**
- * The rows a bank of `count` transformers takes, the spine's row left free for the line's spine (the head stands in
- * the middle of it): the side with more room, from the row next to the spine outward, the west side on a tie; as many
- * rows as fit on it.
+ * The rows a bank of `count` transformers takes. At the line's west end (`crossing` false): centred on the spine, moved
+ * back inside the line when uneven, as it always has. In the middle of the line (`crossing`, RUK-121) the spine's row is
+ * left free for the line's spine: the side with more room, from the row next to the spine outward, the west side on a
+ * tie; as many rows as fit on it.
  */
-function bankRows(count: number, length: number, spineZ: number): { first: number; placed: number } {
+function bankRows(count: number, length: number, spineZ: number, crossing: boolean): { first: number; placed: number } {
+  if (!crossing) {
+    const placed = Math.min(count, length);
+    return { first: Math.min(Math.max(spineZ - Math.floor(placed / 2), 0), length - placed), placed };
+  }
   const below = spineZ, above = length - 1 - spineZ;
   const placed = Math.min(count, Math.max(below, above));
   if (placed <= 0) return { first: 0, placed: 0 };
@@ -521,7 +539,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
   const treeOf = new Map(trees.map((t) => [t.tier, t]));
   const runOf = new Map(head.runs.map((r) => [r.tier, r]));
   const graphs = new Map(head.runs.map((r) => [r.tier, tierGraph(r, treeOf.get(r.tier))]));
-  const runCell = (tier: number, z: number): Vec3 => [runX(head.headX, supply, tier), 0, z];
+  const runCell = (tier: number, z: number): Vec3 => [runX(supply, tier, head.headX), 0, z];
 
   let current: Stages = { ...stages, stages: stages.stages.map((s) => ({ ...s })) };
   const pick = (s: Stages): Sizing['cables'] => {
@@ -537,7 +555,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
   let cables = pick(current);
   let result: Sizing | null = null;
   for (let round = 0; round < MAX_SIZING_ROUNDS; round++) {
-    const rows = current.stages.map((s) => bankRows(s.count, length, placement.spineZ));
+    const rows = current.stages.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0));
     const lossPerBlock = (tier: number): number => cables.get(tier)?.cable.cable?.lossPerBlock ?? 0;
     // where the power enters each run: the supply run's two ends, else the outermost rows of the bank feeding it
     const sources = (tier: number): Vec3[] => {
@@ -597,7 +615,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
       && s.ampsOut === current.stages[i]!.ampsOut)
       && [...nextCables].every(([tier, c]) => cables.get(tier)?.cable.mteId === c.cable.mteId);
     result = {
-      stages: sized, cables: nextCables, rows: merged.map((s) => bankRows(s.count, length, placement.spineZ)), unitLoss, unitAmps, unitBlocks,
+      stages: sized, cables: nextCables, rows: merged.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0)), unitLoss, unitAmps, unitBlocks,
       bankLoss, bankBlocks, supply: null,
     };
     current = sized;

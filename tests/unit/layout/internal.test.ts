@@ -44,32 +44,32 @@ describe('internal routing', () => {
     const { units } = unitsFromPlan(pack, twoStep());
     const stages = transformerStages(groupsOf(units), 2);
     expect(headWidthFor(stages)).toBe(3);
-    expect([runX(0, 2, 2), runX(0, 2, 1)]).toEqual([0, 2]);
-    // RUK-121: the head runs in the middle, so the west macerator stands alone at x 0 and the rest fan out east of the head
+    expect([runX(2, 2), runX(2, 1)]).toEqual([0, 2]);
+    // final review C2: the MV assembler stands a column away from the LV macerators (x 5, not 4)
     const placement = placeUnits(units, { headWidth: 3, portSpacing: 0, supplyTier: 2 });
-    expect(placement.units.map((u) => u.at[0])).toEqual([0, 5, 6]);
+    expect(placement.units.map((u) => u.at[0])).toEqual([3, 3, 5]);
     const r = routeInternal({ pack, parts: resolveParts(pack), placement, occupied: placement.blocks, stages, fluids: [], tailFluidY: 1, groupTier: 2 });
     const at = (p: Vec3) => r.blocks.filter((b) => posKey(b.pos) === posKey(p));
-    expect(at([3, 0, 1])).toMatchObject([{ role: 'transformer', facing: 4, block: { mteId: IDS.TRANSFORMER_LV }, label: 'Low Voltage Transformer' }]);
-    expect([0, 1, 3, 4].map((z) => at([2, 0, z])[0]!.block.mteId)).toEqual(Array(4).fill(IDS.ANNEALED_2X));
-    // final review I4: the east macerator is one tin cable from the LV run, the west one 10: the fan keeps the far leg short
-    expect([0, 1, 3, 4].map((z) => at([4, 0, z])[0]!.block.mteId)).toEqual(Array(4).fill(IDS.TIN_4X));
-    // RUK-115: the landing cells are the whole supply run column (x = headX) plus the supply tier's tree cells on the boundary (the top lane and the assembler port)
-    expect(r.supplyRun).toEqual([[2, 0, 0], [2, 0, 1], [2, 0, 3], [2, 0, 4], [2, 1, 4], [2, 2, 4], [3, 2, 4], [4, 2, 4], [5, 2, 4], [6, 0, 4], [6, 1, 4],
-      [6, 2, 4]]);
+    expect(at([1, 0, 2])).toMatchObject([{ role: 'transformer', facing: 4, block: { mteId: IDS.TRANSFORMER_LV }, label: 'Low Voltage Transformer' }]);
+    expect([0, 1, 2, 3, 4].map((z) => at([0, 0, z])[0]!.block.mteId)).toEqual(Array(5).fill(IDS.ANNEALED_2X));
+    // final review I4: each macerator is 4 tin cables from the bank, gets 28 V and so draws 2 A: 4 A on the LV run
+    expect([0, 1, 2, 3, 4].map((z) => at([2, 0, z])[0]!.block.mteId)).toEqual(Array(5).fill(IDS.TIN_4X));
+    // RUK-115: the landing cells are the whole x = 0 run column plus the supply tier's tree cells on the boundary (z = 0 and the top layer y = 2)
+    expect(r.supplyRun).toEqual([[0, 0, 0], [0, 0, 1], [0, 0, 2], [0, 0, 3], [0, 0, 4], [0, 1, 0], [0, 2, 0], [1, 2, 0], [2, 2, 0], [3, 2, 0], [4, 2, 0],
+      [5, 0, 0], [5, 1, 0], [5, 2, 0]]);
     expect(r.cables.map((c) => [c.tier, c.cable.mteId])).toEqual([[2, IDS.ANNEALED_2X], [1, IDS.TIN_4X]]);
     // the MV run needs 2 parallel 2x Annealed lines (its cable_amps warning), so the build list prices one extra run
-    expect(r.cables.map((c) => [c.tier, c.cells, c.runs])).toEqual([[2, 15, 2], [1, 16, 1]]);
-    expect(parallelRunParts(r.cables)).toEqual([{ key: 'gregtech:gt.blockmachines@1387', amount: 15, why: 'power run (2 parallel)', group: 'power' }]);
+    expect(r.cables.map((c) => [c.tier, c.cells, c.runs])).toEqual([[2, 14, 2], [1, 7, 1]]);
+    expect(parallelRunParts(r.cables)).toEqual([{ key: 'gregtech:gt.blockmachines@1387', amount: 14, why: 'power run (2 parallel)', group: 'power' }]);
     // the assembler gets 114 V from the supply run's far end (2 A) and the bank takes 2 A for its 4 A out: no MV cable of the pack carries 4 A
     expect(r.stages).toMatchObject({ supplyAmps: 4, stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 2, ampsOut: 4 }] });
     expect(r.warnings).toEqual([
       { code: 'cable_amps', text: 'No cable carries 4 A at MV: run 2 parallel 2x Annealed Copper Cable lines' },
-      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 10 of 32 V over 10 blocks of 4x Tin Cable — about 26 EU/t. ${LV_REMEDY}` },
+      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 4 of 32 V over 4 blocks of 4x Tin Cable — about 16 EU/t. ${LV_REMEDY}` },
     ]);
     expect(tierContacts(r.blocks, r.cables, placement)).toEqual([]);
-    expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(placement.headX!, 2, u.tier)))).toEqual([true, true, true]);
-    expect(placement.units.filter((u) => u.tier === 1).some((u) => reachesRun(r.blocks, u.ports.power!, 2))).toBe(false);
+    expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(2, u.tier)))).toEqual([true, true, true]);
+    expect(placement.units.filter((u) => u.tier === 1).some((u) => reachesRun(r.blocks, u.ports.power!, 0))).toBe(false);
     const used = new Set([...placement.blocks.map((b) => posKey(b.pos)), ...placement.reserved.map(posKey)]);
     expect(r.blocks.filter((b) => used.has(posKey(b.pos)))).toEqual([]);
   });
@@ -82,13 +82,13 @@ describe('internal routing', () => {
     const r = routeInternal({ pack, parts: resolveParts(pack), placement, occupied: placement.blocks, stages, fluids: [], tailFluidY: 1, groupTier: 2 });
     expect(r.warnings).toContainEqual({ code: 'power_tier_low', stepId: 's2',
       text: 'Advanced Assembler needs MV power but the line gets LV: it will run short — add a step-up transformer or a generator at MV' });
-    // final review I4: the lane-wall cost makes the long runs longer, so the macerators get 24 V (2 A each) and the assembler 22 V (6 A)
-    expect(r.warnings).toContainEqual({ code: 'cable_amps', text: 'No cable carries 10 A at LV: run 3 parallel 4x Tin Cable lines' });
+    // final review I4: from the run's far end the macerators get 26 V (2 A each) and the assembler 25 V (5 A)
+    expect(r.warnings).toContainEqual({ code: 'cable_amps', text: 'No cable carries 9 A at LV: run 3 parallel 4x Tin Cable lines' });
     expect(reachesRun(r.blocks, placement.units[2]!.ports.power!, 0)).toBe(true);
     // with the hookup's allowance (10 % of the supply volts) the supply run is sized for 3.2 V less
     const allowed = routeInternal({ pack, parts: resolveParts(pack), placement, occupied: placement.blocks, stages, fluids: [], tailFluidY: 1, groupTier: 2,
       supplyLossVolts: hookupAllowanceVolts(1) });
-    expect(allowed.stages!.supplyAmps).toBe(11);
+    expect(allowed.stages!.supplyAmps).toBe(10);
   });
 
   it('lays one fluid pipe per fluid, with pump covers on the machines that make it', () => {
@@ -156,15 +156,15 @@ describe('internal routing edge cases', () => {
 
   it('says so when a machine cannot be wired inside the line', () => {
     const pack = layoutPack();
-    // the assembler's port at [6, 0, 4]: above and beside it blocked, and [6, 0, 0] touches the LV macerator's port
-    const { placement, r } = route(pack, twoStep(), 2, [stone([6, 1, 4]), stone([7, 0, 4]), stone([6, 0, 0])]);
+    // the assembler's port at [5, 0, 0]: above and beside it blocked, and [4, 0, 0] touches the LV macerator's port
+    const { placement, r } = route(pack, twoStep(), 2, [stone([5, 1, 0]), stone([6, 0, 0])]);
     expect(r.warnings).toEqual([
       { code: 'cable_amps', text: 'No cable carries 3 A at MV: run 2 parallel 2x Annealed Copper Cable lines' },
       { code: 'route_failed', stepId: 's2', text: 'Could not wire Advanced Assembler inside the line — connect it by hand' },
-      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 10 of 32 V over 10 blocks of 4x Tin Cable — about 26 EU/t. ${LV_REMEDY}` },
+      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 4 of 32 V over 4 blocks of 4x Tin Cable — about 16 EU/t. ${LV_REMEDY}` },
     ]);
-    expect(blockAt(r, [5, 0, 4])).toBeUndefined();
-    expect(placement.units.filter((u) => u.tier === 1).map((u) => reachesRun(r.blocks, u.ports.power!, 4))).toEqual([true, true]);
+    expect(blockAt(r, [4, 0, 0])).toBeUndefined();
+    expect(placement.units.filter((u) => u.tier === 1).map((u) => reachesRun(r.blocks, u.ports.power!, 2))).toEqual([true, true]);
   });
 
   it('keeps cables off the cells the fluid pipes connect to', () => {
@@ -174,21 +174,21 @@ describe('internal routing edge cases', () => {
       { id: 's2', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
     ], { flows: [{ from: 'raw', to: 's1', key: 't:in@0', perSecond: 1 }, { from: 'raw', to: 's1', key: 'fluid:oxygen', perSecond: 20 },
       { from: 's1', to: 's2', key: 't:out_s1@0', perSecond: 1 }, { from: 's2', to: 'out', key: 't:out_s2@0', perSecond: 1 }] });
-    // the macerators' fluid ports [0, 1, 1] / [0, 1, 3] and [5, 1, 1] / [5, 1, 3] and the tail root [7, 1, 2] stay pipe
-    // cells; the MV tree keeps clear of the LV macerators anyway
-    const { placement, r } = route(pack, plan, 2, [stone([3, 1, 0]), stone([1, 1, 0])]);
-    const fluidCells = new Set([...placement.units.flatMap((u) => u.ports.fluidIn.map(posKey)), '7,1,2']);
+    // the macerators' fluid ports [3, 1, 1] and [3, 1, 3] and the tail root [6, 1, 2] stay pipe cells; the MV tree now
+    // keeps two blocks up and clear of the LV macerators anyway (final review C2)
+    const { placement, r } = route(pack, plan, 2, [stone([3, 1, 0]), stone([4, 1, 2])]);
+    const fluidCells = new Set([...placement.units.flatMap((u) => u.ports.fluidIn.map(posKey)), '6,1,2']);
     expect(r.blocks.filter((b) => b.role === 'cable' && fluidCells.has(posKey(b.pos)))).toEqual([]);
-    expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(placement.headX!, 2, u.tier)))).toEqual([true, true, true]);
-    expect([[0, 1, 1], [5, 1, 1], [7, 1, 2]].map((p) => [blockAt(r, p as Vec3)?.label, (blockAt(r, p as Vec3)?.connections ?? 0) & 1]))
+    expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(2, u.tier)))).toEqual([true, true, true]);
+    expect([[3, 1, 1], [3, 1, 3], [6, 1, 2]].map((p) => [blockAt(r, p as Vec3)?.label, (blockAt(r, p as Vec3)?.connections ?? 0) & 1]))
       .toEqual([['Small Bronze Fluid Pipe (Oxygen)', 1], ['Small Bronze Fluid Pipe (Oxygen)', 1], ['Small Bronze Fluid Pipe (Oxygen)', 0]]);
     expect(r.warnings.map((w) => w.code)).not.toContain('route_failed');
     expect(tierContacts(r.blocks, r.cables, placement)).toEqual([]);
   });
 
   it("lays a pipe walled in by a higher tier's cable one block over the cable", () => {
-    // the LV extractor stands west of the head and the MV assemblers east of it in both rows; the spine lane is taken
-    // (stones for the logistics), so the pipe climbs in z west of the head and runs along z 4 over the bank side
+    // the LV extractor stands next to the head and the MV assemblers behind it in both rows, so the MV tree crosses the
+    // spine one block up between them (x 4); with the spine taken (stones for the logistics) the pipe can only go over it
     const plan = makePlan([
       { id: 'a', mteId: IDS.EXTRACTOR, count: 1, euPerTick: 24, outputs: [['fluid:molten.iron', 144]] },
       { id: 'b', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 },
@@ -198,13 +198,12 @@ describe('internal routing edge cases', () => {
       { from: 'c', to: 'out', key: 't:out_c@0', perSecond: 1 }] });
     const pack = layoutPack();
     const { placement, r } = route(pack, plan, 2, [3, 4, 5, 6].map((x) => stone([x, 0, 2])));
-    expect(placement.units.map((u) => [u.stepId, u.row, u.at[0]])).toEqual([['a', 'N', 0], ['b', 'N', 6], ['c', 'S', 6]]);
-    expect([1, 2, 3].map((z) => blockAt(r, [2, 1, z])?.label)).toEqual(Array(3).fill('2x Annealed Copper Cable'));
-    // up from the extractor in z west of the head, then along z 0 north of the head, down at x 3 to z 4 and into the far assembler
+    expect(placement.units.map((u) => [u.stepId, u.row, u.at[0]])).toEqual([['a', 'N', 3], ['b', 'S', 4], ['c', 'N', 5]]);
+    expect([0, 1, 2, 3, 4].map((z) => blockAt(r, [4, 1, z])?.label)).toEqual(Array(5).fill('2x Annealed Copper Cable'));
+    // up from the extractor, over the cable at y 2 and down into the far assembler
     expect(r.blocks.filter((b) => b.role === 'pipe').map((b) => [posKey(b.pos), b.connections]))
-      .toEqual([['0,1,1', 33], ['1,1,0', 40], ['1,1,1', 20], ['2,1,0', 48], ['3,1,0', 24], ['3,1,1', 12], ['3,1,2', 12], ['3,1,3', 12], ['3,1,4', 36],
-        ['4,1,4', 48], ['5,1,3', 40], ['5,1,4', 20], ['6,1,3', 17]]);
-    expect(r.fluidPipes.map((f) => [f.key, f.cells])).toEqual([['fluid:molten.iron', 13]]);
+      .toEqual([['3,1,1', 1 | 2], ['3,2,1', 1 | 32], ['4,2,1', 16 | 32], ['5,1,1', 1 | 2], ['5,2,1', 1 | 16]]);
+    expect(r.fluidPipes.map((f) => [f.key, f.cells])).toEqual([['fluid:molten.iron', 5]]);
     expect(r.warnings.map((w) => w.code)).not.toContain('route_failed');
   });
 
@@ -285,23 +284,21 @@ describe('internal routing edge cases', () => {
     const pack = layoutPack();
     const { placement, r } = route(pack, makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1, euPerTick: 672 }]), 2);
     expect(placement.size[2]).toBe(4);
-    // the bank fills from the spine's row outward and leaves that row free for the line's spine (the head stands in the
-    // middle of the line): z 2 is the spine, so only z 0 and z 1 fit
     expect(r.blocks.filter((b) => b.role === 'transformer').map((b) => [b.pos, b.connections])).toEqual(
-      [0, 1].map((z) => [[1, 0, z], (1 << 4) | (1 << 5)]));
-    // final review I4: the macerator is a cable away from the two transformers (24 V: 24 A); the six transformers that
-    // takes draw 7 A from MV. The head's middle-of-the-line seat keeps the LV run short, so the LV loss clears the high bar.
+      [0, 1, 2, 3].map((z) => [[1, 0, z], (1 << 4) | (1 << 5)]));
+    // final review I4: the macerator is up to 5 cables from the four transformers (27 V: 25 A); the seven transformers
+    // that takes draw 7 A from MV, up to 4 cables from the supply run's far end (124 V)
     expect(r.warnings).toEqual([
       { code: 'cable_amps', text: 'No cable carries 7 A at MV: run 4 parallel 2x Annealed Copper Cable lines' },
-      { code: 'cable_amps', text: 'No cable carries 24 A at LV: run 6 parallel 4x Tin Cable lines' },
-      { code: 'transformer_bank', text: 'Put 4 more Low Voltage Transformer beside the bank' },
+      { code: 'cable_amps', text: 'No cable carries 25 A at LV: run 7 parallel 4x Tin Cable lines' },
+      { code: 'transformer_bank', text: 'Put 3 more Low Voltage Transformer beside the bank' },
+      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 5 of 32 V over 5 blocks of 4x Tin Cable — about 125 EU/t. ${LV_REMEDY}` },
     ]);
     expect(reachesRun(r.blocks, placement.units[0]!.ports.power!, 2)).toBe(true);
-    // a deep multiblock in row N only: the bank takes the side of the spine with more room, below it, and leaves the
-    // spine's own row free
+    // a deep multiblock in row N only: the bank centred on the spine would leave the line, so it moves back inside
     const ebf = route(pack, makePlan([{ id: 'b', mteId: IDS.EBF, count: 1, euPerTick: 480 }]), 2);
     expect([ebf.placement.size[2], ebf.placement.spineZ]).toEqual([6, 4]);
-    expect(ebf.r.blocks.filter((b) => b.role === 'transformer').map((b) => b.pos[2])).toEqual([0, 1, 2, 3]);
+    expect(ebf.r.blocks.filter((b) => b.role === 'transformer').map((b) => b.pos[2])).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("keeps one fluid's pipe off the cells another fluid connects to", () => {
@@ -338,8 +335,8 @@ describe('internal routing edge cases', () => {
       { code: 'route_failed', stepId: 's2', text: 'Could not wire Advanced Assembler inside the line — connect it by hand' }]);
     expect(b.r.warnings.map((w) => w.code).slice(2)).toEqual(['cable_loss_high']);
     expect(b.r.cables.map((c) => c.tier)).toEqual([1]);
-    expect(b.r.blocks.filter((x) => x.label === '2x Annealed Copper Cable')).toEqual([]);
-    expect(b.r.supplyRun).toHaveLength(4);   // no MV run: the LV run column's y 0 cells are the landing cells
+    expect(b.r.blocks.filter((x) => x.pos[0] === 0)).toEqual([]);
+    expect(b.r.supplyRun).toHaveLength(5);
 
     const noPipe = layoutPack();
     for (const id of [IDS.SMALL_BRONZE_PIPE, IDS.BRONZE_PIPE]) {
@@ -364,7 +361,7 @@ describe('internal routing edge cases', () => {
     pack.machines.set(superconductor.id, superconductor);
     const { r } = route(pack, twoStep(), 2);
     expect(r.warnings[1]).toEqual({ code: 'cable_loss_high',
-      text: 'The LV wiring inside the line loses 10 of 32 V over 10 blocks of 4x Tin Cable — about 26 EU/t. '
+      text: 'The LV wiring inside the line loses 4 of 32 V over 4 blocks of 4x Tin Cable — about 16 EU/t. '
         + 'Lay 1x Superconductor Cable instead: it loses nothing.' });
     expect(r.cables.map((c) => c.cable.mteId)).toEqual([IDS.ANNEALED_2X, IDS.TIN_4X]);      // laid as before: the loss is advice
   });
@@ -384,13 +381,11 @@ describe('internal routing: tiers apart, sized for the loss', () => {
   it('crosses a lower run two blocks up and never lets two tiers touch', () => {
     const { r } = route(twoStep(), 2);
     const mv = r.blocks.filter((b) => b.role === 'cable' && b.label === '2x Annealed Copper Cable').map((b) => posKey(b.pos));
-    // up from the supply run at its east end, over the bank and the LV run at y 2 along z 4, and down to the assembler's port
-    expect(mv).toEqual(expect.arrayContaining(['2,1,4', '2,2,4', '3,2,4', '4,2,4', '5,2,4', '6,2,4', '6,1,4', '6,0,4']));
-    expect(r.blocks.some((b) => b.pos[1] === 1 && b.pos[0] === 3)).toBe(false);   // never on top of the bank
-    // what a supply-tier hookup from outside must not touch: the bank column, the LV run, the LV tree down to the west
-    // machine and the LV macerator cells
-    expect(r.keepAway.map(posKey)).toEqual(['0,0,0', '0,0,1', '0,1,0', '0,2,0', '1,2,0', '2,2,0', '3,0,1', '3,2,0', '4,0,0', '4,0,1', '4,0,3',
-      '4,0,4', '4,1,0', '4,1,1', '4,1,2', '4,1,3', '4,2,0', '5,0,0', '5,0,1']);
+    // up from the MV run, over the bank and the LV run at y 2, and down to the assembler's port behind it
+    expect(mv).toEqual(expect.arrayContaining(['0,1,0', '0,2,0', '1,2,0', '2,2,0', '3,2,0', '4,2,0', '5,2,0', '5,1,0', '5,0,0']));
+    expect(r.blocks.some((b) => b.pos[1] === 1 && b.pos[0] === 1)).toBe(false);   // never on top of the bank
+    // what a supply-tier hookup from outside must not touch: the bank, the LV run, the LV ports and the LV macerators
+    expect(r.keepAway.map(posKey)).toEqual(['1,0,2', '2,0,0', '2,0,1', '2,0,2', '2,0,3', '2,0,4', '3,0,0', '3,0,1', '3,0,3', '3,0,4']);
   });
 
   it('keeps HV, MV and LV apart in a three-tier line', () => {
@@ -402,7 +397,7 @@ describe('internal routing: tiers apart, sized for the loss', () => {
     const { placement, r } = route(plan, 3);
     expect(r.cables.map((c) => c.tier)).toEqual([3, 2, 1]);
     expect(r.warnings.map((w) => w.code)).not.toContain('route_failed');
-    expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(placement.headX, 3, u.tier)))).toEqual([true, true, true]);
+    expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(3, u.tier)))).toEqual([true, true, true]);
     expect(tierContacts(r.blocks, r.cables, placement)).toEqual([]);
   });
 
@@ -416,9 +411,9 @@ describe('internal routing: tiers apart, sized for the loss', () => {
     ]);
     for (const portSpacing of [0, 1, 2] as const) {
       const { placement, r } = route(plan, 3, 0, portSpacing);
-      expect(placement.units.map((u) => [u.stepId, u.row])).toEqual([['l', 'N'], ['l', 'S'], ['m', 'N'], ['m', 'N'], ['h', 'S'], ['h', 'N']]);
+      expect(placement.units.map((u) => [u.stepId, u.row])).toEqual([['l', 'N'], ['l', 'S'], ['m', 'N'], ['m', 'S'], ['h', 'N'], ['h', 'S']]);
       expect([portSpacing, r.warnings.filter((w) => w.code === 'route_failed'), tierContacts(r.blocks, r.cables, placement)]).toEqual([portSpacing, [], []]);
-      expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(placement.headX, 3, u.tier)))).toEqual(Array(6).fill(true));
+      expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(3, u.tier)))).toEqual(Array(6).fill(true));
     }
   });
 
@@ -431,33 +426,33 @@ describe('internal routing: tiers apart, sized for the loss', () => {
     ]);
     for (const portSpacing of [0, 1, 2] as const) {
       const { placement, r } = route(plan, 3, 0, portSpacing);
-      expect(placement.units.map((u) => [u.stepId, u.row])).toEqual([['l', 'N'], ['l', 'S'], ['m', 'N'], ['m', 'N'], ['h', 'S'], ['h', 'N']]);
+      expect(placement.units.map((u) => [u.stepId, u.row])).toEqual([['l', 'N'], ['l', 'S'], ['m', 'N'], ['m', 'S'], ['h', 'N'], ['h', 'S']]);
       expect([portSpacing, r.warnings.filter((w) => w.code === 'route_failed'), tierContacts(r.blocks, r.cables, placement)]).toEqual([portSpacing, [], []]);
-      expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(placement.headX, 3, u.tier)))).toEqual(Array(6).fill(true));
+      expect(placement.units.map((u) => reachesRun(r.blocks, u.ports.power!, runX(3, u.tier)))).toEqual(Array(6).fill(true));
     }
   });
 
   it('prices the supply run from where the hookup lands', () => {
     const { r } = route(twoStep(), 2);
-    // RUK-115 (RUK-121: head in the middle): one entry per `supplyRun` cell (the head's run column z 0…4, then the supply
-    // tree's boundary cells); the east assembler (2 A) is farthest from the run's west end (15 blocks) and the bank (2 A in) nearest
+    // RUK-115: one entry per `supplyRun` cell (the x = 0 run column z 0…4, then the supply tree's boundary cells);
+    // the assembler (2 A) is 10 cables from cell 0 and the bank (2 A in) 3, so cell 0 is the best landing and cell 4 the worst
     expect(r.supply).toEqual({ tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1,
-      consumers: [{ amps: 2, blocks: [15, 14, 10, 9, 8, 7, 6, 5, 4, 1, 2, 3] },
-        { amps: 2, blocks: [2, 1, 5, 6, 7, 8, 9, 10, 11, 14, 13, 12] }],
+      consumers: [{ amps: 2, blocks: [10, 11, 12, 13, 14, 9, 8, 7, 6, 5, 4, 1, 2, 3] },
+        { amps: 2, blocks: [3, 2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 11, 10] }],
       remedy: 'Nothing in this export loses less at MV: build a shorter line, or split the line in two.' });
-    expect(supplyRunLoss(r.supply, 0)).toEqual({ lossEUt: 2 * 15 + 2 * 2,
-      warning: { code: 'cable_loss_high', text: 'The MV wiring inside the line loses 15 of 128 V over 15 blocks of 2x Annealed Copper Cable — about 34 EU/t. '
-        + 'Nothing in this export loses less at MV: build a shorter line, or split the line in two.' },
-      tier: { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 15, worstVolts: 113, lossEUt: 2 * 15 + 2 * 2 } });
-    expect(supplyRunLoss(r.supply, 4).warning).toBeNull();
-    // unknown landing: every consumer counts its own farthest cell, so the two worst cells (assembler 15, bank 14) both price in
-    expect(supplyRunLoss(r.supply, null)).toEqual({ lossEUt: 2 * 15 + 2 * 14,
-      tier: { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 15, worstVolts: 113, lossEUt: 2 * 15 + 2 * 14 },
-      warning: { code: 'cable_loss_high', text: 'The MV wiring inside the line loses 15 of 128 V over 15 blocks of 2x Annealed Copper Cable — about 58 EU/t. '
+    expect(supplyRunLoss(r.supply, 0)).toEqual({ lossEUt: 2 * 10 + 2 * 3, warning: null,
+      tier: { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 10, worstVolts: 118, lossEUt: 2 * 10 + 2 * 3 } });
+    expect(supplyRunLoss(r.supply, 4).warning).toEqual({ code: 'cable_loss_high',
+      text: 'The MV wiring inside the line loses 14 of 128 V over 14 blocks of 2x Annealed Copper Cable — about 34 EU/t. '
+        + 'Nothing in this export loses less at MV: build a shorter line, or split the line in two.' });
+    // unknown landing: every consumer counts its own farthest cell, so the two worst cells (assembler 14, bank 12) both price in
+    expect(supplyRunLoss(r.supply, null)).toEqual({ lossEUt: 2 * 14 + 2 * 12,
+      tier: { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 14, worstVolts: 114, lossEUt: 2 * 14 + 2 * 12 },
+      warning: { code: 'cable_loss_high', text: 'The MV wiring inside the line loses 14 of 128 V over 14 blocks of 2x Annealed Copper Cable — about 52 EU/t. '
         + 'Nothing in this export loses less at MV: build a shorter line, or split the line in two.' } });
-    expect(r.lossEUt).toBe(2 * 10 + 2 * 3);                                                 // the LV run: the west macerator pays 10 blocks, the near one 3
+    expect(r.lossEUt).toBe(2 * 4 + 2 * 4);                                                  // the LV run: two macerators, 2 A over 4 cables
     expect(r.tiers).toEqual([
-      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 10, worstVolts: 22, lossEUt: 2 * 10 + 2 * 3 },
+      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 2 * 4 + 2 * 4 },
     ]);                                                                                     // the supply run's tier comes with the hookup
     expect(supplyRunLoss(null, 2)).toEqual({ lossEUt: 0, warning: null, tier: null });
   });
@@ -477,7 +472,7 @@ describe('internal routing: tiers apart, sized for the loss', () => {
   });
 });
 
-// RUK-115: a power hookup may land on any supply-tier cable cell on the line's outer boundary, and on the head's run column.
+// RUK-115: a power hookup may land on any supply-tier cable cell on the line's outer boundary, not just the x = 0 run.
 describe('supply landing cells on the line boundary', () => {
   const route = (plan: ReturnType<typeof makePlan>, supply: number) => {
     const pack = layoutPack();
@@ -491,12 +486,12 @@ describe('supply landing cells on the line boundary', () => {
   // ten single-block LV macerators: a 7 × 1 × 5 line, so the supply tree spreads across the z = 0 and z = 4 faces
   const tenLV = () => makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 10, euPerTick: 30 }]);
 
-  it('lands on the head run column and the boundary cells of the supply tree, sorted and deduped', () => {
+  it('lands on the x = 0 run and the boundary cells of the supply tree, sorted and deduped', () => {
     const { placement, r } = route(tenLV(), 1);
     const [w, h, l] = placement.size;
     const onBoundary = (p: Vec3): boolean => p[0] === 0 || p[0] === w - 1 || p[2] === 0 || p[2] === l - 1 || p[1] === h - 1;
-    const runColumn = [0, 1, 3, 4].map((z): Vec3 => [placement.headX!, 0, z]);
-    for (const c of runColumn) expect(r.supplyRun.some((s) => posKey(s) === posKey(c))).toBe(true);   // the head run column at y 0, spine row free
+    const runColumn = [0, 1, 2, 3, 4].map((z): Vec3 => [0, 0, z]);
+    for (const c of runColumn) expect(r.supplyRun.some((s) => posKey(s) === posKey(c))).toBe(true);   // whole x = 0 column
     expect(r.supplyRun.some((c) => c[0] > 0)).toBe(true);                                             // tree cells with x > 0
     expect(r.supplyRun.every(onBoundary)).toBe(true);                                                 // nothing interior
     const keys = r.supplyRun.map(posKey);

@@ -123,13 +123,13 @@ describe('layoutLine', () => {
   });
 
   it('counts the banks, the line\'s own cables and the hookup in the power need', async () => {
-    // RUK-120 + RUK-121: the head sits mid-line, so the hookup lands on the (centred) run cell that loses least in total:
-    // banks 4 A out × 1 EU; LV: 2 macerators × 2 A, far one 10 blocks; MV from the landing cell: assembler 2 A × 9, bank 2 A × 6;
-    // hookup 7 cables × 4 A × 1 V
+    // RUK-120: the hookup lands on the run cell that loses least in total (here z 2, a tie won by the earlier candidate):
+    // banks 4 A out × 1 EU; LV: 2 macerators × 2 A × 4 V; MV from the landing cell (z 2): assembler 2 A × 12, bank 2 A × 1;
+    // hookup 8 cables × 4 A × 1 V
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
-    expect(layout.power!.detail).toBe('Needs 268 EU/t on average (180 + 88 loss); 900 EU/t spare; cables and hookup lose 88 EU/t');
+    expect(layout.power!.detail).toBe('Needs 258 EU/t on average (180 + 78 loss); 900 EU/t spare; cables and hookup lose 78 EU/t');
     expect(layout.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
-      .toBe('Run 7× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 121 V');
+      .toBe('Run 8× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 4 A at MV, arriving at 120 V');
   });
 });
 
@@ -181,11 +181,7 @@ describe('layoutLine: the power landing cell', () => {
       fluids: modeResult.ownsFluids === true ? [] : fluidNets(pack, plan, placement), tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
       supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
     });
-    // RUK-121: with the head mid-line the supply tree fans into the inner rows, so not every supply cell is a border landing
-    // cell any more — the landing cells are a subset of the run, not the whole of it (as a west-end head made them)
-    const runLocal = new Set(run.map((b) => key(b.pos.map((v, i) => v - layout.origin[i]!) as [number, number, number])));
-    expect(r.supplyRun.every((c) => runLocal.has(key(c)))).toBe(true);
-    expect(r.supplyRun.length).toBeLessThan(run.length);
+    expect(r.supplyRun.length).toBe(run.length);
     const losses = r.supplyRun.map((_, i) => supplyRunLoss(r.supply, i).lossEUt);
     const local = landed.pos.map((v, i) => v - layout.origin[i]!) as [number, number, number];
     const chosen = r.supplyRun.findIndex((c) => key(c) === key(local));
@@ -209,7 +205,7 @@ describe('layoutLine: the power landing cell', () => {
   it('keeps the short line\'s hookup path pinned', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
     expect(layout.hookups.find((h) => h.kind === 'power')!.path)
-      .toEqual([[17, 64, 30], [17, 64, 29], [17, 64, 28], [17, 64, 27], [17, 64, 26], [17, 64, 25], [18, 64, 25]]);
+      .toEqual([[16, 64, 29], [16, 64, 28], [16, 64, 27], [16, 64, 26], [16, 64, 25], [16, 64, 24], [16, 64, 23], [16, 64, 22]]);
   });
 
   it('draws a dashed guide to the run when the terrain was never scanned', async () => {
@@ -222,23 +218,23 @@ describe('layoutLine: the power landing cell', () => {
 
   it("says what the line's cables lose, tier by tier, and in the power card", async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
-    // RUK-121: with the head mid-line the hookup lands centred. MV from the landing cell: assembler 2 A × 9, bank 2 A × 6;
-    // LV: 2 macerators × 2 A, the far one 10 blocks. The centred head trades a shorter MV run for a longer LV leg.
+    // MV from the hookup's landing cell (RUK-120 lands it at z 2): assembler 2 A × 12 cables, bank 2 A × 1;
+    // LV: 2 macerators × 2 A × 4. The longer hookup costs exactly what the shorter run saves, so the total is the same.
     expect(layout.loss).toEqual({ tiers: [
-      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 9, worstVolts: 119, lossEUt: 30 },
-      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 10, worstVolts: 22, lossEUt: 26 },
-    ], hookupEUt: 28, banksEUt: 4, totalEUt: 88 });       // the tiers' 56, the bank's emitter 4 and the hookup's 28
+      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 12, worstVolts: 116, lossEUt: 26 },
+      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 16 },
+    ], hookupEUt: 32, banksEUt: 4, totalEUt: 78 });       // the tiers' 42, the bank's emitter 4 and the hookup's 32
     const parts = layout.loss!;
     expect(parts.totalEUt).toBe(parts.tiers.reduce((sum, t) => sum + t.lossEUt, 0) + parts.hookupEUt + parts.banksEUt);
-    expect(layout.power!.detail).toContain('cables and hookup lose 88 EU/t');
+    expect(layout.power!.detail).toContain('cables and hookup lose 78 EU/t');
   });
 
   it('prices the supply run from each consumer\'s far end when the line has no base to wire to', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), emptyScan(), makeProject({ scanId: null, baseId: null }));
     expect([layout.status, layout.loss]).toEqual(['no-world', { tiers: [
-      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 15, worstVolts: 113, lossEUt: 2 * 15 + 2 * 14 },
-      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 10, worstVolts: 22, lossEUt: 2 * 10 + 2 * 3 },
-    ], hookupEUt: 0, banksEUt: 4, totalEUt: 4 + 26 + 58 }]); // no hookup to price in, so each consumer pays at its own farthest cell
+      { tier: 2, cable: '2x Annealed Copper Cable', lossPerBlock: 1, worstBlocks: 14, worstVolts: 114, lossEUt: 2 * 14 + 2 * 12 },
+      { tier: 1, cable: '4x Tin Cable', lossPerBlock: 1, worstBlocks: 4, worstVolts: 28, lossEUt: 16 },
+    ], hookupEUt: 0, banksEUt: 4, totalEUt: 4 + 16 + 52 }]); // no hookup to price in, so each consumer pays at its own farthest cell
   });
 });
 
@@ -309,10 +305,10 @@ describe('layoutLine: the final review', () => {
     const fed = await layoutLine(layoutPack(), hvLine(), lvOnly, makeProject(), ground());
     expect(fed.warnings).toContainEqual({ code: 'power_tap_tier', text: 'The HV network has no HV cable to tap: the line is fed at LV from a cable behind one of its transformers' });
     expect(fed.warnings.map((w) => w.code)).toContain('power_tier_low');
-    // the HV machine fed at LV: 300 EU/t at 21.8 V (the hookup's 3.2 V and 7 cables lost) is 14 A, more than the 1x cable carries
+    // the HV machine fed at LV: 300 EU/t at 23.8 V (the hookup's 3.2 V and 5 cables lost) is 13 A, more than the 1x cable carries
     expect(fed.buildSteps.find((s) => s.id === 'layout:power:hookup')!.text)
-      .toBe('Upgrade the 1x Annealed Copper Cable from the tap at pin 2 to carry 14 A, then connect the line');
-    expect(fed.warnings).toContainEqual({ code: 'power_amps_low', text: "The tap's 1x Annealed Copper Cable carries 1 A at LV; the line draws up to 14 A" });
+      .toBe('Upgrade the 1x Annealed Copper Cable from the tap at pin 2 to carry 13 A, then connect the line');
+    expect(fed.warnings).toContainEqual({ code: 'power_amps_low', text: "The tap's 1x Annealed Copper Cable carries 1 A at LV; the line draws up to 13 A" });
   });
 
   it('I-tap: reads the tap cable\'s own rating, so a cable that carries the line is wired whatever the spare power', async () => {
@@ -339,11 +335,11 @@ describe('layoutLine: the final review', () => {
     const hill = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [55, 64, 20], rotation: 0 } }),
       ground([{ from: [50, 64, 15], to: [65, 70, 30], block: STONE }]));
     expect([hill.origin, hill.warnings.filter((w) => w.code.startsWith('placement'))]).toEqual([[55, 64, 20],
-      [{ code: 'placement_blocked', text: '120 blocks are in the way at the chosen spot' }]]);
+      [{ code: 'placement_blocked', text: '105 blocks are in the way at the chosen spot' }]]);
     const edge = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [66, 64, 20], rotation: 0 } }), ground());
     expect(edge.warnings).toContainEqual({ code: 'placement_unchecked',
-      text: '80 blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building' });
-    expect(edge.pins.some((p) => p.kind === 'warning' && p.text.startsWith('80 blocks at the chosen spot'))).toBe(true);
+      text: '60 blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building' });
+    expect(edge.pins.some((p) => p.kind === 'warning' && p.text.startsWith('60 blocks at the chosen spot'))).toBe(true);
     // a placement kept from another base (or dragged off the map) is not used
     const far = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [600, 64, 20], rotation: 0 } }), ground());
     const auto = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
@@ -357,15 +353,14 @@ describe('layoutLine: the final review', () => {
   it('gives a singleblock its front and output side apart, turned with the line', async () => {
     const layout = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [30, 64, 30], rotation: 90 } }), ground());
     const machines = layout.blocks.filter((b) => b.role === 'machine');
-    // the front toward the power head, which stands mid-line: west-side units face north at 90°, east-side units face
-    // south (GT allows no front up or down); the output side keeps the spine face
-    expect(new Set(machines.map((b) => b.mainFacing))).toEqual(new Set([rotateFacing(4, 90), rotateFacing(5, 90)]));
+    // the front toward the power head (local west, GT allows no front up or down): the output side keeps the spine face
+    expect(machines.every((b) => b.mainFacing === rotateFacing(4, 90))).toBe(true);
     expect(new Set(machines.map((b) => b.facing))).toEqual(new Set([4, 5]));         // the two rows face the spine, turned 90°
     expect(machines.every((b) => b.config?.inputFromOutputSide === true)).toBe(true);
-    // the place steps name that front by the compass, turned with the line (toward the middle head: south or north at 90°)
+    // the place steps name that front by the compass, turned with the line (local west → north at 90°)
     const place = layout.buildSteps.filter((s) => s.id.startsWith('layout:place:'));
     expect(place.length).toBeGreaterThan(0);
-    expect(place.every((s) => /its front facing (north|south): with a Wrench, sneak-right-click its (north|south) side/.test(s.text))).toBe(true);
+    expect(place.every((s) => s.text.includes('its front facing north: with a Wrench, sneak-right-click its north side'))).toBe(true);
   });
 });
 
