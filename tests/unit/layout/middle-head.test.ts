@@ -1,8 +1,9 @@
 // RUK-506: the middle power head (RUK-505's `westUnits`). When `placeUnits` is asked to split the line, the first
 // `westUnits` units placed by feed tier stand west of the head facing east, the rest east of it facing west, and the
-// head's runs bridge the spine with cables so nothing of the head stands on the spine row. Every check here runs
-// against the west-end head (`westUnits` 0) as a control first: a check that fails there is the check's fault, not
-// the middle head's (spec §3.5, gt-mechanics §3.1).
+// head's runs bridge the spine with cables so nothing of the head stands on the spine row. A check that holds for the
+// west-end head too (`westUnits` 0) runs there first as a control: one that fails there is the check's fault, not the
+// middle head's. The free spine row under the head and the bridge over it are the middle head's alone (spec §3.5,
+// gt-mechanics §3.1).
 
 import { describe, it, expect } from 'vitest';
 import { placeUnits, unitsFromPlan, type LocalBlock } from '../../../src/server/layout/arrange.ts';
@@ -42,8 +43,8 @@ const twoTier = () => makePlan([
 /** A unit's feed tier at an MV supply: the tier its run and tree are built at. */
 const fedTier = (tier: number): number => Math.min(tier, SUPPLY_TIER);
 
-/** True when a cable path of connections leads from `from` to the run column `x` at y = 0 (the check of internal.test.ts). */
-function reachesRun(blocks: readonly LocalBlock[], from: Vec3, x: number): boolean {
+/** True when a cable path of connections leads from `from` to a cell `to` accepts (the check of internal.test.ts). */
+function reaches(blocks: readonly LocalBlock[], from: Vec3, to: (p: Vec3) => boolean): boolean {
   const cables = new Map(blocks.filter((b) => b.role === 'cable').map((b) => [posKey(b.pos), b]));
   const seen = new Set<string>();
   const queue = [from];
@@ -52,7 +53,7 @@ function reachesRun(blocks: readonly LocalBlock[], from: Vec3, x: number): boole
     const b = cables.get(posKey(p));
     if (!b || seen.has(posKey(p))) continue;
     seen.add(posKey(p));
-    if (p[0] === x && p[1] === 0) return true;
+    if (to(p)) return true;
     for (let s = 0; s < 6; s++) if ((b.connections ?? 0) & (1 << s)) queue.push(step(p, s));
   }
   return false;
@@ -110,6 +111,10 @@ describe('middle power head', () => {
         return missing;
       };
       expect(spineOf(westHead)).toEqual([]);
+      // each run is unbroken along z: its two ends are linked (in the middle, across the spine through the bridge)
+      const brokenRuns = (r: ReturnType<typeof line>): number[] => [r.placement.headX, r.placement.headX + 2]
+        .filter((x) => !reaches(r.internal.blocks, [x, 0, 0], (p) => posKey(p) === posKey([x, 0, r.placement.size[2] - 1])));
+      expect(brokenRuns(westHead)).toEqual([]);
       const mid = line(lossPlan(20), 8, mode);
       expect(tierContacts(mid.internal.blocks, mid.internal.cables, mid.placement)).toEqual([]);
       expect(mid.internal.warnings.map((w) => w.code)).not.toContain('route_failed');
@@ -132,9 +137,11 @@ describe('middle power head', () => {
       expect(west.length).toBe(8);
       expect(east.length).toBe(12);
       for (const u of mid.placement.units) {
-        expect(reachesRun(mid.internal.blocks, u.ports.power!, runX(SUPPLY_TIER, fedTier(u.tier), mid.placement.headX)), u.name).toBe(true);
+        const run = runX(SUPPLY_TIER, fedTier(u.tier), mid.placement.headX);
+        expect(reaches(mid.internal.blocks, u.ports.power!, (p) => p[0] === run && p[1] === 0), u.name).toBe(true);
       }
       expect(spineOf(mid)).toEqual([]);
+      expect(brokenRuns(mid)).toEqual([]);
     });
   }
 
