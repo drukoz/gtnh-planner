@@ -268,11 +268,16 @@ function lineLoss(line: LocalLine): number {
  * The line in its own grid, its power head where the line loses least (RUK-121). The line is laid with the head at its
  * west end and, given the stages, again with each of `headSplits` of its units west of a head in the middle. The middle
  * head with the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 − `MIDDLE_HEAD_MIN_CUT`)
- * of the west-end line's; otherwise the line is the west-end one, exactly the line laid before RUK-121.
+ * of the west-end line's, which must lose something; otherwise the line is the west-end one, exactly the line laid before
+ * RUK-121.
  */
 function buildLocal(input: LocalInput): LocalLine {
   const west = buildLocalAt(input, 0);
   if (input.stages === null) return west;
+  // a line that loses nothing of its own (lossless cable such as ULV Red Alloy, no banks) keeps the west head: a middle
+  // head cannot cut that, and would only make the line taller and longer
+  const westLoss = lineLoss(west);
+  if (westLoss <= 0) return west;
   let middle: LocalLine | null = null;
   let middleLoss = Infinity;
   for (const westUnits of headSplits(input.units.filter((u) => u.manual === undefined).length)) {
@@ -283,7 +288,7 @@ function buildLocal(input: LocalInput): LocalLine {
       middleLoss = loss;
     }
   }
-  return middle !== null && middleLoss <= (1 - MIDDLE_HEAD_MIN_CUT) * lineLoss(west) ? middle : west;
+  return middle !== null && middleLoss <= (1 - MIDDLE_HEAD_MIN_CUT) * westLoss ? middle : west;
 }
 
 /**
