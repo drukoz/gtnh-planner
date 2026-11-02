@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { layoutLine, emptyScan } from '../../../src/server/layout/layout.ts';
-import { overlaps, unitsFromPlan, placeUnits } from '../../../src/server/layout/arrange.ts';
-import { routeInternal, fluidNets, headWidthFor, supplyRunLoss } from '../../../src/server/layout/internal.ts';
-import { tierGroups, transformerStages, hookupAllowanceVolts } from '../../../src/server/layout/power.ts';
-import { buildMode, PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
+import { layoutLine, emptyScan, headSplits } from '../../../src/server/layout/layout.ts';
+import { overlaps, type Placement } from '../../../src/server/layout/arrange.ts';
+import { supplyRunLoss, type InternalResult } from '../../../src/server/layout/internal.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { tierName } from '../../../src/shared/gt/tiers.ts';
 import { OPPOSITE, rotateFacing, step } from '../../../src/shared/layout/geometry.ts';
@@ -161,7 +159,8 @@ describe('layoutLine: the power landing cell', () => {
 
   it('lands a long line\'s hookup in the middle of the run, not at its far end', async () => {
     const pack = layoutPack(), plan = twentyLV();
-    const layout = await layoutLine(pack, plan, lvScan(), project(), lvGround());
+    const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
+    const layout = await layoutLine(pack, plan, lvScan(), project(), { ...lvGround(), localLine: (line) => { seen.push(line); } });
     expect([layout.status, layout.hookups.find((h) => h.kind === 'power')!.found]).toEqual(['ok', true]);
     const run = layout.blocks.filter((b) => b.role === 'cable' && b.hookup === undefined && b.label === '4x Tin Cable');
     expect(run.length).toBeGreaterThan(2);
@@ -171,22 +170,15 @@ describe('layoutLine: the power landing cell', () => {
     expect(landed.pos[0]!).toBeLessThan(Math.max(...xs));
     // the route the old code priced (the run's first cell) is measured with the same loss formula: `buildLocal`'s
     // internal route, mirrored, prices every landing cell, and the hookup loss is amps × blocks × lossPerBlock
-    const parts = resolveParts(pack);
-    const { units } = unitsFromPlan(pack, plan, { primitive: false });
-    const stages = transformerStages(tierGroups(units.filter((u) => u.electric)), 1);
-    const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: PORT_SPACING.direct, ...(stages === null ? {} : { supplyTier: stages.supplyTier }) });
-    const modeResult = buildMode('direct', { pack, plan, parts, placement, network: null });
-    const r = routeInternal({
-      pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages,
-      fluids: modeResult.ownsFluids === true ? [] : fluidNets(pack, plan, placement), tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
-      supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
-    });
-    expect(r.supplyRun.length).toBe(run.length);
+    const r = seen[0]!.internal;
+    // every landing cell is a cell of the run; a head in the middle also has run cells inside the line, which are none
+    const runCells = new Set(run.map((b) => key(b.pos.map((v, i) => v - layout.origin[i]!))));
+    expect(r.supplyRun.filter((c) => !runCells.has(key(c)))).toEqual([]);
     const losses = r.supplyRun.map((_, i) => supplyRunLoss(r.supply, i).lossEUt);
     const local = landed.pos.map((v, i) => v - layout.origin[i]!) as [number, number, number];
     const chosen = r.supplyRun.findIndex((c) => key(c) === key(local));
     expect(chosen).toBeGreaterThan(-1);
-    const amps = stages!.supplyAmps;
+    const amps = r.stages!.supplyAmps;
     const totalLoss = layout.power!.averageEUt - plan.power.averageEUt;
     // everything the landing cell does not change, read off the layout; the first cell's total is then its own run
     // loss plus a hookup no shorter than the straight line from the tap to it — and the chosen total beats even that
@@ -630,5 +622,11 @@ describe('layoutLine: shared machines and structure hatches', () => {
     const merged = mergeLayoutIntoPlan(plan, layout, null, (k) => pack.nameOf(k));
     expect(merged.buildList.filter((l) => l.key === 'machine:91@0' || l.key === 'machine:93@0').map((l) => [l.key, l.amount])).toEqual([['machine:91@0', 1]]);
     expect(layout.buildSteps.find((s) => s.id === 'layout:place:bend-plate')!.text).toContain('Muffler Hatch (LV)');
+  });
+});
+
+describe('headSplits (RUK-121)', () => {
+  it('tries a quarter, a third, two fifths and half of the units, each rounded down to an even count', () => {
+    expect([0, 3, 4, 8, 10, 20, 40].map((n) => headSplits(n))).toEqual([[], [], [2], [2, 4], [2, 4], [4, 6, 8, 10], [10, 12, 16, 20]]);
   });
 });
