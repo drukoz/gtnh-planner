@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { request as httpRequest } from 'node:http';
-import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { IncomingMessage, ServerResponse, request as httpRequest } from 'node:http';
+import { mkdtemp, open, symlink, writeFile } from 'node:fs/promises';
+import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startTestServer, type TestServer } from '../../helpers/test-server.ts';
@@ -9,6 +10,7 @@ import { writeAssetsDir } from '../../helpers/assets-dir.ts';
 import { writeTexturesDump } from '../../helpers/textures-dump.ts';
 import { gtSampleFile, GT_SAMPLE_ASSETS, I } from '../../helpers/gt-sample.ts';
 import { activeExportDir } from '../../../src/server/config.ts';
+import { pipeFile } from '../../../src/server/http/routes/assets.ts';
 import { ASSET_KEYS_MAX } from '../../../src/shared/types/api.ts';
 
 let s: TestServer;
@@ -99,5 +101,15 @@ describe('POST /api/assets/icons and /api/assets/blocks', () => {
     expect((await s.request('/api/assets/blocks', { method: 'POST', body: { blocks: [{ id: 'a:b', meta: -1 }] } })).status).toBe(400);
     expect((await s.request('/api/assets/blocks', { method: 'POST', body: { blocks: [], facing: 9 } })).status).toBe(400);
     expect((await s.request('/api/assets/covers', { method: 'POST', body: { items: keys(ASSET_KEYS_MAX + 1) } })).status).toBe(400);
+  });
+});
+
+describe('pipeFile', () => {
+  it('closes the file at once, without an error, when the browser left before the texture was sent', async () => {
+    const handle = await open(new URL(import.meta.url), 'r');   // any file will do: this one
+    const res = new ServerResponse(new IncomingMessage(new Socket()));
+    res.destroy();                                              // the browser closed the connection while the file was opened
+    await expect(pipeFile(handle, res)).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(handle.fd).toBe(-1));         // closed now, not whenever the garbage collector finds it
   });
 });
