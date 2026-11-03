@@ -39,7 +39,7 @@ describe('WorldPage (server-side render: effects do not run)', () => {
   });
 
   it('is the World top page, after the projects', () => {
-    expect(TOP_PAGES.map((p) => p.path)).toEqual(['/', '/world']);
+    expect(TOP_PAGES.map((p) => p.path)).toEqual(['/projects', '/world']);
     expect(TOP_PAGES.at(-1)).toEqual({ path: '/world', label: 'World', component: WorldPage });
     expect(matchPath('/world')).toEqual({ name: 'top', path: '/world' });
   });

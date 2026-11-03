@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { App } from '../../src/client/App.tsx';
 import { matchPath } from '../../src/client/router.ts';
 import { TOP_PAGES } from '../../src/client/views/top-pages.ts';
 import { TopNav } from '../../src/client/components/TopNav.tsx';
@@ -17,32 +18,40 @@ describe('router and top pages', () => {
   it('matches the login page, top pages, projects and anything else', () => {
     expect(matchPath('/login')).toEqual({ name: 'login' });
     expect(matchPath('/p/abc')).toEqual({ name: 'project', id: 'abc' });
-    expect(matchPath('/')).toEqual({ name: 'top', path: '/' });
+    expect(matchPath('/')).toEqual({ name: 'landing' });
+    expect(matchPath('/projects')).toEqual({ name: 'top', path: '/projects' });
     expect(matchPath('/nope/x')).toEqual({ name: 'notFound' });
   });
   it('reads appended top pages at call time, in the router and in the header', () => {
     TOP_PAGES.push({ path: '/x', label: 'X', component: () => null });
     try {
       expect(matchPath('/x')).toEqual({ name: 'top', path: '/x' });
-      const html = renderToStaticMarkup(<TopNav current="/" />);
+      const html = renderToStaticMarkup(<TopNav current="/projects" />);
       expect(html).toContain('Projects');
       expect(html).toContain('>X<');
-      expect(html).toMatch(/<a[^>]*href="\/"[^>]*aria-current="page"/);
+      expect(html).toMatch(/<a[^>]*href="\/projects"[^>]*aria-current="page"/);
       expect(html).not.toMatch(/<a[^>]*href="\/x"[^>]*aria-current/);
     } finally {
       TOP_PAGES.pop();
     }
   });
-  it('draws the pixel brand mark before the name, as decoration only', () => {
+  it('draws the pixel brand mark before the name, as decoration only, and the brand is the link home', () => {
     // the mark is a CSS background (styles.css `--brand-mark`): the span is empty and hidden from screen readers, so the
-    // brand reads as "GTNH Line Planner" and is still no link (flow-focus.spec.ts looks up the link named "Projects")
-    expect(renderToStaticMarkup(<TopNav current="/" />)).toContain(
-      '<span class="brand"><span class="brand-mark" aria-hidden="true"></span>GTNH Line Planner</span>',
+    // link reads as "GTNH Line Planner" (and a lookup of the link named "Projects", as flow-focus.spec.ts makes, still finds
+    // the page link alone)
+    expect(renderToStaticMarkup(<TopNav current="/projects" />)).toContain(
+      '<a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>GTNH Line Planner</a>',
     );
+  });
+  it('opens the landing page at /, under the header and without the name prompt', () => {
+    const html = renderToStaticMarkup(<App />);                                     // the router's server snapshot is "/"
+    expect(html).toContain('<main class="page landing">');
+    expect(html).toContain('<header class="top-nav"><a class="brand" href="/">');
+    expect(html).not.toContain('What should we call you?');
   });
   it('ends the header with the Theme button, after the pages (Phase 2 spec §4.8): Auto where nothing is stored', () => {
     // after the nav, so the keyboard reaches Projects first (focus.spec.ts) and the Settings button within ten Tabs (drawer.spec.ts)
-    expect(renderToStaticMarkup(<TopNav current="/" />)).toMatch(/<\/nav><button type="button" class="theme-button" data-choice="auto">Theme: Auto<\/button><\/header>$/);
+    expect(renderToStaticMarkup(<TopNav current="/projects" />)).toMatch(/<\/nav><button type="button" class="theme-button" data-choice="auto">Theme: Auto<\/button><\/header>$/);
   });
 });
 

@@ -1,6 +1,6 @@
 // The page for the current route: the login form on its own, every other page under the header nav, and the name
-// prompt over them until this browser has a name; the toasts' region after the page, so a toast lives on across the page's own
-// navigation (Phase 2 spec §12); and the page's one NEI tooltip (Phase 2 spec §6), above everything.
+// prompt over them, but the landing page, until this browser has a name; the toasts' region after the page, so a toast lives
+// on across the page's own navigation (Phase 2 spec §12); and the page's one NEI tooltip (Phase 2 spec §6), above everything.
 
 import type { ReactElement } from 'react';
 import { NamePrompt } from './components/NamePrompt.tsx';
@@ -8,6 +8,7 @@ import { Toasts } from './components/Toasts.tsx';
 import { TooltipHost } from './components/Tooltip.tsx';
 import { TopNav } from './components/TopNav.tsx';
 import { followLink, useRoute, type Route } from './router.ts';
+import { LandingPage } from './views/LandingPage.tsx';
 import { LoginPage } from './views/LoginPage.tsx';
 import { ProjectPage } from './views/ProjectPage.tsx';
 import { TOP_PAGES } from './views/top-pages.ts';
@@ -17,7 +18,7 @@ function NotFound(): ReactElement {
     <main className="page">
       <h1>Nothing here</h1>
       <p>
-        This address is not a page of the planner. <a href="/" onClick={(e) => followLink(e, '/')}>Back to the projects</a>
+        This address is not a page of the planner. <a href="/projects" onClick={(e) => followLink(e, '/projects')}>Back to the projects</a>
       </p>
     </main>
   );
@@ -26,6 +27,8 @@ function NotFound(): ReactElement {
 function RoutePage(props: { route: Exclude<Route, { name: 'login' }> }): ReactElement {
   const { route } = props;
   switch (route.name) {
+    case 'landing':
+      return <LandingPage />;
     case 'top': {
       const Page = TOP_PAGES.find((p) => p.path === route.path)?.component;
       return Page === undefined ? <NotFound /> : <Page />;
@@ -45,7 +48,7 @@ export function App(): ReactElement {
       <TopNav current={route.name === 'top' ? route.path : ''} />
       <RoutePage route={route} />
       <Toasts />
-      <NamePrompt />
+      {route.name !== 'landing' && <NamePrompt />}
       <TooltipHost />
     </>
   );

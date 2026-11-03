@@ -23,7 +23,7 @@ export function alreadyDeletedNotice(name: string): string {
 /** Opens the project list, which then shows the notice for `name` (project `about`, when known). */
 export function leaveDeletedProject(name: string | null, by: string | null, about: string | null = null): void {
   pending = { text: deletedNotice(name, by), about };
-  navigate('/');
+  navigate('/projects');
 }
 
 /** The notice waiting to be shown, once: the next call answers null. */
