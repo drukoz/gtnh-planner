@@ -15,7 +15,9 @@ the planned build. User-facing documentation is in `README.md`.
     placement (`arrange.ts`), the line's own wiring and its loss (`internal.ts`, `power.ts`), hookups to the base's
     power and logistics (`hookups.ts`, `path.ts`), parts and the build list (`parts.ts`), logistics modes (`modes/`).
   - `pack/` reads an export, `export/` makes one, `world/` reads world backups, plus `projects/` and `projector/`.
-- `src/client/`: the React 19 and three.js UI (`views/`, `map/`, `three/`, `state/`), built by Vite.
+- `src/client/`: the React 19 and three.js UI (`views/`, `map/`, `three/`, `state/`), built by Vite. Its routes
+  (`router.ts`): `/` is the public landing page (`views/LandingPage.tsx`) and `/login` the password form; the project
+  list (`/projects`), `/world` and each project (`/p/<id>`) need the password.
 - `src/shared/`: types and code both sides use (`types/`, `layout/`, `plan/`, `gt/`).
 - `tests/unit/` (Vitest on Node), `tests/client/` (Vitest, `*.test.tsx`), `tests/e2e/` (Playwright), and
   `tests/helpers/` (fixtures: `layout-fixtures.ts` has `makeScan`, `makePlan`, `flatVoxels`, `layoutPack` and `IDS`;
@@ -32,12 +34,14 @@ Run them from the repository root.
 - Setup: `npm ci`. A new worktree has no `node_modules/`.
 - Typecheck: `npx tsc -b`. No output means clean. Node runs the `.ts` sources directly, so this is the only compile
   step for the server.
-- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `f5509d5c8` it gives 243 files passed | 18 skipped,
-  4020 tests passed | 188 skipped.
+- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `9d3a44a6d` it gives 253 files passed | 23 skipped,
+  4213 tests passed | 266 skipped.
 - One file or folder: `npx vitest run tests/unit/layout/power-loss.test.ts`, or `npx vitest run tests/unit/layout`.
 - Browser tests: `npm run e2e`. It builds the client, then runs Chromium against a real server on 127.0.0.1:18787,
-  with data that `tests/e2e/prepare.ts` writes to `data/e2e/`. It needs Playwright's Chromium
-  (`npx playwright install chromium`).
+  with data that `tests/e2e/prepare.ts` writes to `data/e2e/`. At `9d3a44a6d` it gives 366 passed, in about 80 s.
+  It needs Playwright's Chromium (`npx playwright install chromium`). On the team's Mac it is already installed:
+  pass `PLAYWRIGHT_BROWSERS_PATH=/Users/drukoz/Library/Caches/ms-playwright`. Two runs at once collide on port
+  18787, so start one only when `netstat -anv -p tcp | grep LISTEN | grep '\.18787 '` prints nothing.
 - See the app with test data: `npm run build`, then
   `node --disable-warning=ExperimentalWarning tests/e2e/prepare.ts`, then
   `GTNH_PLANNER_CONFIG=data/e2e/config.json npm start`, and open `http://127.0.0.1:18787`. The password is
@@ -90,6 +94,9 @@ Run them from the repository root.
   of the Minecraft server on 127.0.0.1:25566; `set-password -- --rotate-sessions` logs the whole group out.
 - `npm start` and `npm run dev:server` without `GTNH_PLANNER_CONFIG` listen on 0.0.0.0:8765, the port the group
   uses. Always start the server with a scratch config such as `data/e2e/config.json`.
+- The group's own planner can run on the same computer, under the same command line (`node … src/server/main.ts`).
+  Never `pkill` or `killall` a pattern that matches it. Stop a leftover test server only by the PID that listens on
+  18787, after `ps -E -p <pid>` shows `GTNH_PLANNER_CONFIG=data/e2e/config.json`.
 - Nothing game-made goes into the repository: no textures, recipes, jars or exports. They come from the user's own
   pack and stay on their machine.
 
@@ -100,5 +107,7 @@ common. Two are tracked as RUK-125: `tests/unit/layout/feed-ae2.test.ts` and `te
 Three more failed under load on 2026-10-30 and passed when run alone: `tests/client/link-geometry.test.tsx` (a
 1,000-block line's link geometry in under a second, a pick in under 6 ms), `tests/unit/layout/feeding/check.test.ts`
 (a 1,200-block line checked in under a second) and `tests/unit/planner/candidates.test.ts` (vitest's 5 s default
-timeout). Re-run the file alone before you chase a failure there, and say so in your hand-over.
+timeout). In the browser tests, `tests/e2e/pipes.spec.ts:75` ("flow pipes move", which watches the pipes' dashes
+move) is timing-sensitive the same way; run it with `npx playwright test tests/e2e/pipes.spec.ts`. Re-run the file
+alone before you chase a failure there, and say so in your hand-over.
 `npx vitest run --maxWorkers=2` runs the whole suite under less load.
