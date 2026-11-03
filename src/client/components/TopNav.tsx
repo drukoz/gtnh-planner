@@ -1,6 +1,6 @@
-// The header above every page but the login form: one link per top-level page (TOP_PAGES, read on every render so
-// pages later plans append show up), the current one marked for screen readers and styling; and, after the pages, the Theme
-// button (Phase 2 spec §4.8), which says the look this browser chose.
+// The header above every page but the login form: the brand, which is the link home (the landing page at /, RUK-510); one link
+// per top-level page (TOP_PAGES, read on every render so pages later plans append show up), the current one marked for screen
+// readers and styling; and, after the pages, the Theme button (Phase 2 spec §4.8), which says the look this browser chose.
 
 import type { ReactElement } from 'react';
 import { followLink } from '../router.ts';
@@ -12,7 +12,7 @@ export function TopNav(props: { current: string }): ReactElement {
   const theme = useThemeChoice();
   return (
     <header className="top-nav">
-      <span className="brand"><span className="brand-mark" aria-hidden="true" />GTNH Line Planner</span>
+      <a className="brand" href="/" onClick={(e) => followLink(e, '/')}><span className="brand-mark" aria-hidden="true" />GTNH Line Planner</a>
       <nav aria-label="Pages">
         {TOP_PAGES.map((page) => (
           <a key={page.path} href={page.path} aria-current={page.path === props.current ? 'page' : undefined} onClick={(e) => followLink(e, page.path)}>{page.label}</a>

@@ -122,7 +122,7 @@ describe('a deleted project', () => {
 
     const loc = stubAddressBar('/p/p1');
     leaveDeletedProject('MV circuits', 'Sam');
-    expect(loc.pathname).toBe('/');
+    expect(loc.pathname).toBe('/projects');
     expect(takeDeletedNotice()).toBe('MV circuits was deleted by Sam');
     expect(takeDeletedNotice()).toBeNull();
   });

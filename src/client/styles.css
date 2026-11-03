@@ -374,7 +374,7 @@ details.settings-section > summary .muted { color: inherit; }
 }
 .brand {
   display: inline-flex; align-items: center; gap: 10px;
-  color: #ffd84a; font: 700 20px/1 var(--font-pixel); letter-spacing: 0.02em; text-shadow: 2px 2px 0 #3f3300;
+  color: #ffd84a; font: 700 20px/1 var(--font-pixel); letter-spacing: 0.02em; text-shadow: 2px 2px 0 #3f3300; text-decoration: none;
 }
 .brand-mark { position: relative; flex: none; width: 32px; height: 32px; background: var(--brand-mark) center / contain no-repeat; }
 /* The pipe flows six turns and rests on the still frame (WCAG 2.2.2, ruling R31); reduced motion: never moves. */
