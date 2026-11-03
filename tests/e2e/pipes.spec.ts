@@ -403,7 +403,7 @@ test('connections pipes move', async ({ page }) => {
 // this asks the stylesheet the built page loaded that both rules are there.
 test('the built stylesheet keeps a fallback colour for the Connections arrow heads', async ({ page }) => {
   await login(page);
-  await page.goto('/');
+  await page.goto('/projects');
   const heads = await page.evaluate(() => {
     const found: string[] = [];
     const walk = (rules: CSSRuleList, within: string): void => {

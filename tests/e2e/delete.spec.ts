@@ -25,11 +25,11 @@ test('a deleted project leaves every open tab within 2 s, and comes back with it
   await typed.fill(name);
   const sentAt = Date.now();
   await confirm.click();
-  await pb.waitForURL((url) => url.pathname === '/', { timeout: 2000 });
+  await pb.waitForURL((url) => url.pathname === '/projects', { timeout: 2000 });
   expect(Date.now() - sentAt).toBeLessThan(2000);
   await expect(pb.getByText(`${name} was deleted by Ann`)).toBeVisible();
 
-  await expect(pa).toHaveURL(/\/$/);
+  await expect(pa).toHaveURL(/\/projects$/);
   await expect(pa.getByText(`${name} was deleted by Ann`)).toHaveCount(1);
   await expect(pa.getByRole('link', { name, exact: true })).toHaveCount(0);
   const row = pa.getByRole('region', { name: 'Recently deleted' }).getByRole('listitem').filter({ hasText: name });
@@ -55,7 +55,7 @@ test('a project is deleted from its row on the list, and a row someone else dele
   await createProject(page, `Kept row ${run}`);
   await createProject(page, `Kept row ${run}`);
   const staleId = await createProject(page, stale);
-  await page.goto('/');
+  await page.goto('/projects');
   const rowOf = (name: string) => page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
   const deletedRow = (name: string) => page.getByRole('region', { name: 'Recently deleted' }).getByRole('listitem').filter({ hasText: name });
   const confirmDelete = async (name: string): Promise<void> => {
@@ -141,7 +141,7 @@ test('Cancel stops a delete still waiting for the page\'s posts, and the focus g
   await form.getByLabel('Type the project name to confirm').fill(renamed);
   await expect(confirm).toBeEnabled();
   await confirm.click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects$/);
   expect(deletes).toHaveLength(1);
 });
 
@@ -151,7 +151,7 @@ test('on the list Escape cancels a row\'s confirm, and the keyboard\'s Cancel an
   await login(page); await setName(page, 'Cy');
   const name = `Escaped delete ${test.info().repeatEachIndex + 1}`;
   await createProject(page, name);
-  await page.goto('/');
+  await page.goto('/projects');
   const row = page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
   const opener = row.getByRole('button', { name: 'Delete' });
   const form = row.getByRole('form', { name: 'Confirm delete' });
@@ -185,7 +185,7 @@ test('a delete confirmed from a list row by the keyboard hands the focus to the 
     const list = (await res.json()) as Array<{ id: string }>;
     return route.fulfill({ response: res, json: list.filter((p) => ids.includes(p.id)) });
   });
-  await page.goto('/');
+  await page.goto('/projects');
   await expect(page.locator('.project-card')).toHaveCount(3);
   const rowOf = (name: string) => page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
   const linkOf = (name: string) => page.getByRole('link', { name, exact: true });

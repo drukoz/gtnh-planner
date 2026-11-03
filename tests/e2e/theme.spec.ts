@@ -20,7 +20,7 @@ test('Auto follows the OS: today\'s look in a light OS, the dark look in a dark 
     try {
       const page = await context.newPage();
       await login(page); await setName(page, 'Ann');
-      await page.goto('/');
+      await page.goto('/projects');
       await expect(page.locator('form.new-project')).toBeVisible();
       await expect(page.getByRole('button', { name: 'Theme: Auto' })).toBeVisible();
       const paint = await page.evaluate(() => {
@@ -42,7 +42,7 @@ test('the Theme button cycles Auto, Dark and Light, and the choice outranks the 
   try {
     const page = await light.newPage();
     await login(page); await setName(page, 'Ann');
-    await page.goto('/');
+    await page.goto('/projects');
     await page.getByRole('button', { name: 'Theme: Auto' }).click();
     // the page cross-fades into the new look (a View Transition), so the colours are polled for
     await expect(page.getByRole('button', { name: 'Theme: Dark' })).toBeVisible();
@@ -63,7 +63,7 @@ test('the Theme button cycles Auto, Dark and Light, and the choice outranks the 
     const page = await dark.newPage();
     await setTheme(page, 'light');
     await login(page); await setName(page, 'Ann');
-    await page.goto('/');
+    await page.goto('/projects');
     await expect(page.getByRole('button', { name: 'Theme: Light' })).toBeVisible();
     await expect.poll(() => stone(page)).toBe(LIGHT.page);
   } finally {
@@ -75,7 +75,7 @@ test('a chosen look is on the page before any app code runs', async ({ page }) =
   await setTheme(page, 'dark');
   await page.route(/\/assets\/.*\.js$/, (route) => route.abort());
   await login(page);
-  await page.goto('/');
+  await page.goto('/projects');
   // no script of the app ran: the stylesheet and the head script alone paint the dark stone
   await expect.poll(() => stone(page)).toBe(DARK.page);
   expect(await page.locator('#root').evaluate((el) => el.childElementCount)).toBe(0);
@@ -98,7 +98,7 @@ const heldPlans: Route[] = [];
 const DARK_TOUR: DarkStop[] = [
   {
     name: 'the project list',
-    open: async (page) => { await page.goto('/'); },
+    open: async (page) => { await page.goto('/projects'); },
     rows: [{ what: 'the top bar', selector: '.top-nav', property: 'background-color', expected: 'rgb(11, 11, 11)' }],
   },
   {
