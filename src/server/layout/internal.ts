@@ -18,14 +18,15 @@
 
 import { tierName, V } from '../../shared/gt/tiers.ts';
 import type { StuffKey } from '../../shared/keys.ts';
-import { fmtInt, joinNames } from '../../shared/layout/format.ts';
+import { fmtInt, fmtRate, joinNames } from '../../shared/layout/format.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
-import type { Plan, PlanWarning } from '../../shared/types/plan.ts';
+import type { Plan, PlanWarning, BomLine } from '../../shared/types/plan.ts';
+import type { TierLoss } from '../../shared/types/layout.ts';
 import { handRunSurroundings, placedStepIds, unitSteps, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
 import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
-import { coverRateWarning, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
+import { coverRateWarning, lowerLossCable, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
 import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
 
 // ---- Types ----
@@ -47,10 +48,14 @@ export interface InternalResult {
   blocks: LocalBlock[];
   /** Pump covers, for the producing machines (Task 11 attaches them). */
   covers: HostCover[];
-  /** Cells of the supply-tier run (x = 0), where the power hookup lands. */
+  /**
+   * Cells of the line's supply-tier cable a power hookup may land on: every supply-tier cable cell — the run or
+   * its tree — that lies on the line's outer boundary (`x = 0`, `x = w - 1`, `z = 0`, `z = l - 1` or `y = h - 1`
+   * of `placement.size`), sorted by x, y, z. `SupplyLoss.consumers[].blocks` is indexed by this list.
+   */
   supplyRun: Vec3[];
-  /** Tier descending. */
-  cables: Array<{ tier: number; cable: Machine; cells: number }>;
+  /** Tier descending. `cells` the cells the layout lays (one run); `runs` the parallel runs the amps need (the build list prices `runs × cells`). */
+  cables: Array<{ tier: number; cable: Machine; cells: number; runs: number }>;
   fluidPipes: Array<{ key: StuffKey; name: string; pipe: Machine; cells: number }>;
   warnings: PlanWarning[];
   /**
@@ -60,9 +65,14 @@ export interface InternalResult {
   stages: Stages | null;
   /**
    * EU/t the line's lower runs and their trees lose: every amp a machine or bank draws times the volts it loses inside
-   * the line. The supply run's share is `supplyRunLoss(supply, z)` once the hookup's landing cell z is known.
+   * the line. The supply run's share is `supplyRunLoss(supply, landing)` once the hookup's landing cell in `supplyRun` is known.
    */
   lossEUt: number;
+  /**
+   * What each wired tier of the line's own wiring loses (RUK-116, design G2), tier descending. The supply run is not in
+   * it: its loss depends on where the hookup lands, so `supplyRunLoss` returns its `TierLoss` with the landing cell.
+   */
+  tiers: TierLoss[];
   /** The supply run's consumers, for `supplyRunLoss`; null without stages or a cable for the supply tier. */
   supply: SupplyLoss | null;
   /**
@@ -93,6 +103,16 @@ function uniquePositions(ps: readonly Vec3[]): Vec3[] {
   return [...byKey.values()].sort(comparePos);
 }
 
+/**
+ * True when `p` lies on a side face of a line of `size`: an end column or a side row. Not the top layer: a hookup comes
+ * in from beside the line, never over it, so a cell on top of the line's middle is no landing cell, and a guide to one
+ * would have to cross the line (RUK-121).
+ */
+function onBoundary(p: Vec3, size: Vec3): boolean {
+  const [w, , l] = size;
+  return p[0] === 0 || p[0] === w - 1 || p[2] === 0 || p[2] === l - 1;
+}
+
 function voltsOf(tier: number): number {
   const v = V[tier];
   if (v === undefined) throw new RangeError(`tier must be an integer from 0 to ${V.length - 1}, got ${tier}`);
@@ -119,9 +139,12 @@ export function headWidthFor(stages: Stages | null): number {
   return stages === null ? 1 : 1 + 2 * stages.stages.length;
 }
 
-/** The x of the cable run of `tier`: the supply run at x = 0, each lower tier two columns further on. */
-export function runX(supplyTier: number, tier: number): number {
-  return 2 * (supplyTier - tier);
+/**
+ * The x of the cable run of `tier`: the supply run at the head's first column `headX` (0: the head at the line's west
+ * end), each lower tier two columns further on.
+ */
+export function runX(supplyTier: number, tier: number, headX = 0): number {
+  return headX + 2 * (supplyTier - tier);
 }
 
 // ---- Fluid nets ----
@@ -173,8 +196,8 @@ export function fluidNets(pack: Pack, plan: Plan, placement: Placement): FluidNe
 
 // ---- Routing ----
 
-/** A cable run of the head; `rated`: the pack has a cable for its volts (else it is never laid). */
-interface Run { tier: number; cells: Vec3[]; rated: boolean }
+/** A cable run of the head, at column `x`; `rated`: the pack has a cable for its volts (else it is never laid). */
+interface Run { tier: number; x: number; cells: Vec3[]; rated: boolean }
 /** The column of the step-down bank of `stage`, between the runs of its two tiers. */
 interface Bank { stage: number; fromTier: number; toTier: number; x: number }
 interface Port { pos: Vec3; unit: PlacedUnit }
@@ -222,19 +245,33 @@ class Grid {
   }
 }
 
-/** The runs (supply first, then each stage's lower tier, each across the whole length) and the bank columns between them. */
-function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run[]; banks: Bank[] } {
+/**
+ * The runs (supply first, then each stage's lower tier, each across the whole length) and the bank columns between
+ * them, on the head's columns at `placement.headX`. At the line's west end (`headX` 0) each run lies on the floor, as
+ * it always has. In the middle of the line (`placeUnits` with `westUnits`) the head crosses the line's spine, so each
+ * run skips the spine's row on the floor and bridges it with three cells one above (below the spine row, above it,
+ * and above the spine cell): a tier's cable runs unbroken along z, while the spine's row stays free for the logistics
+ * spine (`placeUnits`'s rows and the modes' spines).
+ */
+function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run[]; banks: Bank[]; headX: number } {
   const { pack, placement } = input;
-  const length = placement.size[2];
+  const length = placement.size[2], spineZ = placement.spineZ;
   const supply = stages.supplyTier;
+  const headX = placement.headX;
   const runs = [supply, ...stages.stages.map((s) => s.toTier)].map((tier): Run => {
-    const x = runX(supply, tier);
-    const cells = Array.from({ length }, (_, z): Vec3 => [x, 0, z]);
+    const x = runX(supply, tier, headX);
+    const cells: Vec3[] = [];
+    if (headX === 0) for (let z = 0; z < length; z++) cells.push([x, 0, z]);
+    else {
+      for (let z = 0; z < spineZ; z++) cells.push([x, 0, z]);
+      cells.push([x, 1, spineZ - 1], [x, 1, spineZ], [x, 1, spineZ + 1]);
+      for (let z = spineZ + 1; z < length; z++) cells.push([x, 0, z]);
+    }
     for (const c of cells) grid.take(c);
-    return { tier, cells, rated: pickCable(pack, { volts: voltsOf(tier), amps: 1 }) !== null };
+    return { tier, x, cells, rated: pickCable(pack, { volts: voltsOf(tier), amps: 1 }) !== null };
   });
-  const banks = stages.stages.map((s, stage): Bank => ({ stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(supply, s.toTier) - 1 }));
-  return { runs, banks };
+  const banks = stages.stages.map((s, stage): Bank => ({ stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(supply, s.toTier, headX) - 1 }));
+  return { runs, banks, headX };
 }
 
 /** The cell a unit's power reaches it through: the machine (singleblock) or its energy hatch, behind the power port. */
@@ -261,8 +298,11 @@ function warnUnderVoltage(units: readonly PlacedUnit[], supply: number, warnings
  * along. Its cells keep off `keepOff`, the bank columns, the ports of other feed tiers and the cells on top of a bank
  * that sends another tier, and never touch another tier's run, tree or port or a machine of a lower tier; the box
  * reaches H + 1 high, so a tree crosses a lower run two blocks up, and two blocks higher for every run past the second,
- * so it can also pass over the lower tiers' crossings. The cells are taken but not yet laid: the cables are chosen once
- * the trees give the lengths. Units that cannot be reached (or whose tier has no run) get `route_failed`.
+ * so it can also pass over the lower tiers' crossings. A head in the middle of the line (`placement.headX` > 0) is
+ * crossed by the trees of the units west of it: there the box is two blocks taller still (every run past the first),
+ * each tier keeps to a lane of its own (`laneFloorY`), and a tree keeps off the rim of a higher tier's port. The cells
+ * are taken but not yet laid: the cables are chosen once the trees give the lengths. Units that cannot be reached (or
+ * whose tier has no run) get `route_failed`.
  */
 function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, keepOff: ReadonlySet<string>,
   grid: Grid, warnings: WarningList): Tree[] {
@@ -288,26 +328,49 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
       onBank.set(posKey([b.x, 1, z]), b.toTier);
     }
   }
-  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - 2), l - 1] };
-  const unwired = (unit: PlacedUnit) =>
+  // a head in the middle of the line is crossed by the trees west of it (RUK-121); one at the west end keeps the old search
+  const crossing = placement.headX > 0;
+  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - (crossing ? 1 : 2)), l - 1] };
+  const unwired = (unit: PlacedUnit) => {
     warnings.add({ code: 'route_failed', stepId: unit.stepId, text: `Could not wire ${unit.name} inside the line — connect it by hand` });
+  };
   const trees: Tree[] = [];
   // lowest first (the runs are listed supply first): a higher tier's tree grown first could wall a lower tier's machines off
-  for (const run of [...head.runs].sort((a, b) => a.tier - b.tier)) {
+  for (const [lane, run] of [...head.runs].sort((a, b) => a.tier - b.tier).entries()) {
     if (!run.rated) continue;                                                          // its machines are reported below
     const ports = (portsByTier.get(run.tier) ?? []).sort((a, b) => comparePos(a.pos, b.pos));
     portsByTier.delete(run.tier);
     // the cells this tier's cables must not touch
     const avoid = new Set<string>();
+    // a grown tree's cells: a cable must not touch another tier's cable, and the trees keep to their own y-plane
+    // (each tier one plane higher, with a free plane between) so they stack over each other without touching
     for (const r of head.runs) if (r.rated && r.tier !== run.tier) for (const c of r.cells) avoid.add(posKey(c));
     for (const t of trees) for (const c of t.cells) avoid.add(posKey(c));
-    for (const [key, tier] of portTier) if (tier !== run.tier) avoid.add(key);
+    const portKeys = new Set(portTier.keys());
+    for (const [key, tier] of portTier) {
+      if (tier === run.tier) continue;
+      avoid.add(key);
+      if (crossing && tier > run.tier) {
+        // a cable beside a higher tier's port rims it in for the tree that must feed it later: keep off the rim,
+        // except cells that touch a port (a cable beside those cannot wall the port in any further)
+        const [px, py, pz] = key.split(',').map(Number) as [number, number, number];
+        for (let side = 0; side < 6; side++) {
+          const r = step([px, py, pz], side);
+          if (DIRS.some((_, s2) => { const nk = posKey(step(r, s2)); return nk !== key && portKeys.has(nk); })) continue;
+          avoid.add(posKey(r));
+        }
+      }
+    }
     for (const u of electric) {
       const cell = u.tier < run.tier ? powerCell(u) : null;
       if (cell !== null) avoid.add(posKey(cell));
     }
     const opts: PathOptions = {
       bounds,
+      // a z leg running along the lanes (y >= 2) walls the lane above off from the taller trees to come, so price it
+      // above a climb to the lane's own height: 2x the vertical move it replaces; z legs below this tier's own plane
+      // (2 + 2 per tier below it, with a free plane between) cost more still, so each tier lanes on its own plane
+      ...(crossing ? { laneWallCost: 4, laneFloorY: 2 + 2 * lane, midPlaneCost: 16 } : {}),
       passable: (p) => {
         const key = posKey(p);
         const tier = portTier.get(key);
@@ -329,10 +392,22 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
   return trees;
 }
 
-/** The rows a bank of `count` transformers takes: centred on the spine, moved back inside the line when uneven. */
-function bankRows(count: number, length: number, spineZ: number): { first: number; placed: number } {
-  const placed = Math.min(count, length);
-  return { first: Math.min(Math.max(spineZ - Math.floor(placed / 2), 0), length - placed), placed };
+/**
+ * The rows a bank of `count` transformers takes. At the line's west end (`crossing` false): centred on the spine, moved
+ * back inside the line when uneven, as it always has. In the middle of the line (`crossing`, RUK-121) the spine's row is
+ * left free for the line's spine: the side with more room, from the row next to the spine outward, the west side on a
+ * tie; as many rows as fit on it.
+ */
+function bankRows(count: number, length: number, spineZ: number, crossing: boolean): { first: number; placed: number } {
+  if (!crossing) {
+    const placed = Math.min(count, length);
+    return { first: Math.min(Math.max(spineZ - Math.floor(placed / 2), 0), length - placed), placed };
+  }
+  const below = spineZ, above = length - 1 - spineZ;
+  const placed = Math.min(count, Math.max(below, above));
+  if (placed <= 0) return { first: 0, placed: 0 };
+  const east = placed > below || (above > below && placed <= above);
+  return east ? { first: spineZ + 1, placed } : { first: spineZ - placed, placed };
 }
 
 /** Breadth-first edge counts over one tier's linked cable cells from `source`. */
@@ -367,8 +442,8 @@ function tierGraph(run: Run, tree: Tree | undefined): Map<string, string[]> {
 
 interface Sizing {
   stages: Stages;
-  /** The cable of each rated run's tier and whether it is short of amps (parallel runs needed). */
-  cables: Map<number, { cable: Machine; ampsShort: boolean; amps: number }>;
+  /** The cable of each rated run's tier, whether it is short of amps (parallel runs needed) and the runs that needs. */
+  cables: Map<number, { cable: Machine; ampsShort: boolean; runs: number; amps: number }>;
   /** Transformer rows per bank, by stage index. */
   rows: Array<{ first: number; placed: number }>;
   /** Volts each unit's packets lose inside the line (not counting the hookup's allowance), by electric unit index. */
@@ -380,28 +455,30 @@ interface Sizing {
   /** Volts each bank's packets lose on the run above before they reach it, by stage index. */
   bankLoss: number[];
   bankBlocks: number[];
-  /** The supply tier's consumers with the cables from each supply-run cell (by z) to them, for `supplyRunLoss`. */
+  /** The supply tier's consumers with the cables from each landing candidate (by `InternalResult.supplyRun`) to them, for `supplyRunLoss`. */
   supply: SupplyLoss | null;
 }
 
 /**
  * What the supply run feeds inside the line — its wired machines with their amps, and the bank below it with its input
- * amps — and how many cables lie between each supply-run cell (index z) and each of them. Where the hookup lands on the
- * supply run is known only once the line is in the world, so its loss is priced then (`supplyRunLoss`).
+ * amps — and how many cables lie between each candidate landing cell (indexed as in `InternalResult.supplyRun`) and each
+ * of them. Where the hookup lands is known only once the line is in the world, so its loss is priced then (`supplyRunLoss`).
  */
 export interface SupplyLoss {
   tier: number; cable: string; lossPerBlock: number;
+  /** What to lay instead of this cable to lose less, for `cable_loss_high` (RUK-116, design G2). */
+  remedy: string;
   consumers: Array<{ amps: number; blocks: number[] }>;
 }
 
 /**
- * The supply tier's loss inside the line when the hookup lands on supply-run cell `z` (null: unknown, the worst cell
- * counts): the EU/t lost (every consumer's amps over its cables) and `cable_loss_high` when the farthest consumer loses
- * more than `LOSS_WARN_FRACTION` of the supply volts.
+ * The supply tier's loss inside the line when the hookup lands on `InternalResult.supplyRun` cell `landing` (null: unknown,
+ * the worst cell counts): the EU/t lost (every consumer's amps over its cables), the tier's `TierLoss` for `Layout.loss`,
+ * and `cable_loss_high` when the farthest consumer loses more than `LOSS_WARN_FRACTION` of the supply volts.
  */
-export function supplyRunLoss(supply: SupplyLoss | null, z: number | null): { lossEUt: number; warning: PlanWarning | null } {
-  if (supply === null) return { lossEUt: 0, warning: null };
-  const blocksOf = (c: SupplyLoss['consumers'][number]): number => (z === null ? Math.max(...c.blocks) : c.blocks[z] ?? Math.max(...c.blocks));
+export function supplyRunLoss(supply: SupplyLoss | null, landing: number | null): { lossEUt: number; warning: PlanWarning | null; tier: TierLoss | null } {
+  if (supply === null) return { lossEUt: 0, warning: null, tier: null };
+  const blocksOf = (c: SupplyLoss['consumers'][number]): number => (landing === null ? Math.max(...c.blocks) : c.blocks[landing] ?? Math.max(...c.blocks));
   let lossEUt = 0, worst = 0;
   for (const c of supply.consumers) {
     const blocks = blocksOf(c);
@@ -410,13 +487,37 @@ export function supplyRunLoss(supply: SupplyLoss | null, z: number | null): { lo
   }
   const volts = voltsOf(supply.tier);
   const lost = worst * supply.lossPerBlock;
-  return { lossEUt, warning: lost > LOSS_WARN_FRACTION * volts ? lossWarning(supply.tier, lost, worst, supply.cable) : null };
+  const loss: TierLoss = { tier: supply.tier, cable: supply.cable, lossPerBlock: supply.lossPerBlock, worstBlocks: worst,
+    worstVolts: deliveredVolts(volts, lost), lossEUt };
+  return { lossEUt, tier: loss, warning: lost > LOSS_WARN_FRACTION * volts ? lossWarning(loss, supply.remedy) : null };
 }
 
-function lossWarning(tier: number, lostVolts: number, blocks: number, cable: string): PlanWarning {
+/**
+ * What to do about a tier's loss (RUK-116, design G2): name the cable of this export that loses least at those volts and
+ * amps and what it saves; when the pack has nothing rated for them that loses less, say so and point at the line's length
+ * (a supply-tier line's only other knob) or at feeding it from a higher-voltage tap. `amps` is the per-run share: a cable
+ * laid in `pickCable`'s `runs` parallel runs is passed `ceil(amps / runs)`, so the remedy names a cable that works in
+ * that same layout (the `cable_amps` warning names the run count).
+ */
+function lossRemedy(pack: Pack, tier: number, amps: number, current: Machine, isSupply: boolean): string {
+  const loss = current.cable?.lossPerBlock ?? 0;
+  const better = lowerLossCable(pack, { volts: voltsOf(tier), amps }, current);
+  if (better?.cable !== undefined) {
+    const b = better.cable.lossPerBlock;
+    return b === 0 ? `Lay ${better.name} instead: it loses nothing.`
+      : `Lay ${better.name} instead: it loses ${fmtRate(b)} V per block, not ${fmtRate(loss)} V.`;
+  }
+  return `Nothing in this export loses less at ${tierName(tier)}: `
+    + (isSupply ? 'build a shorter line, or split the line in two.'
+      : 'feed the line from a higher-voltage tap and step down beside the machines, or build a shorter line.');
+}
+
+/** `cable_loss_high` for one tier: what it loses and over how much cable, what that costs in EU/t, and the remedy. */
+function lossWarning(loss: TierLoss, remedy: string): PlanWarning {
+  const volts = voltsOf(loss.tier);
   return { code: 'cable_loss_high',
-    text: `The ${tierName(tier)} wiring inside the line loses up to ${Math.round((100 * lostVolts) / voltsOf(tier))}% over ${fmtInt(blocks)} blocks of ${cable}: `
-      + 'it is sized for that, but a cable with less loss or a shorter line wastes less power' };
+    text: `The ${tierName(loss.tier)} wiring inside the line loses ${fmtRate(volts - loss.worstVolts)} of ${fmtInt(volts)} V over `
+      + `${fmtInt(loss.worstBlocks)} blocks of ${loss.cable} — about ${fmtInt(loss.lossEUt)} EU/t. ${remedy}` };
 }
 
 /**
@@ -428,7 +529,8 @@ function lossWarning(tier: number, lostVolts: number, blocks: number, cable: str
  * transformers (whose rows move the entry) and bigger cables (whose loss differs): repeated until nothing changes,
  * never lowering an amp or a count. A unit whose port is not wired counts the worst wired distance of its tier.
  */
-function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, trees: readonly Tree[]): Sizing {
+function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[]; headX: number }, trees: readonly Tree[],
+  candidates: readonly Vec3[]): Sizing {
   const { pack, placement } = input;
   const length = placement.size[2];
   const supply = stages.supplyTier;
@@ -437,7 +539,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
   const treeOf = new Map(trees.map((t) => [t.tier, t]));
   const runOf = new Map(head.runs.map((r) => [r.tier, r]));
   const graphs = new Map(head.runs.map((r) => [r.tier, tierGraph(r, treeOf.get(r.tier))]));
-  const runCell = (tier: number, z: number): Vec3 => [runX(supply, tier), 0, z];
+  const runCell = (tier: number, z: number): Vec3 => [runX(supply, tier, head.headX), 0, z];
 
   let current: Stages = { ...stages, stages: stages.stages.map((s) => ({ ...s })) };
   const pick = (s: Stages): Sizing['cables'] => {
@@ -453,7 +555,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
   let cables = pick(current);
   let result: Sizing | null = null;
   for (let round = 0; round < MAX_SIZING_ROUNDS; round++) {
-    const rows = current.stages.map((s) => bankRows(s.count, length, placement.spineZ));
+    const rows = current.stages.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0));
     const lossPerBlock = (tier: number): number => cables.get(tier)?.cable.cable?.lossPerBlock ?? 0;
     // where the power enters each run: the supply run's two ends, else the outermost rows of the bank feeding it
     const sources = (tier: number): Vec3[] => {
@@ -513,7 +615,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
       && s.ampsOut === current.stages[i]!.ampsOut)
       && [...nextCables].every(([tier, c]) => cables.get(tier)?.cable.mteId === c.cable.mteId);
     result = {
-      stages: sized, cables: nextCables, rows: merged.map((s) => bankRows(s.count, length, placement.spineZ)), unitLoss, unitAmps, unitBlocks,
+      stages: sized, cables: nextCables, rows: merged.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0)), unitLoss, unitAmps, unitBlocks,
       bankLoss, bankBlocks, supply: null,
     };
     current = sized;
@@ -521,15 +623,15 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
     if (same) break;
   }
   const sizing = result!;
-  return { ...sizing, supply: supplyConsumers(sizing, supply, units, runOf.get(supply)!, graphs.get(supply)!, treeOf.get(supply)) };
+  return { ...sizing, supply: supplyConsumers(pack, sizing, supply, units, runOf.get(supply)!, graphs.get(supply)!, treeOf.get(supply), candidates) };
 }
 
-/** The supply tier's wired machines and the bank it feeds, with the cables from every supply-run cell to each. */
-function supplyConsumers(sizing: Sizing, supply: number, units: readonly PlacedUnit[], run: Run, graph: ReadonlyMap<string, readonly string[]>,
-  tree: Tree | undefined): SupplyLoss | null {
+/** The supply tier's wired machines and the bank it feeds, with the cables from every landing candidate to each. */
+function supplyConsumers(pack: Pack, sizing: Sizing, supply: number, units: readonly PlacedUnit[], run: Run,
+  graph: ReadonlyMap<string, readonly string[]>, tree: Tree | undefined, candidates: readonly Vec3[]): SupplyLoss | null {
   const chosen = sizing.cables.get(supply);
   if (chosen === undefined) return null;
-  const fromCell = run.cells.map((c) => edgesFrom(graph, c));
+  const fromCell = candidates.map((c) => edgesFrom(graph, c));
   const blocksAt = (p: Vec3): number[] | undefined => {
     const key = posKey(p);
     const edges = fromCell.map((seen) => seen.get(key));
@@ -545,22 +647,23 @@ function supplyConsumers(sizing: Sizing, supply: number, units: readonly PlacedU
   const top = sizing.stages.stages.findIndex((s) => s.fromTier === supply);
   if (top !== -1) {
     const { first, placed } = sizing.rows[top]!;
-    const rows = Array.from({ length: placed }, (_, j) => blocksAt(run.cells[first + j]!)).filter((b): b is number[] => b !== undefined);
-    if (rows.length > 0) consumers.push({ amps: sizing.stages.stages[top]!.ampsIn, blocks: run.cells.map((_, z) => Math.max(...rows.map((b) => b[z]!))) });
+    const rows = Array.from({ length: placed }, (_, j) => blocksAt([run.x, 0, first + j])).filter((b): b is number[] => b !== undefined);
+    if (rows.length > 0) consumers.push({ amps: sizing.stages.stages[top]!.ampsIn, blocks: candidates.map((_, i) => Math.max(...rows.map((b) => b[i]!))) });
   }
-  return { tier: supply, cable: chosen.cable.name, lossPerBlock: chosen.cable.cable?.lossPerBlock ?? 0, consumers };
+  return { tier: supply, cable: chosen.cable.name, lossPerBlock: chosen.cable.cable?.lossPerBlock ?? 0,
+    remedy: lossRemedy(pack, supply, Math.ceil(chosen.amps / chosen.runs), chosen.cable, true), consumers };
 }
 
 /**
  * Lays the head, the banks and the trees with the cables `sizePower` chose; warns `no_cable` / `cable_amps` per run,
  * `no_transformer` / `transformer_bank` per bank, then (after `power_tier_low` and `route_failed`, raised while
  * growing) `cable_loss_high` per tier whose farthest consumer loses more than `LOSS_WARN_FRACTION` of its volts inside
- * the line. Returns the cable cells laid per tier, run included, and the internal loss in EU/t.
+ * the line. Returns the cable cells laid per tier, run included, the internal loss in EU/t, and the loss per tier,
+ * tier descending (the supply run's is `supplyRunLoss`'s, once the hookup's landing cell is known).
  */
 function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: readonly Bank[] }, trees: readonly Tree[], sizing: Sizing, grid: Grid,
-  headWarnings: WarningList, lossWarnings: WarningList): { cells: Map<number, number>; lossEUt: number } {
+  headWarnings: WarningList, lossWarnings: WarningList): { cells: Map<number, number>; lossEUt: number; tiers: TierLoss[] } {
   const { pack, placement } = input;
-  const length = placement.size[2];
   const { stages, cables } = sizing;
   const supply = stages.supplyTier;
   const treeOf = new Map(trees.map((t) => [t.tier, t]));
@@ -570,13 +673,13 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
       headWarnings.add({ code: 'no_cable', text: `No cable for ${tierName(run.tier)} in this export` });
       continue;
     }
-    const { cable, ampsShort, amps } = chosen;
+    const { cable, ampsShort, runs, amps } = chosen;
     if (ampsShort) {
       headWarnings.add({ code: 'cable_amps',
-        text: `No cable carries ${fmtInt(amps)} A at ${tierName(run.tier)}: run ${Math.ceil(amps / cable.cable!.amps)} parallel ${cable.name} lines` });
+        text: `No cable carries ${fmtInt(amps)} A at ${tierName(run.tier)}: run ${fmtInt(runs)} parallel ${cable.name} lines` });
     }
     for (const c of run.cells) grid.lay(c, cable, 'cable', cable.name);
-    for (let z = 0; z + 1 < length; z++) grid.links.push([run.cells[z]!, run.cells[z + 1]!]);
+    for (let z = 0; z + 1 < run.cells.length; z++) grid.links.push([run.cells[z]!, run.cells[z + 1]!]);
   }
   for (const bank of head.banks) {
     const stage = stages.stages[bank.stage]!;
@@ -610,8 +713,10 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
   // run's depends on where the hookup lands, so `supplyRunLoss` prices it
   const units = placement.units.filter((u) => u.electric);
   let lossEUt = 0;
+  const lostEUt = new Map<number, number>();
   const worst = new Map<number, { volts: number; blocks: number }>();
-  const note = (tier: number, volts: number, blocks: number | undefined): void => {
+  const note = (tier: number, lossEUtOfTier: number, volts: number, blocks: number | undefined): void => {
+    lostEUt.set(tier, (lostEUt.get(tier) ?? 0) + lossEUtOfTier);
     if (blocks === undefined) return;
     const known = worst.get(tier);
     if (known === undefined || volts > known.volts) worst.set(tier, { volts, blocks });
@@ -620,20 +725,29 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
     const feed = Math.min(u.tier, supply);
     if (feed === supply) return;
     lossEUt += sizing.unitAmps[i]! * sizing.unitLoss[i]!;
-    note(feed, sizing.unitLoss[i]!, sizing.unitBlocks[i]);
+    note(feed, sizing.unitAmps[i]! * sizing.unitLoss[i]!, sizing.unitLoss[i]!, sizing.unitBlocks[i]);
   });
   stages.stages.forEach((s, i) => {
     if (s.fromTier === supply) return;
     lossEUt += s.ampsIn * sizing.bankLoss[i]!;
-    note(s.fromTier, sizing.bankLoss[i]!, sizing.bankBlocks[i]);
+    note(s.fromTier, s.ampsIn * sizing.bankLoss[i]!, sizing.bankLoss[i]!, sizing.bankBlocks[i]);
   });
+  // the loss reported per tier (RUK-116, design G2): the runs are listed supply first, so tier descending; the supply
+  // run's entry is `supplyRunLoss`'s, which knows where the hookup lands
+  const tiers: TierLoss[] = [];
   for (const run of head.runs) {
+    if (run.tier === supply) continue;                                                          // priced by `supplyRunLoss`
     const chosen = cables.get(run.tier);
+    if (chosen === undefined) continue;                                                       // no cable for the tier: it is `no_cable`
+    const volts = voltsOf(run.tier);
     const w = worst.get(run.tier);
-    if (chosen === undefined || w === undefined || w.volts <= LOSS_WARN_FRACTION * voltsOf(run.tier)) continue;
-    lossWarnings.add(lossWarning(run.tier, w.volts, w.blocks, chosen.cable.name));
+    const lost = w?.volts ?? 0;
+    const loss: TierLoss = { tier: run.tier, cable: chosen.cable.name, lossPerBlock: chosen.cable.cable?.lossPerBlock ?? 0,
+      worstBlocks: w?.blocks ?? 0, worstVolts: deliveredVolts(volts, lost), lossEUt: lostEUt.get(run.tier) ?? 0 };
+    tiers.push(loss);
+    if (lost > LOSS_WARN_FRACTION * volts) lossWarnings.add(lossWarning(loss, lossRemedy(pack, run.tier, Math.ceil(chosen.amps / chosen.runs), chosen.cable, false)));
   }
-  return { cells, lossEUt };
+  return { cells, lossEUt, tiers };
 }
 
 /** Local cells a supply-tier cable must not touch: other tiers' cables, every transformer, machines below the supply. */
@@ -791,6 +905,17 @@ function pumpCovers(input: InternalInput, plans: readonly FluidPlan[], pipeAt: R
 }
 
 /**
+ * The build-list lines for the parallel cable runs a tier's amps need beyond the one the layout lays: for each entry of
+ * `cables` with `runs > 1`, `(runs − 1) × cells` of the tier's cable, the `why` naming the parallel runs. Tier order as
+ * `cables`; the layed run is priced by `bomFromBlocks`, so these are only the extra runs.
+ */
+export function parallelRunParts(cables: InternalResult['cables']): BomLine[] {
+  return cables.filter((c) => c.runs > 1).map((c): BomLine => ({
+    key: c.cable.itemKey, amount: (c.runs - 1) * c.cells, why: `power run (${fmtInt(c.runs)} parallel)`, group: 'power',
+  }));
+}
+
+/**
  * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
  * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
  * `stages` (no electric unit) nothing is wired.
@@ -806,6 +931,7 @@ export function routeInternal(input: InternalInput): InternalResult {
   const cables: InternalResult['cables'] = [];
   let sized: Stages | null = null;
   let lossEUt = 0;
+  let tiers: TierLoss[] = [];
   let supply: SupplyLoss | null = null;
   let keepAway: Vec3[] = [];
   if (stages !== null) {
@@ -813,7 +939,13 @@ export function routeInternal(input: InternalInput): InternalResult {
     const routeWarnings = new WarningList();
     warnUnderVoltage(placement.units.filter((u) => u.electric), stages.supplyTier, routeWarnings);
     const trees = growTrees(input, stages, head, fluidCells, grid, routeWarnings);
-    const sizing = sizePower(input, stages, head, trees);
+    // the cells a power hookup may land on: the supply tier's run (`planHead` lists it first) and tree, kept to the line's
+    // outer boundary; the run unfiltered when its tree shares no boundary cell, so a line always has at least one landing cell
+    const supplyTree = trees.find((t) => t.tier === stages.supplyTier);
+    const supplyCells = [...head.runs[0]!.cells, ...(supplyTree?.cells ?? [])];
+    const onBorder = supplyCells.filter((c) => onBoundary(c, placement.size));
+    const landingCells = uniquePositions(onBorder.length > 0 ? onBorder : head.runs[0]!.cells);
+    const sizing = sizePower(input, stages, head, trees, landingCells);
     const headWarnings = new WarningList();
     const lossWarnings = new WarningList();
     const laid = layPower(input, head, trees, sizing, grid, headWarnings, lossWarnings);
@@ -821,16 +953,17 @@ export function routeInternal(input: InternalInput): InternalResult {
     for (const w of [...headWarnings.list, ...routeWarnings.list, ...lossWarnings.list]) grid.warnings.add(w);
     sized = sizing.stages;
     lossEUt = laid.lossEUt;
+    tiers = laid.tiers;
     supply = sizing.supply;
-    supplyRun = head.runs[0]!.cells.map((c): Vec3 => [...c]);
+    supplyRun = landingCells;
     for (const run of head.runs) {
       const chosen = sizing.cables.get(run.tier);
-      if (chosen !== undefined) cables.push({ tier: run.tier, cable: chosen.cable, cells: laid.cells.get(run.tier) ?? run.cells.length });
+      if (chosen !== undefined) cables.push({ tier: run.tier, cable: chosen.cable, cells: laid.cells.get(run.tier) ?? run.cells.length, runs: chosen.runs });
     }
     keepAway = keepAwayCells(input, stages.supplyTier, head, trees, grid);
   }
   const pipeAt = new Map<string, StuffKey>();
   const fluidPipes = pipeFluids(input, fluids, fluidCells, powerPorts, pipeAt, grid);
   const covers = pumpCovers(input, fluids, pipeAt, grid);
-  return { blocks: grid.finish(), covers, supplyRun, cables, fluidPipes, warnings: grid.warnings.list, stages: sized, lossEUt, supply, keepAway };
+  return { blocks: grid.finish(), covers, supplyRun, cables, fluidPipes, warnings: grid.warnings.list, stages: sized, lossEUt, tiers, supply, keepAway };
 }
