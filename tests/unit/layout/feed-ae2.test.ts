@@ -315,7 +315,10 @@ describe('AE2 feeding', () => {
           const { plan, patterns } = pooled(16);
           const start = performance.now();
           const runs = aeRunShares(plan, patterns);
-          expect(performance.now() - start).toBeLessThan(200);
+          // A loose bound on purpose: this guards AE_SHARE_SETS_MAX stopping the k² x 2^(k-1) set explosion, which costs
+          // seconds or minutes when it breaks, not milliseconds. A tight bound here only ever fails because the machine
+          // is busy (six worktrees test on it at once).
+          expect(performance.now() - start).toBeLessThan(5_000);
           expect([...runs.values()].filter((r) => !(r.low > 0 && r.low < r.share && r.share < 1))).toEqual([]);
         });
 

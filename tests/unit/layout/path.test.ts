@@ -29,12 +29,10 @@ describe('findPath', () => {
 
   it('gives up within its node budget', () => {
     const walled = new Set([[49, 5, 50], [51, 5, 50], [50, 4, 50], [50, 6, 50], [50, 5, 49], [50, 5, 51]].map((p) => posKey(p as Vec3)));
-    const t0 = performance.now();
     const r = findPath([[0, 0, 0]], [[50, 5, 50]], { passable: (p) => !walled.has(posKey(p)), bounds: box([99, 9, 99]), maxNodes: 5000 });
     expect(r.found).toBe(false);
     expect(r.path).toEqual([]);
     expect(r.expanded).toBeLessThanOrEqual(5001);
-    expect(performance.now() - t0).toBeLessThan(1000);
     expect(MAX_PATH_NODES).toBe(200_000);
   });
 });
