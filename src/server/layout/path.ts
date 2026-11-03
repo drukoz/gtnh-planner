@@ -105,9 +105,9 @@ function inside(p: Vec3, b: PathBounds): boolean {
  * The cheapest path from any start to any goal. A state is (cell, side of the move that entered it); a move costs 1
  * horizontally, `verticalCost` up or down, plus `turnCost` when its side differs from the previous move's, plus
  * `laneWallCost` for a z move made at y >= 2 (a z leg running along the cable lanes walls the lane above off from
- * taller trees), plus `midPlaneCost` on top for a z move from an odd y >= 3 (lanes keep to even planes, one per tier,
- * with a free plane between them so stacked tiers never touch). A cell may be entered when it is inside `bounds` and
- * passable, or when it is a goal. Each pop of the open list is one expansion; the search gives up once
+ * taller trees), plus `midPlaneCost` for a z move made below `laneFloorY` (each tier's tree keeps its z legs to a plane
+ * of its own, with a free plane between tiers, so stacked tiers never touch). A cell may be entered when it is inside
+ * `bounds` and passable, or when it is a goal. Each pop of the open list is one expansion; the search gives up once
  * `expanded > maxNodes`.
  */
 export function findPath(starts: readonly Vec3[], goals: readonly Vec3[], opts: PathOptions): PathResult {
