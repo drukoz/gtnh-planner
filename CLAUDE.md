@@ -19,7 +19,8 @@ the planned build. User-facing documentation is in `README.md`.
 - `src/shared/`: types and code both sides use (`types/`, `layout/`, `plan/`, `gt/`).
 - `tests/unit/` (Vitest on Node), `tests/client/` (Vitest, `*.test.tsx`), `tests/e2e/` (Playwright), and
   `tests/helpers/` (fixtures: `layout-fixtures.ts` has `makeScan`, `makePlan`, `flatVoxels`, `layoutPack` and `IDS`;
-  `power-loss.ts` is the line-loss harness).
+  `power-loss.ts` is the line-loss harness). A test that needs the placement or internal route a line was laid from
+  reads it through `LayoutDeps.localLine` (as `lossLine` does) instead of laying the line again by hand.
 - `docs/superpowers/specs/`: designs; the main one is `2026-10-17-gtnh-planner-design.md`.
   `docs/superpowers/plans/2026-10-17-00-architecture.md` is the "architecture §…" that code comments cite, and
   `docs/research/` holds the game mechanics (for example `gt-mechanics.md`).
@@ -31,8 +32,8 @@ Run them from the repository root.
 - Setup: `npm ci`. A new worktree has no `node_modules/`.
 - Typecheck: `npx tsc -b`. No output means clean. Node runs the `.ts` sources directly, so this is the only compile
   step for the server.
-- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `8874367bb` it gives 241 files passed | 18 skipped,
-  3996 tests passed | 188 skipped.
+- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `f5509d5c8` it gives 243 files passed | 18 skipped,
+  4020 tests passed | 188 skipped.
 - One file or folder: `npx vitest run tests/unit/layout/power-loss.test.ts`, or `npx vitest run tests/unit/layout`.
 - Browser tests: `npm run e2e`. It builds the client, then runs Chromium against a real server on 127.0.0.1:18787,
   with data that `tests/e2e/prepare.ts` writes to `data/e2e/`. It needs Playwright's Chromium
@@ -64,6 +65,9 @@ Run them from the repository root.
   `compareMachineId` in `src/shared/ids.ts`). Never iterate a `Set` or `Map` whose insertion order depends on
   something unordered.
 - Keep diffs tight: do not reformat code you are not changing.
+- `Layout.blocks` mixes the line's own blocks with its hookups' blocks (`hookup` set) and ghosts of the taps they join
+  (`role: 'ghost'`). Hookups run out into the world, outside the line's box, so a check of the line's own blocks keeps
+  `b.hookup === undefined && b.role !== 'ghost'`.
 - Tests stay quiet: no `console.log` in committed tests. To measure something, write a temporary test that writes
   its numbers to a file under `/tmp`, read them, and delete the test before you commit.
 - The loss budgets in `tests/unit/layout/power-loss.test.ts` may only ever be lowered. A line that loses more means

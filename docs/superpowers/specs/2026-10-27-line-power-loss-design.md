@@ -1,6 +1,6 @@
 # Line power loss — design
 
-Status: in build (2026-10-27). Task RUK-112, branch `feat/line-power-loss`.
+Status: built (2026-11-02), in review as PR #5. Task RUK-112, branch `feat/line-power-loss`. What was built and measured, and how it departs from this design, is under "Outcome" at the end.
 
 ## Why
 
@@ -31,7 +31,7 @@ GregTech charges cable loss **per amp, per cable block, along the path the packe
 
 Two consequences, and they are not the same thing:
 
-1. **Path length is what burns EU.** Today every tier's power enters the line at the power head, which stands at the **west end** (`placeUnits`, `headWidth` columns at x = 0 …), and the tier's cable tree then fans **east** along the line to the last machine. So the worst path is the whole length of the line, and the average is half of it. Feeding the same cable in its **middle** halves every path. That is the fix with the best ratio of win to risk, and it is the heart of this task.
+1. **Path length is what burns EU.** Today every tier's power enters the line at the power head, which stands at the **west end** (`placeUnits`, `headWidth` columns at x = 0 …), and the tier's cable tree then fans **east** along the line to the last machine. So the worst path is the whole length of the line, and the average is half of it. Feeding the same cable in its **middle** halves every path. That is the fix with the best ratio of win to risk, and it is the heart of this task. (Measured later: on short lines the power head's own overhead outweighs the halving. See "Outcome".)
 2. **The wire on both sides costs blocks, not EU.** Machines stand in two rows facing a one-block logistics spine, and a single-block machine's power port is the face *away* from the spine (`placeUnits`: "the spine side is its output side, the side away from the spine its power port"). So a tier needs one cable row outside each machine row, joined through the head — the "wire around the machines on both sides" the user sees. Given today's geometry it is forced, and `growTree` lays close to the minimum number of cells for it. Removing it means putting the power run **on the spine**, between the two rows, and moving item logistics to the two outer rows (items and fluids lose nothing by travelling further). That is goal 2 of the *shorter layouts* design (docs/superpowers/specs/2026-10-23-shorter-layouts-design.md), it rewrites the item trunk of all four logistics modes, and it is **not** in this task. See "Left for the shorter-layouts project".
 
 ## Assumptions
@@ -39,7 +39,7 @@ Two consequences, and they are not the same thing:
 Recorded because the report does not say, and the work does not need an answer to start:
 
 1. The user wants less **EU wasted**, measured as EU/t, and is not asking for a specific geometry. So this task buys loss reduction wherever it is cheapest, and reports what is left honestly, rather than reshaping the line.
-2. Nothing here may make a line longer, change its logistics, or change which machines it places. Footprints may move; the set of placed machines must not change.
+2. Nothing here may make a line longer, change its logistics, or change which machines it places. Footprints may move; the set of placed machines must not change. **Relaxed for one case (RUK-121, 2026-11-02):** a line may grow by at most one column and two blocks of height where a power head in the middle cuts its own loss by at least a tenth. Every other line is laid exactly as before.
 3. Lossless cable (superconductors, ULV Red Alloy at loss 0) is suggested when the active export has one at the tier, never silently chosen over a normal cable the player can actually craft.
 4. Determinism stays absolute: the same plan, export and scan must give byte-identical layouts (the existing rotation/repeat tests guard this).
 
@@ -97,4 +97,45 @@ By the designer (the user can overrule any of these in PR review):
 - the objective is total loss, hookup included, not the loss inside the line;
 - the two-sided wire stays for now, and is explained rather than removed, because removing it is the shorter-layouts geometry;
 - loss is reported per tier, in EU/t and as a share of the tier's volts;
-- a lossless cable is suggested, never chosen for the player.
+- a lossless cable is suggested, never chosen for the player;
+- the power head stands in the middle of a line only where that cuts the line's own loss by at least a tenth and leaves no more to finish by hand than the west head; the line then grows by at most one column and two blocks of height (RUK-121).
+
+## Outcome (2026-11-02)
+
+What PR #5 delivers, against "The work" above:
+
+- **A** (RUK-116): built as designed.
+- **B** (RUK-115) and **C** (RUK-120): built. C prices one route to all the landing cells plus one to each of the 3 that lose least inside the line, rather than a route to every cell, so the stress tests stay inside their time limits. It moved no landing cell on the 12 standard lines; its one measured win is 494 → 490 EU/t on a 20-machine fixture.
+- **D** (each bank beside the machines it feeds): not built. RUK-121 moves the whole power head instead, and only where that pays (below).
+- **E** (RUK-117, RUK-124, RUK-352): built. Each of the 12 standard lines has a loss budget that may only be lowered, and five properties of the loss report are pinned on them.
+
+### The power head stands where the line loses least (RUK-121)
+
+A head always in the middle did not halve the worst path. A machine west of the head reaches its tier's run by climbing over the head's higher-tier columns, two blocks up and back down, and an LV machine may not stand beside the MV supply run, so the west side needs a gap column. On lines of 9–15 columns that overhead outweighed the halving: five of the 12 standard lines lost 13–16 % more, and every line grew 1–2 columns longer and 2 blocks taller. On long lines it cut the loss by up to four fifths.
+
+So `buildLocal` (`src/server/layout/layout.ts`) chooses the head line by line:
+
+1. It lays the line with the head at the west end. This is exactly the line laid before RUK-121.
+2. A line of 4 or more units is laid again with a quarter, a third, two fifths and half of its units west of a head in the middle (`headSplits`, even counts).
+3. A middle head that leaves more to finish by hand than the west head is dropped (`handWork`: transformers its bank has no room for, connections it could not lay). A middle head's bank stands on one side of the spine only: on a 5-deep line it holds 2 transformers where the west head's holds 5.
+4. Of the rest, the one that loses least is kept if it cuts the line's own loss (banks, cables, and the supply run from its best landing cell) by at least 10 % (`MIDDLE_HEAD_MIN_CUT`). A line that loses nothing of its own keeps the west head.
+
+The site search aims the power port at a middle head, and a hookup lands only on a side face of the line, so a dashed guide never crosses it. The hookup is not known when the head is chosen, which is what the 10 % margin is for: on every line that switches, the total loss including the hookup still falls.
+
+Measured on the 12 standard lines (`tests/helpers/power-loss.ts`; loss is `Layout.loss.totalEUt`, footprint is `Layout.size`):
+
+| line | head | footprint | loss EU/t | loss ÷ draw | transformers left to place by hand |
+|---|---|---|---|---|---|
+| 10 direct, routed, ae2, enderio | west | unchanged | unchanged | 0.84, 0.97, 1.63, 0.84 | unchanged |
+| 20 direct, routed, enderio | west | unchanged | unchanged | 0.97, 1.76, 0.97 | unchanged |
+| 20 ae2 | middle | 5×1×43 → 5×3×43 | 10,798 → 1,908 | 18.00 → 3.18 | 61 → 17 |
+| 40 direct, 40 enderio | middle | 5×1×24 → 5×3×25 | 2,106 → 1,470 | 1.76 → 1.23 | 21 → 20 |
+| 40 routed | middle | 5×2×44 → 5×3×45 | 22,579 → 4,412 | 18.82 → 3.68 | 132 → 40 |
+| 40 ae2 | middle | 5×1×83 → 5×3×83 | 62,264 → 24,988 | 51.89 → 20.82 | 211 → 151 |
+
+### Left open
+
+- **The far machines of 20 ae2, 40 routed and 40 ae2 still get 1–2 V.** Their worst LV path is still 30–53 blocks of 1 V-per-block cable. The large transformer counts on these three lines have the same cause: a machine that gets 1 V draws one amp for every EU/t it needs. This stays with RUK-351. Fixing it needs feeding beside the machines (D) or a shorter line.
+- **A middle head's bank uses one side of the spine.** Letting it use both (4 rows instead of 2) would let more lines switch.
+- **The choice sees only the line's own loss.** Where the hookup is hard to route, a middle head's hookup can fail where the west head's routes: on the 48-machine ae2 line, too long for the harness's ground, the middle head's power hookup gets `no_path`. A follow-up could lay the west line again when that happens.
+- **Layout time.** A line of 4 or more units is laid up to five times in its own grid instead of once. The three 450–600-layout stress tests in `layout.test.ts` took under 2 s each in the final runs.
