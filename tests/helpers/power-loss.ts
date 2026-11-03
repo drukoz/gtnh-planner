@@ -11,11 +11,8 @@ import type { LogisticsMode, Plan } from '../../src/shared/types/plan.ts';
 import type { Pack, Machine } from '../../src/shared/types/pack.ts';
 import type { WorldScan } from '../../src/shared/types/world.ts';
 import { layoutLine, type LayoutDeps } from '../../src/server/layout/layout.ts';
-import { placeUnits, unitsFromPlan, type LocalBlock, type Placement } from '../../src/server/layout/arrange.ts';
-import { PORT_SPACING } from '../../src/server/layout/modes/mode.ts';
-import { resolveParts } from '../../src/server/layout/parts.ts';
-import { hookupAllowanceVolts, tierGroups, transformerStages } from '../../src/server/layout/power.ts';
-import { fluidNets, headWidthFor, routeInternal, type InternalResult } from '../../src/server/layout/internal.ts';
+import { type LocalBlock, type Placement } from '../../src/server/layout/arrange.ts';
+import { type InternalResult } from '../../src/server/layout/internal.ts';
 import {
   areaReader, flatVoxels, IDS, layoutPack, makePlan, makeProject, makeScan, type ScanSpec, type StepSpec,
 } from './layout-fixtures.ts';
@@ -87,24 +84,21 @@ export const SUPPLY_TIER = 2;
 
 /**
  * The line of `n` machines in `mode`, laid end to end: the layout, its plan, and the local placement and internal
- * route the layout was built from (the wiring checks below read the local grid, where the ports and runs live).
+ * route the layout was built from, as `layoutLine` chose them (`LayoutDeps.localLine`) (the wiring checks below read
+ * the local grid, where the ports and runs live).
  */
 export async function lossLine(n: number, mode: LogisticsMode): Promise<{
   layout: Layout; plan: Plan; placement: Placement; internal: InternalResult; pack: Pack;
 }> {
   const pack = layoutPack();
   const plan = lossPlan(n);
-  const layout = await layoutLine(pack, plan, lossScan(mode), makeProject({ logistics: mode }), lossGround());
-  const parts = resolveParts(pack);
-  const { units } = unitsFromPlan(pack, plan, { primitive: mode !== 'direct' });
-  const electric = units.filter((u) => u.electric);
-  const stages = transformerStages(tierGroups(electric.map((u) => ({ tier: u.tier, euPerTick: u.euPerTick }))), SUPPLY_TIER);
-  const placement = placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], supplyTier: SUPPLY_TIER });
-  const internal = routeInternal({
-    pack, parts, placement, occupied: placement.blocks, stages, fluids: fluidNets(pack, plan, placement),
-    tailFluidY: 1, groupTier: plan.tier, supplyLossVolts: hookupAllowanceVolts(SUPPLY_TIER),
+  const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
+  const layout = await layoutLine(pack, plan, lossScan(mode), makeProject({ logistics: mode }), {
+    ...lossGround(), localLine: (line) => { seen.push(line); },
   });
-  return { layout, plan, placement, internal, pack };
+  const local = seen[0];
+  if (local === undefined) throw new Error(`the ${n}-machine ${mode} line laid nothing of its own`);
+  return { layout, plan, placement: local.placement, internal: local.internal, pack };
 }
 
 /** Cells (`posKey`) holding two or more of the layout's blocks: an overlapping line is broken, whatever it measures. */

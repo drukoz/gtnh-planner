@@ -8,12 +8,10 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { activeExportDir, loadConfig } from '../../../src/server/config.ts';
-import { overlaps, placeUnits, unitsFromPlan, type HatchKind, type PlacedUnit, type Unit, type UnitCell } from '../../../src/server/layout/arrange.ts';
+import { overlaps, unitsFromPlan, type HatchKind, type PlacedUnit, type Placement, type Unit, type UnitCell } from '../../../src/server/layout/arrange.ts';
 import { elementMap, elementTakes, HATCH_RULES, hatchRuleFor, ruleFits } from '../../../src/server/layout/hatch-rules.ts';
-import { headWidthFor } from '../../../src/server/layout/internal.ts';
+import { type InternalResult } from '../../../src/server/layout/internal.ts';
 import { DEFAULT_ORIGIN, emptyScan, layoutLine } from '../../../src/server/layout/layout.ts';
-import { PORT_SPACING } from '../../../src/server/layout/modes/mode.ts';
-import { tierGroups, transformerStages } from '../../../src/server/layout/power.ts';
 import { loadPack } from '../../../src/server/pack/load.ts';
 import { allMachines, machineByMteId } from '../../../src/server/pack/lookup.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
@@ -115,13 +113,6 @@ function counts(m: ReadonlyMap<string, number>): string {
   return [...m].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, n]) => `${k}×${n}`).join(', ') || 'none';
 }
 
-/** Where layoutLine places the units of a line without a world: placeUnits as buildLocal calls it. */
-function placedUnits(units: readonly Unit[], mode: LogisticsMode): PlacedUnit[] {
-  const electric = units.filter((u) => u.electric);
-  const stages = electric.length === 0 ? null : transformerStages(tierGroups(electric), Math.max(...electric.map((u) => u.tier)));
-  return placeUnits(units, { headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }) }).units;
-}
-
 describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 export', () => {
   let pack: Pack;
   const placed = new Map<string, number>();
@@ -207,11 +198,11 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
   /**
    * Every fluid port of the line's multiblocks, and every bus port that moves the step's items (an input bus that holds
    * only the programmed circuit takes nothing), joined to its hatch by a pipe (GT pipes, a routed interface pipe, an ME
-   * interface or an ME Export Bus on a cable) or a conduit face, or a fluid port the layout warns route_failed for (by its text: the layout gives each
-   * text once, so two steps of one machine share it); a port that faces no hatch of its unit is a fault of the placement
-   * this test copies.
+   * interface or an ME Export Bus on a cable) or a conduit face, or a fluid port the layout warns route_failed for (by its
+   * text: the layout gives each text once, so two steps of one machine share it); a port that faces no hatch of its unit
+   * is a fault of the placement.
    */
-  function checkPorts(plan: Plan, units: readonly Unit[], layout: Layout, mode: LogisticsMode): string[] {
+  function checkPorts(plan: Plan, placed: readonly PlacedUnit[], layout: Layout, mode: LogisticsMode): string[] {
     const blocksAt = new Map<string, LayoutBlock[]>();
     for (const b of layout.blocks) {
       const key = posKey(b.pos);
@@ -225,7 +216,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
     const bad: string[] = [];
     const faces = (p: Vec3, side: number, conduit: (kind: string) => boolean): boolean =>
       at(p).some((b) => (b.conduits ?? []).some((c) => conduit(c.kind) && c.faces.some((f) => f.face === FACES[side] && f.mode !== 'disabled')));
-    for (const u of placedUnits(units, mode)) {
+    for (const u of placed) {
       if (!u.multiblock) continue;
       const hatchOf = (p: Vec3, side: number) => at(step(p, side)).find((b) => b.role === 'hatch' && b.stepId === u.stepId && b.facing === OPPOSITE[side]);
       const fluidPorts = [
@@ -287,7 +278,8 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
       const loose: string[] = [];
       for (const mode of MODES) {
         const project = { ...makeProject({ scanId: null, baseId: null }), settings: { ...settings, logistics: mode } };
-        const layout = await layoutLine(pack, plan, emptyScan(), project);
+        const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
+        const layout = await layoutLine(pack, plan, emptyScan(), project, { localLine: (line) => { seen.push(line); } });
         // the units as layoutLine makes them in this mode: in every mode but machine to machine (architecture §11
         // entry 48) a Bricked Blast Furnace or a Coke Oven is run by hand, which places the units of its row elsewhere
         const modeUnits = unitsFromPlan(pack, plan, { primitive: mode !== 'direct' }).units;
@@ -295,7 +287,7 @@ describe.skipIf(process.env.GTNH_LOCAL !== '1')('hatch rules on the real 2.9 exp
         expect(layout.status, mode).toBe('no-world');
         expect(overlaps(layout.blocks.filter((b) => b.role !== 'ghost')).length, `${mode}: cells holding two blocks`).toBe(0);
         expect(layout.blocks.filter((b) => b.role === 'hatch').length, `${mode}: hatches in the layout`).toBe(hatches);
-        loose.push(...checkPorts(plan, modeUnits, layout, mode));
+        loose.push(...checkPorts(plan, seen[0]!.placement.units, layout, mode));
         for (const w of layout.warnings) bump(codes, `${mode} ${w.code}`);
       }
       expect(loose).toEqual([]);

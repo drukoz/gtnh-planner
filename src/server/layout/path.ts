@@ -20,6 +20,9 @@ export interface PathOptions {
   maxNodes?: number;      // MAX_PATH_NODES
   verticalCost?: number;  // 2
   turnCost?: number;      // 0.25
+  laneWallCost?: number;  // 0: added to a z move made from a cell at y >= 2, where a z leg walls the lane above off
+  laneFloorY?: number;    // 0: this tree's lane plane; legs below it cost midPlaneCost more
+  midPlaneCost?: number;  // 0: added to a z move made below laneFloorY, keeping each tier's lane on its own plane
 }
 export interface PathResult { found: boolean; path: Vec3[] /* start … goal, inclusive; [] when not found */; expanded: number }
 export interface TreeResult { cells: Vec3[] /* new cells in the order added */; links: Array<[Vec3, Vec3]>; unreached: Vec3[] }
@@ -100,14 +103,19 @@ function inside(p: Vec3, b: PathBounds): boolean {
 
 /**
  * The cheapest path from any start to any goal. A state is (cell, side of the move that entered it); a move costs 1
- * horizontally, `verticalCost` up or down, plus `turnCost` when its side differs from the previous move's. A cell may be
- * entered when it is inside `bounds` and passable, or when it is a goal. Each pop of the open list is one expansion;
- * the search gives up once `expanded > maxNodes`.
+ * horizontally, `verticalCost` up or down, plus `turnCost` when its side differs from the previous move's, plus
+ * `laneWallCost` for a z move made at y >= 2 (a z leg running along the cable lanes walls the lane above off from
+ * taller trees), plus `midPlaneCost` on top for a z move from an odd y >= 3 (lanes keep to even planes, one per tier,
+ * with a free plane between them so stacked tiers never touch). A cell may be entered when it is inside `bounds` and
+ * passable, or when it is a goal. Each pop of the open list is one expansion; the search gives up once
+ * `expanded > maxNodes`.
  */
 export function findPath(starts: readonly Vec3[], goals: readonly Vec3[], opts: PathOptions): PathResult {
   const maxNodes = opts.maxNodes ?? MAX_PATH_NODES;
   const verticalCost = opts.verticalCost ?? DEFAULT_VERTICAL_COST;
   const turnCost = opts.turnCost ?? DEFAULT_TURN_COST;
+  const laneWallCost = opts.laneWallCost ?? 0;
+  const midPlaneCost = opts.midPlaneCost ?? 0;
   const goalKeys = new Set(goals.map(posKey));
   for (const s of starts) if (goalKeys.has(posKey(s))) return { found: true, path: [[...s]], expanded: 0 };
   const goalBox = bboxOf(goals);
@@ -173,7 +181,9 @@ export function findPath(starts: readonly Vec3[], goals: readonly Vec3[], opts: 
       if (!canEnter(nextId)) continue;
       const nextState = nextId * STATES_PER_CELL + side + 1;
       if (closed[nextState]) continue;
-      const nextCost = g + (side <= 1 ? verticalCost : 1) + (entered !== -1 && entered !== side ? turnCost : 0);
+      const zLeg = (side >= 2 && side <= 3 && here[1] >= 2 ? laneWallCost : 0)
+        + (side >= 2 && side <= 3 && here[1] < (opts.laneFloorY ?? 0) ? midPlaneCost : 0);
+      const nextCost = g + (side <= 1 ? verticalCost : 1) + zLeg + (entered !== -1 && entered !== side ? turnCost : 0);
       const known = cost[nextState];
       if (known !== undefined && known <= nextCost) continue;
       cost[nextState] = nextCost;

@@ -7,11 +7,12 @@ import { deliveredVolts } from '../../../src/server/layout/power.ts';
 import { runX } from '../../../src/server/layout/internal.ts';
 import { lossLine, measureLoss, overlaps, SUPPLY_TIER, tierContacts } from '../../helpers/power-loss.ts';
 
-// measured 2026-10-30 on this branch (RUK-124, commit 10883cace), rounded up to two decimals; may only ever be lowered
+// measured 2026-10-30 on this branch (RUK-124, commit 10883cace), rounded up to two decimals; may only ever be lowered.
+// Lowered 2026-11-02 (RUK-507) on the five lines whose power head now stands in the middle (RUK-121).
 const BUDGET: Readonly<Record<string, number>> = {
   '10 direct': 0.84, '10 routed': 0.97, '10 ae2': 1.63, '10 enderio': 0.84,
-  '20 direct': 0.97, '20 routed': 1.76, '20 ae2': 18.00, '20 enderio': 0.97,
-  '40 direct': 1.76, '40 routed': 18.82, '40 ae2': 51.89, '40 enderio': 1.76,
+  '20 direct': 0.97, '20 routed': 1.76, '20 ae2': 3.18, '20 enderio': 0.97,
+  '40 direct': 1.23, '40 routed': 3.68, '40 ae2': 20.82, '40 enderio': 1.23,
 };
 
 const GT_VOLTS = (tier: number): number => 8 * 4 ** tier;   // ULV 8, LV 32, MV 128
@@ -70,7 +71,7 @@ describe('loss lines stay wired', () => {
           const feedTier = Math.min(u.tier, SUPPLY_TIER);
           const entry = internal.cables.find((c) => c.tier === feedTier);
           expect(entry, `${u.name}: no ${feedTier}-tier cable run`).toBeDefined();
-          const hops = hopsToRun(internal.blocks, u.ports.power!, entry!.cable.name, runX(SUPPLY_TIER, feedTier));
+          const hops = hopsToRun(internal.blocks, u.ports.power!, entry!.cable.name, runX(SUPPLY_TIER, feedTier, placement.headX));
           expect(hops, `${u.name}: port cable does not reach the ${feedTier}-tier run`).not.toBeNull();
           const amps = Math.ceil(u.euPerTick / deliveredVolts(GT_VOLTS(feedTier), 0));
           const volts = deliveredVolts(GT_VOLTS(feedTier), amps * hops! * (entry!.cable.cable?.lossPerBlock ?? 0));

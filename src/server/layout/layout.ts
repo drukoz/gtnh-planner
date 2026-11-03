@@ -52,6 +52,11 @@ export interface LayoutDeps {
   readArea?: (dim: number, bbox: BBox) => Promise<Voxels>;
   /** The A* budget of each hookup search (default `MAX_PATH_NODES`). */
   maxPathNodes?: number;
+  /**
+   * Tests only: called once with the line's own placement and internal route as `buildLocal` chose them (RUK-121), so a
+   * test reads the line the layout was built from instead of laying it again by hand.
+   */
+  localLine?: (line: { placement: Placement; internal: InternalResult }) => void;
 }
 
 /** Where a line without a scan or base is drawn. */
@@ -228,20 +233,91 @@ interface LocalLine {
   warnings: PlanWarning[];
 }
 
+/** What `buildLocal` lays a line from. */
+interface LocalInput {
+  pack: Pack; plan: Plan; parts: Parts; mode: LogisticsMode; units: readonly Unit[]; stages: Stages | null;
+  network: LogisticsNetwork | null;
+}
+
+/**
+ * A middle power head is kept only when it cuts the line's own loss (`lineLoss`) by at least this share (RUK-121): it
+ * makes the line two blocks taller and often a column longer, and its landing cell usually needs a longer hookup, which
+ * the choice cannot see before the site is found.
+ */
+const MIDDLE_HEAD_MIN_CUT = 0.1;
+
+/**
+ * How many units to try west of a power head in the middle of a line whose `units` units are placed by feed tier
+ * (RUK-121): a quarter, a third, two fifths and half of them, each rounded down to an even count so the two rows end
+ * level; without 0 and repeats, ascending. A line of fewer than four units gets none.
+ */
+export function headSplits(units: number): number[] {
+  const even = (x: number): number => 2 * Math.floor(Math.floor(x) / 2);
+  const splits = [units / 4, units / 3, (2 * units) / 5, units / 2].map(even).filter((k) => k > 0);
+  return splits.filter((k, i) => splits.indexOf(k) === i).sort((a, b) => a - b);
+}
+
+/** What a line loses in its own wiring: the banks, its cables, and its supply run from the best landing cell. */
+function lineLoss(line: LocalLine): number {
+  let run = supplyRunLoss(line.internal.supply, null).lossEUt;
+  for (let i = 0; i < line.internal.supplyRun.length; i++) run = Math.min(run, supplyRunLoss(line.internal.supply, i).lossEUt);
+  return (line.stages?.lossEUt ?? 0) + line.internal.lossEUt + run;
+}
+
+/**
+ * What a line leaves to finish by hand inside its own grid (RUK-121): the connections it could not lay (`route_failed`)
+ * and the transformers its banks have no room for (`transformer_bank`).
+ */
+function handWork(line: LocalLine): { unwired: number; transformers: number } {
+  const needed = line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0;
+  const placed = line.internal.blocks.filter((b) => b.role === 'transformer').length;
+  return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
+}
+
+/**
+ * The line in its own grid, its power head where the line loses least (RUK-121). The line is laid with the head at its
+ * west end and, given the stages, again with each of `headSplits` of its units west of a head in the middle. A middle
+ * head that leaves more to finish by hand (`handWork`) than the west-end line is never kept. Of the others, the one with
+ * the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 − `MIDDLE_HEAD_MIN_CUT`) of the
+ * west-end line's, which must lose something; otherwise the line is the west-end one, exactly the line laid before RUK-121.
+ */
+function buildLocal(input: LocalInput): LocalLine {
+  const west = buildLocalAt(input, 0);
+  if (input.stages === null) return west;
+  // a line that loses nothing of its own (lossless cable such as ULV Red Alloy, no banks) keeps the west head: a middle
+  // head cannot cut that, and would only make the line taller and longer
+  const westLoss = lineLoss(west);
+  if (westLoss <= 0) return west;
+  // a middle head's bank has room on one side of the spine only: a middle head that leaves more to finish by hand than
+  // the west head (a transformer, a connection) is never kept, whatever it saves
+  const westHand = handWork(west);
+  let middle: LocalLine | null = null;
+  let middleLoss = Infinity;
+  for (const westUnits of headSplits(input.units.filter((u) => u.manual === undefined).length)) {
+    const line = buildLocalAt(input, westUnits);
+    const hand = handWork(line);
+    if (hand.unwired > westHand.unwired || hand.transformers > westHand.transformers) continue;
+    const loss = lineLoss(line);
+    if (loss < middleLoss) {
+      middle = line;
+      middleLoss = loss;
+    }
+  }
+  return middle !== null && middleLoss <= (1 - MIDDLE_HEAD_MIN_CUT) * westLoss ? middle : west;
+}
+
 /**
  * Stages 3–5 in the line's own grid. Machines fed at different tiers stand apart (their cables never touch), the lowest
  * feed tier next to the power head, whose last run is that tier's (`placeUnits` with the supply tier): a tier's tree
  * then never has to get past a higher tier's machines and tree to reach its own. The supply run is sized for packets
  * that already lost up to the hookup's allowance (spec §3.5 never overload a cable). The line's height counts the air
  * cells its multiblocks need kept empty as well as its blocks.
+ * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
  */
-function buildLocal(input: {
-  pack: Pack; plan: Plan; parts: Parts; mode: LogisticsMode; units: readonly Unit[]; stages: Stages | null;
-  network: LogisticsNetwork | null;
-}): LocalLine {
+function buildLocalAt(input: LocalInput, westUnits: number): LocalLine {
   const { pack, plan, parts, mode, units, stages, network } = input;
   const placement = placeUnits(units, {
-    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }),
+    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits,
   });
   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
   // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
@@ -320,7 +396,9 @@ async function chooseSite(input: {
   const ports: SiteRequest['ports'] = {};
   const taps: SiteRequest['taps'] = {};
   if (line !== null && line.stages !== null) {
-    ports.power = [-1, 0, line.placement.spineZ];
+    // the hookup lands on the supply run: beside the spine's row at the line's west end, or at the north end of a head
+    // in the middle of the line (RUK-121), whose run reaches both long sides
+    ports.power = line.placement.headX === 0 ? [-1, 0, line.placement.spineZ] : [line.placement.headX, 0, -1];
     const tap = powerTaps === null ? null : nearestTap(powerTaps, base.center);
     if (tap !== null) taps.power = [...tap.pos];
   }
@@ -781,6 +859,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
 
   // stage 5; from here on the stages are the ones sized for the volts every machine gets
   const line = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet });
+  deps.localLine?.({ placement: line.placement, internal: line.internal });
   const { stages } = line;
   // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
   const areas = farmAreas(plan, line.size);

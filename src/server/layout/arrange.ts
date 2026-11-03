@@ -162,7 +162,10 @@ export interface Placement {
   units: PlacedUnit[];
   /** W, H, L */
   size: Vec3;
-  spineZ: number; firstX: number; tailX: number;
+  spineZ: number;
+  /** The power head's first column; units stand on both sides of it. 0: the head stands at the line's west end. */
+  headX: number;
+  firstX: number; tailX: number;
   /** Every unit cell, sorted by x, y, z. */
   blocks: LocalBlock[];
   /**
@@ -1045,36 +1048,28 @@ function lowestFeedFirst(units: readonly Unit[], feedTier: (u: Unit) => number |
   return units.map((u) => (feedTier(u) === null ? u : electric[next++]!));
 }
 
+/** A west side side faces the head east and the spine the other way: GT's W/E sides trade places, N/S and up/down stay. */
+function flipSide(side: number): number {
+  return side === WEST ? EAST : side === EAST ? WEST : side;
+}
+
+interface PlacedSlot { u: Unit; row: Row; x: number }
+
 /**
- * Two rows along x facing a spine at z = `spineZ`, after a power head of `headWidth` columns. Units are placed in the
- * order given (flow order). Each goes to the shorter row (N on a tie), one column apart from a multiblock neighbour, and
- * moves along until its item ports are `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell;
- * 2: not even neighbouring).
- * With `supplyTier`, the electric units are placed by feed tier (`min(tier, supplyTier)`), lowest first and each tier in
- * flow order (`lowestFeedFirst`): the lowest feed tier stands next to the head, whose last column is that tier's run, so
- * a tier's cable tree never has to get past a higher tier's machines, or the tree that crosses the spine to them, to
- * reach its own (Task 6 grows the trees lowest first). Units fed at different tiers never stand side by side, and a
- * unit fed at another tier than the head's last column keeps a column away from it, so cables of two tiers never have
- * to touch (spec §3.5): their power ports stay at least two cells apart.
- * A unit run by hand (`Unit.manual`) comes after all the others, so nothing of the line has to pass it and it stands
- * near the tail chests; it stands one block back from the spine, its front row kept empty (`reserved`), a column from
- * the power head and off every cell its neighbour keeps beside it (a side port, whose pipe would touch it), so nothing
- * of the line touches it (the routing keeps off the cells around it: `handRunSurroundings`) and its controller is in
- * reach. A venting steam unit (`Unit.vent`) faces the spine with its output side up (`PlacedUnit.outputSide`), the cell
- * above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe` waits while a cover or a block with a hit box is
- * there) and the one behind it (its steam inlet) kept empty.
+ * One side of the power head: `ordered` units placed in local columns from 0 outward (local 0 touches the head), in the
+ * row's own z with the spine at 0. `headTier` is the feed tier of the head face they start beside (its run column): a
+ * unit fed at another tier keeps a column away, so cables of two tiers never have to touch (spec §3.5). Each unit goes
+ * to the shorter row (N on a tie), one column apart from a multiblock neighbour, and moves on until its item ports are
+ * `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell; 2: not even neighbouring) and every
+ * cell it keeps beside its columns (a side port, a muffler's air) is free.
  */
-export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number }): Placement {
-  const { headWidth, portSpacing, supplyTier } = opts;
-  const cursor: Record<Row, number> = { N: headWidth, S: headWidth };
+function placeSide(ordered: readonly Unit[], opts: {
+  portSpacing: 0 | 1 | 2; feedTier: (u: Unit) => number | null; headTier: number | null; supplyTier?: number;
+}): { slots: PlacedSlot[]; reach: Record<Row, number> } {
+  const { portSpacing, feedTier, headTier, supplyTier } = opts;
+  const cursor: Record<Row, number> = { N: 0, S: 0 };
   const previous: Record<Row, Unit | null> = { N: null, S: null };
-  const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
-  // without `supplyTier`: flow order; the units run by hand last
-  const ordered = [...lowestFeedFirst(units.filter((u) => u.manual === undefined), feedTier), ...units.filter((u) => u.manual !== undefined)];
-  const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
-  // the head's last column is the run of the lowest feed tier (Task 6 lays one run per fed tier, lowest last)
-  const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
-  /** The feed tier the next unit of a row stands beside: the head's, the previous unit's, or none (a steam unit). */
+  /** The feed tier the next unit of a row stands beside: the head's run, the previous unit's, or none (a steam unit). */
   const besideTier: Record<Row, number | null> = { N: headTier, S: headTier };
   const claimed = new Set<number>();
   const near = (px: number) => {
@@ -1087,18 +1082,18 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   const beside = (u: Unit, row: Row, x: number) => besideCells(u).map((p) => localCell(u, row, x, 0, p));
   /** Per row: the cells the last unit keeps beside its columns, and the first column past them and the unit. */
   const kept: Record<Row, Set<string>> = { N: new Set(), S: new Set() };
-  const reach: Record<Row, number> = { N: headWidth, S: headWidth };
-  const fits = (u: Unit, row: Row, x: number) => beside(u, row, x).every((p) => p[0] >= headWidth && !kept[row].has(posKey(p)));
+  const reach: Record<Row, number> = { N: 0, S: 0 };
+  const fits = (u: Unit, row: Row, x: number) => beside(u, row, x).every((p) => p[0] >= 0 && !kept[row].has(posKey(p)));
   // nothing the neighbour keeps beside it may touch a unit run by hand: no cell beside one of its own is one of those
   const clear = (u: Unit, row: Row, x: number) => u.manual === undefined
     || !u.cells.some((c) => DIRS.some((_, side) => kept[row].has(posKey(step(localCell(u, row, x, 0, c.pos), side)))));
-  const slots: Array<{ u: Unit; row: Row; x: number }> = [];
+  const slots: PlacedSlot[] = [];
   for (const u of ordered) {
     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
     const before = previous[row];
     const tier = feedTier(u);
     const otherTier = tier !== null && besideTier[row] !== null && tier !== besideTier[row];
-    // a unit run by hand keeps a column from the power head too, whose last column is a cable run (Task 6)
+    // a unit run by hand keeps a column from the power head too, whose face is a cable run (Task 6)
     const besideHead = before === null && u.manual !== undefined && supplyTier !== undefined;
     let x = cursor[row] + ((before !== null && (u.multiblock || before.multiblock)) || otherTier || besideHead ? 1 : 0);
     // a port or air cell beside the unit stays off the power head and off the cells its neighbour keeps
@@ -1112,59 +1107,115 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     besideTier[row] = tier;
     slots.push({ u, row, x });
   }
+  return { slots, reach };
+}
 
-  const deepest = (row: Row) => slots.reduce((d, s) => (s.row === row ? Math.max(d, s.u.size[2] + standOff(s.u)) : d), 0);
+/**
+ * Two rows along x facing a spine at z = `spineZ`, after a power head of `headWidth` columns at the line's west end
+ * (`headX` 0, `firstX` = `headWidth`), or on both sides of the head when it stands in the middle of the line. Units are
+ * placed in the order given (flow order).
+ * With `supplyTier` and `westUnits` > 0 (RUK-121), the head stands in the middle, its supply run on its west face and
+ * the lowest fed tier's run on its east face: the first `westUnits` of the units placed by feed tier (the lowest feed
+ * tiers first, flow order within a tier: `lowestFeedFirst`) stand west of it, facing east, the rest east of it, facing
+ * west, so a tier's cable tree reaches its machines from the nearer head face. The head's first column is `headX` =
+ * the west side's reach, so the west side fits exactly, and `firstX` is 0. Without `westUnits`, or with 0, the units
+ * all stand after the head, exactly as before RUK-121.
+ * The electric units are placed by feed tier (`min(tier, supplyTier)`), lowest first: the lowest feed tier stands next
+ * to its run, so a tier's cable tree never has to get past a higher tier's machines, or the tree that crosses the spine
+ * to them, to reach its own (Task 6 grows the trees lowest first). Units fed at different tiers never stand side by
+ * side (`placeSide`), and a unit fed at another tier than the head face's keeps a column away from it, so cables of two
+ * tiers never have to touch (spec §3.5): their power ports stay at least two cells apart.
+ * A unit run by hand (`Unit.manual`) comes after all the others, so nothing of the line has to pass it and it stands
+ * near the tail chests; it stands one block back from the spine, its front row kept empty (`reserved`), a column from
+ * the power head and off every cell its neighbour keeps beside it (a side port, whose pipe would touch it), so nothing
+ * of the line touches it (the routing keeps off the cells around it: `handRunSurroundings`) and its controller is in
+ * reach. A venting steam unit (`Unit.vent`) faces the spine with its output side up (`PlacedUnit.outputSide`), the cell
+ * above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe` waits while a cover or a block with a hit box is
+ * there) and the one behind it (its steam inlet) kept empty.
+ */
+export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number; westUnits?: number }): Placement {
+  const { headWidth, portSpacing, supplyTier } = opts;
+  const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
+  const nonManual = lowestFeedFirst(units.filter((u) => u.manual === undefined), feedTier);
+  const handUnits = units.filter((u) => u.manual !== undefined);
+  const feeds = [...nonManual, ...handUnits].map(feedTier).filter((t): t is number => t !== null);
+  // the head's east face is the run of the lowest feed tier (Task 6 lays one run per fed tier, lowest last)
+  const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
+  // with `westUnits`, a head of runs (`supplyTier`) stands in the middle of the line: the first `westUnits` units stand
+  // west of it, mirrored, facing its west face; the units run by hand stay last, east of it, near the tail chests
+  const split = supplyTier !== undefined && headWidth > 0 ? Math.min(Math.max(0, Math.floor(opts.westUnits ?? 0)), nonManual.length) : 0;
+  // the head's west face is its supply run, its east face the lowest fed tier's run
+  const west = placeSide(nonManual.slice(0, split), { portSpacing, feedTier, headTier: supplyTier ?? headTier, supplyTier });
+  const east = placeSide([...nonManual.slice(split), ...handUnits], { portSpacing, feedTier, headTier, supplyTier });
+  const headX = split === 0 ? 0 : Math.max(west.reach.N, west.reach.S);
+  const deepest = (row: Row) => [...west.slots, ...east.slots].reduce((d, s) => (s.row === row ? Math.max(d, s.u.size[2] + standOff(s.u)) : d), 0);
   const dN = deepest('N'), dS = deepest('S');
   const spineZ = 1 + dN;
   // the tail column stays clear of the cells the last unit of each row keeps beside it
-  const tailX = Math.max(reach.N, reach.S);
+  const tailX = headX + headWidth + Math.max(east.reach.N, east.reach.S);
 
   const placed: PlacedUnit[] = [];
   const blocks: LocalBlock[] = [];
   const reserved: Vec3[] = [];
-  for (const { u, row, x } of slots) {
-    const toSpine = towardSpine(row);
-    // a singleblock's output side faces the spine (its covers and inputs go there), its front elsewhere (GT keeps the
-    // two apart); a venting steam unit's output side faces up; a bench has only its front, turned away from the spine,
-    // so its back, its output face, meets the spine
-    const mainFacing = u.multiblock || u.bench !== undefined ? undefined : singleblockMainFacing();
-    for (const c of u.cells) {
-      const facing = c.role === 'machine' ? (u.vent === true ? UP : u.bench !== undefined ? OPPOSITE[toSpine]! : toSpine)
-        : c.role === 'hatch' ? hatchFacing(c, row) : undefined;
-      blocks.push({
-        pos: localCell(u, row, x, spineZ, c.pos), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
-        ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
-        stepId: u.stepId, ...(u.stepIds === undefined ? {} : { stepIds: [...u.stepIds] }),
-        // a hatch the exported structure holds is no hatch the line chose (`UnitCell.exported`)
-        label: c.label, ...(c.item === undefined ? {} : { item: c.item }), ...(c.hatch === undefined || c.exported === true ? {} : { hatch: c.hatch }),
-        ...(c.config === undefined ? {} : { config: { ...c.config } }),
-        // a bench's grid, mode and button: the configure step words them (architecture §11 entry 51's `FeedSpec.bench`)
-        ...(c.role === 'machine' && u.bench !== undefined ? { feed: { bench: structuredClone(u.bench.spec) } } : {}),
+  const mapPorts = (p: UnitPorts, pos: (p: Vec3) => Vec3, flip: (s: number) => number): UnitPorts => ({
+    power: p.power === null ? null : pos(p.power),
+    items: p.items.map(pos),
+    fluidIn: p.fluidIn.map(pos),
+    fluidOut: p.fluidOut.map(pos),
+    fluidInSides: p.fluidInSides.map(flip),
+    fluidOutSides: p.fluidOutSides.map(flip),
+    itemFaces: p.itemFaces.map((f) => ({ pos: pos(f.pos), side: flip(f.side) })),
+    fluidFaces: p.fluidFaces.map((f) => ({ pos: pos(f.pos), side: flip(f.side) })),
+  });
+  const emit = (sideSlots: readonly PlacedSlot[], mapX: (x: number) => number, flip: (s: number) => number): void => {
+    for (const { u, row, x } of sideSlots) {
+      const toSpine = towardSpine(row);
+      const pos = (p: Vec3): Vec3 => [mapX(p[0]), p[1], p[2]];
+      // a singleblock's output side faces the spine (its covers and inputs go there), its front toward the head (GT keeps
+      // the two apart; on the west side the head lies east); a venting steam unit's output side faces up; a bench has
+      // only its front, turned away from the spine, so its back, its output face, meets the spine
+      const mainFacing = u.multiblock || u.bench !== undefined ? undefined : flip(singleblockMainFacing());
+      for (const c of u.cells) {
+        const hatchSide = c.role === 'hatch' ? hatchFacing(c, row) : undefined;
+        const facing = c.role === 'machine' ? (u.vent === true ? UP : u.bench !== undefined ? OPPOSITE[toSpine]! : toSpine)
+          : hatchSide === undefined ? undefined : flip(hatchSide);
+        blocks.push({
+          pos: pos(localCell(u, row, x, spineZ, c.pos)), block: { ...c.block }, role: c.role, ...(facing === undefined ? {} : { facing }),
+          ...(c.role === 'machine' && mainFacing !== undefined ? { mainFacing } : {}),
+          stepId: u.stepId, ...(u.stepIds === undefined ? {} : { stepIds: [...u.stepIds] }),
+          // a hatch the exported structure holds is no hatch the line chose (`UnitCell.exported`)
+          label: c.label, ...(c.item === undefined ? {} : { item: c.item }), ...(c.hatch === undefined || c.exported === true ? {} : { hatch: c.hatch }),
+          ...(c.config === undefined ? {} : { config: { ...c.config } }),
+          // a bench's grid, mode and button: the configure step words them (architecture §11 entry 51's `FeedSpec.bench`)
+          ...(c.role === 'machine' && u.bench !== undefined ? { feed: { bench: structuredClone(u.bench.spec) } } : {}),
+        });
+      }
+      for (const a of u.air) reserved.push(pos(localCell(u, row, x, spineZ, a)));
+      if (u.manual !== undefined) {
+        // its front row, between it and the spine: you fill and empty it from there, and nothing of the line touches it
+        const z = row === 'S' ? spineZ + 1 : spineZ - 1;
+        for (let cx = 0; cx < u.size[0]; cx++) for (let y = 0; y < u.size[1]; y++) reserved.push(pos([x + cx, y, z]));
+      }
+      if (u.vent === true) {
+        const machine = pos(localCell(u, row, x, spineZ, u.cells.find((c) => c.role === 'machine')!.pos));
+        reserved.push(step(machine, UP), step(machine, OPPOSITE[toSpine]!));                  // its vent and its steam inlet
+      }
+      const off = standOff(u);
+      const at: Vec3 = pos(row === 'S' ? [x, 0, spineZ + 1 + off] : [x, 0, spineZ - u.size[2] - off]);
+      placed.push({
+        ...u, row, at, facing: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ...(u.vent === true ? { outputSide: UP } : {}),
+        ports: mapPorts(unitPorts(u, row, x, spineZ), pos, flip),
       });
     }
-    for (const a of u.air) reserved.push(localCell(u, row, x, spineZ, a));
-    if (u.manual !== undefined) {
-      // its front row, between it and the spine: you fill and empty it from there, and nothing of the line touches it
-      const z = row === 'S' ? spineZ + 1 : spineZ - 1;
-      for (let cx = 0; cx < u.size[0]; cx++) for (let y = 0; y < u.size[1]; y++) reserved.push([x + cx, y, z]);
-    }
-    if (u.vent === true) {
-      const machine = localCell(u, row, x, spineZ, u.cells.find((c) => c.role === 'machine')!.pos);
-      reserved.push(step(machine, UP), step(machine, OPPOSITE[toSpine]!));                  // its vent and its steam inlet
-    }
-    const off = standOff(u);
-    const at: Vec3 = row === 'S' ? [x, 0, spineZ + 1 + off] : [x, 0, spineZ - u.size[2] - off];
-    placed.push({
-      ...u, row, at, facing: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ...(u.vent === true ? { outputSide: UP } : {}),
-      ports: unitPorts(u, row, x, spineZ),
-    });
-  }
+  };
+  emit(west.slots, (x) => headX - 1 - x, flipSide);
+  emit(east.slots, (x) => headX + headWidth + x, (s) => s);
   blocks.sort((a, b) => comparePos(a.pos, b.pos));
   reserved.sort(comparePos);
   // the box holds every cell kept empty too (a steam vent above a singleblock), so the site checks it is clear
   const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1));
   const size: Vec3 = [tailX + 1, height, dN + dS + 3];
-  return { units: placed, size, spineZ, firstX: headWidth, tailX, blocks, reserved };
+  return { units: placed, size, spineZ, headX, firstX: split === 0 ? headWidth : 0, tailX, blocks, reserved };
 }
 
 /**
