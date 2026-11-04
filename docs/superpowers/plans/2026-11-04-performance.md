@@ -90,7 +90,7 @@ pool does not take); `availability.ts` 2.6 s; loading the pack 2.4 s; garbage co
 | --- | --- | --- | --- |
 | `tools/perf` (RUK-564, merged) | The scratch runner made a tool: a fresh copy of the data, a server on a free port, the passes above, the `/api/health` probe, timings, and a byte-for-byte check against a reference (`npm run perf`). | new `tools/perf/`, `tests/unit/tools/perf-compare.test.ts`, `package.json`, `tsconfig.server.json`, `CLAUDE.md` | |
 | Settle index (RUK-565, merged) | `estimateCosts` settles each good through the slots it fills instead of scanning every input of every consumer; byte-identical, measured. | `src/server/planner/candidates.ts` | |
-| Solver pool queue (RUK-575) | The solver pool hands each job to a thread only when that thread is idle, from one queue (below). | `src/server/planner/lp.ts`, `tests/unit/planner/lp-pool.test.ts` | |
+| Solver pool queue (RUK-575, merged) | The solver pool hands each job to a thread only when that thread is idle, from one queue (below). | `src/server/planner/lp.ts`, `tests/unit/planner/lp-pool.test.ts` | |
 | Planning thread (RUK-579) | Plans, line goods, breakdowns, build prices and step wording on a worker thread of their own, each answer equal to the call on the main thread (tested on the Mini-GT export). Nothing uses it yet. | new `src/server/planner/thread.ts`, `thread-worker.ts`, `tests/unit/planner/thread.test.ts` | |
 | Wiring (RUK-580) | The plan route and the layout service plan on the thread `main.ts` starts, and the main thread's pack loads before the ready line. Gate: 42 of 42 files and the longest `/api/health` wait under 0.5 s in every pass. | `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `src/server/main.ts` | RUK-579 |
 | Disk store (RUK-576) | A cache of JSON values on disk: one gzip file per key under a code version (`codeVersion`), at most N files, the least recently used dropped. Nothing uses it yet. | new `src/server/planner/disk-cache.ts`, `tests/unit/planner/disk-cache.test.ts` | |
@@ -152,6 +152,9 @@ job, from one shared queue, to a thread only when that thread is idle: milestone
 soon as it is asked for, so when two plans run at once (two compares, or a compare beside a background replan), some of
 one plan's price LPs can wait behind the other plan's build MIP (usually 1.6 to 2 s, at most its 30 s limit) while
 another thread is free. A single plan is not affected: its prices are solved before its build stage (RUK-540 review).
+Merged (RUK-575): one plan at a time it changes nothing measurable. Three runs gave the same 42 files; the seven cold
+plans took 39.2 to 39.8 s against 40.3 s before, and after a restart 37.9 s and 38.0 s against 41.9 s (a third run, at
+load average 21, had one plan at twice its time there, 55.2 s in all).
 Check, as measured below: `tools/perf` byte-identical, and the longest `/api/health` wait in every pass under 0.5 s.
 
 **The plan cache on disk.** `PlanCache` keeps 32 plans in memory; a store under `<dataDir>/cache/plans/` (one gzip file
