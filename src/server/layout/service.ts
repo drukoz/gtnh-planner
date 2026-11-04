@@ -6,6 +6,7 @@
 // call, so a service registered later is the one used.
 
 import type { AppContext } from '../app.ts';
+import { exportDirFor } from '../config.ts';
 import { planForProject } from '../http/routes/projects.ts';
 import { worldService } from '../http/routes/world.ts';
 import { allMachines } from '../pack/lookup.ts';
@@ -14,12 +15,13 @@ import { bomBuildCost } from '../planner/build-cost.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
 import { linePricing } from '../planner/pricing.ts';
 import { partSteps } from '../planner/steps.ts';
+import { planningThreadOf, type PartStep, type PartStepsInput } from '../planner/thread.ts';
 import { emptyScan, layoutLine, type LayoutDeps } from './layout.ts';
 import { isOptional, mergeLayoutIntoPlan, subtractReplaced } from './merge.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { BomLine, BuildStep, Plan, PlanStep } from '../../shared/types/plan.ts';
+import type { BomLine, BuildStep, Plan, PlanContext, PlanStep } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import type { BBox, Voxels, WorldScan } from '../../shared/types/world.ts';
 
@@ -72,6 +74,12 @@ export interface LayoutServiceDeps {
    * no farms, the export pack.
    */
   linePack?(pack: Pack, project: Project): Promise<Pack>;
+  // optional addition (RUK-563)
+  /**
+   * A placed line's build steps, `partSteps` on the line's farm pack worked out elsewhere (the app's planning thread);
+   * `finishPlan` then asks no `linePack`. Without it, `finishPlan` words them here, on `linePack`'s pack.
+   */
+  steps?(pack: Pack, project: Project, input: PartStepsInput): Promise<PartStep[]>;
 }
 
 export interface LayoutService {
@@ -193,14 +201,16 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       const pack = await deps.pack();
       const expansion = await expansionOf(entry, pack, layout, project, plan);
       const cost = costOf(entry, pack, layout, project);
-      const stepsPack = deps.linePack === undefined ? pack : await deps.linePack(pack, project);
       // what the group takes from its seed bank is no import, as the plan's breakdown decided it (its `seedBank` lines)
       const bank = seedBankKeys(plan.buildList);
       const lines = fromSeedBank(expansion.lines, bank);
       const totals = fromSeedBank(expansion.totals, bank);
       const bom = { lines, totals, makes: expansion.makes ?? [] };
-      const parts = partSteps(stepsPack, { steps: plan.steps, bom, tier: plan.tier })
-        .map((s, i): BuildStep => ({ ...s, order: i + 1 }));
+      const input: PartStepsInput = { steps: plan.steps, bom, tier: plan.tier };
+      const worded = deps.steps !== undefined
+        ? await deps.steps(pack, project, input)
+        : partSteps(deps.linePack === undefined ? pack : await deps.linePack(pack, project), input);
+      const parts = worded.map((s, i): BuildStep => ({ ...s, order: i + 1 }));
       const nameOf = (k: string): string => (k.startsWith('map:') ? pack.maps.get(k.slice(4))?.name ?? k.slice(4) : partName(pack, k));
       return mergeLayoutIntoPlan(plan, layout, { ...expansion, lines, totals, parts }, nameOf, cost === null ? undefined : await cost);
     },
@@ -216,20 +226,29 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
 export function layoutService(app: AppContext): LayoutService {
   const existing = app.services.layout as LayoutService | undefined;
   if (existing !== undefined) return existing;
+  // The planning work on the app's planning thread when it has one (main.ts starts it), so this thread keeps answering.
+  const thread = planningThreadOf(app);
+  const contextOf = async (project: Project): Promise<PlanContext> => app.services.planContext?.(project) ?? emptyContext();
+  const dirOf = (pack: Pack): string => exportDirFor(app.config, pack.manifest.exportId);
   const service = createLayoutService({
     pack: () => app.pack(),
     plan: (project) => planForProject(app, project),
     scan: (scanId) => worldService(app).getScan(scanId),
     readArea: (scanId, dim, bbox) => worldService(app).readArea(scanId, dim, bbox),
-    expand: async (pack, lines, project, steps) =>
-      expandBomLines(pack, lines, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), steps === undefined ? undefined : { steps }),
+    expand: async (pack, lines, project, steps) => (thread !== undefined
+      ? thread.expand(dirOf(pack), lines, project.settings, await contextOf(project), steps)
+      : expandBomLines(pack, lines, project.settings, await contextOf(project), steps === undefined ? undefined : { steps })),
     // the layout's parts at the prices the plan's machines are priced at (plan 12: `cost.layout`)
-    layoutCost: async (pack, lines, project) =>
-      bomBuildCost(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), lines),
+    layoutCost: async (pack, lines, project) => (thread !== undefined
+      ? thread.layoutCost(dirOf(pack), project.settings, await contextOf(project), lines)
+      : bomBuildCost(pack, project.settings, await contextOf(project), lines)),
     // the line's farm pack from its pricing (memoized: the plan route priced the line), so its build steps say what its
     // crop farms plant as the plan's own do (add-on 17)
-    linePack: async (pack, project) =>
-      (await linePricing(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext())))?.pack ?? pack,
+    linePack: async (pack, project) => (await linePricing(pack, project.settings, await contextOf(project)))?.pack ?? pack,
+    ...(thread === undefined ? {} : {
+      steps: async (pack: Pack, project: Project, input: PartStepsInput) =>
+        thread.partSteps(dirOf(pack), project.settings, await contextOf(project), input),
+    }),
   });
   app.services.layout = service;
   return service;
