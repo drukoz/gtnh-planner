@@ -90,8 +90,11 @@ pool does not take); `availability.ts` 2.6 s; loading the pack 2.4 s; garbage co
 | --- | --- | --- | --- |
 | `tools/perf` (RUK-564, merged) | The scratch runner made a tool: a fresh copy of the data, a server on a free port, the passes above, the `/api/health` probe, timings, and a byte-for-byte check against a reference (`npm run perf`). | new `tools/perf/`, `tests/unit/tools/perf-compare.test.ts`, `package.json`, `tsconfig.server.json`, `CLAUDE.md` | |
 | Settle index (RUK-565, merged) | `estimateCosts` settles each good through the slots it fills instead of scanning every input of every consumer; byte-identical, measured. | `src/server/planner/candidates.ts` | |
-| Worker | Planning in a worker thread, and the solver pool's shared queue (below). | to be specified after the two above report | `tools/perf` |
-| Disk cache | The plan cache kept on disk (below). | to be specified after the two above report | `tools/perf` |
+| Solver pool queue (RUK-575) | The solver pool hands each job to a thread only when that thread is idle, from one queue (below). | `src/server/planner/lp.ts`, `tests/unit/planner/lp-pool.test.ts` | |
+| Planning thread (RUK-579) | Plans, line goods, breakdowns, build prices and step wording on a worker thread of their own, each answer equal to the call on the main thread (tested on the Mini-GT export). Nothing uses it yet. | new `src/server/planner/thread.ts`, `thread-worker.ts`, `tests/unit/planner/thread.test.ts` | |
+| Wiring (RUK-580) | The plan route and the layout service plan on the thread `main.ts` starts, and the main thread's pack loads before the ready line. Gate: 42 of 42 files and the longest `/api/health` wait under 0.5 s in every pass. | `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `src/server/main.ts` | RUK-579 |
+| Disk store (RUK-576) | A cache of JSON values on disk: one gzip file per key under a code version (`codeVersion`), at most N files, the least recently used dropped. Nothing uses it yet. | new `src/server/planner/disk-cache.ts`, `tests/unit/planner/disk-cache.test.ts` | |
+| Disk cache | What a restart redoes, kept on disk with the store (below). | to be specified at the approval of RUK-580 and RUK-576 | RUK-580, RUK-576 |
 | QA | Verify the merged branch: suites, browser tests, `tools/perf` with `--restart` against the reference. | tests only | all |
 
 `tools/perf` is merged: the tasks that follow measure with `npm run perf` (`tools/perf/README.md`). RUK-565 predates it
@@ -149,19 +152,61 @@ job, from one shared queue, to a thread only when that thread is idle: milestone
 soon as it is asked for, so when two plans run at once (two compares, or a compare beside a background replan), some of
 one plan's price LPs can wait behind the other plan's build MIP (usually 1.6 to 2 s, at most its 30 s limit) while
 another thread is free. A single plan is not affected: its prices are solved before its build stage (RUK-540 review).
-Check: `tools/perf` byte-identical, and the longest `/api/health` wait during a cold plan under 0.2 s.
+Check, as measured below: `tools/perf` byte-identical, and the longest `/api/health` wait in every pass under 0.5 s.
 
 **The plan cache on disk.** `PlanCache` keeps 32 plans in memory; a store under `<dataDir>/cache/plans/` (one gzip file
 per key, the key hashed) is read on a memory miss and written after a computation, at most 64 files, the oldest
 dropped. The key gains the code's version (a hash of `src/server/**/*.ts`, `src/shared/**/*.ts` and
 `package-lock.json`, taken at start), so a pulled change never serves an old plan. Seven test files count
 `PlanCache.computations` (38 uses); each one's data folder must be checked before the spec says a disk hit does not
-count. Check: `tools/perf --restart`, the `restart/` pass byte-identical and every plan in it under 0.2 s.
+count. Its check is set when it is specified: a plan cache alone cannot make a restart fast (below).
+
+### The worker and the disk cache, measured before they were specified (RUK-564's approval)
+
+**What is left on the main thread.** The main thread's CPU profile of a base run (`c51560e05`, the RUK-565 Tech Lead's
+runs), its samples grouped by the source folder that drives them (a profile loses a function's async callers after an
+`await`, so names alone undercount `planLine` and `layoutLine`):
+
+| | Cold: total | Cold: longest unbroken | Restart: total | Restart: longest unbroken |
+| --- | ---: | ---: | ---: | ---: |
+| `planner/` and HiGHS (moves to the thread) | 35.2 s | 5.8 s | 36.3 s | 6.9 s |
+| Loading the pack (`pack/`) | 2.9 s | 1.3 s | 2.7 s | 1.3 s |
+| `layout/` (`layoutLine` and its stages) | 0.34 s | 0.10 s | 0.32 s | 0.12 s |
+| `layout/service.ts` (merging, step wording) | 0.50 s | 0.09 s | 0.36 s | 0.08 s |
+| `world/` (the scan reads) | 0.51 s | 0.17 s | 0.29 s | 0.08 s |
+
+With every `planner/` and HiGHS sample off the main thread, its longest busy stretch would be 0.19 to 0.24 s (laying a
+line out, then reading its area of the scan), apart from the pack's own load at first use, 1.0 to 2.4 s. That load
+now happens before the server prints that it is ready (RUK-580). So the worker's check is 0.5 s, a little over twice
+what stays, and the measured value is reported beside it.
+
+**The whole change, prototyped** (the pool's queue, the thread and the wiring, exactly as RUK-575, RUK-579 and RUK-580
+specify them; `npm run perf -- --restart` on `cd5e71640`, load average 5.9 to 7.8): 42 of 42 files byte-identical, every
+request 200.
+
+| | Base (`9be5b962d`, load 15.7 to 17.6) | Planning thread |
+| --- | ---: | ---: |
+| Cold total | 40.3 s | 42.0 s |
+| Restart total | 41.9 s | 39.3 s |
+| Warm rounds | about 0.17 s each | 0.27 s each |
+| Longest `/api/health` wait: cold / warm / restart | 3.0 s / – / 3.2 s | 0.166 s / 0.020 s / 0.095 s |
+
+The warm rounds grew because each warm answer now sends `partSteps` to the thread (about 10 ms a plan); the disk cache
+keeps its result with the layout's other parts. The pack is loaded twice, once per thread; the server's memory was not
+measured yet.
+
+**What a restart redoes.** On a fresh server the plan route prices the line for its goods (`lineGoods` → `linePricing`)
+before it reads the plan cache, and `finishPlan` breaks the build down (`expandBomLines`), prices the layout's parts
+(`bomBuildCost`) and words its steps (`partSteps`, on the line's farm pack), none of which is kept past a restart. A disk
+cache of plans alone would still leave about 1.5 to 2 s a project. So the disk cache keeps, under one code version
+(`codeVersion`, RUK-576): the plans (by their cache key), the lines' goods (by the plan key), and each finished layout's
+expansion, cost and worded steps (by `layoutKey`). It is specified once the wiring has landed, from a profile of the
+restart pass.
 
 ### The milestone's check
 
-`tools/perf --restart` on the merged branch against the reference: 42 of 42 files byte-identical, the cold total, the
-restart pass, and the longest `/api/health` wait, beside the table above.
+`npm run perf -- --restart` on the merged branch against the reference: 42 of 42 files byte-identical, the cold total,
+the restart pass, and the longest `/api/health` wait in every pass (under 0.5 s), beside the tables above.
 
 ## Milestone 3: smoother 3D on big lines
 
