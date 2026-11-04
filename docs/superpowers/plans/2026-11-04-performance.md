@@ -48,6 +48,11 @@ visits as in the review, the cold total, and a byte-for-byte check against the p
 1. `tools/perf/`: plans and lays out the seven projects on a copy of the data, cold, and checks every plan and layout
    byte for byte against a reference run.
 2. Planning in a worker thread, so the server keeps answering pages, textures and tiles while a plan is made (F4).
+   The solver pool then hands each job, from one shared queue, to a thread only when that thread is idle. Milestone 1's
+   pool hands a job to a thread as soon as it is asked for, so when two plans run at once (two compares, or a compare
+   beside a background replan), some of one plan's price LPs can wait behind the other plan's build MIP (usually 1.6
+   to 2 s, at most its 30 s limit) while another thread is free. A single plan is not affected: its prices are solved
+   before its build stage (RUK-540 review).
 3. Spikes, each kept only with byte-identical plans: `highs` 1.15.4, a native HiGHS binding, and the hot loops of
    `buildCandidates` and `estimateCosts` (F3).
 4. The plan cache kept on disk, so a restart does not make every plan cold again.
