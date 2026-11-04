@@ -28,6 +28,10 @@ describe('the landing page', () => {
     expect(html).toContain('<code>npm run extract-assets</code>');
   });
 
+  it('says nothing about a password, which the planner asks for only when one is on', () => {
+    expect(html.toLowerCase()).not.toContain('password');
+  });
+
   it('asks the server for nothing and draws no game texture', () => {
     for (const needle of ["from '../api/", "from '../assets/", 'fetch(', 'EventSource', 'ItemIcon', 'apiGet', 'apiPost']) {
       expect(source, needle).not.toContain(needle);

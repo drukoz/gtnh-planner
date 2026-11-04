@@ -1,5 +1,6 @@
 // The real app and HTTP server on a free 127.0.0.1 port, with a temporary data folder and a config built in memory (no
-// config file). It logs in once; `request` sends that session cookie unless told not to.
+// config file). It asks for the password unless `requirePassword: false` is passed, and logs in once either way; `request`
+// sends that session cookie unless told not to.
 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,7 +29,9 @@ export interface TestServer {
  * `opts.pack` is what the app's pack loader returns (no export is active without one, so pack routes answer 503);
  * without `opts.staticDir` the server has no built client and every non-API path is a 404.
  */
-export async function startTestServer(opts: { pack?: Pack | null; password?: string; staticDir?: string } = {}): Promise<TestServer> {
+export async function startTestServer(
+  opts: { pack?: Pack | null; password?: string; staticDir?: string; requirePassword?: boolean } = {},
+): Promise<TestServer> {
   const dir = mkdtempSync(join(tmpdir(), 'gp-server-'));
   const password = opts.password ?? 'pw';
   const pack = opts.pack ?? null;
@@ -36,6 +39,7 @@ export async function startTestServer(opts: { pack?: Pack | null; password?: str
     ...DEFAULT_CONFIG,
     dataDir: join(dir, 'data'), activeExportId: pack === null ? null : pack.manifest.exportId,
     port: 0, host: '127.0.0.1', passwordHash: hashPassword(password), sessionSecret: newSessionSecret(),
+    requirePassword: opts.requirePassword ?? true,
   };
   const app = createApp(config, {
     loadPack: async () => {

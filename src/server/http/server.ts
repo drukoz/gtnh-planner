@@ -1,6 +1,7 @@
 // The one HTTP server (web-stack §4): `/api/*` goes through the route table with the session check (or, on the few
-// routes that allow it, a project token), everything else is the built web client. Timeouts allow slow 1 GB world
-// uploads (architecture §11.9).
+// routes that allow it, a project token), everything else is the built web client. With the password off (spec §3.11)
+// only a project token is still checked, and `/login` sends the browser to the project list. Timeouts allow slow 1 GB
+// world uploads (architecture §11.9).
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -49,19 +50,21 @@ function sendError(req: IncomingMessage, res: ServerResponse, status: number, er
 }
 
 /**
- * The auth step (architecture §11.23) for a request to `route`, whose `:id` param is `projectId`. A public route lets
- * everyone in, with `authed` saying whether the session cookie is valid. Otherwise a valid session cookie gives full
- * rights and always wins over an Authorization header; failing that, a route flagged `bearer` takes a project token
- * that `app.services.verifyToken` (read on every request) accepts for `projectId`, and its handler sees `ctx.bearer`.
- * Null: answer 401.
+ * The auth step (architecture §11.23) for a request to `route`, whose `:id` param is `projectId`. With the password off
+ * (`requirePassword` false, spec §3.11), a request that sends no project token gets full rights, as a logged-in browser
+ * does; one that sends a token is checked as below. A public route lets everyone in, with `authed` saying whether the
+ * session cookie is valid. Otherwise a valid session cookie gives full rights and always wins over an Authorization
+ * header; failing that, a route flagged `bearer` takes a project token that `app.services.verifyToken` (read on every
+ * request) accepts for `projectId`, and its handler sees `ctx.bearer`. Null: answer 401.
  */
 function authenticate(
   app: AppContext, req: IncomingMessage, route: Route, projectId: string | undefined,
 ): Omit<RequestContext, 'me'> | null {
+  const token = bearerToken(req.headers.authorization);
+  if (!app.config.requirePassword && token === null) return { authed: true };
   const authed = verifySession(app.config.sessionSecret, readCookie(req.headers.cookie, SESSION_COOKIE), Date.now());
   if (route.public || authed) return { authed };
   if (!route.bearer || projectId === undefined) return null;
-  const token = bearerToken(req.headers.authorization);
   const verify = app.services.verifyToken;
   if (token === null || typeof verify !== 'function') return null;
   const hit = (verify as TokenVerifier)(token, projectId);
@@ -108,6 +111,12 @@ async function handleStatic(req: IncomingMessage, res: ServerResponse, staticDir
   }
 }
 
+/** `/login` with the password off: there is nothing to log in to, so an old link or bookmark opens the project list. */
+function sendToProjects(res: ServerResponse): void {
+  res.writeHead(302, { Location: '/projects', 'Cache-Control': 'no-store' });
+  res.end();
+}
+
 function urlOf(host: string, port: number): string {
   return `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
 }
@@ -126,6 +135,7 @@ export function startServer(app: AppContext, opts: { port?: number; host?: strin
     const i = url.indexOf('?');
     const pathname = i < 0 ? url : url.slice(0, i);
     if (pathname === '/api' || pathname.startsWith('/api/')) void handleApi(app, routes, req, res, pathname);
+    else if (pathname === '/login' && !app.config.requirePassword && (req.method === 'GET' || req.method === 'HEAD')) sendToProjects(res);
     else void handleStatic(req, res, staticDir);
   });
 
