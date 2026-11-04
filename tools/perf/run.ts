@@ -77,6 +77,8 @@ let log = '';
 let baseUrl = '';
 let probeTimer: NodeJS.Timeout | undefined;
 let probeInFlight = false;
+/** Settles when the probe last sent has answered or failed. */
+let probeSettled: Promise<void> = Promise.resolve();
 let probeTimes: number[] = [];
 let probeMax = 0;
 
@@ -142,7 +144,7 @@ function setupRunFolder(): void {
   for (const d of ['export', 'scans']) {
     cpSync(join(options.source, 'data', d), join(dataDir, d), { recursive: true, mode: constants.COPYFILE_FICLONE });
   }
-  copyFileSync(join(options.source, 'planner.sqlite.orig'), join(dataDir, 'planner.sqlite'));
+  copyFileSync(join(options.source, 'planner.sqlite.orig'), join(dataDir, 'planner.sqlite'), constants.COPYFILE_FICLONE);
   const sourceConfig: { activeExportId?: unknown } = JSON.parse(readFileSync(join(options.source, 'config.json'), 'utf8'));
   const id = sourceConfig.activeExportId;
   if (typeof id !== 'string' && id !== null && id !== undefined) refuse(`${options.source}/config.json: activeExportId must be a string or null`);
@@ -217,6 +219,8 @@ function get(path: string): Promise<Response> {
       const chunks: Buffer[] = [];
       res.on('data', (chunk: Buffer) => chunks.push(chunk));
       res.on('end', () => resolveGet({ status: res.statusCode ?? 0, body: Buffer.concat(chunks), seconds: (performance.now() - startedAt) / 1000 }));
+      // An answer cut off mid-body (the server died) emits 'error' only when someone listens; without this it never settles.
+      res.on('error', rejectGet);
     });
     req.on('error', rejectGet);
     req.end();
@@ -228,7 +232,7 @@ function startProbe(): void {
   probeTimer = setInterval(() => {
     if (probeInFlight) return;
     probeInFlight = true;
-    get('/api/health').then((r) => {
+    probeSettled = get('/api/health').then((r) => {
       probeTimes.push(r.seconds);
       probeMax = Math.max(probeMax, r.seconds);
     }, () => {}).finally(() => { probeInFlight = false; });
@@ -274,13 +278,16 @@ async function runPass(name: string, withLayout: boolean, projects: Project[]): 
     probeMax = 0;
     const plan = await get(`/api/projects/${p.id}/plan`);
     writeFileSync(join(passDir, `plan-${p.id}.json`), plan.body);
-    const row: ProjectRow = { id: p.id, name: p.name, planSeconds: round3(plan.seconds), healthMaxSeconds: round3(probeMax), status: [plan.status] };
+    const row: ProjectRow = { id: p.id, name: p.name, planSeconds: round3(plan.seconds), healthMaxSeconds: 0, status: [plan.status] };
     if (withLayout) {
       const layout = await get(`/api/projects/${p.id}/layout`);
       writeFileSync(join(passDir, `layout-${p.id}.json`), layout.body);
       row.layoutSeconds = round3(layout.seconds);
       row.status.push(layout.status);
     }
+    // The probe that waited behind this project's last stall answers just after it: count it here, not in the next project.
+    await probeSettled;
+    row.healthMaxSeconds = round3(probeMax);
     rows.push(row);
   }
   return { totalSeconds: round3((performance.now() - startedAt) / 1000), projects: rows, health: healthStats(probeTimes) };

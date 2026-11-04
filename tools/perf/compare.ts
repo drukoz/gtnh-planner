@@ -55,8 +55,7 @@ function preview(bytes: Buffer, offset: number): string {
 
 /**
  * Compares every `.json` file of every pass folder of `referenceDir` against the same `<pass>/<name>` under `runDir`.
- * A pass the run did not make is skipped and its files are not counted; a pass folder of the run is missing when the run
- * has no folder of that name.
+ * A pass the run has no folder for is skipped, and its files are neither counted nor missing.
  */
 export function compareRuns(referenceDir: string, runDir: string): Comparison {
   const found: Comparison = { compared: 0, missing: [], differing: [], skippedPasses: [] };

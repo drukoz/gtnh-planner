@@ -18,7 +18,7 @@ npm run perf -- --source <copy of the data> --out <new folder> --reference <fold
 - `--restart`: after the warm rounds, stop the server, start it again on the same run folder, and plan and lay out
   everything a second time.
 - `--profile`: the server writes its main thread's CPU profile to `<out>/prof/<pass>` when it exits. Summarising it is
-  your own work (`node --prof-process`, or DevTools).
+  your own work: open the `.cpuprofile` in Chrome DevTools' Performance panel (`node --prof-process` does not read it).
 - `--threads N` (default 4): `GTNH_LP_THREADS`, how many solver threads the server uses (1 to 64).
 
 `node tools/perf/compare.ts <reference> <run>` runs just the check against an existing run folder.
