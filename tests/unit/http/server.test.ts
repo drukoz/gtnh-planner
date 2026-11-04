@@ -9,7 +9,7 @@ import { packFromSpec } from '../../helpers/pack-spec.ts';
 import { sampleExportSpec, sampleInlineCrop } from '../../helpers/sample-export.ts';
 import { createApp } from '../../../src/server/app.ts';
 import { DEFAULT_CONFIG } from '../../../src/server/config.ts';
-import { HttpError } from '../../../src/server/http/router.ts';
+import { HttpError, type TokenVerifier } from '../../../src/server/http/router.ts';
 import { summarizeRecipe } from '../../../src/server/http/routes/pack.ts';
 import { displayName } from '../../../src/server/http/server.ts';
 
@@ -273,5 +273,40 @@ describe('static files: details', () => {
     const t = await startTestServer({ pack });
     expect((await t.request('/', { cookie: null })).status).toBe(404);
     await t.close();
+  });
+});
+
+describe('the password off (requirePassword false, spec §3.11)', () => {
+  let open: TestServer; let id: string;
+  beforeAll(async () => {
+    open = await startTestServer({ pack, staticDir, requirePassword: false });
+    const made = await open.request('/api/projects', { method: 'POST', body: { name: 'Open line' }, name: 'Ann', cookie: null });
+    id = (await made.json()).id as string;
+    const verify: TokenVerifier = (token, projectId) => (token === 'gpt_good' && projectId === id ? { tokenId: 't1' } : null);
+    open.app.services.verifyToken = verify;
+  });
+  afterAll(async () => { await open.close(); });
+  const withToken = (path: string, token: string, init: { method?: string; body?: unknown; name?: string } = {}) =>
+    open.request(path, { ...init, cookie: null, headers: { authorization: `Bearer ${token}` } });
+
+  it('answers every route without a login, a request with a Basic header too', async () => {
+    expect((await open.request('/api/pack', { cookie: null })).status).toBe(200);
+    expect((await open.request('/api/projects', { cookie: null })).status).toBe(200);
+    expect((await open.request(`/api/projects/${id}`, { cookie: null, headers: { authorization: 'Basic eDp5' } })).status).toBe(200);
+  });
+  it('still checks a project token: its own project only, step ticks only, and never a bad one', async () => {
+    expect((await withToken(`/api/projects/${id}`, 'gpt_good')).status).toBe(200);
+    expect((await withToken(`/api/projects/${id}`, 'gpt_bad')).status).toBe(401);
+    expect((await withToken('/api/projects', 'gpt_good')).status).toBe(401);
+    const rename = await withToken(`/api/projects/${id}/ops`, 'gpt_good', { method: 'POST', body: { ops: [{ op: 'rename', name: 'x' }] }, name: 'Steve' });
+    expect([rename.status, (await rename.json()).error]).toEqual([403, 'token-scope']);
+  });
+  it('sends /login to the project list, while with the password on /login is the login page', async () => {
+    const away = await fetch(`${open.url}/login?next=%2Fp%2Fabc`, { redirect: 'manual' });
+    expect([away.status, away.headers.get('location'), away.headers.get('cache-control')]).toEqual([302, '/projects', 'no-store']);
+    expect((await fetch(`${open.url}/login`, { method: 'POST', redirect: 'manual' })).status).toBe(404);
+    const page = await fetch(`${s.url}/login`, { redirect: 'manual' });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('GTNH Line Planner');
   });
 });

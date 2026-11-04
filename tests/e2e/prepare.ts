@@ -309,14 +309,17 @@ const E2E_PACK: PackSpec = {
   ],
 };
 
-/** Removes and recreates data/e2e: the e2e pack's export `e2e` with the line parts, and the config the e2e server starts with. */
+/**
+ * Removes and recreates data/e2e: the e2e pack's export `e2e` with the line parts, and the config the e2e server starts
+ * with, which asks for the password (the browser tests log in; tests/unit/http/server.test.ts covers the password off).
+ */
 async function main(): Promise<void> {
   await rm('data/e2e', { recursive: true, force: true });
   await mkdir('data/e2e', { recursive: true });
   await makeExport('data/e2e/export/e2e', withLineParts(toExportSpec(E2E_PACK)));
   saveConfig({
     port: 18787, host: '127.0.0.1', dataDir: 'data/e2e', serverFolder: null, activeExportId: 'e2e',
-    passwordHash: hashPassword(E2E_PASSWORD), sessionSecret: newSessionSecret(),
+    passwordHash: hashPassword(E2E_PASSWORD), sessionSecret: newSessionSecret(), requirePassword: true,
   }, 'data/e2e/config.json');
   await prepareAssets('data/e2e', 'data/e2e/export/e2e');
 }

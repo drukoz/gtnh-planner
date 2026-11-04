@@ -6,7 +6,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 export interface RequestContext {
   /** Display name from the X-Planner-Name header, URI-decoded and trimmed; null when absent or empty. */
   me: string | null;
-  /** The session cookie is valid, or a project token let the request into a `bearer` route (then `bearer` is set). */
+  /**
+   * The session cookie is valid, the password is off and the request sent no project token, or a project token let the
+   * request into a `bearer` route (then `bearer` is set).
+   */
   authed: boolean;
   /** Set when a project token, not the session cookie, let the request in (architecture §11.23). */
   bearer?: { projectId: string; tokenId: string };
