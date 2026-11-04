@@ -57,11 +57,13 @@ describe('published summaries (add-on 17, architecture §11.45 (4))', () => {
       ],
     };
     expect(summaryOf(project('p1'), plan, AT)).toEqual({
-      projectId: 'p1', name: 'One', exportId: 'E1', rev: 3, at: AT, createdAt: CREATED.p1,
+      projectId: 'p1', name: 'One', exportId: 'E1', rev: 3, at: AT, createdAt: CREATED.p1, readsBoard: true,
       surplus: [{ key: 't:y@0', perSecond: 0.1 }],
       needs: [{ key: 't:a@0', perSecond: 0.2 }, { key: 't:b@0', perSecond: 0.05 }],
       draws: [{ from: 'p2', key: 't:b@0', perSecond: 0.05 }],
     });
+    // with "Use other projects' surplus" off a cheapest line reads nothing of the board (RUK-529)
+    expect(summaryOf(project('p1', { useSurplus: false }), plan, AT)?.readsBoard).toBe(false);
     expect(summaryOf(project('p1', { mode: 'makeN', amount: 4 }), { ...plan, makeN: { totalSeconds: 10, leftovers: [] } }, AT)).toBeNull();
     expect(summaryOf(project('p1'), { ...plan, status: 'infeasible' }, AT)).toBeNull();
     // per key, at 9 significant digits (ruling S11): a good bought beside a draw of it is one need; a farm the group runs
@@ -84,76 +86,86 @@ describe('published summaries (add-on 17, architecture §11.45 (4))', () => {
     const board = new SurplusBoard(db);
     board.publish(summary('p2', { surplus: [rate('t:y@0', 0.1), rate('t:z@0', 0.2)] }));
     board.publish(summary('p3', { exportId: 'other', surplus: [rate('t:y@0', 0.5)] }));
-    const p1 = project('p1');
-    expect(p1.settings.objective).toBe('cheapest');
-    const read = readOf(board, p1, goods('t:y@0'));
+    const reader = project('p4');
+    expect(reader.settings.objective).toBe('cheapest');
+    const read = readOf(board, reader, goods('t:y@0'));
     expect(read.offers).toEqual([{ from: 'p2', name: 'Two', key: 't:y@0', perSecond: 0.1 }]);
     expect(read.needs).toEqual([]);
     expect(read.hash).toMatch(/^[0-9a-f]{16}$/);
     // p2 not live: nothing; p3's summary is of another export: never
-    expect(readOf(board, p1, goods('t:y@0', 't:z@0'), new Set(['p1', 'p3']))).toEqual({ offers: [], needs: [], hash: '' });
-    expect(readOf(board, p1, goods('t:y@0', 't:z@0')).offers.map((o) => `${o.from} ${o.key}`)).toEqual(['p2 t:y@0', 'p2 t:z@0']);
+    expect(readOf(board, reader, goods('t:y@0', 't:z@0'), new Set(['p4', 'p3']))).toEqual({ offers: [], needs: [], hash: '' });
+    expect(readOf(board, reader, goods('t:y@0', 't:z@0')).offers.map((o) => `${o.from} ${o.key}`)).toEqual(['p2 t:y@0', 'p2 t:z@0']);
     // its own target is never taken from another project
-    expect(readOf(board, project('p1', { target: 't:y@0' }), goods('t:y@0', 't:z@0')).offers.map((o) => o.key)).toEqual(['t:z@0']);
+    expect(readOf(board, project('p4', { target: 't:y@0' }), goods('t:y@0', 't:z@0')).offers.map((o) => o.key)).toEqual(['t:z@0']);
     // nothing read
-    expect(readOf(board, p1, goods('t:x@0')).hash).toBe('');
+    expect(readOf(board, reader, goods('t:x@0')).hash).toBe('');
     // the same reads in another insertion order give the same hash
-    const both = readOf(board, p1, goods('t:y@0', 't:z@0'));
+    const both = readOf(board, reader, goods('t:y@0', 't:z@0'));
     const otherDb = openDb(join(dir, 'other.sqlite'));
     try {
       const other = new SurplusBoard(otherDb);
       other.publish(summary('p3', { exportId: 'other', surplus: [rate('t:y@0', 0.5)] }));
       other.publish(summary('p2', { surplus: [rate('t:z@0', 0.2), rate('t:y@0', 0.1)] }));
-      expect(readOf(other, p1, goods('t:z@0', 't:y@0'))).toEqual(both);
+      expect(readOf(other, reader, goods('t:z@0', 't:y@0'))).toEqual(both);
     } finally {
       otherDb.close();
     }
   });
 
-  it('never lets two projects feed each other', () => {
+  it('takes surplus only from older projects, and from younger ones that read nothing of the board', () => {
+    // RUK-529 (the user's ruling of 2026-11-04): newer projects take from older ones, whatever anyone draws. p1's draw on
+    // p3 is one a summary stored before RUK-529 may still hold.
     const board = new SurplusBoard(db);
-    board.publish(summary('p2', { surplus: [rate('t:y@0', 0.1)], draws: [draw('p1', 't:b@0', 0.05)] }));
-    board.publish(summary('p3', { surplus: [rate('t:y@0', 0.2)], draws: [draw('p4', 't:c@0', 0.01)] }));
-    expect(readOf(board, project('p1'), goods('t:y@0')).offers.map((o) => o.from)).toEqual(['p3']);
+    board.publish(summary('p1', { surplus: [rate('t:y@0', 0.1)], draws: [draw('p3', 't:b@0', 0.05)] }));
+    board.publish(summary('p2', { surplus: [rate('t:y@0', 0.2)] }));
+    board.publish(summary('p4', { surplus: [rate('t:y@0', 0.3)] }));
+    expect(readOf(board, project('p3'), goods('t:y@0')).offers.map((o) => o.from)).toEqual(['p1', 'p2']);
+    // the oldest takes from none of them
+    expect(readOf(board, project('p1'), goods('t:y@0'))).toEqual({ offers: [], needs: [], hash: '' });
+    // a younger project that reads nothing of the board ("Use other projects' surplus" off) offers to older ones too, and
+    // the change reaches every reader of its goods
+    const opened = board.publish(summary('p4', { surplus: [rate('t:y@0', 0.3)], readsBoard: false }));
+    expect(opened).toEqual(change({ surplus: ['t:y@0'] }));
+    expect(readOf(board, project('p3'), goods('t:y@0')).offers.map((o) => o.from)).toEqual(['p1', 'p2', 'p4']);
+    expect(readOf(board, project('p1'), goods('t:y@0')).offers).toEqual([{ from: 'p4', name: 'Four', key: 't:y@0', perSecond: 0.3 }]);
+    expect(board.publish(summary('p4', { surplus: [rate('t:y@0', 0.3)], readsBoard: false }))).toEqual(NOTHING);
+    expect(board.publish(summary('p4', { surplus: [rate('t:y@0', 0.3)], readsBoard: true }))).toEqual(change({ surplus: ['t:y@0'] }));
+    expect(readOf(board, project('p1'), goods('t:y@0')).offers).toEqual([]);
   });
 
-  it('walks the draws as they are now', () => {
-    // review: a list of upstream projects stored when the producer last published goes stale
+  it('decides who may take by age alone, not by walking the draws', () => {
     const board = new SurplusBoard(db);
     board.publish(summary('p2'));
     board.publish(summary('p3', { surplus: [rate('t:z@0', 0.2)], draws: [draw('p2', 't:y@0', 0.1)] }));
-    board.noteRead('p1', { offers: goods('t:z@0'), needs: goods() });
-    board.noteRead('p4', { offers: goods('t:w@0'), needs: goods() });
-    expect(readOf(board, project('p1'), goods('t:z@0')).offers).toEqual([{ from: 'p3', name: 'Three', key: 't:z@0', perSecond: 0.2 }]);
-    // B starts drawing from A while C's summary stays as it was: C → B → A
-    const drawn = board.publish(summary('p2', { draws: [draw('p1', 't:x@0', 0.3)] }));
-    expect(readOf(board, project('p1'), goods('t:z@0')).offers).toEqual([]);
-    expect(drawn).toEqual(change({ draws: true, drawsFrom: ['p1'] }));
-    // every project that read offers walks the draws again, though no good it read changed
+    board.noteRead('p4', { offers: goods('t:z@0'), needs: goods() });
+    board.noteRead('p1', { offers: goods('t:w@0'), needs: goods() });
+    const before = readOf(board, project('p4'), goods('t:z@0'));
+    expect(before.offers).toEqual([{ from: 'p3', name: 'Three', key: 't:z@0', perSecond: 0.2 }]);
+    // p2 draws from p4 while p3 draws from p2 (a summary stored before RUK-529): p4 still takes p3's surplus
+    const drawn = board.publish(summary('p2', { draws: [draw('p4', 't:x@0', 0.3)] }));
+    expect(readOf(board, project('p4'), goods('t:z@0'))).toEqual(before);
+    expect(drawn).toEqual(change({ draws: true, drawsFrom: ['p4'] }));
+    // a change of draws still reaches every project that read offers: older readers' draws cut younger readers' offers
     expect(board.fanOut('p2', drawn)).toEqual({ to: ['p1', 'p4'], skipped: [] });
   });
 
   it('runs one read, plan and publish at a time', async () => {
+    // two readers of one surplus: the younger may take only what the older leaves, which it sees once the older has published
     const flows = async (board: SurplusBoard, locked: boolean): Promise<string[]> => {
-      const own: Record<string, PublishedSummary> = {
-        p1: summary('p1', { surplus: [rate('t:y@0', 0.1)] }), p2: summary('p2', { surplus: [rate('t:z@0', 0.2)] }),
-      };
-      const reads: Record<string, Set<string>> = { p1: goods('t:z@0'), p2: goods('t:y@0') };
-      board.publish(own.p1!);
-      board.publish(own.p2!);
+      board.publish(summary('p1', { surplus: [rate('t:y@0', 0.1)] }));
       const flow = (id: string) => async (): Promise<void> => {
-        const read = readOf(board, project(id), reads[id]!);
+        const read = readOf(board, project(id), goods('t:y@0'));
         await new Promise((resolve) => setTimeout(resolve, 10));
-        board.publish({ ...own[id]!, draws: read.offers.map((o) => ({ from: o.from, key: o.key, perSecond: o.perSecond })) });
+        board.publish(summary(id, { draws: read.offers.filter((o) => o.perSecond > 0).map((o) => ({ from: o.from, key: o.key, perSecond: o.perSecond })) }));
       };
-      await Promise.all(['p1', 'p2'].map((id) => (locked ? board.exclusive(flow(id)) : flow(id)())));
-      return ['p1', 'p2'].filter((id) => board.get(id)!.draws.length > 0);
+      await Promise.all(['p2', 'p3'].map((id) => (locked ? board.exclusive(flow(id)) : flow(id)())));
+      return ['p2', 'p3'].filter((id) => board.get(id)!.draws.length > 0);
     };
-    expect(await flows(new SurplusBoard(db), true)).toHaveLength(1);
-    // a check on the test: without the lock both flows read before either publishes, and both draw
+    expect(await flows(new SurplusBoard(db), true)).toEqual(['p2']);
+    // a check on the test: without the lock both flows read before either publishes, and both take all of it
     const raceDb = openDb(join(dir, 'race.sqlite'));
     try {
-      expect(await flows(new SurplusBoard(raceDb), false)).toEqual(['p1', 'p2']);
+      expect(await flows(new SurplusBoard(raceDb), false)).toEqual(['p2', 'p3']);
     } finally {
       raceDb.close();
     }
@@ -166,35 +178,35 @@ describe('published summaries (add-on 17, architecture §11.45 (4))', () => {
   it('reads needs only for best multi-output', () => {
     const board = new SurplusBoard(db);
     board.publish(summary('p2', { surplus: [rate('t:z@0', 0.2)], needs: [rate('t:y@0', 0.3)] }));
-    const multi = readOf(board, project('p1', { objective: 'multi-output' }), goods('t:y@0', 't:z@0'));
+    const multi = readOf(board, project('p3', { objective: 'multi-output' }), goods('t:y@0', 't:z@0'));
     expect(multi.needs).toEqual([{ by: 'p2', name: 'Two', key: 't:y@0', perSecond: 0.3 }]);
     expect(multi.offers).toEqual([{ from: 'p2', name: 'Two', key: 't:z@0', perSecond: 0.2 }]);
     expect(readOf(board, project('p1'), goods('t:y@0', 't:z@0')).needs).toEqual([]);
-    const switchedOff = readOf(board, project('p1', { objective: 'multi-output', useSurplus: false }), goods('t:y@0', 't:z@0'));
+    const switchedOff = readOf(board, project('p3', { objective: 'multi-output', useSurplus: false }), goods('t:y@0', 't:z@0'));
     expect(switchedOff.offers).toEqual([]);
     expect(switchedOff.needs).toEqual(multi.needs);
     expect(switchedOff.hash).not.toBe('');
     // a Make N project neither publishes nor reads
-    expect(readOf(board, project('p1', { objective: 'multi-output', mode: 'makeN' }), goods('t:y@0', 't:z@0'))).toEqual({ offers: [], needs: [], hash: '' });
+    expect(readOf(board, project('p3', { objective: 'multi-output', mode: 'makeN' }), goods('t:y@0', 't:z@0'))).toEqual({ offers: [], needs: [], hash: '' });
   });
 
   it('serves the oldest readers of one surplus first', () => {
     // ruling R16 (OQ3): an offer is the surplus less what older live readers draw of it, at least 0, and says so
     const board = new SurplusBoard(db);
-    board.publish(summary('p2', { surplus: [rate('t:y@0', 0.1)] }));
-    board.publish(summary('p3', { draws: [draw('p2', 't:y@0', 0.06)] }));
+    board.publish(summary('p1', { surplus: [rate('t:y@0', 0.1)] }));
+    board.publish(summary('p3', { draws: [draw('p1', 't:y@0', 0.06)] }));
     const young = project('p4');
     const shared = readOf(board, young, goods('t:y@0'));
-    expect(shared.offers).toEqual([{ from: 'p2', name: 'Two', key: 't:y@0', perSecond: 0.04, shared: { surplus: 0.1, takenBy: ['Three'] } }]);
+    expect(shared.offers).toEqual([{ from: 'p1', name: 'One', key: 't:y@0', perSecond: 0.04, shared: { surplus: 0.1, takenBy: ['Three'] } }]);
     // a younger reader's draw leaves an older reader's offer whole
-    board.publish(summary('p4', { draws: [draw('p2', 't:y@0', 0.04)] }));
-    expect(readOf(board, project('p1'), goods('t:y@0')).offers).toEqual([{ from: 'p2', name: 'Two', key: 't:y@0', perSecond: 0.1 }]);
+    board.publish(summary('p4', { draws: [draw('p1', 't:y@0', 0.04)] }));
+    expect(readOf(board, project('p2'), goods('t:y@0')).offers).toEqual([{ from: 'p1', name: 'One', key: 't:y@0', perSecond: 0.1 }]);
     // not live: no share taken
-    expect(readOf(board, young, goods('t:y@0'), new Set(['p2', 'p4'])).offers).toEqual([{ from: 'p2', name: 'Two', key: 't:y@0', perSecond: 0.1 }]);
+    expect(readOf(board, young, goods('t:y@0'), new Set(['p1', 'p4'])).offers).toEqual([{ from: 'p1', name: 'One', key: 't:y@0', perSecond: 0.1 }]);
     // older readers in age order; a fully taken offer is 0, and still read, so the hash follows older readers' draws
-    board.publish(summary('p1', { draws: [draw('p2', 't:y@0', 0.04)] }));
+    board.publish(summary('p2', { draws: [draw('p1', 't:y@0', 0.04)] }));
     const taken = readOf(board, young, goods('t:y@0'));
-    expect(taken.offers).toEqual([{ from: 'p2', name: 'Two', key: 't:y@0', perSecond: 0, shared: { surplus: 0.1, takenBy: ['One', 'Three'] } }]);
+    expect(taken.offers).toEqual([{ from: 'p1', name: 'One', key: 't:y@0', perSecond: 0, shared: { surplus: 0.1, takenBy: ['Two', 'Three'] } }]);
     expect(taken.hash).not.toBe(shared.hash);
     expect(taken.hash).not.toBe('');
   });
@@ -207,12 +219,14 @@ describe('published summaries (add-on 17, architecture §11.45 (4))', () => {
     first.remove('p4');
     db.setMeta(`${SUMMARY_PREFIX}p9`, 'not json');
     db.setMeta(`${SUMMARY_PREFIX}p8`, JSON.stringify({ projectId: 'p8', name: 'Eight' }));
+    db.setMeta(`${SUMMARY_PREFIX}p7`, JSON.stringify({ ...published, projectId: 'p7', readsBoard: 'yes' }));
     db.close();
     db = openDb(file);
     const board = new SurplusBoard(db);
     expect(board.get('p2')).toEqual(published);
     expect(board.get('p4')).toBeNull();
     expect(board.get('p9')).toBeNull();
+    expect(board.get('p7')).toBeNull();
     expect(board.all().map((s) => s.projectId)).toEqual(['p2']);
     expect(db.getMeta('schema_version')).toBe('3');
   });
