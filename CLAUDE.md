@@ -116,9 +116,9 @@ common. Two are tracked as RUK-125: `tests/unit/layout/feed-ae2.test.ts` and `te
 Three more failed under load on 2026-10-30 and passed when run alone: `tests/client/link-geometry.test.tsx` (a
 1,000-block line's link geometry in under a second, a pick in under 6 ms), `tests/unit/layout/feeding/check.test.ts`
 (a 1,200-block line checked in under a second) and `tests/unit/planner/candidates.test.ts` (vitest's 5 s default
-timeout); `tests/unit/planner/lp.test.ts` ("retries where the root LP relaxation did not solve") hit the same timeout
-on 2026-11-03, and `tests/unit/cli/pipeline.test.ts` (the export pipeline's child processes) and
-`tests/unit/planner/build-pick.test.ts` ("gives exactly what it gives on this thread") failed under load on
+timeout); `tests/unit/planner/lp.test.ts` ("retries where the root LP relaxation did not solve", 1.5 s alone) hit the
+same timeout on 2026-11-03 and twice on 2026-11-04, and has an explicit 30 s timeout since. `tests/unit/cli/pipeline.test.ts`
+(the export pipeline's child processes) and `tests/unit/planner/build-pick.test.ts` ("gives exactly what it gives on this thread") failed under load on
 2026-11-04 and passed alone. `tests/unit/export/run.test.ts` ("stops the JVM when aborted", vitest's 5 s timeout)
 failed under load on 2026-11-04 (RUK-543) and passed alone. A new test that runs HiGHS or starts solver threads takes
 1 to 3 s alone, so give it an

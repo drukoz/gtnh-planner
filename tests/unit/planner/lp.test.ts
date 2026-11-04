@@ -240,7 +240,7 @@ describe('solveBuildRunsAside (release gate round 2, G1)', () => {
     } finally {
       posted.mockRestore();
     }
-  });
+  }, 30_000);   // 1.5 s alone; past vitest's 5 s default under the suite's load (2026-11-03, twice on 2026-11-04)
 });
 
 describe('a MIP with a cutoff (release gate round 2, G1: the lite start)', () => {
