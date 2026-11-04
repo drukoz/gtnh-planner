@@ -1,10 +1,11 @@
-// The site's front page (RUK-510): what the planner is, for anyone who opens the site, before any password. It calls no
-// API: a 401 would send the visitor to the login form (api/client.ts), and this page must stand on its own.
+// The site's front page (RUK-510): what the planner is, for anyone who opens the site. It calls no API: while the planner
+// asks for a password, a 401 would send the visitor to the login form (api/client.ts), and this page must stand on its own.
+// It says nothing about a password, which the planner asks for only when its owner turns one on (spec §3.11).
 
 import type { ReactElement } from 'react';
 import { followLink } from '../router.ts';
 
-/** The landing page at `/`: the planner's name, what it does, and the way in (`/projects`, which asks for the password). */
+/** The landing page at `/`: the planner's name, what it does, and the way in (`/projects`, behind the password when one is on). */
 export function LandingPage(): ReactElement {
   return (
     <main className="page landing">
@@ -16,7 +17,6 @@ export function LandingPage(): ReactElement {
           <a className="landing-cta primary" href="/projects" onClick={(e) => followLink(e, '/projects')}>Open the planner</a>
           <a className="landing-cta" href="/world" onClick={(e) => followLink(e, '/world')}>Upload a world</a>
         </div>
-        <p className="muted">The planner is shared behind one password: Open the planner asks for it, and a login lasts 30 days in this browser.</p>
       </section>
       <section className="landing-section" aria-labelledby="landing-features">
         <h2 id="landing-features">What it does</h2>
@@ -66,7 +66,7 @@ export function LandingPage(): ReactElement {
       </section>
       <section className="landing-section card" aria-labelledby="landing-data">
         <h2 id="landing-data">Your pack, your world</h2>
-        <p>Nothing from the game ships with the planner. Recipes, textures and worlds come from your own copy of the pack, stay on the computer that runs the planner, and are shown only to people who have the password.</p>
+        <p>Nothing from the game ships with the planner. Recipes, textures and worlds come from your own copy of the pack and stay on the computer that runs the planner.</p>
       </section>
       <footer className="landing-footer">
         <p className="muted">Made for GregTech: New Horizons 2.9 on Minecraft 1.7.10. A fan-made tool, not affiliated with the GTNH team or Mojang.</p>
