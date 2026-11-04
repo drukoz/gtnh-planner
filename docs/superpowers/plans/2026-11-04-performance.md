@@ -91,10 +91,10 @@ pool does not take); `availability.ts` 2.6 s; loading the pack 2.4 s; garbage co
 | `tools/perf` (RUK-564, merged) | The scratch runner made a tool: a fresh copy of the data, a server on a free port, the passes above, the `/api/health` probe, timings, and a byte-for-byte check against a reference (`npm run perf`). | new `tools/perf/`, `tests/unit/tools/perf-compare.test.ts`, `package.json`, `tsconfig.server.json`, `CLAUDE.md` | |
 | Settle index (RUK-565, merged) | `estimateCosts` settles each good through the slots it fills instead of scanning every input of every consumer; byte-identical, measured. | `src/server/planner/candidates.ts` | |
 | Solver pool queue (RUK-575, merged) | The solver pool hands each job to a thread only when that thread is idle, from one queue (below). | `src/server/planner/lp.ts`, `tests/unit/planner/lp-pool.test.ts` | |
-| Planning thread (RUK-579) | Plans, line goods, breakdowns, build prices and step wording on a worker thread of their own, each answer equal to the call on the main thread (tested on the Mini-GT export). Nothing uses it yet. | new `src/server/planner/thread.ts`, `thread-worker.ts`, `tests/unit/planner/thread.test.ts` | |
-| Wiring (RUK-580) | The plan route and the layout service plan on the thread `main.ts` starts, and the main thread's pack loads before the ready line. Gate: 42 of 42 files and the longest `/api/health` wait under 0.5 s in every pass. | `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `src/server/main.ts` | RUK-579 |
-| Disk store (RUK-576) | A cache of JSON values on disk: one gzip file per key under a code version (`codeVersion`), at most N files, the least recently used dropped. Nothing uses it yet. | new `src/server/planner/disk-cache.ts`, `tests/unit/planner/disk-cache.test.ts` | |
-| Disk cache | What a restart redoes, kept on disk with the store (below). | to be specified at the approval of RUK-580 and RUK-576 | RUK-580, RUK-576 |
+| Planning thread (RUK-579, merged) | Plans, line goods, breakdowns, build prices and step wording on a worker thread of their own, each answer equal to the call on the main thread (tested on the Mini-GT export). Nothing uses it yet. | new `src/server/planner/thread.ts`, `thread-worker.ts`, `tests/unit/planner/thread.test.ts` | |
+| Wiring (RUK-580, merged) | The plan route and the layout service plan on the thread `main.ts` starts, and the main thread's pack loads before the ready line. Gate: 42 of 42 files and the longest `/api/health` wait under 0.5 s in every pass. | `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `src/server/main.ts` | RUK-579 |
+| Disk store (RUK-576, merged) | A cache of JSON values on disk: one gzip file per key under a code version (`codeVersion`), at most N files, the least recently used dropped. Nothing uses it yet. | new `src/server/planner/disk-cache.ts`, `tests/unit/planner/disk-cache.test.ts` | |
+| Disk cache (RUK-602) | What a restart redoes, kept on disk with the store: the plans, the lines' goods, and each finished layout's expansion, cost and worded steps, in three `diskCache` folders under `<dataDir>/cache/`; and the worded steps kept in the layout entry (below). Gate: 42 of 42 files, the restart pass under 4 s with each plan under 1 s, the warm rounds under 0.2 s. | new `src/server/planner/plan-store.ts`, `tests/unit/planner/plan-store.test.ts`; `src/server/main.ts`, `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `tests/unit/layout/service.test.ts`, `CLAUDE.md` | RUK-580, RUK-576 |
 | QA | Verify the merged branch: suites, browser tests, `tools/perf` with `--restart` against the reference. | tests only | all |
 
 `tools/perf` is merged: the tasks that follow measure with `npm run perf` (`tools/perf/README.md`). RUK-565 predates it
@@ -204,7 +204,49 @@ before it reads the plan cache, and `finishPlan` breaks the build down (`expandB
 cache of plans alone would still leave about 1.5 to 2 s a project. So the disk cache keeps, under one code version
 (`codeVersion`, RUK-576): the plans (by their cache key), the lines' goods (by the plan key), and each finished layout's
 expansion, cost and worded steps (by `layoutKey`). It is specified once the wiring has landed, from a profile of the
-restart pass.
+restart pass (RUK-602, below).
+
+### The disk cache, measured and prototyped (RUK-580's approval)
+
+**Merged (RUK-580).** `npm run perf -- --restart` on `1d40fd332`, at load average 3.9 to 4.3:
+- 42 of 42 files byte-identical.
+- Cold took 36.4 s, the restart pass 36.0 s, and each warm round 0.25 s.
+- The longest `/api/health` wait was 0.062 s cold, 0.011 s and 0.014 s warm, and 0.124 s after the restart.
+
+**Where a restart's time goes.** The restart pass on the same commit, with each planning-thread job timed from the main
+thread, in ms:
+
+| | MV circuit | Circuit | test | poly | HV Circuit | Duty plate | diamond |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| The line's goods (`goods`) | 4250 | 624 | 2403 | 1302 | 1349 | 663 | 420 |
+| The plan (`plan`) | 3746 | 1688 | 3944 | 1830 | 4985 | 6891 | 889 |
+| Finishing it (the layout, `expand`, `layoutCost`, `partSteps`) | 602 | 325 | 422 | 349 | 415 | 556 | 339 |
+| of which the layout itself, on the main thread | 315 | 73 | 190 | 46 | 123 | 174 | 43 |
+
+The main thread was idle for 36.7 s of the pass's 40.9 s sampled. A plan-only cache would still leave 1.0 to 4.9 s a
+project (the goods and the finish), as the note above expected.
+
+**RUK-602, prototyped** on `1d40fd332`. It keeps the plans, the goods, and each finished layout's expansion, cost and
+worded steps in three `diskCache` folders under `<dataDir>/cache/`. The main thread reads and writes them: `JSON.parse`
+of the largest plan (4.3 MB) takes 15 ms, and a restart that finds everything on disk never starts the planning thread.
+The worded steps also stay in the layout entry, so warm answers send nothing to the thread. Measured back to back with
+the base, at load average 19 to 28:
+
+| | Base (`1d40fd332`) | Disk cache |
+| --- | ---: | ---: |
+| Restart total | 64.4 s | 2.0 s |
+| Slowest plan after the restart | 19.6 s | 0.54 s |
+| Warm rounds | 0.28 s each | 0.13 s and 0.12 s |
+| Longest `/api/health` wait: cold / restart | 0.453 s / 0.135 s | 0.166 s / 0.141 s |
+
+Both runs gave 42 of 42 files. After a restart, the server still lays each line out again (0.04 to 0.32 s, on the main
+thread).
+
+RUK-602's check, with the change:
+- the restart total is under 4 s, and each restart plan under 1 s;
+- each warm round is under 0.2 s, or under 60 % of the base's;
+- every health wait is under 0.5 s, or within 0.1 s of the base's own on a loaded Mac (the base's reached 0.453 s at
+  load average 28).
 
 ### The milestone's check
 
