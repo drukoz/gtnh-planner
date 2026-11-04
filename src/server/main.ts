@@ -7,6 +7,7 @@ import { createApp } from './app.ts';
 import { ConfigError, configPath, loadConfig, type AppConfig } from './config.ts';
 import { backupDaily, PURGE_AFTER_MS } from './db/db.ts';
 import { startServer } from './http/server.ts';
+import { startPlanningThread } from './planner/thread.ts';
 
 const DAY_MS = 86_400_000;
 
@@ -45,6 +46,8 @@ async function main(): Promise<void> {
   if (problem !== null) fail(problem);
 
   const app = createApp(config);
+  // Planning runs on a thread of its own, so this one keeps answering the group meanwhile (RUK-563).
+  app.services.planningThread = startPlanningThread();
   let server;
   try {
     server = await startServer(app, { port: config.port, host: config.host });
@@ -71,11 +74,13 @@ async function main(): Promise<void> {
   const backups = setInterval(daily, DAY_MS);
   backups.unref();
 
+  // This thread's own pack, loaded before the server says it is ready, so no request waits behind its load (RUK-563);
+  // a failed load shows on use.
+  await app.pack().catch(() => {});
   console.log(`GTNH Line Planner on ${server.url}`);
   if (!config.requirePassword) {
     console.log('No password is asked: anyone who can reach that address can change and delete projects. npm run set-password sets one.');
   }
-  app.pack().catch(() => {});   // load in the background so the first page does not wait; errors show on use
 
   let stopping = false;
   const stop = (): void => {

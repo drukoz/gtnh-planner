@@ -8,10 +8,12 @@
 
 import type { IncomingMessage } from 'node:http';
 import type { AppContext } from '../../app.ts';
+import { exportDirFor } from '../../config.ts';
 import { COMPARE_TIME_LIMIT_SECONDS, compareModes, compareRunnerFor, modeSettings } from '../../planner/compare.ts';
 import { objectiveOf } from '../../planner/objective.ts';
 import { emptyContext, planCacheKey, planLine, PlanCache, settingsHash } from '../../planner/plan.ts';
 import { linePricing } from '../../planner/pricing.ts';
+import { planningThreadOf } from '../../planner/thread.ts';
 import { OpError, type ProjectStore } from '../../projects/store.ts';
 import {
   crossRead, drawsOn, loopWarning, readGoods, readsBoard, sharedWarnings, summaryOf, surplusBoardFor, type BoardChange, type CrossRead,
@@ -215,7 +217,14 @@ export async function planForProject(app: AppContext, project: Project, opts: { 
   const planKey = planCacheKey(settingsHash(settings), exportId, scanId, baseId);
   let context: Promise<PlanContext> | undefined;
   const contextOf = (): Promise<PlanContext> => (context ??= contextFor(app, project));
+  // On the app's planning thread when it has one (main.ts starts it), so this thread keeps answering (RUK-563).
+  const thread = planningThreadOf(app);
+  const exportDir = exportDirFor(app.config, exportId);
   const goods = !readsBoard(settings) ? NO_GOODS : await lineGoods(app, planKey, async () => {
+    if (thread !== undefined) {
+      const keys = await thread.goods(exportDir, settings, await contextOf());
+      return keys === null ? NO_GOODS : new Set(keys);
+    }
     const pricing = linePricing(pack, settings, await contextOf());
     return pricing === null ? NO_GOODS : new Set((await pricing).graph.goods.keys());
   });
@@ -226,8 +235,13 @@ export async function planForProject(app: AppContext, project: Project, opts: { 
     const read = crossRead(board, project, settings, live, goods, exportId);
     if (publish) board.noteRead(project.id, readGoods(settings, goods));
     const key = read.hash === '' ? planKey : `${planKey}|x:${read.hash}`;
-    const plan = await planCacheFor(app).get(key, async () =>
-      withRead(pack, settings, await planLine(pack, settings, await contextOf(), { offers: read.offers, needs: read.needs }), read));
+    const plan = await planCacheFor(app).get(key, async () => {
+      const ctx = await contextOf();
+      const planned = thread !== undefined
+        ? await thread.plan(exportDir, settings, ctx, { offers: read.offers, needs: read.needs })
+        : await planLine(pack, settings, ctx, { offers: read.offers, needs: read.needs });
+      return withRead(pack, settings, planned, read);
+    });
     return publish ? published(app, board, project, plan, live) : plan;
   };
   const plan = publish ? await board.exclusive(flow) : await flow();
