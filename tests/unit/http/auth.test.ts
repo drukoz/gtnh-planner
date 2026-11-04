@@ -1,11 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hashPassword, verifyPassword, signSession, verifySession, sessionCookie, readCookie, LoginLimiter,
   SESSION_MAX_AGE_S, clearSessionCookie, newSessionSecret } from '../../../src/server/http/auth.ts';
-import { applyNewPassword } from '../../../src/server/cli/set-password.ts';
-import { loadConfig, type AppConfig } from '../../../src/server/config.ts';
+import { applyNewPassword, main as setPassword, turnPasswordOff } from '../../../src/server/cli/set-password.ts';
+import { loadConfig, saveConfig, type AppConfig } from '../../../src/server/config.ts';
 
 const DAY = 86_400_000;
 afterEach(() => { delete process.env.GTNH_PLANNER_CONFIG; });
@@ -98,10 +98,12 @@ describe('LoginLimiter', () => {
   });
 });
 describe('applyNewPassword', () => {
-  const base = { port: 8765, host: '0.0.0.0', dataDir: 'data', serverFolder: null, activeExportId: null, passwordHash: '', sessionSecret: '' } as AppConfig;
-  it('sets the hash and creates a session secret once', () => {
+  const base = { port: 8765, host: '0.0.0.0', dataDir: 'data', serverFolder: null, activeExportId: null, passwordHash: '', sessionSecret: '',
+    requirePassword: false } as AppConfig;
+  it('sets the hash, turns the password on and creates a session secret once', () => {
     const a = applyNewPassword(base, 'hunter2hunter2', { rotateSessions: false });
     expect(verifyPassword('hunter2hunter2', a.passwordHash)).toBe(true);
+    expect(a.requirePassword).toBe(true);
     expect(a.sessionSecret).toMatch(/^[0-9a-f]{64}$/);
     const b = applyNewPassword(a, 'another-password', { rotateSessions: false });
     expect(b.sessionSecret).toBe(a.sessionSecret);
@@ -113,8 +115,32 @@ describe('applyNewPassword', () => {
   it('keeps every other setting and accepts exactly 8 characters', () => {
     const cfg = { ...base, port: 9000, serverFolder: '/srv/gtnh', future: 'kept' } as AppConfig;
     const next = applyNewPassword(cfg, '12345678', { rotateSessions: false });
-    expect({ ...next, passwordHash: '', sessionSecret: '' }).toEqual({ ...cfg });
+    expect({ ...next, passwordHash: '', sessionSecret: '', requirePassword: false }).toEqual({ ...cfg });
     expect(base.passwordHash).toBe('');                          // the input is not changed
     expect(() => applyNewPassword(base, '1234567', { rotateSessions: false })).toThrow('Password must be at least 8 characters');
+  });
+  it('turns the password off and keeps its hash and session secret', () => {
+    const on = applyNewPassword(base, 'hunter2hunter2', { rotateSessions: false });
+    expect(turnPasswordOff(on)).toEqual({ ...on, requirePassword: false });
+    expect(on.requirePassword).toBe(true);                       // the input is not changed
+  });
+});
+describe('npm run set-password -- --off', () => {
+  it('turns the password off in the settings file without reading a password, and takes no other option with it', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'gp-cfg-')), 'config.json');
+    const on = applyNewPassword(loadConfig(file), 'hunter2hunter2', { rotateSessions: false });   // no file yet: the defaults
+    saveConfig(on, file);
+    process.env.GTNH_PLANNER_CONFIG = file;
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(await setPassword(['--off', '--rotate-sessions'])).toBe(2);
+      expect(loadConfig(file).requirePassword).toBe(true);
+      expect(await setPassword(['--off'])).toBe(0);
+      expect(loadConfig(file)).toEqual({ ...on, requirePassword: false });
+    } finally {
+      out.mockRestore();
+      err.mockRestore();
+    }
   });
 });
