@@ -33,6 +33,7 @@ describe('solverThreadCount', () => {
 });
 
 describe('solveLpAside on a pool of threads', () => {
+  // About 2 s alone (HiGHS's root work on twelve solves), past vitest's 5 s default under the whole suite's load.
   it('spreads jobs asked together over GTNH_LP_THREADS threads, each answer as solveLp gives it', async () => {
     vi.stubEnv('GTNH_LP_THREADS', '2');
     const workers = new Set<Worker>();
@@ -45,5 +46,5 @@ describe('solveLpAside on a pool of threads', () => {
     const aside = await Promise.all(models.map((m) => solveLpAside(m)));
     expect(workers.size).toBe(2);
     for (const [i, m] of models.entries()) expect(aside[i]).toStrictEqual(await solveLp(m));
-  });
+  }, 30_000);
 });
