@@ -1,5 +1,6 @@
 // The app's settings file, `data/config.json` (architecture §9, §11.1). Plan 1 knows the export paths; Plan 2 adds
-// `port`, `host`, `passwordHash` and `sessionSecret`. Keys this code does not know survive a load and save.
+// `port`, `host`, `passwordHash` and `sessionSecret`, and `requirePassword` makes the password optional (spec §3.11). Keys
+// this code does not know survive a load and save.
 
 import { closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -14,6 +15,11 @@ export interface AppConfig {
   passwordHash: string;
   /** Hex key that signs session cookies; `''` until `npm run set-password` creates it. */
   sessionSecret: string;
+  /**
+   * Whether the planner asks for the shared password (spec §3.11); off by default. With it off, a request that sends no
+   * project token gets in without a login. `npm run set-password` turns it on, `npm run set-password -- --off` off.
+   */
+  requirePassword: boolean;
   /** The Minecraft 1.7.10 client jar (architecture §11.17, read by Plan 3's `extract-assets`). */
   clientJar?: string | null;
   /**
@@ -26,7 +32,7 @@ export interface AppConfig {
 
 export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   dataDir: 'data', serverFolder: null, activeExportId: null,
-  port: 8765, host: '0.0.0.0', passwordHash: '', sessionSecret: '', clientJar: null,
+  port: 8765, host: '0.0.0.0', passwordHash: '', sessionSecret: '', requirePassword: false, clientJar: null,
 });
 
 /** The settings file cannot be read, is not valid JSON, or holds a value of the wrong type. */
@@ -68,6 +74,7 @@ function checkFields(c: Record<string, unknown>, file: string): void {
   for (const field of ['serverFolder', 'activeExportId'] as const) {
     if (c[field] !== null && typeof c[field] !== 'string') throw fail(field, 'a string or null');
   }
+  if (typeof c.requirePassword !== 'boolean') throw fail('requirePassword', 'true or false');
   // Optional keys, not in DEFAULT_CONFIG, so checked only when the file holds them.
   if (c.clientInstance !== undefined && c.clientInstance !== null && typeof c.clientInstance !== 'string') {
     throw fail('clientInstance', 'a string or null');

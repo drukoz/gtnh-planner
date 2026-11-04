@@ -9,7 +9,7 @@ afterEach(() => { delete process.env.GTNH_PLANNER_CONFIG; });
 
 it('returns defaults when the file does not exist', () => {
   expect(loadConfig(file())).toEqual({ dataDir: 'data', serverFolder: null, activeExportId: null,
-    port: 8765, host: '0.0.0.0', passwordHash: '', sessionSecret: '', clientJar: null });
+    port: 8765, host: '0.0.0.0', passwordHash: '', sessionSecret: '', requirePassword: false, clientJar: null });
 });
 
 it('round-trips, keeps unknown keys, writes mode 0600 and a trailing newline', () => {
@@ -19,7 +19,7 @@ it('round-trips, keeps unknown keys, writes mode 0600 and a trailing newline', (
   saveConfig({ ...loadConfig(f), activeExportId: 'abc' }, f);
   const text = readFileSync(f, 'utf8');
   expect(JSON.parse(text)).toEqual({ dataDir: 'data', serverFolder: '/srv/gtnh', activeExportId: 'abc', passwordHash: 'scrypt$x',
-    futureKey: 'kept', port: 8765, host: '0.0.0.0', sessionSecret: '', clientJar: null });
+    futureKey: 'kept', port: 8765, host: '0.0.0.0', sessionSecret: '', requirePassword: false, clientJar: null });
   expect(text.endsWith('\n')).toBe(true);
   expect(statSync(f).mode & 0o777).toBe(0o600);
 });
@@ -40,6 +40,19 @@ it('checks clientInstance when present', () => {
   expect(() => loadConfig(f)).toThrow(/clientInstance must be a string or null/);
   writeFileSync(f, JSON.stringify({ dataDir: 'd', clientInstance: '/x/inst' }));
   expect(loadConfig(f).clientInstance).toBe('/x/inst');
+});
+
+it('reads requirePassword as true or false, off when the file leaves it out', () => {
+  const f = file();
+  saveConfig({ ...DEFAULT_CONFIG }, f);
+  writeFileSync(f, JSON.stringify({ dataDir: 'd' }));
+  expect(loadConfig(f).requirePassword).toBe(false);
+  writeFileSync(f, JSON.stringify({ dataDir: 'd', requirePassword: true }));
+  expect(loadConfig(f).requirePassword).toBe(true);
+  for (const bad of ['yes', 1, null]) {
+    writeFileSync(f, JSON.stringify({ dataDir: 'd', requirePassword: bad }));
+    expect(() => loadConfig(f), String(bad)).toThrow(/requirePassword must be true or false/);
+  }
 });
 
 it('keeps a null clientInstance (unset)', () => {

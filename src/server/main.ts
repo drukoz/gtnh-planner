@@ -19,11 +19,13 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-/** What keeps this config from serving, or null. loadConfig type-checks only the export fields. */
-function startProblem(config: AppConfig, file: string): string | null {
-  if (typeof config.passwordHash !== 'string' || config.passwordHash === '') return 'Set a password first: npm run set-password';
-  if (typeof config.sessionSecret !== 'string' || config.sessionSecret === '') {
-    return `${file}: sessionSecret must be a non-empty string; remove it and run npm run set-password`;
+/** What keeps this config from serving, or null. loadConfig type-checks the export fields and `requirePassword` only. */
+export function startProblem(config: AppConfig, file: string): string | null {
+  if (config.requirePassword) {
+    if (typeof config.passwordHash !== 'string' || config.passwordHash === '') return 'Set a password first: npm run set-password';
+    if (typeof config.sessionSecret !== 'string' || config.sessionSecret === '') {
+      return `${file}: sessionSecret must be a non-empty string; remove it and run npm run set-password`;
+    }
   }
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65_535) return `${file}: port must be a whole number from 0 to 65535`;
   if (typeof config.host !== 'string' || config.host === '') return `${file}: host must be a non-empty string such as "0.0.0.0"`;
@@ -70,6 +72,9 @@ async function main(): Promise<void> {
   backups.unref();
 
   console.log(`GTNH Line Planner on ${server.url}`);
+  if (!config.requirePassword) {
+    console.log('No password is asked: anyone who can reach that address can change and delete projects. npm run set-password sets one.');
+  }
   app.pack().catch(() => {});   // load in the background so the first page does not wait; errors show on use
 
   let stopping = false;

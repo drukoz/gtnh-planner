@@ -10,12 +10,12 @@ import { loadConfig, type AppConfig } from '../../../src/server/config.ts';
 const DAY = 86_400_000;
 afterEach(() => { delete process.env.GTNH_PLANNER_CONFIG; });
 describe('config', () => {
-  it('loadConfig honours GTNH_PLANNER_CONFIG and fills port 8765, host 0.0.0.0, passwordHash "", sessionSecret ""', () => {
+  it('loadConfig honours GTNH_PLANNER_CONFIG and fills port 8765, host 0.0.0.0, passwordHash "", sessionSecret "", no password asked', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'gp-cfg-')), 'config.json');
     writeFileSync(file, JSON.stringify({ dataDir: 'data/x', serverFolder: null, activeExportId: 'e1' }));   // Plan 1's fields only
     process.env.GTNH_PLANNER_CONFIG = file;
     expect(loadConfig()).toEqual({ dataDir: 'data/x', serverFolder: null, activeExportId: 'e1',
-      port: 8765, host: '0.0.0.0', passwordHash: '', sessionSecret: '', clientJar: null });
+      port: 8765, host: '0.0.0.0', passwordHash: '', sessionSecret: '', requirePassword: false, clientJar: null });
   });
 });
 describe('passwords', () => {
