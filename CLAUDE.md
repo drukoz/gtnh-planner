@@ -114,7 +114,8 @@ Three more failed under load on 2026-10-30 and passed when run alone: `tests/cli
 1,000-block line's link geometry in under a second, a pick in under 6 ms), `tests/unit/layout/feeding/check.test.ts`
 (a 1,200-block line checked in under a second) and `tests/unit/planner/candidates.test.ts` (vitest's 5 s default
 timeout); `tests/unit/planner/lp.test.ts` ("retries where the root LP relaxation did not solve") hit the same timeout
-on 2026-11-03. In the browser tests, `tests/e2e/pipes.spec.ts:75` ("flow pipes move", which watches the pipes' dashes
+on 2026-11-03, and `tests/unit/cli/pipeline.test.ts` (the export pipeline's child processes) failed under load on
+2026-11-04 and passed alone. In the browser tests, `tests/e2e/pipes.spec.ts:75` ("flow pipes move", which watches the pipes' dashes
 move) is timing-sensitive the same way; run it with `npx playwright test tests/e2e/pipes.spec.ts`. Re-run the file
 alone before you chase a failure there, and say so in your hand-over.
 `npx vitest run --maxWorkers=2` runs the whole suite under less load.
