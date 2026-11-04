@@ -484,7 +484,7 @@ export async function solveBuildRunsAside(job: BuildRunsJob): Promise<BuildRuns>
   return reply !== undefined && 'runs' in reply ? reply.runs : solveBuildRuns(job);
 }
 
-// ---- Worker bootstrap: only inside the solver thread `solverThread` starts (`workerData.lpSolver`) ----
+// ---- Worker bootstrap: only inside a solver thread `idleSolver` starts (`workerData.lpSolver`) ----
 
 if (!isMainThread && (workerData as Record<string, unknown> | null)?.[SOLVER_FLAG] === true) {
   const reply = (r: SolverReply): void => parentPort?.postMessage(r);
