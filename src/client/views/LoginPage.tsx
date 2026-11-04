@@ -1,14 +1,14 @@
 // The shared-password form (spec §3.11). A right password sets the 30-day session cookie and returns to the page that
-// asked for it (`?next=`), or to the project list.
+// asked for it (`?next=`), or to the project list; a link under the form goes back to the landing page.
 
 import { useState, type FormEvent, type ReactElement } from 'react';
 import { ApiError, apiPost, messageOf } from '../api/client.ts';
-import { navigate } from '../router.ts';
+import { followLink, navigate } from '../router.ts';
 
-/** The `next` page to return to, when it is a path of this site; anything else (another site, the login page) is `/`. */
+/** The `next` page to return to, when it is a path of this site; anything else (another site, the login page) is `/projects`. */
 function nextPath(search: string): string {
   const next = new URLSearchParams(search).get('next');
-  if (next === null || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\') || next.startsWith('/login')) return '/';
+  if (next === null || !next.startsWith('/') || next.startsWith('//') || next.startsWith('/\\') || next.startsWith('/login')) return '/projects';
   return next;
 }
 
@@ -39,6 +39,7 @@ export function LoginPage(): ReactElement {
         </label>
         {error !== null && <p className="error" role="alert">{error}</p>}
         <button type="submit" className="primary" disabled={busy || password === ''}>Log in</button>
+        <a href="/" onClick={(e) => followLink(e, '/')}>Back to the home page</a>
       </form>
     </main>
   );

@@ -213,7 +213,7 @@ test('in forced colours a toast is a whole box of the theme\'s canvas, framed in
 // region outlives the list), and a note added says so; neither can be undone, so Dismiss is the toast's one button, and it takes it away.
 test('making a project and adding a note say so, with nothing to undo', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
-  await page.goto('/');
+  await page.goto('/projects');
   await page.getByLabel('New project').fill('Toasts made');
   await page.getByRole('button', { name: 'Create' }).click();
   await expect(page).toHaveURL(/\/p\//);
@@ -252,7 +252,7 @@ test('a project made on a narrow window says so once, its toast waiting drawn an
   });
   await page.setViewportSize({ width: 800, height: 900 });
   await login(page); await setName(page, 'Ann');
-  await page.goto('/');
+  await page.goto('/projects');
   await page.getByLabel('New project').fill('Toasts made narrow');
   await page.getByRole('button', { name: 'Create' }).click();
   await expect(settingsOf(page)).toBeVisible();                                            // no target: the drawer opened by itself
@@ -501,7 +501,7 @@ test('deleting a project from its page offers Undo, which brings it back', async
   const name = runName('Toasts deleted');
   await createProject(page, name);
   await deleteProject(page, name);
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects$/);
   const toast = toastOf(page, `Deleted “${name}”`);
   await expect(toast).toBeVisible();                                                      // on the list the page left for
   await expect(page.getByText(`${name} was deleted by Ann`)).toHaveCount(1);
@@ -518,7 +518,7 @@ test('a project deleted from its row offers Undo too, and the list\'s own Restor
   await login(page); await setName(page, 'Cy');
   const name = runName('Toasts row deleted');
   await createProject(page, name);
-  await page.goto('/');
+  await page.goto('/projects');
   const row = page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
   await row.getByRole('button', { name: 'Delete' }).click();
   const form = row.getByRole('form', { name: 'Confirm delete' });
@@ -565,7 +565,7 @@ test('a keyboard Undo of a deleted project gives the focus on, not back to the R
   await login(page); await setName(page, 'Cy');
   const name = runName('Toasts restore focus');
   await createProject(page, name);
-  await page.goto('/');
+  await page.goto('/projects');
   const row = page.locator('.project-card').filter({ has: page.getByRole('link', { name, exact: true }) });
   await row.getByRole('button', { name: 'Delete' }).click();
   const form = row.getByRole('form', { name: 'Confirm delete' });
@@ -781,7 +781,7 @@ test('a note deleted just before its project stays deleted when the project is r
   await page.locator('.note').getByRole('button', { name: 'Delete' }).click();
   await expect(toastOf(page, 'Note deleted')).toBeVisible();
   await deleteProject(page, name);                                                        // well inside the note's 5 s
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/projects$/);
   await toastOf(page, `Deleted “${name}”`).getByRole('button', { name: 'Undo' }).click();
   await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
   expect(await notesOf(page, id)).toEqual([]);

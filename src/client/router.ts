@@ -1,14 +1,16 @@
-// Client-side routes on the history API: /login, the top-level pages of TOP_PAGES (read at call time, so pages later
-// plans append are matched), /p/:id for a project, and a not-found page for anything else.
+// Client-side routes on the history API: / for the landing page (the site's front page, open to anyone), /login, the
+// top-level pages of TOP_PAGES (read at call time, so pages later plans append are matched), /p/:id for a project, and a
+// not-found page for anything else.
 
 import { useMemo, useSyncExternalStore, type MouseEvent } from 'react';
 import { TOP_PAGES } from './views/top-pages.ts';
 
-export type Route = { name: 'login' } | { name: 'top'; path: string } | { name: 'project'; id: string } | { name: 'notFound' };
+export type Route = { name: 'landing' } | { name: 'login' } | { name: 'top'; path: string } | { name: 'project'; id: string } | { name: 'notFound' };
 
 const PROJECT_PATH = /^\/p\/([^/]+)$/;
 
 export function matchPath(pathname: string): Route {
+  if (pathname === '/') return { name: 'landing' };
   if (pathname === '/login') return { name: 'login' };
   if (TOP_PAGES.some((page) => page.path === pathname)) return { name: 'top', path: pathname };
   const project = PROJECT_PATH.exec(pathname);

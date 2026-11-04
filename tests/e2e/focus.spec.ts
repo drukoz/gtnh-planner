@@ -26,7 +26,7 @@ test('the focus ring shows on panels and on the top bar', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
   const project = `Focus link ${test.info().repeatEachIndex + 1}`;                     // one per run: the server is shared
   await createProject(page, project);
-  await page.goto('/');
+  await page.goto('/projects');
 
   // Create is disabled while the name is empty, and Tab skips a disabled button: give the project a name first
   await page.getByLabel('New project').fill('Focus line');
@@ -61,7 +61,7 @@ test('in the dark look a link on a panel rings yellow', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
   const project = `Dark focus link ${test.info().repeatEachIndex + 1}`;                // one per run: the server is shared
   await createProject(page, project);
-  await page.goto('/');
+  await page.goto('/projects');
   const link = page.getByRole('link', { name: project, exact: true });
   await expect(link).toBeVisible();
   await link.focus();

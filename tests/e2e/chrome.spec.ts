@@ -95,7 +95,7 @@ test('reduced motion stops the live dot', async ({ page }) => {
 
 test('the brand\'s pipe flows six turns, then rests; under reduced motion it holds still', async ({ page }) => {
   await login(page);
-  await page.goto('/');
+  await page.goto('/projects');
   const mark = page.locator('.brand-mark');
   await expect(mark).toBeVisible();
   // both pseudo-elements are read, each on its own: the build's minifier has merged a list of them before and lost a half (ruling R28)
