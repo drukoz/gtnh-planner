@@ -159,6 +159,39 @@ describe('the line on the map', () => {
     vi.useRealTimers();
   });
 
+  it('checks the layout again, with no loading line, when only the plan was answered again (RUK-529, §11.16)', async () => {
+    vi.useFakeTimers();
+    const answers: Array<(l: Layout) => void> = [];
+    const states: LayoutState[] = [];
+    const loader = createLayoutLoader(() => new Promise<Layout>((r) => answers.push(r)), (s) => states.push(s));
+    const plan = {} as Plan;
+    loader.request('P1', plan, 'k1', 1);
+    expect(loader.state().loading).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    answers[0]!(structuredClone(layout));
+    await vi.advanceTimersByTimeAsync(0);
+    const shown = loader.state().layout;
+    expect(shown).not.toBeNull();
+    loader.request('P1', plan, 'k1', 1);                                      // nothing new: nothing fetched
+    await vi.advanceTimersByTimeAsync(100);
+    expect(answers).toHaveLength(1);
+    const seen = states.length;
+    loader.request('P1', plan, 'k1', 2);                                      // the same plan answered again: checked
+    await vi.advanceTimersByTimeAsync(100);
+    expect(answers).toHaveLength(2);
+    answers[1]!(structuredClone(layout));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loader.state().layout).toBe(shown);
+    expect(states.slice(seen).some((s) => s.loading)).toBe(false);            // no loading line over the layout shown
+    loader.request('P1', plan, 'k1', 3);                                      // a placement batch: the same plan, a moved line
+    await vi.advanceTimersByTimeAsync(100);
+    expect(answers).toHaveLength(3);
+    answers[2]!({ ...structuredClone(layout), origin: [1, 1, 1] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loader.state().layout!.origin).toEqual([1, 1, 1]);
+    vi.useRealTimers();
+  });
+
   it('links build steps to map pins', () => {
     focusPin(3);
     expect(getFocusedPin()).toBe(3);

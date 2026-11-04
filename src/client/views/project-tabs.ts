@@ -23,6 +23,9 @@ export interface ProjectViewProps {
    * view sends at once.
    */
   sendLater?: ProjectStore['sendLater'];
+  // optional addition (RUK-529)
+  /** How many plan fetches have answered (`ProjectViewState.planAnswers`): the views that show the layout check it again after each. */
+  planAnswers?: number;
 }
 export interface ProjectTab { id: 'map' | '3d' | 'connections' | 'flow' | 'materials' | 'notes'; label: string; component: ComponentType<ProjectViewProps> }
 

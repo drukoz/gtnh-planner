@@ -148,6 +148,31 @@ describe('project store', () => {
     expect(store.getSnapshot().plan).toEqual({ settingsHash: 'h', n: 2 });
     vi.useRealTimers();
   });
+  it('counts every answer to a plan fetch, an answer of the same plan too, but not a failed fetch (RUK-529, §11.16)', async () => {
+    vi.useFakeTimers();
+    const { deps, store, events } = harness();
+    events().snapshot(P0);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = store.getSnapshot().plan;
+    expect(first).toEqual({ settingsHash: 'h' });
+    expect(store.getSnapshot().planAnswers).toBe(1);
+    deps.fetchPlan = vi.fn(async () => ({ settingsHash: 'h' }) as never);   // the same plan, as after a placement batch
+    events().plan({ rev: 1 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().plan).toBe(first);
+    expect(store.getSnapshot().planAnswers).toBe(2);
+    deps.fetchPlan = vi.fn(async () => { throw new Error('down'); });
+    events().plan({ rev: 2 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().planError).toBe('down');
+    expect(store.getSnapshot().planAnswers).toBe(2);
+    deps.fetchPlan = vi.fn(async () => ({ settingsHash: 'h', n: 2 }) as never);
+    events().plan({ rev: 3 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().plan).toEqual({ settingsHash: 'h', n: 2 });
+    expect(store.getSnapshot().planAnswers).toBe(3);
+    vi.useRealTimers();
+  });
   it('ignores an answer older than what the events already brought', async () => {
     let answer: ((p: Project) => void) | undefined;
     const { deps, store, events } = harness();
