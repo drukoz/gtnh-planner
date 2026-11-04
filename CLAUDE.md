@@ -37,15 +37,13 @@ Run them from the repository root.
 - Setup: `npm ci`. A new worktree has no `node_modules/`.
 - Typecheck: `npx tsc -b`. No output means clean. Node runs the `.ts` sources directly, so this is the only compile
   step for the server.
-- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `c922fc180` it gives 257 files passed | 23 skipped,
-  4238 tests passed | 266 skipped.
+- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `48d4f8ca1` it gives 257 files passed | 23 skipped,
+  4240 tests passed | 266 skipped.
 - One file or folder: `npx vitest run tests/unit/layout/power-loss.test.ts`, or `npx vitest run tests/unit/layout`.
 - Browser tests: `npm run e2e`. It builds the client, then runs Chromium against a real server on 127.0.0.1:18787,
   with data that `tests/e2e/prepare.ts` writes to `data/e2e/`; its config asks for the password, so the browser tests
-  log in (`tests/unit/http/server.test.ts` covers the password off). At `c922fc180` it gives 365 passed | 1 failed, in
-  about 90 s: the failure is `tests/e2e/glide.spec.ts:1258`, which RUK-543 files as a regression of RUK-542's keeping
-  the shown plan (it fails alone, deterministically, and passes with that commit's two client-state files reverted).
-  It needs Playwright's Chromium (`npx playwright install chromium`). On the team's Mac it is already installed:
+  log in (`tests/unit/http/server.test.ts` covers the password off). At `48d4f8ca1` it gives 366 passed, in about
+  90 s. It needs Playwright's Chromium (`npx playwright install chromium`). On the team's Mac it is already installed:
   pass `PLAYWRIGHT_BROWSERS_PATH=/Users/drukoz/Library/Caches/ms-playwright`. Two runs at once collide on port
   18787, so start one only when `netstat -anv -p tcp | grep LISTEN | grep '\.18787 '` prints nothing.
 - See the app with test data: `npm run build`, then
@@ -118,7 +116,9 @@ Three more failed under load on 2026-10-30 and passed when run alone: `tests/cli
 timeout); `tests/unit/planner/lp.test.ts` ("retries where the root LP relaxation did not solve") hit the same timeout
 on 2026-11-03, and `tests/unit/cli/pipeline.test.ts` (the export pipeline's child processes) and
 `tests/unit/planner/build-pick.test.ts` ("gives exactly what it gives on this thread") failed under load on
-2026-11-04 and passed alone. A new test that runs HiGHS or starts solver threads takes 1 to 3 s alone, so give it an
+2026-11-04 and passed alone. `tests/unit/export/run.test.ts` ("stops the JVM when aborted", vitest's 5 s timeout)
+failed under load on 2026-11-04 (RUK-543) and passed alone. A new test that runs HiGHS or starts solver threads takes
+1 to 3 s alone, so give it an
 explicit timeout as its last argument (`}, 30_000)`). In the browser tests, `tests/e2e/pipes.spec.ts:75` ("flow pipes move", which watches the pipes' dashes
 move) is timing-sensitive the same way; run it with `npx playwright test tests/e2e/pipes.spec.ts`. Re-run the file
 alone before you chase a failure there, and say so in your hand-over.
