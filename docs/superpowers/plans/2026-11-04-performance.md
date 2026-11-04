@@ -82,20 +82,59 @@ pool does not take); `availability.ts` 2.6 s; loading the pack 2.4 s; garbage co
 | --- | --- | --- |
 | `highs` 1.15.4 | It changes 9 lines of highs-js's bridge, for the `mipUserSolution` callback, which the planner does not use; HiGHS stays 1.15.1. All 42 files byte-identical; the seven cold plans 41.6 s against 40.0 s (noise). | Not adopted here: nothing to gain. A later dependency task can take it. |
 | A native HiGHS binding | On npm, `highs-addon` 0.10.3 wraps HiGHS 1.11.0 without callbacks (the build MIP needs `mipInterrupt` and `mipImprovingSolution`), and `ortools-node` reaches HiGHS through OR-Tools. So the question was whether native HiGHS 1.15.1 gives our solves' answers at all. Every solve of three cold plans (428) was dumped from highs-js and solved again with highspy 1.15.1 (the same HiGHS, native): the PyPI wheel matched 77 of 421 LPs bit for bit; a source build with `-ffp-contract=off` (no fused multiply-add, as WASM) matched 421 of 421 LPs and solved them 2.5 times faster (5.1 s to 2.1 s), but none of the 3 MIPs it could replay (also with `threads=1`). | Dropped. The build MIPs decide the plans and come out different. Native LPs alone would save about 4 s of the seven cold plans (their LPs take about 7 s) for a C++ toolchain and a HiGHS build in every install. The probe is in `spikes/native-highs/`. |
-| The hot loops of `buildCandidates` and `estimateCosts` | The profile above. | Subtask: settle each good through an index of the slots it fills (exact: the same estimates in the same order), then measure what is left. |
+| The hot loops of `buildCandidates` and `estimateCosts` | The profile above. | Subtask (RUK-565, merged): settle each good through an index of the slots it fills (exact: the same estimates in the same order), then measure what is left: below, under "The settle index, measured". |
 
 ### Subtasks
 
 | Subtask | What | Files | Blocked by |
 | --- | --- | --- | --- |
-| `tools/perf` | The scratch runner made a tool: a fresh copy of the data, a server on a free port, the passes above, the `/api/health` probe, timings, and a byte-for-byte check against a reference (`npm run perf`). | new `tools/perf/`, `tests/unit/tools/perf-compare.test.ts`, `package.json`, `tsconfig.server.json`, `CLAUDE.md` | |
-| Settle index | `estimateCosts` settles each good through the slots it fills instead of scanning every input of every consumer; byte-identical, measured. | `src/server/planner/candidates.ts` | |
+| `tools/perf` (RUK-564, merged) | The scratch runner made a tool: a fresh copy of the data, a server on a free port, the passes above, the `/api/health` probe, timings, and a byte-for-byte check against a reference (`npm run perf`). | new `tools/perf/`, `tests/unit/tools/perf-compare.test.ts`, `package.json`, `tsconfig.server.json`, `CLAUDE.md` | |
+| Settle index (RUK-565, merged) | `estimateCosts` settles each good through the slots it fills instead of scanning every input of every consumer; byte-identical, measured. | `src/server/planner/candidates.ts` | |
 | Worker | Planning in a worker thread, and the solver pool's shared queue (below). | to be specified after the two above report | `tools/perf` |
 | Disk cache | The plan cache kept on disk (below). | to be specified after the two above report | `tools/perf` |
 | QA | Verify the merged branch: suites, browser tests, `tools/perf` with `--restart` against the reference. | tests only | all |
 
-Until `tools/perf` is merged, a task measures with the CTO's scratch runner (`/tmp/ruk563/bin/run.mjs`, compared by
-`/tmp/ruk563/bin/compare.sh`), which `tools/perf` replaces.
+`tools/perf` is merged: the tasks that follow measure with `npm run perf` (`tools/perf/README.md`). RUK-565 predates it
+and was measured with the CTO's scratch runner (`/tmp/ruk563/bin/run.mjs`, compared by `/tmp/ruk563/bin/compare.sh`).
+
+### The settle index, measured (RUK-565)
+
+While it walks, `estimateCosts` now records each consumed slot of a reached recipe under every good the slot can take
+(`slotsOf`), and settles a good through those slots alone instead of scanning every input of every consumer. It finds
+the same estimates in the same order: 42 of 42 files byte-identical in all sixteen runs of the review, and on the merged
+branch (`npm run perf -- --restart` on `9be5b962d`: cold 40.3 s, restart 41.9 s, longest `/api/health` wait 3.0 s and
+3.2 s, load average 15.7 to 17.6).
+
+Its CPU effect is smaller than the prototype's single pair showed (own time 5.00 s to 3.83 s cold), and smaller than one
+pair of runs on this Mac can show. Eight back-to-back pairs; each cell is `estimateCosts`' own time as a share of the
+main thread's sampled time, weighted by the time between samples as `prof.mjs` counts it (own / all sampled):
+
+| Pair | Cold, base | Cold, change | Restart, base | Restart, change |
+| --- | ---: | ---: | ---: | ---: |
+| Engineer 1, base first | 11.99 % (5.27 / 44.0 s) | 11.51 % (4.62 / 40.1 s) | 11.87 % (5.10 / 43.0 s) | 10.38 % (4.25 / 40.9 s) |
+| Tech Lead 1, change first | 11.00 % (4.84 / 44.0 s) | 11.67 % (5.17 / 44.3 s) | 12.31 % (5.49 / 44.6 s) | 11.05 % (4.28 / 38.7 s) |
+| Tech Lead 2, change first | 10.93 % (4.10 / 37.6 s) | 13.42 % (6.85 / 51.0 s) | 12.12 % (4.91 / 40.5 s) | 10.41 % (4.89 / 46.9 s) |
+| Engineer q1, change first | 14.03 % (6.79 / 48.4 s) | 10.62 % (4.10 / 38.6 s) | 11.45 % (4.63 / 40.4 s) | 10.68 % (4.01 / 37.6 s) |
+| Engineer q2, change first | 10.76 % (4.34 / 40.3 s) | 10.98 % (4.21 / 38.4 s) | 11.89 % (4.77 / 40.1 s) | 10.97 % (4.02 / 36.7 s) |
+| Engineer q3, change first | 11.28 % (4.50 / 39.9 s) | 11.07 % (4.21 / 38.0 s) | 12.25 % (5.01 / 40.9 s) | 10.62 % (4.02 / 37.8 s) |
+| Engineer q4, change first | 11.71 % (4.65 / 39.7 s) | 10.76 % (4.88 / 45.3 s) | 12.36 % (6.22 / 50.3 s) | 10.88 % (5.43 / 49.9 s) |
+| Engineer q5, change first | 12.91 % (5.57 / 43.1 s) | 10.08 % (3.96 / 39.3 s) | 10.80 % (5.26 / 48.7 s) | 10.22 % (3.90 / 38.2 s) |
+| Pooled | 11.89 % | 11.34 % (−4.6 %) | 11.87 % | 10.65 % (−10.3 %) |
+
+- The change is lower in all 8 restart pairs but in only 5 of 8 cold ones. Over both passes its share falls 7.4 %: about
+  0.3 s (cold) and 0.8 s (restart) of `estimateCosts`' own time per pass of the seven plans, 1 to 2 % of a cold pass.
+- The same base code's share moved between 10.8 % and 14.0 % across these runs, so one pair cannot resolve an effect of
+  this size. In this milestone a timing is reported, and gated only when its expected effect is several times the
+  spread of the same code run twice.
+- Under this load V8's sampler ticks every 2 to 4 ms instead of 1 ms, and some runs get bursts (q1's base, cold: 50,405
+  samples, 83 % of them in `estimateCosts`). Compare time-weighted figures only, never sample counts.
+
+What is left (q3, the change, cold pass, 38.0 s sampled): `buildCandidates` 12.3 s in all, 11.2 s of it in
+`estimateCosts`, whose own body (the walk and the settle loop) takes 4.2 s; the rest is spread over `usable` (accepting
+each recipe the walk meets, 1.8 s), `settleSteps` (1.8 s), `run` (1.3 s) and `carried` (0.9 s), each including what it
+calls. No single loop like the old settle scan remains. The larger lever is how often `buildCandidates` runs per plan
+(five callers, listed under "Where it starts"); whether some of those calls repeat the same work is a question for after
+the worker and disk-cache tasks, not a task yet.
 
 ### Design notes for the two tasks that follow
 
