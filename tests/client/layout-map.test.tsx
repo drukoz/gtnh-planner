@@ -134,6 +134,31 @@ describe('the line on the map', () => {
       .toBe('{"placement":null,"logistics":"direct","scanId":"S1","baseId":"B"}');
   });
 
+  it('keeps the shown layout object when a refetch brings the same layout (RUK-529)', async () => {
+    vi.useFakeTimers();
+    const answers: Array<(l: Layout) => void> = [];
+    const loader = createLayoutLoader(() => new Promise<Layout>((r) => answers.push(r)), () => {});
+    loader.request('P1', {} as Plan, 'k1');
+    await vi.advanceTimersByTimeAsync(100);
+    answers[0]!(structuredClone(layout));
+    await vi.advanceTimersByTimeAsync(0);
+    const shown = loader.state().layout;
+    expect(shown).not.toBeNull();
+    loader.request('P1', {} as Plan, 'k1');                                   // another plan object: fetched again
+    await vi.advanceTimersByTimeAsync(100);
+    answers[1]!(structuredClone(layout));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(answers).toHaveLength(2);
+    expect(loader.state().layout).toBe(shown);
+    loader.request('P1', {} as Plan, 'k1');
+    await vi.advanceTimersByTimeAsync(100);
+    answers[2]!({ ...structuredClone(layout), origin: [1, 1, 1] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loader.state().layout).not.toBe(shown);
+    expect(loader.state().layout!.origin).toEqual([1, 1, 1]);
+    vi.useRealTimers();
+  });
+
   it('links build steps to map pins', () => {
     focusPin(3);
     expect(getFocusedPin()).toBe(3);
