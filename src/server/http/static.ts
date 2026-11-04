@@ -4,6 +4,7 @@
 import { open, stat, type FileHandle } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
+import { gzipFor } from './compress.ts';
 
 const MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({
   '.html': 'text/html; charset=utf-8',
@@ -16,6 +17,9 @@ const MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
 });
+
+/** The files sent gzip-compressed to a client that takes gzip (RUK-529): text. Images and fonts are compressed already. */
+const COMPRESSIBLE: ReadonlySet<string> = new Set(['.html', '.js', '.css', '.svg', '.json', '.wasm']);
 
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 const REVALIDATE = 'no-cache';
@@ -47,7 +51,10 @@ function safePath(rawUrl: string): string | null {
   return path;
 }
 
-/** Sends `file` (200, or headers only for HEAD); false when it is not a regular file. */
+/**
+ * Sends `file` (200, or headers only for HEAD), gzip-compressed when it is text and `req` takes gzip (`gzipFor`); false
+ * when it is not a regular file.
+ */
 async function sendFile(req: IncomingMessage, res: ServerResponse, file: string, cacheControl: string): Promise<boolean> {
   let handle: FileHandle;
   try {
@@ -58,13 +65,17 @@ async function sendFile(req: IncomingMessage, res: ServerResponse, file: string,
   try {
     if (!(await handle.stat()).isFile()) return false;
     const body = await handle.readFile();
+    const ext = extname(file).toLowerCase();
+    const gzipped = COMPRESSIBLE.has(ext) ? gzipFor(req, body) : null;
     res.writeHead(200, {
-      'Content-Type': MIME_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
-      'Content-Length': body.length,
+      'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream',
+      'Content-Length': (gzipped ?? body).length,
       'Cache-Control': cacheControl,
       'X-Content-Type-Options': 'nosniff',
+      Vary: 'Accept-Encoding',
+      ...(gzipped === null ? {} : { 'Content-Encoding': 'gzip' }),
     });
-    res.end(req.method === 'HEAD' ? undefined : body);
+    res.end(req.method === 'HEAD' ? undefined : (gzipped ?? body));
     return true;
   } finally {
     await handle.close();

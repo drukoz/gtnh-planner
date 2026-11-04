@@ -50,6 +50,7 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5
 describe('surplus across projects (add-on 17, architecture §11.45 (4))', () => {
   it("takes another project's surplus, from <project>", async () => {
     const p = await create('P', MAKES_T);
+    await tick();
     const q = await create('Q', USES_Y);
     const first = await plan(q.id);
     expect(recipes(first)).toContain('make-y');
@@ -80,6 +81,7 @@ describe('surplus across projects (add-on 17, architecture §11.45 (4))', () => 
 
   it('publishes the plan a request finds in the cache', async () => {
     const p = await create('P', MAKES_T);
+    await tick();
     const q = await create('Q', USES_Y);
     await plan(p.id);
     expect(fromRows(await plan(q.id)).map((r) => r.from?.id)).toEqual([p.id]);
@@ -101,6 +103,7 @@ describe('surplus across projects (add-on 17, architecture §11.45 (4))', () => 
     // P's summary is withdrawn between Q's plan and its layout, as a publish of P landing then would change it: the
     // served plan keeps its own power, layout steps and summary, not those of Q making its own Wyes
     const p = await create('P', MAKES_T);
+    await tick();
     const q = await create('Q', USES_Y);
     await plan(p.id);
     const finish = s.app.services.planFinish!;
@@ -118,6 +121,7 @@ describe('surplus across projects (add-on 17, architecture §11.45 (4))', () => 
 
   it('follows a rename, a new target and a delete of the project it takes from', async () => {
     const p = await create('P', MAKES_T);
+    await tick();
     const q = await create('Q', USES_Y);
     await plan(p.id);
     expect(fromRows(await plan(q.id))).toEqual([{ key: 't:y@0', from: { kind: 'project', id: p.id, name: 'P' } }]);
@@ -148,6 +152,7 @@ describe('surplus across projects (add-on 17, architecture §11.45 (4))', () => 
 
   it('settles two projects that feed each other', async () => {
     const a = await create('A', { ...MAKES_T, objective: 'multi-output' });
+    await tick();
     const b = await create('B', USES_Y);
     const rounds: Array<[Plan, Plan]> = [];
     for (let round = 0; round < 3; round++) rounds.push([await plan(a.id), await plan(b.id)]);
@@ -184,6 +189,25 @@ describe('surplus across projects (add-on 17, architecture §11.45 (4))', () => 
       { by: q1.id, name: 'Q1', key: 't:y@0', perSecond: sig9(40 / HOUR) },
       { by: q2.id, name: 'Q2', key: 't:y@0', perSecond: left },
     ]);
+  });
+
+  it('never takes from a newer project, unless that one reads nothing of the board (RUK-529)', async () => {
+    const q = await create('Q', USES_Y);
+    await tick();
+    const p = await create('P', MAKES_T);
+    await plan(p.id);
+    const own = await plan(q.id);
+    expect(fromRows(own)).toEqual([]);
+    expect(recipes(own)).toContain('make-y');
+    // P turns "Use other projects' surplus" off: it reads nothing, so older projects may take its Wyes too
+    const es = await events(q.id);
+    try {
+      await send(p.id, [{ op: 'settings', patch: { useSurplus: false } }]);
+      await es.next('plan');
+    } finally {
+      es.close();
+    }
+    expect(fromRows(await plan(q.id))).toEqual([{ key: 't:y@0', from: { kind: 'project', id: p.id, name: 'P' } }]);
   });
 
   it('ignores other projects with the switch off', async () => {

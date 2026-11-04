@@ -22,6 +22,8 @@ afterAll(async () => { await s.close(); });
 const createProject = async (name: string): Promise<string> => (await (await s.request('/api/projects', { method: 'POST', body: { name }, name: 'Ann' })).json()).id;
 const newToken = async (label = 'Steve', project = id): Promise<CreateTokenResult> => (await s.request(`/api/projects/${project}/tokens`, { method: 'POST', body: { label }, name: 'Ann' })).json();
 const projector = (token: string, project = id) => s.request(`/api/projects/${project}/projector`, { cookie: null, headers: { authorization: `Bearer ${token}` } });
+/** Creation times are milliseconds: one apart, so the older project is always the one created first. */
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5));
 
 describe('projector routes', () => {
   it('creates a token, shows it once and lists it without the secret', async () => {
@@ -155,6 +157,7 @@ describe('projector routes', () => {
         method: 'POST', name: 'Ann', body: { name, settings: { per: 'hour', objective: 'least-raw', ...settings } },
       })).json()).id;
       const p = await create('P', { target: 't:t@0', amount: 60 });
+      await tick();
       const q = await create('Q', { target: 't:q@0', amount: 30 });
       expect((await t.request(`/api/projects/${p}/plan`)).status).toBe(200);
       const given: Array<Plan | undefined> = [];

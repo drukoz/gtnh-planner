@@ -505,7 +505,7 @@ function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanL
 export function MapTab(props: ProjectViewProps): ReactElement {
   const { project, plan, send } = props;
   const { scans, error } = useDoneScans();
-  const line = useLayout(project.id, plan, project);
+  const line = useLayout(project.id, plan, project, props.planAnswers);
   const focusedPin = usePinFocus();
   const { scanId } = project.world;
   if (scanId === null) {

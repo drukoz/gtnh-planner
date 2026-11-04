@@ -14,7 +14,7 @@ import {
 } from './build-mip.ts';
 import { canonicalRank, type CandidateGraph, type LpRecipe } from './candidates.ts';
 import {
-  solveBuildRuns, solveBuildRunsAside, solveLp, wholeBuild, type BuildRunsJob, type LpModel, type LpResult, type LpRow,
+  solveBuildRuns, solveBuildRunsAside, solveLp, solveLpAside, wholeBuild, type BuildRunsJob, type LpModel, type LpResult, type LpRow,
 } from './lp.ts';
 import { buildCounts, type BuildModel, type MachineOption } from './machine-options.ts';
 import { sourceWeight } from './objective.ts';
@@ -2336,7 +2336,8 @@ function chainGraph(graph: CandidateGraph, recipes: LpRecipe[], key: StuffKey): 
  * The least raw material that makes one unit of each of `keys` on its own in `graph` (fix wave 3 (D)), to 9
  * significant digits (`sig9`): `standaloneCosts`' LP without its barred inputs and its chain details, on the key's own
  * chain alone — the main LP of the recipes its chain can use (`chainRecipes`) and the goods they touch
- * (`chainGraph`), that one demand at 1, every byproduct sunk — solved cold by `solveLp`: a fresh HiGHS model per key,
+ * (`chainGraph`), that one demand at 1, every byproduct sunk — solved cold on the solver threads (`solveLpAside`, all the
+ * keys' LPs at once, each answered as `solveLp` answers it alone: RUK-529): a fresh HiGHS model per key,
  * presolve on, which drops a route through a dead end however little of the dead end that route needs. So a price is
  * a function of `graph`, its leaf costs and the key, whatever else is asked, in whatever order and whatever was priced
  * before; on one graph a cheaper leaf never raises a key's least raw material, which the 9-digit price follows except
@@ -2348,19 +2349,18 @@ export async function standalonePrices(graph: CandidateGraph, keys: readonly Stu
   if (keys.length === 0) return out;
   const made = makeableGoods(graph);
   const producers = producersIn(graph);
-  for (const key of new Set(keys)) {
-    if (!made.has(key)) {
-      out.set(key, Infinity);
-      continue;
-    }
+  const unique = [...new Set(keys)];
+  const prices = await Promise.all(unique.map(async (key): Promise<number> => {
+    if (!made.has(key)) return Infinity;
     const recipes = chainOf(graph, producers, [key]);
     const lp = mainLp(chainGraph(graph, recipes, key), recipes, new Map([[key, 1]]));
     const width = lp.rawCost.length;
-    const result = await solveLp({
+    const result = await solveLpAside({
       sense: 'min', colCost: [...lp.rawCost], colLower: new Array<number>(width).fill(0), colUpper: new Array<number>(width).fill(Infinity), rows: lp.rows,
     });
-    out.set(key, result.status === 'optimal' ? sig9(Math.max(0, result.objective)) : Infinity);
-  }
+    return result.status === 'optimal' ? sig9(Math.max(0, result.objective)) : Infinity;
+  }));
+  unique.forEach((key, i) => out.set(key, prices[i] as number));
   return out;
 }
 

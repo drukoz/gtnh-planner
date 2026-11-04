@@ -545,7 +545,7 @@ export function ConnectionsShell(props: ConnectionsShellProps): ReactElement {
  */
 export function ConnectionsView(props: ProjectViewProps): ReactElement {
   const { project, plan } = props;
-  const { layout, loading, error } = useLayout(project.id, plan, project);
+  const { layout, loading, error } = useLayout(project.id, plan, project, props.planAnswers);
   const { settings } = project;
   const per = settings.mode === 'makeN' ? 'hour' : settings.per;
   const graph = useMemo(
