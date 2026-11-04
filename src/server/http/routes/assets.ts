@@ -60,6 +60,23 @@ function etagMatches(header: string | undefined, etag: string): boolean {
   });
 }
 
+/**
+ * Sends the file `handle` is open on as the body of `res`, and leaves `handle` closed whatever becomes of the download.
+ * A browser that goes away is not a server error: `pipeline` rejects with `ERR_STREAM_UNABLE_TO_PIPE` when `res` was
+ * already closed before the first byte (and then leaves the stream, and so the handle, open: hence the `destroy`), and
+ * with `ERR_STREAM_PREMATURE_CLOSE` when it closes midway.
+ */
+export async function pipeFile(handle: FileHandle, res: ServerResponse): Promise<void> {
+  const stream = handle.createReadStream();   // it closes the handle when it ends or is destroyed
+  try {
+    await pipeline(stream, res);
+  } catch (err) {
+    stream.destroy();
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code !== 'ERR_STREAM_UNABLE_TO_PIPE' && code !== 'ERR_STREAM_PREMATURE_CLOSE') throw err;
+  }
+}
+
 /** Streams the PNG `file` with its caching headers, or answers 304 when the client already holds this version. */
 async function sendPng(req: IncomingMessage, res: ServerResponse, file: string, rel: string): Promise<void> {
   let handle: FileHandle;
@@ -85,13 +102,8 @@ async function sendPng(req: IncomingMessage, res: ServerResponse, file: string, 
       ETag: etag,
       'X-Content-Type-Options': 'nosniff',
     });
-    streaming = true;   // the read stream closes the handle when it ends or is destroyed
-    try {
-      await pipeline(handle.createReadStream(), res);
-    } catch (err) {
-      // A client that goes away mid-download is not a server error.
-      if ((err as NodeJS.ErrnoException | null)?.code !== 'ERR_STREAM_PREMATURE_CLOSE') throw err;
-    }
+    streaming = true;   // from here on, pipeFile closes the handle
+    await pipeFile(handle, res);
   } finally {
     if (!streaming) await handle.close();
   }
