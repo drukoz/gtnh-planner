@@ -1,0 +1,272 @@
+diff --git a/src/server/http/compress.ts b/src/server/http/compress.ts
+new file mode 100644
+index 000000000..ac4d2d14f
+--- /dev/null
++++ b/src/server/http/compress.ts
+@@ -0,0 +1,42 @@
++// Compressed answers (RUK-529, performance review F5): a plan is 0.8 to 4 MB of JSON and the client's main script about
++// 0.6 MB, and friends reach the planner over a forwarded port. A body of MIN_GZIP_BYTES or more goes out
++// gzip-compressed to a client whose `Accept-Encoding` takes gzip (over plain HTTP, Chrome and Firefox offer gzip and
++// deflate only). The projector mod sends no `Accept-Encoding`, so it keeps getting plain bodies.
++
++import type { IncomingMessage } from 'node:http';
++import { gzipSync } from 'node:zlib';
++
++/** A body smaller than this goes out as it is: gzip would save too little on it. */
++export const MIN_GZIP_BYTES = 1024;
++
++/** gzip's level: the group's 4 MB plan compresses 15 times at level 6, in about 20 ms. */
++const GZIP_LEVEL = 6;
++
++/**
++ * Whether `req` takes a gzip body: its `Accept-Encoding` lists `gzip` (or `x-gzip`) with a q-value above 0, or, where it
++ * does not list gzip, `*` with a q-value above 0. False without the header, and without a request.
++ */
++export function acceptsGzip(req: IncomingMessage | undefined): boolean {
++  const header = req?.headers['accept-encoding'];
++  if (typeof header !== 'string') return false;
++  let gzip: number | null = null;
++  let any: number | null = null;
++  for (const part of header.split(',')) {
++    const [name = '', ...params] = part.split(';').map((s) => s.trim().toLowerCase());
++    let q = 1;
++    for (const param of params) {
++      if (!param.startsWith('q=')) continue;
++      const value = Number(param.slice(2));
++      q = Number.isFinite(value) ? value : 0;
++    }
++    if (name === 'gzip' || name === 'x-gzip') gzip = Math.max(gzip ?? 0, q);
++    else if (name === '*') any = Math.max(any ?? 0, q);
++  }
++  return gzip !== null ? gzip > 0 : any !== null && any > 0;
++}
++
++/** `body` gzip-compressed for `req`, or null to send it as it is: `req` does not take gzip, or `body` is under MIN_GZIP_BYTES. */
++export function gzipFor(req: IncomingMessage | undefined, body: Buffer): Buffer | null {
++  if (body.length < MIN_GZIP_BYTES || !acceptsGzip(req)) return null;
++  return gzipSync(body, { level: GZIP_LEVEL });
++}
+diff --git a/src/server/http/router.ts b/src/server/http/router.ts
+index f2ca62afe..9f8ef1cbb 100644
+--- a/src/server/http/router.ts
++++ b/src/server/http/router.ts
+@@ -2,6 +2,7 @@
+ // and the error type handlers throw to answer with a status.
+ 
+ import type { IncomingMessage, ServerResponse } from 'node:http';
++import { gzipFor } from './compress.ts';
+ 
+ export interface RequestContext {
+   /** Display name from the X-Planner-Name header, URI-decoded and trimmed; null when absent or empty. */
+@@ -49,14 +50,21 @@ export class HttpError extends Error {
+ 
+ const DEFAULT_MAX_JSON_BYTES = 1_048_576;
+ 
++/**
++ * Answers with `body` as JSON, gzip-compressed when the request it answers (`res.req`) takes gzip and the JSON has
++ * MIN_GZIP_BYTES or more (RUK-529, `gzipFor`).
++ */
+ export function sendJson(res: ServerResponse, status: number, body: unknown): void {
+-  const text = JSON.stringify(body);
++  const text = Buffer.from(JSON.stringify(body));
++  const gzipped = gzipFor(res.req, text);
+   res.writeHead(status, {
+     'Content-Type': 'application/json; charset=utf-8',
+-    'Content-Length': Buffer.byteLength(text),
++    'Content-Length': (gzipped ?? text).length,
+     'Cache-Control': 'no-store',
++    Vary: 'Accept-Encoding',
++    ...(gzipped === null ? {} : { 'Content-Encoding': 'gzip' }),
+   });
+-  res.end(text);
++  res.end(gzipped ?? text);
+ }
+ 
+ function tooLarge(maxBytes: number): HttpError {
+diff --git a/src/server/http/static.ts b/src/server/http/static.ts
+index f07155c4a..1e285b472 100644
+--- a/src/server/http/static.ts
++++ b/src/server/http/static.ts
+@@ -4,6 +4,7 @@
+ import { open, stat, type FileHandle } from 'node:fs/promises';
+ import type { IncomingMessage, ServerResponse } from 'node:http';
+ import { extname, join, resolve, sep } from 'node:path';
++import { gzipFor } from './compress.ts';
+ 
+ const MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({
+   '.html': 'text/html; charset=utf-8',
+@@ -17,6 +18,9 @@ const MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({
+   '.woff2': 'font/woff2',
+ });
+ 
++/** The files sent gzip-compressed to a client that takes gzip (RUK-529): text. Images and fonts are compressed already. */
++const COMPRESSIBLE: ReadonlySet<string> = new Set(['.html', '.js', '.css', '.svg', '.json', '.wasm']);
++
+ const IMMUTABLE = 'public, max-age=31536000, immutable';
+ const REVALIDATE = 'no-cache';
+ 
+@@ -47,7 +51,10 @@ function safePath(rawUrl: string): string | null {
+   return path;
+ }
+ 
+-/** Sends `file` (200, or headers only for HEAD); false when it is not a regular file. */
++/**
++ * Sends `file` (200, or headers only for HEAD), gzip-compressed when it is text and `req` takes gzip (`gzipFor`); false
++ * when it is not a regular file.
++ */
+ async function sendFile(req: IncomingMessage, res: ServerResponse, file: string, cacheControl: string): Promise<boolean> {
+   let handle: FileHandle;
+   try {
+@@ -58,13 +65,17 @@ async function sendFile(req: IncomingMessage, res: ServerResponse, file: string,
+   try {
+     if (!(await handle.stat()).isFile()) return false;
+     const body = await handle.readFile();
++    const ext = extname(file).toLowerCase();
++    const gzipped = COMPRESSIBLE.has(ext) ? gzipFor(req, body) : null;
+     res.writeHead(200, {
+-      'Content-Type': MIME_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
+-      'Content-Length': body.length,
++      'Content-Type': MIME_TYPES[ext] ?? 'application/octet-stream',
++      'Content-Length': (gzipped ?? body).length,
+       'Cache-Control': cacheControl,
+       'X-Content-Type-Options': 'nosniff',
++      Vary: 'Accept-Encoding',
++      ...(gzipped === null ? {} : { 'Content-Encoding': 'gzip' }),
+     });
+-    res.end(req.method === 'HEAD' ? undefined : body);
++    res.end(req.method === 'HEAD' ? undefined : (gzipped ?? body));
+     return true;
+   } finally {
+     await handle.close();
+diff --git a/tests/unit/http/compress.test.ts b/tests/unit/http/compress.test.ts
+new file mode 100644
+index 000000000..ea41dd9bc
+--- /dev/null
++++ b/tests/unit/http/compress.test.ts
+@@ -0,0 +1,126 @@
++// Compressed answers (RUK-529, performance review F5): JSON and the client's text files go out gzip-compressed to a
++// client that takes gzip, and as they are to every other client.
++import { describe, it, expect, afterAll } from 'vitest';
++import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
++import type { IncomingMessage, ServerResponse } from 'node:http';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { gunzipSync } from 'node:zlib';
++import { acceptsGzip, gzipFor, MIN_GZIP_BYTES } from '../../../src/server/http/compress.ts';
++import { sendJson } from '../../../src/server/http/router.ts';
++import { serveStatic } from '../../../src/server/http/static.ts';
++
++/** A request with these headers: only what the code under test reads. */
++function request(headers: Record<string, string>, method = 'GET', url = '/'): IncomingMessage {
++  return { headers, method, url } as unknown as IncomingMessage;
++}
++
++/** A response that records its status, headers and body; `req` is the request it answers. */
++function response(req: IncomingMessage | undefined) {
++  const sent: { status: number; headers: Record<string, string | number>; body: Buffer | undefined } = { status: 0, headers: {}, body: undefined };
++  const res = {
++    req,
++    writeHead(status: number, headers: Record<string, string | number>) {
++      sent.status = status;
++      sent.headers = headers;
++      return res;
++    },
++    end(body?: Buffer | string) {
++      sent.body = body === undefined ? undefined : Buffer.from(body);
++      return res;
++    },
++  };
++  return { res: res as unknown as ServerResponse, sent };
++}
++
++describe('acceptsGzip', () => {
++  it('takes gzip when Accept-Encoding lists it, or lists * without it, with a q-value above 0', () => {
++    expect(acceptsGzip(request({ 'accept-encoding': 'gzip, deflate' }))).toBe(true);
++    expect(acceptsGzip(request({ 'accept-encoding': 'deflate, GZIP;q=0.5' }))).toBe(true);
++    expect(acceptsGzip(request({ 'accept-encoding': 'x-gzip' }))).toBe(true);
++    expect(acceptsGzip(request({ 'accept-encoding': '*' }))).toBe(true);
++    expect(acceptsGzip(request({ 'accept-encoding': 'gzip;q=0' }))).toBe(false);
++    expect(acceptsGzip(request({ 'accept-encoding': 'gzip;q=0, *' }))).toBe(false);
++    expect(acceptsGzip(request({ 'accept-encoding': '*;q=0' }))).toBe(false);
++    expect(acceptsGzip(request({ 'accept-encoding': 'br, deflate' }))).toBe(false);
++    expect(acceptsGzip(request({ 'accept-encoding': 'identity' }))).toBe(false);
++    expect(acceptsGzip(request({}))).toBe(false);
++    expect(acceptsGzip(undefined)).toBe(false);
++  });
++
++  it('compresses from MIN_GZIP_BYTES on', () => {
++    const gzip = request({ 'accept-encoding': 'gzip' });
++    expect(gzipFor(gzip, Buffer.alloc(MIN_GZIP_BYTES - 1, 'a'))).toBeNull();
++    expect(gunzipSync(gzipFor(gzip, Buffer.alloc(MIN_GZIP_BYTES, 'a'))!).equals(Buffer.alloc(MIN_GZIP_BYTES, 'a'))).toBe(true);
++  });
++});
++
++describe('sendJson', () => {
++  const big = { rows: Array.from({ length: 200 }, (_, i) => ({ i, name: `row ${i}` })) };
++
++  it('sends JSON of MIN_GZIP_BYTES or more gzip-compressed to a client that takes gzip', () => {
++    const { res, sent } = response(request({ 'accept-encoding': 'gzip, deflate' }));
++    sendJson(res, 200, big);
++    expect(sent.status).toBe(200);
++    expect(sent.headers['Content-Encoding']).toBe('gzip');
++    expect(sent.headers['Vary']).toBe('Accept-Encoding');
++    expect(sent.headers['Cache-Control']).toBe('no-store');
++    expect(sent.headers['Content-Length']).toBe(sent.body!.length);
++    expect(JSON.parse(gunzipSync(sent.body!).toString('utf8'))).toEqual(big);
++  });
++
++  it('sends it as it is to a client without gzip, without a request, and when it is small', () => {
++    for (const req of [request({}), request({ 'accept-encoding': 'identity' }), undefined]) {
++      const { res, sent } = response(req);
++      sendJson(res, 200, big);
++      expect(sent.headers['Content-Encoding']).toBeUndefined();
++      expect(sent.body!.toString('utf8')).toBe(JSON.stringify(big));
++      expect(sent.headers['Content-Length']).toBe(sent.body!.length);
++    }
++    const { res, sent } = response(request({ 'accept-encoding': 'gzip' }));
++    sendJson(res, 404, { error: 'not-found', message: 'No such project' });
++    expect(sent.headers['Content-Encoding']).toBeUndefined();
++    expect(JSON.parse(sent.body!.toString('utf8'))).toEqual({ error: 'not-found', message: 'No such project' });
++  });
++});
++
++describe('serveStatic', () => {
++  const root = mkdtempSync(join(tmpdir(), 'gp-gzip-'));
++  mkdirSync(join(root, 'assets'));
++  const script = `console.log(${JSON.stringify('x'.repeat(4000))});\n`;
++  writeFileSync(join(root, 'index.html'), '<!doctype html><title>GTNH Line Planner</title>');
++  writeFileSync(join(root, 'assets', 'app-2.js'), script);
++  writeFileSync(join(root, 'assets', 'icon.png'), Buffer.alloc(4000, 7));
++  afterAll(() => rmSync(root, { recursive: true, force: true }));
++
++  it("sends the client's text files gzip-compressed to a client that takes gzip, and HEAD says the same", async () => {
++    const { res, sent } = response(undefined);
++    expect(await serveStatic(request({ 'accept-encoding': 'gzip' }, 'GET', '/assets/app-2.js'), res, root)).toBe(true);
++    expect(sent.status).toBe(200);
++    expect(sent.headers['Content-Encoding']).toBe('gzip');
++    expect(sent.headers['Vary']).toBe('Accept-Encoding');
++    expect(sent.headers['Content-Length']).toBe(sent.body!.length);
++    expect(gunzipSync(sent.body!).toString('utf8')).toBe(script);
++    const head = response(undefined);
++    await serveStatic(request({ 'accept-encoding': 'gzip' }, 'HEAD', '/assets/app-2.js'), head.res, root);
++    expect(head.sent.headers['Content-Encoding']).toBe('gzip');
++    expect(head.sent.headers['Content-Length']).toBe(sent.body!.length);
++    expect(head.sent.body).toBeUndefined();
++  });
++
++  it('sends images, small files, and files for a client without gzip as they are', async () => {
++    const cases: Array<[Record<string, string>, string, number]> = [
++      [{ 'accept-encoding': 'gzip' }, '/assets/icon.png', 4000],
++      [{ 'accept-encoding': 'gzip' }, '/index.html', 47],
++      [{}, '/assets/app-2.js', Buffer.byteLength(script)],
++    ];
++    for (const [headers, url, length] of cases) {
++      const { res, sent } = response(undefined);
++      await serveStatic(request(headers, 'GET', url), res, root);
++      expect(sent.status).toBe(200);
++      expect(sent.headers['Content-Encoding']).toBeUndefined();
++      expect(sent.headers['Content-Length']).toBe(length);
++      expect(sent.body!.length).toBe(length);
++    }
++  });
++});
