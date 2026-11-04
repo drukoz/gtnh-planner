@@ -23,6 +23,7 @@ import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, apiPost, isTimeout, messageOf } from '../api/client.ts';
 import { isProjectGone, openProjectEvents } from '../api/sse.ts';
 import { getName } from './name.ts';
+import { sameJson } from './same-json.ts';
 
 export interface ProjectViewState {
   project: Project | null; plan: Plan | null; planLoading: boolean; planError: string | null; connected: boolean; error: string | null;
@@ -301,7 +302,7 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
     confirm(next);
   }
 
-  /** Fetches the plan; only the answer to the latest request is kept, and the plan it replaces when its settings differ. */
+  /** Fetches the plan; only the answer to the latest request is kept, the shown plan stays when the answer is the same plan (sameJson), and the plan it replaces is kept when its settings differ. */
   function loadPlan(): void {
     const request = ++planRequest;
     update({ planLoading: true });
@@ -309,6 +310,11 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
       (plan) => {
         if (request !== planRequest) return;
         const shown = state.plan;
+        // RUK-529: the same plan again keeps the shown object, so the layout is not fetched again and no tab is rebuilt
+        if (shown !== null && sameJson(shown, plan)) {
+          update({ planLoading: false, planError: null });
+          return;
+        }
         const previousPlan = shown !== null && shown.settingsHash !== plan.settingsHash ? shown : state.previousPlan;
         update({ plan, previousPlan, planLoading: false, planError: null });
       },

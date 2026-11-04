@@ -1,7 +1,7 @@
 // The project's line layout for a view (spec §3.7–§3.8, architecture §7.1, §8). It is fetched again whenever the plan
 // changes (Plan 2's store replaces the plan object after every SSE `plan` event, which also means "the layout may have
 // changed") or one of the layout's own inputs changes in this tab (placement, logistics mode, scan, base), once per
-// burst of changes 100 ms apart. Only the answer to the latest fetch is kept; a failed fetch keeps the last layout and
+// burst of changes 100 ms apart. Only the answer to the latest fetch is kept, and an answer equal to the shown layout keeps the shown object (RUK-529); a failed fetch keeps the last layout and
 // says why.
 
 import { useEffect, useRef, useState } from 'react';
@@ -10,6 +10,7 @@ import type { Plan } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import { messageOf } from '../api/client.ts';
 import { fetchLayout } from '../api/layout.ts';
+import { sameJson } from './same-json.ts';
 
 /** Changes closer together than this cause one layout fetch. */
 const LAYOUT_COALESCE_MS = 100;
@@ -47,7 +48,10 @@ export function createLayoutLoader(fetch: (id: string) => Promise<Layout>, onCha
     const fetchNo = ++latest;
     fetch(id).then(
       (layout) => {
-        if (fetchNo === latest) update({ layout, loading: timer !== null, error: null });
+        if (fetchNo !== latest) return;
+        // RUK-529: the same layout again keeps the shown object, so the 3D view is not rebuilt
+        const shown = state.layout;
+        update({ layout: shown !== null && sameJson(shown, layout) ? shown : layout, loading: timer !== null, error: null });
       },
       (err: unknown) => {
         if (fetchNo === latest) update({ loading: timer !== null, error: messageOf(err) });

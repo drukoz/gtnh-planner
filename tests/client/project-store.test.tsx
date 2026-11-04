@@ -128,6 +128,26 @@ describe('project store', () => {
     expect(store.getSnapshot().previousPlan).toEqual({ settingsHash: 'h', n: 2 });   // a refetch keeps what changed
     vi.useRealTimers();
   });
+  it('keeps the shown plan object when a refetch brings the same plan (RUK-529)', async () => {
+    vi.useFakeTimers();
+    const { deps, store, events } = harness();
+    events().snapshot(P0);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = store.getSnapshot().plan;
+    expect(first).toEqual({ settingsHash: 'h' });
+    deps.fetchPlan = vi.fn(async () => ({ settingsHash: 'h' }) as never);   // a new object of the same plan
+    events().plan({ rev: 1 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(deps.fetchPlan).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().plan).toBe(first);
+    expect(store.getSnapshot().planLoading).toBe(false);
+    deps.fetchPlan = vi.fn(async () => ({ settingsHash: 'h', n: 2 }) as never);
+    events().plan({ rev: 2 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().plan).not.toBe(first);
+    expect(store.getSnapshot().plan).toEqual({ settingsHash: 'h', n: 2 });
+    vi.useRealTimers();
+  });
   it('ignores an answer older than what the events already brought', async () => {
     let answer: ((p: Project) => void) | undefined;
     const { deps, store, events } = harness();
