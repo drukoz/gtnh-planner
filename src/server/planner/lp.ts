@@ -360,11 +360,16 @@ type SolverTask = { model: LpModel } | { runs: BuildRunsJob };
 type SolverJob = { id: number } & SolverTask;
 type SolverReply = { id: number; result: LpResult } | { id: number; runs: BuildRuns } | { id: number; failed: true };
 
-/** The solver thread and the jobs it has not answered yet, each with the callback that settles its promise. */
-interface Solver { worker: Worker; pending: Map<number, (reply: SolverReply | undefined) => void> }
+/** A job for a solver thread, with the callback that settles its promise. */
+interface Job { id: number; task: SolverTask; settle: (reply: SolverReply | undefined) => void }
+
+/** A solver thread and the job it is solving, null while it is idle: a thread has one job at a time (RUK-563). */
+interface Solver { worker: Worker; job: Job | null }
 
 /** The solver threads started so far, oldest first, at most `solverThreadCount()` of them (RUK-529). */
 const solvers: Solver[] = [];
+/** The jobs no solver thread has taken yet, oldest first: one queue for every thread (RUK-563). */
+const waiting: Job[] = [];
 /** A solver thread that could not start or stopped is not started again: every later model solves on this thread. */
 let solverFailed = false;
 let nextJob = 0;
@@ -381,30 +386,32 @@ export function solverThreadCount(): number {
 }
 
 /**
- * The solver thread for the next job: the first idle one; else a new one while fewer than `solverThreadCount()` run
- * (each holds the process open only while a job is pending: `ref`/`unref`); else the one with the fewest jobs pending,
- * the oldest of those.
+ * An idle solver thread: the first idle one, else a new one while fewer than `solverThreadCount()` run (each holds the
+ * process open only while it solves: `ref`/`unref`); null when every thread is solving.
  */
-function solverThread(): Solver {
-  const idle = solvers.find((s) => s.pending.size === 0);
+function idleSolver(): Solver | null {
+  const idle = solvers.find((s) => s.job === null);
   if (idle !== undefined) return idle;
-  if (solvers.length >= solverThreadCount()) return solvers.reduce((a, b) => (b.pending.size < a.pending.size ? b : a));
+  if (solvers.length >= solverThreadCount()) return null;
   const worker = new Worker(new URL(import.meta.url), { workerData: { [SOLVER_FLAG]: true }, execArgv: SOLVER_EXEC_ARGV });
   worker.unref();
-  const started: Solver = { worker, pending: new Map() };
+  const started: Solver = { worker, job: null };
   const stopped = (): void => {
     solverFailed = true;
     const at = solvers.indexOf(started);
     if (at >= 0) solvers.splice(at, 1);
-    for (const settle of started.pending.values()) settle(undefined);
-    started.pending.clear();
+    const job = started.job;
+    started.job = null;
+    job?.settle(undefined);
+    handOut();
   };
   worker.on('message', (reply: SolverReply) => {
-    const settle = started.pending.get(reply.id);
-    if (settle === undefined) return;
-    started.pending.delete(reply.id);
-    if (started.pending.size === 0) worker.unref();
-    settle('failed' in reply ? undefined : reply);
+    const job = started.job;
+    if (job === null || job.id !== reply.id) return;
+    started.job = null;
+    worker.unref();
+    job.settle('failed' in reply ? undefined : reply);
+    handOut();
   });
   worker.on('error', stopped);
   worker.on('exit', stopped);
@@ -412,27 +419,44 @@ function solverThread(): Solver {
   return started;
 }
 
-/** `task` done on a solver thread (`solverThread`); undefined when that thread cannot do it (it did not start, stopped, or threw). */
-function solvedAside(task: SolverTask): Promise<SolverReply | undefined> {
-  if (solverFailed) return Promise.resolve(undefined);
-  let thread: Solver;
-  try {
-    thread = solverThread();
-  } catch {
-    solverFailed = true;
-    return Promise.resolve(undefined);
-  }
-  return new Promise((settle) => {
-    const id = nextJob++;
-    thread.pending.set(id, settle);
+/**
+ * Hands the waiting jobs, oldest first, to idle solver threads, one job per thread at a time, so no job waits behind
+ * another job's solve while a thread is free (RUK-563: two plans at once, where one plan's price LPs used to wait behind
+ * the other's build MIP). Once a thread has failed, every waiting job is settled with undefined, and its caller solves it.
+ */
+function handOut(): void {
+  while (waiting.length > 0) {
+    if (solverFailed) {
+      for (const job of waiting.splice(0)) job.settle(undefined);
+      return;
+    }
+    let thread: Solver | null;
+    try {
+      thread = idleSolver();
+    } catch {
+      solverFailed = true;
+      continue;
+    }
+    if (thread === null) return;
+    const job = waiting.shift() as Job;
+    thread.job = job;
     thread.worker.ref();
     try {
-      thread.worker.postMessage({ id, ...task } satisfies SolverJob);
+      thread.worker.postMessage({ id: job.id, ...job.task } satisfies SolverJob);
     } catch {
-      thread.pending.delete(id);
-      if (thread.pending.size === 0) thread.worker.unref();
-      settle(undefined);
+      thread.job = null;
+      thread.worker.unref();
+      job.settle(undefined);
     }
+  }
+}
+
+/** `task` done on a solver thread (`handOut`); undefined when no thread can do it (none starts, it stopped, or it threw). */
+function solvedAside(task: SolverTask): Promise<SolverReply | undefined> {
+  if (solverFailed) return Promise.resolve(undefined);
+  return new Promise((settle) => {
+    waiting.push({ id: nextJob++, task, settle });
+    handOut();
   });
 }
 
@@ -441,8 +465,8 @@ function solvedAside(task: SolverTask): Promise<SolverReply | undefined> {
  * (`buildStage`: the leanest line's build MIP beside plan 09's plan). HiGHS gives the same model the same answer on
  * either thread, so the result is `solveLp`'s, bit for bit. Where the solver thread cannot answer (it does not start,
  * stops, or the solve throws there, as on a malformed model) the model is solved on this thread, which throws the same
- * errors as `solveLp`. Up to `solverThreadCount()` threads serve the callers, each its jobs one at a time in the order
- * it was handed them.
+ * errors as `solveLp`. Up to `solverThreadCount()` threads serve the callers from one queue, in the order they asked,
+ * each thread one job at a time.
  */
 export async function solveLpAside(model: LpModel): Promise<LpResult> {
   const reply = await solvedAside({ model });

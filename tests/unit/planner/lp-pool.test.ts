@@ -47,4 +47,28 @@ describe('solveLpAside on a pool of threads', () => {
     expect(workers.size).toBe(2);
     for (const [i, m] of models.entries()) expect(aside[i]).toStrictEqual(await solveLp(m));
   }, 30_000);
+
+  // About 2 s alone, as the test above.
+  it('hands a job to a thread only when that thread is idle, from one queue', async () => {
+    vi.stubEnv('GTNH_LP_THREADS', '2');
+    const unanswered = new Map<Worker, number>();
+    let most = 0;
+    const post = Worker.prototype.postMessage;
+    vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker, ...args: Parameters<Worker['postMessage']>) {
+      if (!unanswered.has(this)) {
+        unanswered.set(this, 0);
+        // runs before lp.ts's own listener, which may hand this thread its next job at once
+        this.prependListener('message', () => unanswered.set(this, (unanswered.get(this) ?? 1) - 1));
+      }
+      const n = (unanswered.get(this) ?? 0) + 1;
+      unanswered.set(this, n);
+      most = Math.max(most, n);
+      return post.apply(this, args);
+    });
+    const models = [7, 8, 9, 10, 11, 12].map(knapsack);
+    const aside = await Promise.all(models.map((m) => solveLpAside(m)));
+    expect(unanswered.size).toBe(2);
+    expect(most).toBe(1);
+    for (const [i, m] of models.entries()) expect(aside[i]).toStrictEqual(await solveLp(m));
+  }, 30_000);
 });
