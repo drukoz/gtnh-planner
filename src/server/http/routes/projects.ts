@@ -12,6 +12,7 @@ import { exportDirFor } from '../../config.ts';
 import { COMPARE_TIME_LIMIT_SECONDS, compareModes, compareRunnerFor, modeSettings } from '../../planner/compare.ts';
 import { objectiveOf } from '../../planner/objective.ts';
 import { emptyContext, planCacheKey, planLine, PlanCache, settingsHash } from '../../planner/plan.ts';
+import { planStoreFor } from '../../planner/plan-store.ts';
 import { linePricing } from '../../planner/pricing.ts';
 import { planningThreadOf } from '../../planner/thread.ts';
 import { OpError, type ProjectStore } from '../../projects/store.ts';
@@ -220,13 +221,21 @@ export async function planForProject(app: AppContext, project: Project, opts: { 
   // On the app's planning thread when it has one (main.ts starts it), so this thread keeps answering (RUK-563).
   const thread = planningThreadOf(app);
   const exportDir = exportDirFor(app.config, exportId);
+  // What a restart would work out again, from the app's store on disk when it has one (main.ts opens it, RUK-563).
+  const store = planStoreFor(app, project);
   const goods = !readsBoard(settings) ? NO_GOODS : await lineGoods(app, planKey, async () => {
+    const stored = await store?.goods.get(planKey);
+    if (Array.isArray(stored)) return new Set(stored as StuffKey[]);
+    let found: ReadonlySet<StuffKey>;
     if (thread !== undefined) {
       const keys = await thread.goods(exportDir, settings, await contextOf());
-      return keys === null ? NO_GOODS : new Set(keys);
+      found = keys === null ? NO_GOODS : new Set(keys);
+    } else {
+      const pricing = linePricing(pack, settings, await contextOf());
+      found = pricing === null ? NO_GOODS : new Set((await pricing).graph.goods.keys());
     }
-    const pricing = linePricing(pack, settings, await contextOf());
-    return pricing === null ? NO_GOODS : new Set((await pricing).graph.goods.keys());
+    void store?.goods.put(planKey, [...found]);
+    return found;
   });
   const board = surplusBoardFor(app);
   const publish = opts.publish ?? true;
@@ -236,11 +245,15 @@ export async function planForProject(app: AppContext, project: Project, opts: { 
     if (publish) board.noteRead(project.id, readGoods(settings, goods));
     const key = read.hash === '' ? planKey : `${planKey}|x:${read.hash}`;
     const plan = await planCacheFor(app).get(key, async () => {
+      const stored = await store?.plans.get(key);
+      if (typeof stored === 'object' && stored !== null) return stored as Plan;
       const ctx = await contextOf();
       const planned = thread !== undefined
         ? await thread.plan(exportDir, settings, ctx, { offers: read.offers, needs: read.needs })
         : await planLine(pack, settings, ctx, { offers: read.offers, needs: read.needs });
-      return withRead(pack, settings, planned, read);
+      const made = withRead(pack, settings, planned, read);
+      void store?.plans.put(key, made);
+      return made;
     });
     return publish ? published(app, board, project, plan, live) : plan;
   };
