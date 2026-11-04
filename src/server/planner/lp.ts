@@ -1,9 +1,10 @@
 // The LP solver (web-stack §6): HiGHS compiled to WebAssembly, behind one small dense-bounds, sparse-rows model shape.
 // This is the only module that imports `highs`. Rows are scaled before the solve because planner quantities range from
 // 0.05 dust to 20,000 L (prior-art §3.4); scaling a row changes neither the solution nor the objective. A model may also
-// be solved on a worker thread that loads this module with its own HiGHS runtime (`solveLpAside`, and a build MIP's
-// solves together: `solveBuildRunsAside`; the bootstrap at the end), while this thread solves others.
+// be solved on one of a few worker threads that each load this module with their own HiGHS runtime (`solveLpAside`, and
+// a build MIP's solves together: `solveBuildRunsAside`; the bootstrap at the end), while this thread solves others.
 
+import { availableParallelism } from 'node:os';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 import highsDefault from 'highs';
 import type { Highs, ModelData } from 'highs';
@@ -362,20 +363,39 @@ type SolverReply = { id: number; result: LpResult } | { id: number; runs: BuildR
 /** The solver thread and the jobs it has not answered yet, each with the callback that settles its promise. */
 interface Solver { worker: Worker; pending: Map<number, (reply: SolverReply | undefined) => void> }
 
-let solver: Solver | null = null;
+/** The solver threads started so far, oldest first, at most `solverThreadCount()` of them (RUK-529). */
+const solvers: Solver[] = [];
 /** A solver thread that could not start or stopped is not started again: every later model solves on this thread. */
 let solverFailed = false;
 let nextJob = 0;
 
-/** The solver thread, started on first use; it holds the process open only while a job is pending (`ref`/`unref`). */
+/**
+ * How many solver threads `solveLpAside` and `solveBuildRunsAside` may use (RUK-529): `GTNH_LP_THREADS` when it is a
+ * whole number from 1 to 64, else one fewer than this computer's cores, at most 4. On the group's 16-core Mac, the seven
+ * real projects' cold plans took 39.9 s on 1 thread, 36.4 s on 4 and 36.9 s on 8. Read for every job, so a test can set it.
+ */
+export function solverThreadCount(): number {
+  const asked = Number(process.env.GTNH_LP_THREADS);
+  if (Number.isInteger(asked) && asked >= 1 && asked <= 64) return asked;
+  return Math.min(4, Math.max(1, availableParallelism() - 1));
+}
+
+/**
+ * The solver thread for the next job: the first idle one; else a new one while fewer than `solverThreadCount()` run
+ * (each holds the process open only while a job is pending: `ref`/`unref`); else the one with the fewest jobs pending,
+ * the oldest of those.
+ */
 function solverThread(): Solver {
-  if (solver !== null) return solver;
+  const idle = solvers.find((s) => s.pending.size === 0);
+  if (idle !== undefined) return idle;
+  if (solvers.length >= solverThreadCount()) return solvers.reduce((a, b) => (b.pending.size < a.pending.size ? b : a));
   const worker = new Worker(new URL(import.meta.url), { workerData: { [SOLVER_FLAG]: true }, execArgv: SOLVER_EXEC_ARGV });
   worker.unref();
   const started: Solver = { worker, pending: new Map() };
   const stopped = (): void => {
     solverFailed = true;
-    if (solver === started) solver = null;
+    const at = solvers.indexOf(started);
+    if (at >= 0) solvers.splice(at, 1);
     for (const settle of started.pending.values()) settle(undefined);
     started.pending.clear();
   };
@@ -388,11 +408,11 @@ function solverThread(): Solver {
   });
   worker.on('error', stopped);
   worker.on('exit', stopped);
-  solver = started;
+  solvers.push(started);
   return started;
 }
 
-/** `task` done on the solver thread; undefined when that thread cannot do it (it did not start, stopped, or threw). */
+/** `task` done on a solver thread (`solverThread`); undefined when that thread cannot do it (it did not start, stopped, or threw). */
 function solvedAside(task: SolverTask): Promise<SolverReply | undefined> {
   if (solverFailed) return Promise.resolve(undefined);
   let thread: Solver;
@@ -421,7 +441,8 @@ function solvedAside(task: SolverTask): Promise<SolverReply | undefined> {
  * (`buildStage`: the leanest line's build MIP beside plan 09's plan). HiGHS gives the same model the same answer on
  * either thread, so the result is `solveLp`'s, bit for bit. Where the solver thread cannot answer (it does not start,
  * stops, or the solve throws there, as on a malformed model) the model is solved on this thread, which throws the same
- * errors as `solveLp`. One thread serves every caller, one job at a time, in the order asked.
+ * errors as `solveLp`. Up to `solverThreadCount()` threads serve the callers, each its jobs one at a time in the order
+ * it was handed them.
  */
 export async function solveLpAside(model: LpModel): Promise<LpResult> {
   const reply = await solvedAside({ model });
@@ -429,7 +450,7 @@ export async function solveLpAside(model: LpModel): Promise<LpResult> {
 }
 
 /**
- * `solveBuildRuns` on the solver thread, as one job: every solve of it runs there one after another, so none waits for
+ * `solveBuildRuns` on a solver thread, as one job: every solve of it runs there one after another, so none waits for
  * this thread to come back from a solve of its own (release gate round 2, G1: Duty plate's leanest line waited 1.7 s
  * for plan 09's charge MIP before its retry), and the answer is `solveBuildRuns`'s here, bit for bit. Where the solver
  * thread cannot answer, the job runs on this thread, as `solveLpAside`'s models do.
