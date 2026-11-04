@@ -802,7 +802,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
           </div>
           {/* The view remounts on a tab switch anyway; the key makes the section new too, so its fade-in plays again. */}
           <section key={active.id} className="tab-panel" role="tabpanel" id={`panel-${active.id}`} aria-labelledby={`tab-${active.id}`}>
-            <View project={project} plan={plan} previousPlan={view.previousPlan} send={send} sendLater={view.sendLater} me={me} />
+            <View project={project} plan={plan} previousPlan={view.previousPlan} send={send} sendLater={view.sendLater} me={me}
+              planAnswers={view.planAnswers} />
           </section>
         </div>
       </div>
