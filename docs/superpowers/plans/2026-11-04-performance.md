@@ -208,7 +208,14 @@ restart pass.
 `npm run perf -- --restart` on the merged branch against the reference: 42 of 42 files byte-identical, the cold total,
 the restart pass, and the longest `/api/health` wait in every pass (under 0.5 s), beside the tables above.
 
-## Milestone 3: smoother 3D on big lines
+## Milestone 3: measured, and not built
 
-Picking by the block grid instead of raycasting every instance, the connections' link geometry off the main thread,
-and a faster path search for Move line (F7).
+The review's three smaller costs in the 3D (F7) were measured on the group's seven lines on 2026-11-04, before any task
+was made. None of them is a wait the group can notice, so milestone 3 is not built and the program ends with milestone 2.
+It comes back if the group's lines grow several times bigger.
+
+| Cost | Measured | Why nothing is built |
+| --- | --- | --- |
+| Hovering raycasts every block of the scene | The biggest scenes are Duty plate (401 blocks and 190 hookup cells) and HV Circuit (429 and 108). The review measured a pick at under 6 ms for 1,000 blocks. | About 3 ms a pointer move. Picking by the block grid starts to matter at about 5,000 blocks (about 30 ms). |
+| Show connections builds its geometry on the main thread | In the review's browser profiles (four lines, with and without Show connections), the planner's own code for it (`connectionsGraph`, `linkGeometry`) took 9 to 15 ms. Turning it on added 190 to 230 ms of the browser's own native work (the profiles' "(program)"), in a headless browser that draws without a graphics card. | A worker could take only the 9 to 15 ms. The native work stays on the canvas's thread. |
+| The path search when a line is moved | Three drops each on Duty plate and HV Circuit (a scratch server on a copy of the group's data, `feat/perf-m2` at `fac4cfccb`). The new layout answered in 0.08 to 0.10 s. The plan the tabs fetch next took 0.18 to 0.25 s, because it is finished again with the new hookups (power, build list, costs). | The path search is part of the 0.1 s. A drop answers in about 0.3 s in all. |

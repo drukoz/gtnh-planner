@@ -159,4 +159,5 @@ builds and the candidate-graph JavaScript, each measured on the same seven proje
 byte-identical plans or the user accepts the changes. The plan cache survives a restart.
 
 Milestone 3: smoother 3D on big lines (F7). Picking by the block grid, link geometry off the main thread, and a faster
-path search for Move line.
+path search for Move line. Measured on the group's lines before any task was made, none of the three is a wait the
+group can notice, so it is not built (the plan's milestone 3 section has the figures).
