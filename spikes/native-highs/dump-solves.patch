@@ -1,0 +1,32 @@
+diff --git a/src/server/planner/lp.ts b/src/server/planner/lp.ts
+index 5c7b4f0cb..05f2c0867 100644
+--- a/src/server/planner/lp.ts
++++ b/src/server/planner/lp.ts
+@@ -200,7 +200,27 @@ export function highsOptions(model: LpModel): Record<string, number | boolean> {
+   };
+ }
+ 
++import { appendFileSync } from 'node:fs';
++import { threadId } from 'node:worker_threads';
++let dumpSeq = 0;
++const enc = (_k: string, v: unknown): unknown => (typeof v === 'number' && (!Number.isFinite(v) || Object.is(v, -0)) ? (Object.is(v, -0) ? '-0' : String(v)) : (ArrayBuffer.isView(v) ? Array.from(v as Float64Array) : v));
+ export async function solveLp(model: LpModel): Promise<LpResult> {
++  const dir = process.env.RUK563_DUMP;
++  if (dir === undefined || model.colCost.length === 0) return solveLpInner(model);
++  const highs = await runtime();
++  const data = modelData(highs, model);
++  const t0 = performance.now();
++  const result = await solveLpInner(model);
++  const ms = performance.now() - t0;
++  appendFileSync(`${dir}/solves-${process.pid}-${threadId}.jsonl`, JSON.stringify({
++    seq: dumpSeq++, thread: threadId, numCols: data.numCols, numRows: data.numRows, sense: model.sense, colCost: data.colCost, colLower: data.colLower, colUpper: data.colUpper,
++    rowLower: data.rowLower, rowUpper: data.rowUpper, starts: data.matrix.starts, indices: data.matrix.indices, values: data.matrix.values,
++    integer: model.integer ?? null, options: highsOptions(model), start: model.start ?? null, maxIterations: model.maxIterations ?? null,
++    stopOnRootLpFailure: model.stopOnRootLpFailure ?? false, keepImproving: model.keepImproving ?? false, result, ms,
++  }, enc) + '\n');
++  return result;
++}
++async function solveLpInner(model: LpModel): Promise<LpResult> {
+   if (model.colCost.length === 0) return solveEmpty(model);
+   checkStart(model);
+   // A solve is synchronous WebAssembly: yield first, so a plan of a dozen solves never holds the thread for all of them.
