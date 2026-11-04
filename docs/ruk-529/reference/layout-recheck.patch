@@ -1,0 +1,296 @@
+diff --git a/src/client/state/project-store.ts b/src/client/state/project-store.ts
+index 3979b641f..a334bd667 100644
+--- a/src/client/state/project-store.ts
++++ b/src/client/state/project-store.ts
+@@ -34,6 +34,12 @@ export interface ProjectViewState {
+    * §6.4); null until a settings change replans. A plan of the same settings (a refetch, a rescan) leaves it.
+    */
+   previousPlan: Plan | null;
++  /**
++   * How many plan fetches have answered, an answer of the same plan too (whose shown object stays, RUK-529). The server
++   * sends a `plan` event also when only the layout may have changed (a placement batch, architecture §11.16), so the
++   * views that show the layout check it again after every answer, not only when `plan` is another object.
++   */
++  planAnswers: number;
+ }
+ 
+ export interface StoreDeps {
+@@ -202,6 +208,7 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
+   let queued = 0;
+   let state: ProjectViewState = {
+     project: null, plan: null, planLoading: false, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
++    planAnswers: 0,
+   };
+   const listeners = new Set<() => void>();
+   let closed = false;
+@@ -302,7 +309,10 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
+     confirm(next);
+   }
+ 
+-  /** Fetches the plan; only the answer to the latest request is kept, the shown plan stays when the answer is the same plan (sameJson), and the plan it replaces is kept when its settings differ. */
++  /**
++   * Fetches the plan; only the answer to the latest request is kept and counted in `planAnswers`, the shown plan stays
++   * when the answer is the same plan (sameJson), and the plan it replaces is kept when its settings differ.
++   */
+   function loadPlan(): void {
+     const request = ++planRequest;
+     update({ planLoading: true });
+@@ -310,13 +320,14 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
+       (plan) => {
+         if (request !== planRequest) return;
+         const shown = state.plan;
+-        // RUK-529: the same plan again keeps the shown object, so the layout is not fetched again and no tab is rebuilt
++        const planAnswers = state.planAnswers + 1;
++        // RUK-529: the same plan again keeps the shown object, so no tab is rebuilt; the new count still has the layout checked
+         if (shown !== null && sameJson(shown, plan)) {
+-          update({ planLoading: false, planError: null });
++          update({ planLoading: false, planError: null, planAnswers });
+           return;
+         }
+         const previousPlan = shown !== null && shown.settingsHash !== plan.settingsHash ? shown : state.previousPlan;
+-        update({ plan, previousPlan, planLoading: false, planError: null });
++        update({ plan, previousPlan, planLoading: false, planError: null, planAnswers });
+       },
+       (err: unknown) => {
+         if (request === planRequest) update({ planLoading: false, planError: messageOf(err) });
+@@ -509,6 +520,7 @@ export function liveDeps(): StoreDeps {
+ 
+ const LOADING: ProjectViewState = {
+   project: null, plan: null, planLoading: true, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
++  planAnswers: 0,
+ };
+ const noStore = (): (() => void) => () => {};
+ const loading = (): ProjectViewState => LOADING;
+diff --git a/src/client/state/use-layout.ts b/src/client/state/use-layout.ts
+index 66ed73b08..270e2de17 100644
+--- a/src/client/state/use-layout.ts
++++ b/src/client/state/use-layout.ts
+@@ -1,7 +1,10 @@
+ // The project's line layout for a view (spec §3.7–§3.8, architecture §7.1, §8). It is fetched again whenever the plan
+-// changes (Plan 2's store replaces the plan object after every SSE `plan` event, which also means "the layout may have
+-// changed") or one of the layout's own inputs changes in this tab (placement, logistics mode, scan, base), once per
+-// burst of changes 100 ms apart. Only the answer to the latest fetch is kept, and an answer equal to the shown layout keeps the shown object (RUK-529); a failed fetch keeps the last layout and
++// changes or one of the layout's own inputs changes in this tab (placement, logistics mode, scan, base), once per burst
++// of changes 100 ms apart, and checked again, with no loading line, after every other answer to the store's plan fetches
++// (`ProjectViewState.planAnswers`): the store fetches the plan after every SSE `plan` event, which also means "the
++// layout may have changed" (architecture §11.16: a placement batch hits the plan cache but still tells the tabs), and
++// keeps the shown plan object when the answer is the same plan (RUK-529). Only the answer to the latest fetch is kept,
++// and an answer equal to the shown layout keeps the shown object (RUK-529); a failed fetch keeps the last layout and
+ // says why.
+ 
+ import { useEffect, useRef, useState } from 'react';
+@@ -23,16 +26,17 @@ export function layoutInputKey(project: Project): string {
+ 
+ export interface LayoutState { layout: Layout | null; loading: boolean; error: string | null }
+ 
+-export interface LayoutLoader { request(id: string, plan: Plan | null, key: string): void; state(): LayoutState; close(): void }
++export interface LayoutLoader { request(id: string, plan: Plan | null, key: string, answers?: number): void; state(): LayoutState; close(): void }
+ 
+ /**
+  * Fetches project `id`'s layout through `fetch` when `request` names another project, plan (by identity) or key than
+- * the request before; requests within LAYOUT_COALESCE_MS of the first of a burst cause one fetch. `onChange` gets
+- * every new state. After `close` nothing is fetched or reported.
++ * the request before, and checks it again with no loading line when only the count of plan answers (`answers`) is
++ * another; requests within LAYOUT_COALESCE_MS of the first of a burst cause one fetch. `onChange` gets every new
++ * state. After `close` nothing is fetched or reported.
+  */
+ export function createLayoutLoader(fetch: (id: string) => Promise<Layout>, onChange: (s: LayoutState) => void): LayoutLoader {
+   let state: LayoutState = { layout: null, loading: false, error: null };
+-  let last: { id: string; plan: Plan | null; key: string } | null = null;
++  let last: { id: string; plan: Plan | null; key: string; answers: number | undefined } | null = null;
+   let timer: ReturnType<typeof setTimeout> | null = null;
+   /** Bumped by every fetch; only the answer to the newest one is kept. */
+   let latest = 0;
+@@ -60,17 +64,20 @@ export function createLayoutLoader(fetch: (id: string) => Promise<Layout>, onCha
+   }
+ 
+   return {
+-    request(id, plan, key) {
++    request(id, plan, key, answers) {
+       if (closed) return;
+-      if (last !== null && last.id === id && last.plan === plan && last.key === key) return;
+-      last = { id, plan, key };
++      const before = last;
++      // the same project, plan and inputs, answered again (§11.16): checked again quietly, with no loading line
++      const quiet = before !== null && before.id === id && before.plan === plan && before.key === key;
++      if (quiet && before.answers === answers) return;
++      last = { id, plan, key, answers };
+       if (timer === null) {
+         timer = setTimeout(() => {
+           timer = null;
+           if (last !== null) load(last.id);
+         }, LAYOUT_COALESCE_MS);
+       }
+-      if (!state.loading) update({ loading: true });
++      if (!quiet && !state.loading) update({ loading: true });
+     },
+     state: () => state,
+     close() {
+@@ -83,8 +90,8 @@ export function createLayoutLoader(fetch: (id: string) => Promise<Layout>, onCha
+ 
+ const STARTING: LayoutState = { layout: null, loading: true, error: null };
+ 
+-/** The layout of project `projectId`, refetched as `plan` and the project's layout inputs change. */
+-export function useLayout(projectId: string, plan: Plan | null, project: Project): LayoutState {
++/** The layout of project `projectId`, refetched as `plan` and the project's layout inputs change, and checked again after every plan answer (`planAnswers`). */
++export function useLayout(projectId: string, plan: Plan | null, project: Project, planAnswers?: number): LayoutState {
+   const key = layoutInputKey(project);
+   const [state, setState] = useState<LayoutState>(STARTING);
+   const loader = useRef<LayoutLoader | null>(null);
+@@ -98,7 +105,7 @@ export function useLayout(projectId: string, plan: Plan | null, project: Project
+     };
+   }, []);
+   useEffect(() => {
+-    loader.current?.request(projectId, plan, key);
+-  }, [projectId, plan, key]);
++    loader.current?.request(projectId, plan, key, planAnswers);
++  }, [projectId, plan, key, planAnswers]);
+   return state;
+ }
+diff --git a/src/client/views/ConnectionsView.tsx b/src/client/views/ConnectionsView.tsx
+index 61ecf0a0c..0964ae6e7 100644
+--- a/src/client/views/ConnectionsView.tsx
++++ b/src/client/views/ConnectionsView.tsx
+@@ -545,7 +545,7 @@ export function ConnectionsShell(props: ConnectionsShellProps): ReactElement {
+  */
+ export function ConnectionsView(props: ProjectViewProps): ReactElement {
+   const { project, plan } = props;
+-  const { layout, loading, error } = useLayout(project.id, plan, project);
++  const { layout, loading, error } = useLayout(project.id, plan, project, props.planAnswers);
+   const { settings } = project;
+   const per = settings.mode === 'makeN' ? 'hour' : settings.per;
+   const graph = useMemo(
+diff --git a/src/client/views/MapTab.tsx b/src/client/views/MapTab.tsx
+index 7320ac83d..8b0c163a2 100644
+--- a/src/client/views/MapTab.tsx
++++ b/src/client/views/MapTab.tsx
+@@ -505,7 +505,7 @@ function ProjectMap(props: { project: Project; scanId: string; scans: WorldScanL
+ export function MapTab(props: ProjectViewProps): ReactElement {
+   const { project, plan, send } = props;
+   const { scans, error } = useDoneScans();
+-  const line = useLayout(project.id, plan, project);
++  const line = useLayout(project.id, plan, project, props.planAnswers);
+   const focusedPin = usePinFocus();
+   const { scanId } = project.world;
+   if (scanId === null) {
+diff --git a/src/client/views/ProjectPage.tsx b/src/client/views/ProjectPage.tsx
+index 5dd20ea4c..cfb7bea2c 100644
+--- a/src/client/views/ProjectPage.tsx
++++ b/src/client/views/ProjectPage.tsx
+@@ -802,7 +802,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
+           </div>
+           {/* The view remounts on a tab switch anyway; the key makes the section new too, so its fade-in plays again. */}
+           <section key={active.id} className="tab-panel" role="tabpanel" id={`panel-${active.id}`} aria-labelledby={`tab-${active.id}`}>
+-            <View project={project} plan={plan} previousPlan={view.previousPlan} send={send} sendLater={view.sendLater} me={me} />
++            <View project={project} plan={plan} previousPlan={view.previousPlan} send={send} sendLater={view.sendLater} me={me}
++              planAnswers={view.planAnswers} />
+           </section>
+         </div>
+       </div>
+diff --git a/src/client/views/View3D.tsx b/src/client/views/View3D.tsx
+index 868362d70..648bfe0c3 100644
+--- a/src/client/views/View3D.tsx
++++ b/src/client/views/View3D.tsx
+@@ -330,7 +330,7 @@ function preserveDrawingBuffer(): boolean {
+  */
+ export default function View3D(props: ProjectViewProps): ReactElement {
+   const { project, plan } = props;
+-  const line = useLayout(project.id, plan, project);
++  const line = useLayout(project.id, plan, project, props.planAnswers);
+   const { layout } = line;
+   const [webgl] = useState(webgl2Available);
+   const [maxLayer, setMaxLayer] = useState<number | null>(null);
+diff --git a/src/client/views/project-tabs.ts b/src/client/views/project-tabs.ts
+index 3285c13fc..e367ea2c6 100644
+--- a/src/client/views/project-tabs.ts
++++ b/src/client/views/project-tabs.ts
+@@ -23,6 +23,9 @@ export interface ProjectViewProps {
+    * view sends at once.
+    */
+   sendLater?: ProjectStore['sendLater'];
++  // optional addition (RUK-529)
++  /** How many plan fetches have answered (`ProjectViewState.planAnswers`): the views that show the layout check it again after each. */
++  planAnswers?: number;
+ }
+ export interface ProjectTab { id: 'map' | '3d' | 'connections' | 'flow' | 'materials' | 'notes'; label: string; component: ComponentType<ProjectViewProps> }
+ 
+diff --git a/tests/client/layout-map.test.tsx b/tests/client/layout-map.test.tsx
+index f23bee93f..68a590f3b 100644
+--- a/tests/client/layout-map.test.tsx
++++ b/tests/client/layout-map.test.tsx
+@@ -159,6 +159,39 @@ describe('the line on the map', () => {
+     vi.useRealTimers();
+   });
+ 
++  it('checks the layout again, with no loading line, when only the plan was answered again (RUK-529, §11.16)', async () => {
++    vi.useFakeTimers();
++    const answers: Array<(l: Layout) => void> = [];
++    const states: LayoutState[] = [];
++    const loader = createLayoutLoader(() => new Promise<Layout>((r) => answers.push(r)), (s) => states.push(s));
++    const plan = {} as Plan;
++    loader.request('P1', plan, 'k1', 1);
++    expect(loader.state().loading).toBe(true);
++    await vi.advanceTimersByTimeAsync(100);
++    answers[0]!(structuredClone(layout));
++    await vi.advanceTimersByTimeAsync(0);
++    const shown = loader.state().layout;
++    expect(shown).not.toBeNull();
++    loader.request('P1', plan, 'k1', 1);                                      // nothing new: nothing fetched
++    await vi.advanceTimersByTimeAsync(100);
++    expect(answers).toHaveLength(1);
++    const seen = states.length;
++    loader.request('P1', plan, 'k1', 2);                                      // the same plan answered again: checked
++    await vi.advanceTimersByTimeAsync(100);
++    expect(answers).toHaveLength(2);
++    answers[1]!(structuredClone(layout));
++    await vi.advanceTimersByTimeAsync(0);
++    expect(loader.state().layout).toBe(shown);
++    expect(states.slice(seen).some((s) => s.loading)).toBe(false);            // no loading line over the layout shown
++    loader.request('P1', plan, 'k1', 3);                                      // a placement batch: the same plan, a moved line
++    await vi.advanceTimersByTimeAsync(100);
++    expect(answers).toHaveLength(3);
++    answers[2]!({ ...structuredClone(layout), origin: [1, 1, 1] });
++    await vi.advanceTimersByTimeAsync(0);
++    expect(loader.state().layout!.origin).toEqual([1, 1, 1]);
++    vi.useRealTimers();
++  });
++
+   it('links build steps to map pins', () => {
+     focusPin(3);
+     expect(getFocusedPin()).toBe(3);
+diff --git a/tests/client/project-store.test.tsx b/tests/client/project-store.test.tsx
+index dea5d47fe..0a8620667 100644
+--- a/tests/client/project-store.test.tsx
++++ b/tests/client/project-store.test.tsx
+@@ -148,6 +148,31 @@ describe('project store', () => {
+     expect(store.getSnapshot().plan).toEqual({ settingsHash: 'h', n: 2 });
+     vi.useRealTimers();
+   });
++  it('counts every answer to a plan fetch, an answer of the same plan too, but not a failed fetch (RUK-529, §11.16)', async () => {
++    vi.useFakeTimers();
++    const { deps, store, events } = harness();
++    events().snapshot(P0);
++    await vi.advanceTimersByTimeAsync(0);
++    const first = store.getSnapshot().plan;
++    expect(first).toEqual({ settingsHash: 'h' });
++    expect(store.getSnapshot().planAnswers).toBe(1);
++    deps.fetchPlan = vi.fn(async () => ({ settingsHash: 'h' }) as never);   // the same plan, as after a placement batch
++    events().plan({ rev: 1 });
++    await vi.advanceTimersByTimeAsync(150);
++    expect(store.getSnapshot().plan).toBe(first);
++    expect(store.getSnapshot().planAnswers).toBe(2);
++    deps.fetchPlan = vi.fn(async () => { throw new Error('down'); });
++    events().plan({ rev: 2 });
++    await vi.advanceTimersByTimeAsync(150);
++    expect(store.getSnapshot().planError).toBe('down');
++    expect(store.getSnapshot().planAnswers).toBe(2);
++    deps.fetchPlan = vi.fn(async () => ({ settingsHash: 'h', n: 2 }) as never);
++    events().plan({ rev: 3 });
++    await vi.advanceTimersByTimeAsync(150);
++    expect(store.getSnapshot().plan).toEqual({ settingsHash: 'h', n: 2 });
++    expect(store.getSnapshot().planAnswers).toBe(3);
++    vi.useRealTimers();
++  });
+   it('ignores an answer older than what the events already brought', async () => {
+     let answer: ((p: Project) => void) | undefined;
+     const { deps, store, events } = harness();
