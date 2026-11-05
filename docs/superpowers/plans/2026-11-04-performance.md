@@ -94,8 +94,8 @@ pool does not take); `availability.ts` 2.6 s; loading the pack 2.4 s; garbage co
 | Planning thread (RUK-579, merged) | Plans, line goods, breakdowns, build prices and step wording on a worker thread of their own, each answer equal to the call on the main thread (tested on the Mini-GT export). Nothing uses it yet. | new `src/server/planner/thread.ts`, `thread-worker.ts`, `tests/unit/planner/thread.test.ts` | |
 | Wiring (RUK-580, merged) | The plan route and the layout service plan on the thread `main.ts` starts, and the main thread's pack loads before the ready line. Gate: 42 of 42 files and the longest `/api/health` wait under 0.5 s in every pass. | `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `src/server/main.ts` | RUK-579 |
 | Disk store (RUK-576, merged) | A cache of JSON values on disk: one gzip file per key under a code version (`codeVersion`), at most N files, the least recently used dropped. Nothing uses it yet. | new `src/server/planner/disk-cache.ts`, `tests/unit/planner/disk-cache.test.ts` | |
-| Disk cache (RUK-602) | What a restart redoes, kept on disk with the store: the plans, the lines' goods, and each finished layout's expansion, cost and worded steps, in three `diskCache` folders under `<dataDir>/cache/`; and the worded steps kept in the layout entry (below). Gate: 42 of 42 files, the restart pass under 4 s with each plan under 1 s, the warm rounds under 0.2 s. | new `src/server/planner/plan-store.ts`, `tests/unit/planner/plan-store.test.ts`; `src/server/main.ts`, `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `tests/unit/layout/service.test.ts`, `CLAUDE.md` | RUK-580, RUK-576 |
-| QA | Verify the merged branch: suites, browser tests, `tools/perf` with `--restart` against the reference. | tests only | all |
+| Disk cache (RUK-602, merged) | What a restart redoes, kept on disk with the store: the plans, the lines' goods, and each finished layout's expansion, cost and worded steps, in three `diskCache` folders under `<dataDir>/cache/`; and the worded steps kept in the layout entry (below). Gate: 42 of 42 files, the restart pass under 4 s with each plan under 1 s, the warm rounds under 0.2 s. | new `src/server/planner/plan-store.ts`, `tests/unit/planner/plan-store.test.ts`; `src/server/main.ts`, `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `tests/unit/layout/service.test.ts`, `CLAUDE.md` | RUK-580, RUK-576 |
+| QA (RUK-622) | Verify the merged branch: suites, browser tests, `tools/perf` with `--restart` against the reference, and the server's memory with the planning thread against `374680441` (the branch before RUK-580, one pack). | `CLAUDE.md`'s test counts | all |
 
 `tools/perf` is merged: the tasks that follow measure with `npm run perf` (`tools/perf/README.md`). RUK-565 predates it
 and was measured with the CTO's scratch runner (`/tmp/ruk563/bin/run.mjs`, compared by `/tmp/ruk563/bin/compare.sh`).
@@ -247,6 +247,18 @@ RUK-602's check, with the change:
 - each warm round is under 0.2 s, or under 60 % of the base's;
 - every health wait is under 0.5 s, or within 0.1 s of the base's own on a loaded Mac (the base's reached 0.453 s at
   load average 28).
+
+**Merged (RUK-602, `f7c225c1a`).** `npm run perf -- --restart` at load average 12 to 15: 42 of 42 files. Cold took
+45.2 s, the warm rounds 0.109 s and 0.111 s, and the restart pass 1.287 s (each plan 0.05 to 0.32 s). The longest
+`/api/health` wait was 0.159 s cold and 0.081 s after the restart. The Tech Lead's back-to-back pair: restart 47.2 s →
+1.42 s, warm 0.27 s → 0.11 s.
+
+One gap is left, reachable only through the API (the Map tab offers only finished scans). A project pointed at a
+running scan is planned in an empty world and kept in memory under the key its finished scan's plan will have, as
+before. If a new layout entry is made for that plan after the scan finished, the disk cache keeps the finished layout
+worked out from it, and after a restart the real plan is shown with that plan's build list, steps and layout cost. The
+fix, if the group needs it: plans and layouts made while the scan is not done get the "no scan" key, or are dropped
+when the scan finishes.
 
 ### The milestone's check
 
