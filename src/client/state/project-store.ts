@@ -23,6 +23,7 @@ import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, apiPost, isTimeout, messageOf } from '../api/client.ts';
 import { isProjectGone, openProjectEvents } from '../api/sse.ts';
 import { getName } from './name.ts';
+import { sameJson } from './same-json.ts';
 
 export interface ProjectViewState {
   project: Project | null; plan: Plan | null; planLoading: boolean; planError: string | null; connected: boolean; error: string | null;
@@ -33,6 +34,12 @@ export interface ProjectViewState {
    * §6.4); null until a settings change replans. A plan of the same settings (a refetch, a rescan) leaves it.
    */
   previousPlan: Plan | null;
+  /**
+   * How many plan fetches have answered, an answer of the same plan too (whose shown object stays, RUK-529). The server
+   * sends a `plan` event also when only the layout may have changed (a placement batch, architecture §11.16), so the
+   * views that show the layout check it again after every answer, not only when `plan` is another object.
+   */
+  planAnswers: number;
 }
 
 export interface StoreDeps {
@@ -201,6 +208,7 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
   let queued = 0;
   let state: ProjectViewState = {
     project: null, plan: null, planLoading: false, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
+    planAnswers: 0,
   };
   const listeners = new Set<() => void>();
   let closed = false;
@@ -301,7 +309,10 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
     confirm(next);
   }
 
-  /** Fetches the plan; only the answer to the latest request is kept, and the plan it replaces when its settings differ. */
+  /**
+   * Fetches the plan; only the answer to the latest request is kept and counted in `planAnswers`, the shown plan stays
+   * when the answer is the same plan (sameJson), and the plan it replaces is kept when its settings differ.
+   */
   function loadPlan(): void {
     const request = ++planRequest;
     update({ planLoading: true });
@@ -309,8 +320,14 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
       (plan) => {
         if (request !== planRequest) return;
         const shown = state.plan;
+        const planAnswers = state.planAnswers + 1;
+        // RUK-529: the same plan again keeps the shown object, so no tab is rebuilt; the new count still has the layout checked
+        if (shown !== null && sameJson(shown, plan)) {
+          update({ planLoading: false, planError: null, planAnswers });
+          return;
+        }
         const previousPlan = shown !== null && shown.settingsHash !== plan.settingsHash ? shown : state.previousPlan;
-        update({ plan, previousPlan, planLoading: false, planError: null });
+        update({ plan, previousPlan, planLoading: false, planError: null, planAnswers });
       },
       (err: unknown) => {
         if (request === planRequest) update({ planLoading: false, planError: messageOf(err) });
@@ -503,6 +520,7 @@ export function liveDeps(): StoreDeps {
 
 const LOADING: ProjectViewState = {
   project: null, plan: null, planLoading: true, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
+  planAnswers: 0,
 };
 const noStore = (): (() => void) => () => {};
 const loading = (): ProjectViewState => LOADING;

@@ -2,6 +2,7 @@
 // and the error type handlers throw to answer with a status.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { gzipFor } from './compress.ts';
 
 export interface RequestContext {
   /** Display name from the X-Planner-Name header, URI-decoded and trimmed; null when absent or empty. */
@@ -49,14 +50,21 @@ export class HttpError extends Error {
 
 const DEFAULT_MAX_JSON_BYTES = 1_048_576;
 
+/**
+ * Answers with `body` as JSON, gzip-compressed when the request it answers (`res.req`) takes gzip and the JSON has
+ * MIN_GZIP_BYTES or more (RUK-529, `gzipFor`).
+ */
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const text = JSON.stringify(body);
+  const text = Buffer.from(JSON.stringify(body));
+  const gzipped = gzipFor(res.req, text);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(text),
+    'Content-Length': (gzipped ?? text).length,
     'Cache-Control': 'no-store',
+    Vary: 'Accept-Encoding',
+    ...(gzipped === null ? {} : { 'Content-Encoding': 'gzip' }),
   });
-  res.end(text);
+  res.end(gzipped ?? text);
 }
 
 function tooLarge(maxBytes: number): HttpError {

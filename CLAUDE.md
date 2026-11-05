@@ -11,7 +11,9 @@ the planned build. User-facing documentation is in `README.md`.
 ## Layout
 
 - `src/server/`: the Node HTTP server (`main.ts`, `app.ts`, `http/`, `db/`) and the CLIs behind the npm scripts (`cli/`).
-  - `planner/`: the recipe-chain solver (linear programs on `highs`).
+  - `planner/`: the recipe-chain solver (linear programs on `highs`). `main.ts` runs its plans on a worker thread of
+    their own (`thread.ts`) and keeps what it works out on disk between runs (`plan-store.ts`, under `data/cache/`);
+    the tests' servers plan on the main thread and keep everything in memory.
   - `layout/`: lays a planned line out in the world. `layout.ts` runs the stages: site search (`site.ts`), machine
     placement (`arrange.ts`), the line's own wiring and its loss (`internal.ts`, `power.ts`), hookups to the base's
     power and logistics (`hookups.ts`, `path.ts`), parts and the build list (`parts.ts`), logistics modes (`modes/`).
@@ -37,15 +39,18 @@ Run them from the repository root.
 - Setup: `npm ci`. A new worktree has no `node_modules/`.
 - Typecheck: `npx tsc -b`. No output means clean. Node runs the `.ts` sources directly, so this is the only compile
   step for the server.
-- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `7804cbd43` it gives 254 files passed | 23 skipped,
-  4222 tests passed | 266 skipped.
+- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `f7c225c1a` it gives 261 files passed | 23 skipped,
+  4263 tests passed | 266 skipped.
 - One file or folder: `npx vitest run tests/unit/layout/power-loss.test.ts`, or `npx vitest run tests/unit/layout`.
 - Browser tests: `npm run e2e`. It builds the client, then runs Chromium against a real server on 127.0.0.1:18787,
   with data that `tests/e2e/prepare.ts` writes to `data/e2e/`; its config asks for the password, so the browser tests
-  log in (`tests/unit/http/server.test.ts` covers the password off). At `7804cbd43` it gives 366 passed, in about 80 s.
-  It needs Playwright's Chromium (`npx playwright install chromium`). On the team's Mac it is already installed:
+  log in (`tests/unit/http/server.test.ts` covers the password off). At `f7c225c1a` it gives 366 passed, in about
+  84 s. It needs Playwright's Chromium (`npx playwright install chromium`). On the team's Mac it is already installed:
   pass `PLAYWRIGHT_BROWSERS_PATH=/Users/drukoz/Library/Caches/ms-playwright`. Two runs at once collide on port
   18787, so start one only when `netstat -anv -p tcp | grep LISTEN | grep '\.18787 '` prints nothing.
+- Perf: `npm run perf -- --source <copy of the data> --out <new folder> --reference <folder> [--restart] [--profile]
+  [--threads N]` plans every project of a copy of the group's data on its own server and checks the bytes; see
+  `tools/perf/README.md`.
 - See the app with test data: `npm run build`, then
   `node --disable-warning=ExperimentalWarning tests/e2e/prepare.ts`, then
   `GTNH_PLANNER_CONFIG=data/e2e/config.json npm start`, and open `http://127.0.0.1:18787`. The password is
@@ -92,7 +97,8 @@ Run them from the repository root.
 
 - Wherever the planner runs, `data/` holds the user's real data: pack exports, world scans, uploads, the project
   database, and `data/config.json` with the password hash and session secret. It is git-ignored. Never commit it,
-  and never edit or delete anything in it except `data/e2e/`, which the tests rebuild on every run.
+  and never edit or delete anything in it except `data/e2e/`, which the tests rebuild on every run, and
+  `data/cache/`, which holds only what the planner worked out: deleting it makes the next plans cold again.
 - Do not run `npm run export`, `npm run scan`, `npm run extract-assets`, `npm run import-nei-icons` or
   `npm run set-password` unless your task says so. `export` clones the user's GTNH server folder and starts a copy
   of the Minecraft server on 127.0.0.1:25566; `set-password` turns the password on for the whole group, `-- --off`
@@ -113,8 +119,13 @@ common. Two are tracked as RUK-125: `tests/unit/layout/feed-ae2.test.ts` and `te
 Three more failed under load on 2026-10-30 and passed when run alone: `tests/client/link-geometry.test.tsx` (a
 1,000-block line's link geometry in under a second, a pick in under 6 ms), `tests/unit/layout/feeding/check.test.ts`
 (a 1,200-block line checked in under a second) and `tests/unit/planner/candidates.test.ts` (vitest's 5 s default
-timeout); `tests/unit/planner/lp.test.ts` ("retries where the root LP relaxation did not solve") hit the same timeout
-on 2026-11-03. In the browser tests, `tests/e2e/pipes.spec.ts:75` ("flow pipes move", which watches the pipes' dashes
+timeout); `tests/unit/planner/lp.test.ts` ("retries where the root LP relaxation did not solve", 1.5 s alone) hit the
+same timeout on 2026-11-03 and twice on 2026-11-04, and has an explicit 30 s timeout since. `tests/unit/cli/pipeline.test.ts`
+(the export pipeline's child processes) and `tests/unit/planner/build-pick.test.ts` ("gives exactly what it gives on this thread") failed under load on
+2026-11-04 and passed alone. `tests/unit/export/run.test.ts` ("stops the JVM when aborted", vitest's 5 s timeout)
+failed under load on 2026-11-04 (RUK-543) and passed alone. A new test that runs HiGHS or starts solver threads takes
+1 to 3 s alone, so give it an
+explicit timeout as its last argument (`}, 30_000)`). In the browser tests, `tests/e2e/pipes.spec.ts:75` ("flow pipes move", which watches the pipes' dashes
 move) is timing-sensitive the same way; run it with `npx playwright test tests/e2e/pipes.spec.ts`. Re-run the file
 alone before you chase a failure there, and say so in your hand-over.
 `npx vitest run --maxWorkers=2` runs the whole suite under less load.

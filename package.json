@@ -17,6 +17,7 @@
     "typecheck": "tsc -b",
     "test": "tsc -b && vitest run",
     "e2e": "vite build && playwright test",
+    "perf": "node --disable-warning=ExperimentalWarning tools/perf/run.ts",
     "pack:info": "node --disable-warning=ExperimentalWarning src/server/cli/pack-info.ts",
     "export": "node --disable-warning=ExperimentalWarning src/server/cli/export.ts",
     "scan": "node --disable-warning=ExperimentalWarning src/server/cli/scan.ts",

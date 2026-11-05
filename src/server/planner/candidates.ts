@@ -707,7 +707,8 @@ function estimateCosts(
 ): Estimates {
   const estimate = new Map<StuffKey, number>();
   const settledAt = new Map<StuffKey, number>();
-  const consumersOf = new Map<StuffKey, Recipe[]>();
+  /** Per good: each consumed slot of a reached recipe that takes it, as [recipe, slot], a recipe's slots next to each other in walk order. */
+  const slotsOf = new Map<StuffKey, Array<[Recipe, Ingredient]>>();
   const reached: Recipe[] = [];
   const leaves: Array<[StuffKey, number]> = [];
   const seen = new Set<StuffKey>(targets);
@@ -735,9 +736,9 @@ function estimateCosts(
       for (const ing of r.inputs) {
         if (!ing.consumed) continue;
         for (const o of optionsOf(ing)) {
-          const list = consumersOf.get(o.key);
-          if (list === undefined) consumersOf.set(o.key, [r]);
-          else if (list[list.length - 1] !== r) list.push(r);
+          const slots = slotsOf.get(o.key);
+          if (slots === undefined) slotsOf.set(o.key, [[r, ing]]);
+          else slots.push([r, ing]);
           if (!seen.has(o.key)) {
             seen.add(o.key);
             walk.push(o.key);
@@ -773,10 +774,14 @@ function estimateCosts(
     if (estimate.has(key)) continue;
     estimate.set(key, cost);
     settledAt.set(key, settledAt.size);
-    for (const r of consumersOf.get(key) ?? []) {
+    // Each recipe that takes `key` in some slot, once, in walk order: its slots that `key` fills now count as filled.
+    const slots = slotsOf.get(key) ?? [];
+    for (let s = 0; s < slots.length;) {
+      const r = (slots[s] as [Recipe, Ingredient])[0];
       let left = open.get(r) as number;
-      for (const ing of r.inputs) {
-        if (!ing.consumed || filled.has(ing) || carried(r).has(ing) || !optionsOf(ing).some((o) => o.key === key)) continue;
+      for (; s < slots.length && (slots[s] as [Recipe, Ingredient])[0] === r; s++) {
+        const ing = (slots[s] as [Recipe, Ingredient])[1];
+        if (filled.has(ing) || carried(r).has(ing)) continue;
         filled.add(ing);
         left--;
       }

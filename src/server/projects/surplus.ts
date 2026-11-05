@@ -40,6 +40,11 @@ export interface PublishedSummary {
   needs: Array<{ key: StuffKey; perSecond: number }>;
   draws: Array<{ from: string; key: StuffKey; perSecond: number }>;
   createdAt: string;
+  /**
+   * Whether the project's line reads the board (`readsBoard` of its settings). One that does not may be taken from by
+   * older projects too (`mayTake`, RUK-529). Absent in a summary stored before RUK-529, and then read as true.
+   */
+  readsBoard?: boolean;
 }
 
 /** A line's read of the board: its offers and needs (objective.ts), and the hash of both ('' when nothing was read). */
@@ -101,6 +106,7 @@ export function summaryOf(project: Project, plan: Plan, at: string): PublishedSu
     draws: [...draws.values()].map((d) => ({ ...d, perSecond: sig9(d.perSecond) })).filter((d) => d.perSecond > 0)
       .sort((a, b) => byString(a.from, b.from) || byKey(a, b)),
     createdAt: project.createdAt,
+    readsBoard: readsBoard(project.settings),
   };
 }
 
@@ -124,7 +130,8 @@ function storedSummary(id: string, value: string): PublishedSummary | null {
   if (typeof v !== 'object' || v === null) return null;
   const s = v as Record<string, unknown>;
   const texts = ['projectId', 'name', 'exportId', 'at', 'createdAt'].every((field) => typeof s[field] === 'string');
-  const shaped = texts && typeof s.rev === 'number' && isRates(s.surplus, false) && isRates(s.needs, false) && isRates(s.draws, true);
+  const shaped = texts && typeof s.rev === 'number' && isRates(s.surplus, false) && isRates(s.needs, false) && isRates(s.draws, true)
+    && (s.readsBoard === undefined || typeof s.readsBoard === 'boolean');
   return shaped && s.projectId === id ? (v as PublishedSummary) : null;
 }
 
@@ -160,9 +167,11 @@ function changeOf(before: PublishedSummary | undefined, after: PublishedSummary)
   // A summary of another export is read by other projects, so for every reader all of it is new or gone.
   const moved = before.exportId !== after.exportId;
   const whole = renamed || moved;
+  // Older projects may take its surplus now, or no longer may (`mayTake`).
+  const opened = (before.readsBoard !== false) !== (after.readsBoard !== false);
   const draws = moved ? before.draws.length + after.draws.length > 0 : drawsText(before.draws) !== drawsText(after.draws);
   return {
-    surplus: whole ? keysOf(before.surplus, after.surplus) : changedKeys(before.surplus, after.surplus),
+    surplus: whole || opened ? keysOf(before.surplus, after.surplus) : changedKeys(before.surplus, after.surplus),
     needs: whole ? keysOf(before.needs, after.needs) : changedKeys(before.needs, after.needs),
     draws,
     drawsFrom: draws || renamed ? producersOf([...before.draws, ...after.draws]) : [],
@@ -315,19 +324,14 @@ export function readGoods(settings: PlanSettings, goods: ReadonlySet<StuffKey>):
   };
 }
 
-/** Whether the draws of `byId`'s summaries, walked from project `from`, reach project `to`. */
-function drawsReach(byId: ReadonlyMap<string, PublishedSummary>, from: string, to: string): boolean {
-  const seen = new Set([from]);
-  const walk = [from];
-  for (let id = walk.pop(); id !== undefined; id = walk.pop()) {
-    for (const d of byId.get(id)?.draws ?? []) {
-      if (d.from === to) return true;
-      if (seen.has(d.from)) continue;
-      seen.add(d.from);
-      walk.push(d.from);
-    }
-  }
-  return false;
+/**
+ * Whether a reader may take `producer`'s surplus (RUK-529, the user's ruling of 2026-11-04: newer projects take from older
+ * ones): when `producer` is older than the reader (`self`), or when it reads nothing of the board (`readsBoard` false), so
+ * nothing it plans can depend on the reader. Neither depends on what any plan draws, so two projects never feed each
+ * other in a circle, and the plans settle instead of changing each other on every visit.
+ */
+function mayTake(producer: PublishedSummary, self: { createdAt: string; projectId: string }): boolean {
+  return byAge(producer, self) < 0 || producer.readsBoard === false;
 }
 
 /**
@@ -368,12 +372,11 @@ export function crossRead(
   const needs: Need[] = [];
   if (reads.offers.size > 0 || reads.needs.size > 0) {
     const view = board.all().filter((s) => live.has(s.projectId) && s.exportId === exportId);
-    const byId = new Map(view.map((s) => [s.projectId, s]));
     const others = view.filter((s) => s.projectId !== project.id).sort(byAge);
     const self = { createdAt: project.createdAt, projectId: project.id };
     const older = others.filter((s) => byAge(s, self) < 0);
     for (const s of others) {
-      if (reads.offers.size > 0 && !drawsReach(byId, s.projectId, project.id)) {
+      if (reads.offers.size > 0 && mayTake(s, self)) {
         for (const entry of [...s.surplus].sort(byKey)) if (reads.offers.has(entry.key)) offers.push(offerOf(s, entry, older));
       }
       for (const entry of [...s.needs].sort(byKey)) {
