@@ -95,7 +95,7 @@ pool does not take); `availability.ts` 2.6 s; loading the pack 2.4 s; garbage co
 | Wiring (RUK-580, merged) | The plan route and the layout service plan on the thread `main.ts` starts, and the main thread's pack loads before the ready line. Gate: 42 of 42 files and the longest `/api/health` wait under 0.5 s in every pass. | `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `src/server/main.ts` | RUK-579 |
 | Disk store (RUK-576, merged) | A cache of JSON values on disk: one gzip file per key under a code version (`codeVersion`), at most N files, the least recently used dropped. Nothing uses it yet. | new `src/server/planner/disk-cache.ts`, `tests/unit/planner/disk-cache.test.ts` | |
 | Disk cache (RUK-602, merged) | What a restart redoes, kept on disk with the store: the plans, the lines' goods, and each finished layout's expansion, cost and worded steps, in three `diskCache` folders under `<dataDir>/cache/`; and the worded steps kept in the layout entry (below). Gate: 42 of 42 files, the restart pass under 4 s with each plan under 1 s, the warm rounds under 0.2 s. | new `src/server/planner/plan-store.ts`, `tests/unit/planner/plan-store.test.ts`; `src/server/main.ts`, `src/server/http/routes/projects.ts`, `src/server/layout/service.ts`, `tests/unit/layout/service.test.ts`, `CLAUDE.md` | RUK-580, RUK-576 |
-| QA (RUK-622) | Verify the merged branch: suites, browser tests, `tools/perf` with `--restart` against the reference, and the server's memory with the planning thread against `374680441` (the branch before RUK-580, one pack). | `CLAUDE.md`'s test counts | all |
+| QA (RUK-622, merged) | Verify the merged branch: suites, browser tests, `tools/perf` with `--restart` against the reference, and the server's memory with the planning thread against `374680441` (the branch before RUK-580, one pack). | `CLAUDE.md`'s test counts | all |
 
 `tools/perf` is merged: the tasks that follow measure with `npm run perf` (`tools/perf/README.md`). RUK-565 predates it
 and was measured with the CTO's scratch runner (`/tmp/ruk563/bin/run.mjs`, compared by `/tmp/ruk563/bin/compare.sh`).
@@ -195,8 +195,8 @@ request 200.
 | Longest `/api/health` wait: cold / warm / restart | 3.0 s / – / 3.2 s | 0.166 s / 0.020 s / 0.095 s |
 
 The warm rounds grew because each warm answer now sends `partSteps` to the thread (about 10 ms a plan); the disk cache
-keeps its result with the layout's other parts. The pack is loaded twice, once per thread; the server's memory was not
-measured yet.
+keeps its result with the layout's other parts. The pack is loaded twice, once per thread; RUK-622 measured the memory
+that costs ("The milestone's check", below).
 
 **What a restart redoes.** On a fresh server the plan route prices the line for its goods (`lineGoods` → `linePricing`)
 before it reads the plan cache, and `finishPlan` breaks the build down (`expandBomLines`), prices the layout's parts
@@ -264,6 +264,34 @@ when the scan finishes.
 
 `npm run perf -- --restart` on the merged branch against the reference: 42 of 42 files byte-identical, the cold total,
 the restart pass, and the longest `/api/health` wait in every pass (under 0.5 s), beside the tables above.
+
+**Passed (RUK-622, on `f7c225c1a`, merged as `a87e4a5ce`).** QA Engineer 1 and the Tech Lead each ran the merged branch
+and, right after it, `374680441` (the branch before RUK-580: it plans on the main thread, with one pack), with each
+server's memory sampled by `ps` every 0.5 s. All four runs gave 42 of 42 files.
+
+| | QA: base | QA: merged | Tech Lead: base | Tech Lead: merged |
+| --- | ---: | ---: | ---: | ---: |
+| Load average, start → end | 13.7 → 35.1 | 14.0 → 14.6 | 34.6 → 19.5 | 44.2 → 35.2 |
+| Cold total | 83.9 s | 38.8 s | 39.6 s | 53.9 s |
+| Warm rounds | 0.216 s, 0.193 s | 0.097 s, 0.097 s | 0.175 s, 0.172 s | 0.103 s, 0.111 s |
+| Restart total | 59.5 s | 1.16 s | 39.9 s | 1.20 s |
+| Longest `/api/health` wait: cold / warm / restart | 4.02 / 0.027 / 6.01 s | 0.079 / 0.018 / 0.068 s | 3.18 / 0.021 / 3.17 s | 0.328 / 0.019 / 0.078 s |
+| Peak memory (RSS), the server of the cold and warm passes | 2,552 MB | 3,480 MB | 2,690 MB | 3,750 MB |
+| Peak memory (RSS), the server of the restart pass | 2,777 MB | 1,045 MB | 2,686 MB | 1,062 MB |
+
+- On the merged branch, every pass's longest health wait is under 0.5 s (0.328 s at worst, at load average 44), and
+  the restart pass is under 4 s.
+- The cold total moves with the load, not with the change: cold plans are bound by HiGHS, and the settle index
+  (RUK-565) saves about 0.3 s of them.
+- The memory is the milestone's cost. The planning thread loads its own pack at its first job and keeps it until the
+  server stops (`thread-worker.ts` keeps the pack of the export it planned on last, and nothing in the server closes
+  the thread). So once it has planned, the server holds about 1,000 MB more than before (928 and 1,060 MB in the two
+  runs): 3,480 to 3,750 MB at its peak, against 2,552 to 2,777 MB. A restarted server that finds everything on disk
+  gives the thread no job and stays at about 1,050 MB (about 2,700 MB before), until a plan is not on disk. If the
+  computer that runs the server is short of memory, the thread can be closed after some idle minutes: a closed thread
+  starts again at its next job (RUK-579's test), and that job first waits for the pack's load, 1 to 3 s, on the
+  planning thread. Not built: the group decides (PR #12's risks).
+- `npm test` on `a87e4a5ce`: 261 files and 4263 tests passed. `npm run e2e` (QA and the Tech Lead): 366 passed.
 
 ## Milestone 3: measured, and not built
 
