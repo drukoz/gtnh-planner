@@ -1,6 +1,7 @@
 # Performance plan (RUK-529)
 
-Kind: **Program** (three milestones, one pull request each). The findings and measurements are in
+Kind: **Program**, planned as three milestones with one pull request each. Milestones 1 and 2 are done (PR #11 and
+PR #12), and milestone 3 was measured and is not built (below). The findings and measurements are in
 `docs/superpowers/specs/2026-11-04-performance-review.md`.
 
 ## Assumptions
@@ -21,13 +22,16 @@ Kind: **Program** (three milestones, one pull request each). The findings and me
 | Compressed responses | `node:zlib` (Node 24, built in) | use | gzip is all browsers offer over plain HTTP. Express's `compression` middleware does not fit the hand-written router. |
 | Solver threads | `solveLpAside` in `src/server/planner/lp.ts` (`node:worker_threads`, one HiGHS per thread) | use, as a pool | Already loads HiGHS on its own thread. A 4-thread pool gave byte-identical plans (prototype, 42.0 s to 36.4 s for the seven cold plans). A pool library would add a dependency for 30 lines. |
 | "Same answer again" on refetch | JSON text of the shown plan or layout | build (about 15 lines) | An ETag would need server changes for the same effect. |
-| Faster solves | `highs` 1.15.4 (newer than the pinned 1.15.3), a native HiGHS binding | spike in milestone 2 | Either may change the build MIPs' answers, so each needs the byte-for-byte check first. |
-| Measurement and byte-for-byte check | the scratch scripts of the review | build in milestone 2 (`tools/perf/`) | Nothing in the repository measures the real projects. |
+| Faster solves | `highs` 1.15.4 (newer than the pinned 1.15.3) | not adopted (measured in milestone 2) | It changes only a callback the planner does not use: the same bytes and the same time. A later dependency task may take it. |
+| Faster solves | A native HiGHS binding | dropped (measured in milestone 2) | Native HiGHS 1.15.1 matched our LPs only when built without fused multiply-add, and none of the build MIPs, which decide the plans. Details under milestone 2's spikes; the probe is `spikes/native-highs/`. |
+| Measurement and byte-for-byte check | the scratch scripts of the review | built in milestone 2 (`tools/perf/`, RUK-564) | Nothing in the repository measured the real projects. |
 
 ## Milestone 1: the revisit is instant and the bytes are small (`feat/perf-m1`)
 
+Done (RUK-538): PR #11, with the suites, the browser tests and the seven real projects checked on its final commit.
+
 What the group sees: coming back to a project answers from the cache (under 0.05 s instead of 1 to 12 s), plans no
-longer change between visits, a friend on the forwarded port downloads about 15 times fewer bytes, a refresh that
+longer change between visits, a friend on the forwarded port downloads about 13 times fewer bytes, a refresh that
 changes nothing redraws nothing, and cold plans take about 13 % less time.
 
 | Subtask | What | Files | Blocked by |
@@ -46,6 +50,8 @@ visits as in the review, the cold total, and a byte-for-byte check against the p
 ## Milestone 2: faster cold plans and a server that keeps answering (`feat/perf-m2`, RUK-563)
 
 Builds on milestone 1 (`feat/perf-m1`, PR #11). Every change keeps the plans and layouts byte for byte.
+
+Done (RUK-563): PR #12. The results are under "The milestone's check" below.
 
 ### Where it starts (measured 2026-11-04 on `c922fc180`)
 
