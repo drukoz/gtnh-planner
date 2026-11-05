@@ -39,13 +39,13 @@ Run them from the repository root.
 - Setup: `npm ci`. A new worktree has no `node_modules/`.
 - Typecheck: `npx tsc -b`. No output means clean. Node runs the `.ts` sources directly, so this is the only compile
   step for the server.
-- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `48d4f8ca1` it gives 257 files passed | 23 skipped,
-  4240 tests passed | 266 skipped.
+- All tests: `npm test` (`tsc -b && vitest run`, about 20 s). At `f7c225c1a` it gives 261 files passed | 23 skipped,
+  4263 tests passed | 266 skipped.
 - One file or folder: `npx vitest run tests/unit/layout/power-loss.test.ts`, or `npx vitest run tests/unit/layout`.
 - Browser tests: `npm run e2e`. It builds the client, then runs Chromium against a real server on 127.0.0.1:18787,
   with data that `tests/e2e/prepare.ts` writes to `data/e2e/`; its config asks for the password, so the browser tests
-  log in (`tests/unit/http/server.test.ts` covers the password off). At `48d4f8ca1` it gives 366 passed, in about
-  90 s. It needs Playwright's Chromium (`npx playwright install chromium`). On the team's Mac it is already installed:
+  log in (`tests/unit/http/server.test.ts` covers the password off). At `f7c225c1a` it gives 366 passed, in about
+  84 s. It needs Playwright's Chromium (`npx playwright install chromium`). On the team's Mac it is already installed:
   pass `PLAYWRIGHT_BROWSERS_PATH=/Users/drukoz/Library/Caches/ms-playwright`. Two runs at once collide on port
   18787, so start one only when `netstat -anv -p tcp | grep LISTEN | grep '\.18787 '` prints nothing.
 - Perf: `npm run perf -- --source <copy of the data> --out <new folder> --reference <folder> [--restart] [--profile]
