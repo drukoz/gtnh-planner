@@ -244,6 +244,24 @@ describe('layout service', () => {
     expect(asked).toBe(0);
   });
 
+  it('finishes a plan once per layout, and a new service finishes it from the store', async () => {
+    const kept = new Map<string, unknown>();
+    const store = { get: async (k: string) => kept.get(k), put: async (k: string, v: unknown) => { kept.set(k, JSON.parse(JSON.stringify(v))); } };
+    let expands = 0;
+    let worded = 0;
+    const over: Partial<LayoutServiceDeps> = {
+      expand: async (_pack, lines) => { expands++; return { lines, totals: [] }; },
+      steps: async () => { worded++; return []; },
+      store: () => store,
+    };
+    const project = makeProject();
+    const first = createLayoutService(deps(over));
+    const done = await first.finishPlan(twoStep(), project);
+    expect(await first.finishPlan(twoStep(), project)).toEqual(done);
+    expect([...kept.keys()]).toEqual([layoutKey(twoStep(), project)]);
+    expect(await createLayoutService(deps(over)).finishPlan(twoStep(), project)).toEqual(done);
+    expect([expands, worded]).toEqual([1, 1]);
+  });
   it('lays out on an empty scan until the scan is done, and reads terrain only for a scan id', async () => {
     const reads: boolean[] = [];
     const svc = createLayoutService(deps({

@@ -3,10 +3,13 @@
 // down cleanly on Ctrl-C or SIGTERM.
 
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createApp } from './app.ts';
 import { ConfigError, configPath, loadConfig, type AppConfig } from './config.ts';
 import { backupDaily, PURGE_AFTER_MS } from './db/db.ts';
 import { startServer } from './http/server.ts';
+import { codeVersion } from './planner/disk-cache.ts';
+import { openPlanStore } from './planner/plan-store.ts';
 import { startPlanningThread } from './planner/thread.ts';
 
 const DAY_MS = 86_400_000;
@@ -48,6 +51,8 @@ async function main(): Promise<void> {
   const app = createApp(config);
   // Planning runs on a thread of its own, so this one keeps answering the group meanwhile (RUK-563).
   app.services.planningThread = startPlanningThread();
+  // What the planner works out, kept on disk under the code's version, so a restarted server answers it at once (RUK-563).
+  app.services.planStore = openPlanStore(config.dataDir, codeVersion(fileURLToPath(new URL('../..', import.meta.url))));
   let server;
   try {
     server = await startServer(app, { port: config.port, host: config.host });

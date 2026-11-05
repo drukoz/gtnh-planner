@@ -11,7 +11,9 @@ the planned build. User-facing documentation is in `README.md`.
 ## Layout
 
 - `src/server/`: the Node HTTP server (`main.ts`, `app.ts`, `http/`, `db/`) and the CLIs behind the npm scripts (`cli/`).
-  - `planner/`: the recipe-chain solver (linear programs on `highs`).
+  - `planner/`: the recipe-chain solver (linear programs on `highs`). `main.ts` runs its plans on a worker thread of
+    their own (`thread.ts`) and keeps what it works out on disk between runs (`plan-store.ts`, under `data/cache/`);
+    the tests' servers plan on the main thread and keep everything in memory.
   - `layout/`: lays a planned line out in the world. `layout.ts` runs the stages: site search (`site.ts`), machine
     placement (`arrange.ts`), the line's own wiring and its loss (`internal.ts`, `power.ts`), hookups to the base's
     power and logistics (`hookups.ts`, `path.ts`), parts and the build list (`parts.ts`), logistics modes (`modes/`).
@@ -95,7 +97,8 @@ Run them from the repository root.
 
 - Wherever the planner runs, `data/` holds the user's real data: pack exports, world scans, uploads, the project
   database, and `data/config.json` with the password hash and session secret. It is git-ignored. Never commit it,
-  and never edit or delete anything in it except `data/e2e/`, which the tests rebuild on every run.
+  and never edit or delete anything in it except `data/e2e/`, which the tests rebuild on every run, and
+  `data/cache/`, which holds only what the planner worked out: deleting it makes the next plans cold again.
 - Do not run `npm run export`, `npm run scan`, `npm run extract-assets`, `npm run import-nei-icons` or
   `npm run set-password` unless your task says so. `export` clones the user's GTNH server folder and starts a copy
   of the Minecraft server on 127.0.0.1:25566; `set-password` turns the password on for the whole group, `-- --off`
