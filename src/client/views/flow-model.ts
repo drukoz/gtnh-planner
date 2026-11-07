@@ -139,11 +139,17 @@ export const DIM_OPACITY = 0.18;
 
 /** Box widths come from their text, between these (fix spec §6.2). */
 export const MIN_NODE_WIDTH = 190;
-export const MAX_NODE_WIDTH = 330;
+export const MAX_NODE_WIDTH = 380;
 /** A box is this tall for its title, plus this much per line of text, plus this much per row. */
 export const NODE_TITLE_HEIGHT = 28;
 export const NODE_LINE_HEIGHT = 16;
 export const ROW_HEIGHT = 18;
+/** A step's or a line's "Input | Output" header above its rows (RUK-741). */
+export const IO_HEAD_HEIGHT = 14;
+/** Between a two-column box's input column and its output column. */
+export const COLUMN_GAP = 12;
+/** The most characters a material's name takes in the diagram; a longer one is cut to `MAX_NAME_CHARS - 1` and "…" (its full name is in the tooltip). */
+export const MAX_NAME_CHARS = 14;
 /** Room below the last row. */
 const ROWS_BOTTOM = 6;
 /** Estimated text widths per character: the 13 px semibold title, and the 11.5 px lines and rows. */
@@ -387,15 +393,33 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
  * which draw its first line, then its other lines and its badge (Phase 2 spec §7.2). The ELK ports, the drawn rows and `fromElk`'s fallback
  * all read it, so they move together.
  */
-export function rowsTop(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>): number {
+export function rowsTop(node: Pick<FlowNode, 'kind' | 'lines' | 'avoidBadge' | 'machine'>): number {
   const badge = node.avoidBadge === undefined ? 0 : 1;
-  if (node.machine === undefined) return NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * (node.lines.length + badge);
-  return STEP_HEAD_HEIGHT + BUSY_BAND + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
+  const io = rowHasIcon(node) ? IO_HEAD_HEIGHT : 0;   // the two columns' "Input | Output" header (RUK-741)
+  if (node.machine === undefined) return NODE_TITLE_HEIGHT + io + NODE_LINE_HEIGHT * (node.lines.length + badge);
+  return STEP_HEAD_HEIGHT + BUSY_BAND + io + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
 }
 
-/** The middle of a box's `i`-th row, from the box's top: where that row's port sits. */
-export function rowCentre(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
-  return rowsTop(node) + ROW_HEIGHT * i + ROW_HEIGHT / 2;
+/**
+ * The row line of a box's `i`-th row (RUK-741): a step's or collapsed line's inputs count down the left column and its
+ * outputs down the right, on the same lines; a stub's single row is on line `i`.
+ */
+export function rowLine(node: Pick<FlowNode, 'kind' | 'rows'>, i: number): number {
+  const row = node.rows[i];
+  if (row === undefined || !rowHasIcon(node)) return i;
+  return node.rows.slice(0, i).filter((r) => r.side === row.side).length;
+}
+
+/** How many row lines a box's rows fill: the taller of its two columns, or its rows' count for a stub. */
+export function rowLines(node: Pick<FlowNode, 'kind' | 'rows'>): number {
+  if (!rowHasIcon(node)) return node.rows.length;
+  const inputs = node.rows.filter((r) => r.side === 'in').length;
+  return Math.max(inputs, node.rows.length - inputs);
+}
+
+/** The middle of a box's `i`-th row, from the box's top: where that row's port sits, on its column's line. */
+export function rowCentre(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
+  return rowsTop(node) + ROW_HEIGHT * rowLine(node, i) + ROW_HEIGHT / 2;
 }
 
 /** Whether a box draws an icon beside each row: steps and collapsed lines; a stub's title already shows its one good. */
@@ -413,9 +437,32 @@ export function textWidth(text: string, charWidth: number): number {
   return Math.ceil(text.length * charWidth);
 }
 
-/** The room a row of `node` leaves for the good's name beside its rate; a box sized to its rows leaves each name room. */
+/**
+ * A good's name as a box writes it (RUK-741): at most `MAX_NAME_CHARS` characters, an ellipsis for the rest.
+ */
+export function shortName(name: string): string {
+  return name.length <= MAX_NAME_CHARS ? name : `${name.slice(0, MAX_NAME_CHARS - 1).trimEnd()}…`;
+}
+
+/** A box's title as its box writes it: a step's machine and a collapsed line's are kept whole, a stub's material name is cut to 14. */
+export function boxTitle(node: Pick<FlowNode, 'kind' | 'title'>): string {
+  return node.kind === 'step' || node.kind === 'line' ? node.title : shortName(node.title);
+}
+
+/**
+ * The room a row of `node` leaves for the good's name beside its rate; a box sized to its rows leaves each name room.
+ * A two-column box's rows get one column each: half the room between the edges and the gap.
+ */
 export function rowNameRoom(node: Pick<FlowNode, 'kind' | 'width'>, row: Pick<FlowRow, 'rate' | 'share'>): number {
-  return node.width - 2 * TEXT_LEFT - (rowHasIcon(node) ? ICON_SPACE : 0) - textWidth(` ${rowRate(row)}`, TEXT_CHAR_WIDTH);
+  const rate = textWidth(` ${rowRate(row)}`, TEXT_CHAR_WIDTH);
+  if (!rowHasIcon(node)) return node.width - 2 * TEXT_LEFT - rate;
+  return (node.width - 2 * TEXT_LEFT - COLUMN_GAP) / 2 - ICON_SPACE - rate;
+}
+
+/** What a row writes for its good: a step's or line's material is shortened to 14; a stub's words are kept whole. Both cut to the room. */
+export function rowLabel(node: Pick<FlowNode, 'kind' | 'width'>, row: Pick<FlowRow, 'name' | 'rate' | 'share'>): string {
+  const name = rowHasIcon(node) ? shortName(row.name) : row.name;
+  return clipText(name, rowNameRoom(node, row), TEXT_CHAR_WIDTH);
 }
 
 /** `text` cut to fit `width` at `charWidth` per character, ending in "…" when cut (the full text is in the tooltip). */
@@ -425,7 +472,7 @@ export function clipText(text: string, width: number, charWidth: number): string
 }
 
 /**
- * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–330 px, as tall as its rows need. A step box's head is its
+ * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–380 px, as tall as its rows need. A step box's head is its
  * machine readout, which draws its first line (Phase 2 spec §7.2): its head, chip row and busy band count instead of its title and that line.
  */
 function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
@@ -434,14 +481,17 @@ function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
   const { machine } = node;
   const widths = [
     ...(machine === undefined
-      ? [2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(node.title, TITLE_CHAR_WIDTH)]
+      ? [2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(boxTitle(node), TITLE_CHAR_WIDTH)]
       : readoutWidths(node.title, machine)),
     ...(machine === undefined ? node.lines : node.lines.slice(1)).map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
     ...(node.avoidBadge === undefined ? [] : [2 * TEXT_LEFT + textWidth(node.avoidBadge.text, TEXT_CHAR_WIDTH)]),
-    ...node.rows.map((r) => 2 * TEXT_LEFT + rowIcon + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)),
+    // a two-column box is as wide as its widest row's name and rate needs twice, the columns' gap between (RUK-741)
+    ...(rowHasIcon(node)
+      ? [2 * TEXT_LEFT + COLUMN_GAP + 2 * Math.max(0, ...node.rows.map((r) => rowIcon + textWidth(shortName(r.name), TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)))]
+      : node.rows.map((r) => 2 * TEXT_LEFT + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH))),
   ];
   const width = Math.min(MAX_NODE_WIDTH, Math.max(MIN_NODE_WIDTH, ...widths));
-  const height = rowsTop(node) + ROW_HEIGHT * node.rows.length + (node.rows.length > 0 ? ROWS_BOTTOM : 0);
+  const height = rowsTop(node) + ROW_HEIGHT * rowLines(node) + (node.rows.length > 0 ? ROWS_BOTTOM : 0);
   return { ...node, width, height };
 }
 
