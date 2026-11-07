@@ -5,7 +5,8 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
-  collapsedLines, firstProducer, edgeTag, rowNameRoom, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, flowIssueLines, type FlowLayout, type FlowNode,
+  collapsedLines, firstProducer, edgeTag, rowNameRoom, rowLabel, rowHasIcon, shortName, boxTitle, rowLine, rowLines, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH,
+  IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS, PORT_SIZE, flowIssueLines, type FlowLayout, type FlowNode,
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
   CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
   layoutChange, glidable, GLIDE_LIMIT, type LayoutChange, type PlacedPicture,
@@ -246,10 +247,10 @@ describe('flow diagram: boxes, rows and stubs (fix spec §6.2)', () => {
       ['in', 't:copper_block@0', false], ['out', PLATE, true], ['out', 't:copper_dust@0', false]]);
     for (const n of g.nodes) {
       expect(n.width).toBeGreaterThanOrEqual(190);
-      expect(n.width).toBeLessThanOrEqual(330);
+      expect(n.width).toBeLessThanOrEqual(380);
     }
     const long = flowGraph(planOf({ steps: [mv({ id: 'x', machine: { mteId: 1, name: 'Extremely Advanced Large Multiblock Assembling Machine of Great Length', tier: 2 } })] }), 'hour');
-    expect(nodeOf(long, 'x').width).toBe(330);
+    expect(nodeOf(long, 'x').width).toBe(380);
   });
   it('says when a step shares its machines with other steps (plan 12)', () => {
     // The hammer steps of Task 5's AE2 sand plan: one forge hammer for both.
@@ -458,8 +459,8 @@ describe('flow diagram: focus (fix spec §6.2)', () => {
   it('makes a box wide enough that no row name is cut, up to the widest box', () => {
     for (const graph of [g, flowGraph(red, 'hour'), flowGraph(red, 'hour', { collapsedLines: new Set([RED]) })]) {
       for (const n of graph.nodes) {
-        if (n.width >= 330) continue;
-        for (const r of n.rows) expect(textWidth(r.name, TEXT_CHAR_WIDTH), `${n.id} ${r.port}`).toBeLessThanOrEqual(rowNameRoom(n, r));
+        if (n.width >= 380) continue;
+        for (const r of n.rows) expect(textWidth(rowLabel(n, r), TEXT_CHAR_WIDTH), `${n.id} ${r.port}`).toBeLessThanOrEqual(rowNameRoom(n, r));
       }
     }
   });
@@ -684,13 +685,14 @@ describe('flow diagram: machine readouts', () => {
     expect([0, 1, 6, 14].map(tierSlug)).toEqual(['ulv', 'lv', 'luv', 'max']); expect(tierSlug(15)).toBe('unknown'); expect(tierSlug(-1)).toBe('unknown');
     expect(tierSlug(1.5)).toBe('unknown');
   });
-  it('starts a readout box\'s rows below its 46 px head and 16 px busy band', () => {
+  it('starts a readout box\'s rows below its 46 px head, 16 px busy band and 14 px row header', () => {
     const box = nodeOf(flowGraph(plan, 'min'), 'circuit-lv');
-    expect(box.machine).toBeDefined(); expect(rowsTop(box)).toBe(46 + 16 + 16 * (box.lines.length - 1));
-    expect(rowsTop({ ...box, avoidBadge: { text: 'x', warnings: [] } })).toBe(46 + 16 + 16 * box.lines.length);
-    expect(rowsTop({ ...box, machine: undefined })).toBe(28 + 16 * box.lines.length);   // a stub, as today
+    expect(box.machine).toBeDefined(); expect(rowsTop(box)).toBe(46 + 16 + 14 + 16 * (box.lines.length - 1));
+    expect(rowsTop({ ...box, avoidBadge: { text: 'x', warnings: [] } })).toBe(46 + 16 + 14 + 16 * box.lines.length);
+    expect(rowsTop({ ...box, machine: undefined })).toBe(28 + 14 + 16 * box.lines.length);   // the stub of a two-column kind keeps its row header
     expect(box.lines).toEqual(['LV · 16 EU/t · 5 machines · 100% busy']);                    // the words stay (:71)
     expect([MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT, CHIP_PADDING]).toEqual([32, 36, 46, 16, 16, 5]);
+    expect([IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS]).toEqual([14, 12, 14]);   // the two columns (RUK-741)
     // only a step has a readout: a stub, the target and a collapsed line keep their heads
     const closed = flowGraph(red, 'hour', { collapsedLines: new Set([RED]) });
     expect(closed.nodes.filter((n) => n.machine !== undefined).map((n) => n.id)).toEqual(['wire']);
@@ -742,24 +744,25 @@ describe('flow diagram: machine readouts', () => {
       .toMatchObject({ iconKey: 'gregtech:gt.blockmachines@28001', tier: { name: 'LV', slug: 'lv' }, count: '×1', power: '0.107 EU/t' });
     const box = nodeOf(flowGraph({ ...plan, steps: [tgs] } as Plan, 'min'), 'circuit-lv');
     expect(box.lines).toEqual(['LV · 30 EU/t · 1 machine · 50% busy', words]);   // the words keep the whole sentence
-    expect(box.width).toBe(330); expect(rowsTop(box)).toBe(46 + 16 + 16);
+    expect(box.width).toBe(380); expect(rowsTop(box)).toBe(46 + 16 + 14 + 16);
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
     expect(html).toContain('data-item-key="gregtech:gt.blockmachines@15541"'); expect(html).toContain('<g class="flow-chip tier-lv" transform="translate(52 25)">');
-    expect(html).toContain('<text class="flow-node-line" x="8" y="73">Tree Growth Simulator (LV): Rubber Sapling in the…</text>');
+    expect(html).toContain('<text class="flow-node-line" x="8" y="73">Tree Growth Simulator (LV): Rubber Sapling in the control…</text>');
     expect(html).not.toContain('t:rubber_sapling@0');                                                         // the slot never shows the sapling
     expect(html).toContain(`data-tip="Tree Growth Simulator\nLV · 30 EU/t · 1 machine · 50% busy\n${words}\n`);   // the tip keeps them whole
   });
   it('sizes a readout box to its head, its chip row and its band, and puts a second line and the badge below the band', () => {
     // the chip row of a UMV pool step: 52 + 40 (UMV) + 4 + 110 (×12 shared) + 6 + 62 (1,920 EU/t) + 8; the band alone needs 120
     const pooled = step({ machine: { mteId: 121, name: 'Basic Assembler', tier: 12 }, count: 12, euPerTick: 1920, pool: { id: 'pool:a', steps: ['a', 'circuit-lv'] } });
-    expect(nodeOf(flowGraph({ ...plan, steps: [pooled] } as Plan, 'min'), 'circuit-lv').width).toBe(52 + 40 + 4 + 110 + 6 + 62 + 8);
+    // 318: the two columns, each wide enough for "Basic Circuit 30/min", are wider than the 282 px chip row (RUK-741)
+    expect(nodeOf(flowGraph({ ...plan, steps: [pooled] } as Plan, 'min'), 'circuit-lv').width).toBe(2 * 8 + 12 + 2 * (20 + 81 + 44));
     expect(machineReadout(pooled)).toMatchObject({ tier: { name: 'UMV', slug: 'umv' }, count: '×12 shared', power: '1,920 EU/t' });
     expect(8 + 60 + 6 + textWidth('>99.9%', TEXT_CHAR_WIDTH) + 8).toBe(120);
-    expect(busyTrack({ width: 190 })).toBe(130); expect(busyTrack({ width: 330 })).toBe(270);
+    expect(busyTrack({ width: 190 })).toBe(130); expect(busyTrack({ width: 380 })).toBe(320);
     // a long machine name sizes the head: 8 + 36 + 8 + its 13 px title + 8, up to the widest box
     const named = (name: string): number => nodeOf(flowGraph({ ...plan, steps: [step({ machine: { mteId: 121, name, tier: 1 } })] } as Plan, 'min'), 'circuit-lv').width;
-    expect(named('Electric Blast Furnace Controller')).toBe(60 + textWidth('Electric Blast Furnace Controller', 7.4));
-    expect(named('Extremely Advanced Large Multiblock Assembling Machine')).toBe(330);
+    expect(named('Electric Blast Furnace Controller')).toBe(318);   // its 297 px title, under the 318 px the two columns want
+    expect(named('Extremely Advanced Large Multiblock Assembling Machine')).toBe(380);
     // an owned step's second line and the avoid badge, below the band
     const text = 'Basic Assembler uses Redstone — no recipe at LV avoids it';
     const owned = flowGraph({ ...plan, steps: [step({ owned: 2, inputs: plan.steps[0]!.inputs, outputs: plan.steps[0]!.outputs })],
@@ -769,7 +772,7 @@ describe('flow diagram: machine readouts', () => {
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
     expect(html).toContain('<text class="flow-node-line" x="8" y="73">2 owned</text>');
     expect(html).toContain('<g class="flow-avoid-badge" data-avoid-badge="" transform="translate(4 78)">');
-    expect(rowsTop(box)).toBe(46 + 16 + 16 + 16);
+    expect(rowsTop(box)).toBe(46 + 16 + 14 + 16 + 16);
     expect(html).toContain(`<rect class="flow-hit" width="${box.width}" height="${rowsTop(box)}"></rect>`);   // the head's hit area holds the band
   });
   it('makes every chip wide enough for its text in Pixelify and in its fallback, MAX in bold too (ledger ruling P2-R8)', () => {
@@ -1002,5 +1005,78 @@ describe('a removed box\'s ghost', () => {
       expect(html, `${kind}: its opacity is its fade's`).not.toContain('opacity');
       expect(html, kind).not.toMatch(/flow-port|flow-node-box|flow-node\b/);
     }
+  });
+});
+
+// RUK-741: a step's or collapsed line's rows are two columns under a 14 px row header, its inputs taking the left and
+// its outputs the right, counted down the same lines; every material name a step's or line's rows write is at most MAX_NAME_CHARS characters.
+describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
+  it('counts an input column and an output column down the same lines; a stub keeps its one row', () => {
+    const saw = nodeOf(g, 'saw');                                          // one input, two outputs
+    expect(saw.rows.map((r) => r.side)).toEqual(['in', 'out', 'out']);
+    expect([0, 1, 2].map((i) => rowLine(saw, i))).toEqual([0, 0, 1]);
+    expect(rowLines(saw)).toBe(2);
+    expect(rowCentre(saw, 0)).toBe(rowCentre(saw, 1));                     // the input sits beside its main output
+    expect(rowCentre(saw, 2)).toBe(rowCentre(saw, 1) + 18);                // the byproduct a line lower
+    const asm = nodeOf(g, 'asm');                                          // three inputs, one output
+    expect(asm.rows.map((r) => r.side)).toEqual(['in', 'in', 'in', 'out']);
+    expect([0, 1, 2, 3].map((i) => rowLine(asm, i))).toEqual([0, 1, 2, 0]);
+    expect(rowLines(asm)).toBe(3);
+    // a box is as tall as its taller column: the saw's two rows, not its three
+    expect(saw.height).toBe(rowsTop(saw) + 18 * 2 + 6);
+    // a stub's one row is its own: line 0, no columns and no header over them
+    const stub = nodeOf(g, 'import:t:copper_ingot@0@mill');
+    expect(rowLine(stub, 0)).toBe(0); expect(rowLines(stub)).toBe(1);
+    expect(rowsTop(stub)).toBe(28 + 16 * stub.lines.length);
+  });
+  it('leaves a 14 px header for the two columns above a step box\'s and a collapsed line box\'s rows', () => {
+    const mill = nodeOf(g, 'mill');                                        // a step: head, band, then the header
+    expect(rowsTop(mill)).toBe(46 + 16 + 14);
+    const closed = flowGraph(red, 'hour', { collapsedLines: new Set([RED]) });
+    const line = nodeOf(closed, `line:${RED}`);                            // a collapsed line: title, then the header
+    expect(rowsTop(line)).toBe(28 + 14 + 16 * line.lines.length);
+    const stub = nodeOf(g, 'import:t:copper_ingot@0@mill');                // a stub: no header over its one row
+    expect(rowsTop(stub)).toBe(28 + 16 * stub.lines.length);
+  });
+  it('writes every name in at most 14 characters, fitted to its column, and leaves a stub\'s title whole', () => {
+    expect(shortName('Redstone')).toBe('Redstone');
+    expect(shortName('Basic Circuit')).toBe('Basic Circuit');
+    expect(shortName('Molten Soldering Alloy')).toBe('Molten Solder…');
+    expect(shortName('12345678901234')).toBe('12345678901234');              // exactly 14 is kept whole
+    expect(shortName('123456789012345')).toBe('1234567890123…');
+    expect(boxTitle(nodeOf(g, 'mill'))).toBe('Advanced Wiremill');          // a step's machine name is kept whole, never cut
+    expect(boxTitle(nodeOf(g, 'import:t:copper_ingot@0@mill'))).toBe('Copper Ingot');   // a stub's material title, short enough to stay whole
+    const block = nodeOf(g, 'import:t:copper_block@0@saw');                // a 15-character good's import stub: its title is a material, cut to 14
+    expect(block.kind).toBe('import'); expect(boxTitle(block)).toBe('Block of Copp…'); expect(boxTitle(block).length).toBe(MAX_NAME_CHARS);
+    const mill = nodeOf(g, 'mill');
+    expect(mill.rows.map((r) => rowLabel(mill, r))).toEqual(['Copper Ingot', '1x Copper Wire']);   // 14 characters fit the column whole
+    const smelt = nodeOf(flowGraph(red, 'hour'), 'smelt');
+    expect(smelt.rows.map((r) => rowLabel(smelt, r))).toEqual(['Copper Ingot', 'Redstone', 'Red Alloy Ing…']);
+    for (const graph of [g, flowGraph(red, 'hour'), flowGraph(red, 'hour', { collapsedLines: new Set([RED]) })]) {
+      for (const n of graph.nodes) {
+        if (n.width >= 380) continue;
+        for (const r of n.rows) {
+          const label = rowLabel(n, r);
+          if (rowHasIcon(n)) expect(label.length, `${n.id} ${r.port}`).toBeLessThanOrEqual(MAX_NAME_CHARS);   // a stub's row words are kept whole
+          expect(textWidth(label, TEXT_CHAR_WIDTH), `${n.id} ${r.port}`).toBeLessThanOrEqual(rowNameRoom(n, r));
+        }
+      }
+    }
+  });
+  it('puts a two-input, one-output step\'s rows on two lines, the taller column sizing the box', () => {
+    const smelt = nodeOf(flowGraph(red, 'hour'), 'smelt');                // 2 inputs (copper, redstone), 1 output
+    expect(smelt.rows.map((r) => r.side)).toEqual(['in', 'in', 'out']);
+    expect(rowLines(smelt)).toBe(2);
+    expect(rowCentre(smelt, 0)).toBe(rowCentre(smelt, 2));                // input 0 sits beside the output
+    expect(rowCentre(smelt, 1)).toBe(rowCentre(smelt, 0) + 18);          // input 1 one ROW_HEIGHT lower
+    expect(smelt.height).toBe(rowsTop(smelt) + 2 * 18 + 6);
+  });
+  it('lifts a step box\'s rows the row header over the same box read as a stub, and puts each row\'s port on its line', () => {
+    const mill = nodeOf(g, 'mill');
+    expect(rowsTop(mill) - rowsTop({ ...mill, kind: 'import' })).toBe(IO_HEAD_HEIGHT);   // the header, and nothing else, is the step's extra height
+    const elk = toElk(g);
+    const ports = elk.children?.find((c) => c.id === 'mill')?.ports;
+    expect(ports?.map((p) => p.y)).toEqual(mill.rows.map((_, i) => rowCentre(mill, i) - PORT_SIZE / 2));
+    expect(ports?.[0]?.y).toBe(ports?.[1]?.y);                            // the input's port is on its output's line
   });
 });

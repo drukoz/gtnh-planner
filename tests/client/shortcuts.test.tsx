@@ -28,6 +28,7 @@ describe('keyboard shortcuts', () => {
     expect(['1', '2', '3', '4', '5', '6'].map((k) => shortcutOf(key(k), null))).toEqual([0, 1, 2, 3, 4, 5].map((index) => ({ kind: 'tab', index })));
     expect(shortcutOf(key('7'), null)).toBeNull(); expect(shortcutOf(key('Escape'), null)).toBeNull();
     for (const k of ['f', 'F']) expect(shortcutOf(key(k), null)).toEqual({ kind: 'fit' }); for (const k of ['p', 'P']) expect(shortcutOf(key(k), null)).toEqual({ kind: 'pipes' });
+    for (const k of ['r', 'R']) expect(shortcutOf(key(k), null)).toEqual({ kind: 'recipes' }); for (const k of ['u', 'U']) expect(shortcutOf(key(k), null)).toEqual({ kind: 'uses' });
     expect(shortcutOf(key('?'), null)).toEqual({ kind: 'sheet' });
   });
 
@@ -52,20 +53,32 @@ describe('keyboard shortcuts', () => {
   // must not pull the focus out to a tab. A button outside one takes them all
   it('takes no shortcut inside an in-app confirm', () => {
     const inConfirm = el('BUTTON', { closest: (s) => (s === '[role="alertdialog"]' ? {} : null) });
-    for (const k of ['/', '5', 'f', 'p', '?']) expect(shortcutOf(key(k), inConfirm), k).toBeNull();
+    for (const k of ['/', '5', 'f', 'p', 'r', 'u', '?']) expect(shortcutOf(key(k), inConfirm), k).toBeNull();
     expect(shortcutOf(key('5'), el('BUTTON'))).toEqual({ kind: 'tab', index: 4 });
+  });
+
+  // R and U are single-key shortcuts like F: a chord, a field and an in-app confirm all leave them, so they are null wherever F is
+  it('takes no R or U with Ctrl or Cmd, typed in a field, or inside an in-app confirm', () => {
+    const inConfirm = el('BUTTON', { closest: (s) => (s === '[role="alertdialog"]' ? {} : null) });
+    for (const k of ['r', 'R', 'u', 'U']) {
+      expect(shortcutOf(key(k, { ctrlKey: true }), null), k).toBeNull();
+      expect(shortcutOf(key(k, { metaKey: true }), null), k).toBeNull();
+      expect(shortcutOf(key(k), el('INPUT', { type: 'text' })), k).toBeNull();
+      expect(shortcutOf(key(k), inConfirm), k).toBeNull();
+    }
   });
 
   // the final fix wave, ledger ruling P2-R134: the Esc row says what Escape does, layer by layer (spec §6.1, §14.1), in place of the mockup's
   // words, which named a panel no Escape closes; the words hold no string an e2e spec looks for (spec §3.8)
   it('lists the mockup\'s rows, and draws them in a dialog named by its title', () => {
     expect(SHORTCUT_ROWS).toEqual([[['/'], 'Search items and fluids'], [['1', '–', '6'], 'Switch tabs: Map, 3D, Connections, Flow, Materials, Notes'], [['F'], 'Fit the diagram'],
-      [['P'], 'Pause or play the pipes'], [['Esc'], 'Hide a tip, close a list, a question or the drawer, clear the highlight'], [['?'], 'Show this sheet']]);
+      [['P'], 'Pause or play the pipes'], [['R'], 'Show the recipes that make the material under the pointer (Flow)'], [['U'], 'Show what uses the material under the pointer (Flow)'],
+      [['Esc'], 'Hide a tip, close a list, a question or the drawer, clear the highlight'], [['?'], 'Show this sheet']]);
     const html = renderToStaticMarkup(<ShortcutsDialog onClose={() => {}} />);
     // fix round 1: the dialog holds the focus a press on its words gives it (ledger ruling P2-R81a), and a cap a screen reader would skip or
     // misread says its glyph as a word (P2-R86), the range's en dash too: authorized changes of the brief's two pins
     expect(html).toMatch(/<div class="modal shortcuts-sheet" role="dialog" aria-modal="true" aria-labelledby="([^"]+)" tabindex="-1"><h2 id="\1">Keyboard shortcuts<\/h2>/);
-    expect(html).toContain('<dt><kbd><span class="fig">1</span></kbd><span aria-hidden="true">–</span><span class="visually-hidden"> to </span><kbd><span class="fig">6</span></kbd></dt>'); expect(html.match(/<dt>/g)).toHaveLength(6); expect(html).toContain('<button type="button">Close</button>');   // a digit cap's digit in VT323 (spec §25)
+    expect(html).toContain('<dt><kbd><span class="fig">1</span></kbd><span aria-hidden="true">–</span><span class="visually-hidden"> to </span><kbd><span class="fig">6</span></kbd></dt>'); expect(html.match(/<dt>/g)).toHaveLength(8); expect(html).toContain('<button type="button">Close</button>');   // a digit cap's digit in VT323 (spec §25)
     expect(html).toContain('<dt><kbd><span aria-hidden="true">/</span><span class="visually-hidden">slash</span></kbd></dt>');
     expect(html).toContain('<dt><kbd><span aria-hidden="true">?</span><span class="visually-hidden">question mark</span></kbd></dt>');
     expect(html).toContain('<dt><kbd>Esc</kbd></dt>');
