@@ -121,6 +121,8 @@ export interface FlowLayout {
   edges: Array<FlowEdge & { points: Array<[number, number]>; labelAt?: [number, number]; labelBox?: Box }>;
   /** The open supporting lines, around their boxes. */
   groups: Array<FlowGroup & { x: number; y: number; width: number; height: number }>;
+  /** The left-over band's frame (RUK-740), below everything else; absent when nothing is left over. */
+  leftOver?: Box;
 }
 
 /** A rectangle in diagram coordinates. */
@@ -199,6 +201,19 @@ const HIGH_BUSY = 0.9;
 const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 /** Room around the boxes of an open supporting line; its title sits in the top band. */
 const GROUP_PADDING = '[top=36,left=12,bottom=12,right=12]';
+/** The left-over band (RUK-740): from the bottom of the rest of the diagram to its first arrow lane; between two lanes. */
+export const LEFT_OVER_GAP = 24;
+export const LANE_STEP = 6;
+/** The band's frame: its title band's height and the room inside its sides and bottom; between two left-over boxes. */
+export const LEFT_OVER_TITLE = 28;
+export const LEFT_OVER_PAD = 12;
+export const LEFT_OVER_SPACING = 28;
+/** An arrow into the band: how far right of its maker it drops (one lane's drop `DROP_STEP` further than the last, over 4), and how far left of its box it comes down. */
+export const DROP_GAP = 10;
+export const DROP_STEP = 5;
+export const APPROACH = 14;
+/** The words of the band's title. */
+export const LEFT_OVER_WORDS = 'Left over: not used in this line';
 
 const RAW = 'raw';
 const OUT = 'out';
@@ -625,7 +640,8 @@ function stepBox(ctx: GraphContext, step: PlanStep, unavoidable: readonly PlanWa
 
 /**
  * The arrows of the plan's flows between the boxes they are drawn in, and the stubs at their ends: an import stub beside
- * each box that takes a bought good, a sink beside each box that leaves a good over, a stub into each input nothing
+ * each box that takes a bought good, a sink for each good a box leaves over (laid in the band at the bottom, no group),
+ * a stub into each input nothing
  * supplies or supplies short (carrying what is missing). Flows between one pair of ports add up (a collapsed line's);
  * a flow inside a collapsed line is not drawn. With `importsInOneColumn` no import stub sits in a group.
  */
@@ -663,7 +679,7 @@ function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrow
     } else if (f.to === SINK) {
       const producer = boxOf(ctx, f.from);
       const id = sinkId(f.key, producer);
-      addStub(id, { kind: 'sink', key: f.key, perSecond: f.perSecond }, groupOf(ctx, f.from));
+      addStub(id, { kind: 'sink', key: f.key, perSecond: f.perSecond }, undefined);
       addArrow(producer, id, f.key, f.perSecond);
     } else {
       const from = boxOf(ctx, f.from);
@@ -813,7 +829,7 @@ function openGroups(ctx: GraphContext, nodes: readonly FlowNode[]): FlowGroup[] 
  *   readout, which its head draws in place of that first line (Phase 2 spec §7);
  * - an import stub `import:<key>@<step>` beside each step that takes a bought good, named by its kind of import;
  * - a stub `missing:<key>@<step>` into each input nothing supplies ("no source in the plan") or supplies short ("short");
- * - a stub `sink:<key>@<step>` for each good a step leaves over;
+  * - a stub `sink:<key>@<step>` for each good a box leaves over, laid in the band at the bottom;
  * - the target `out`, `Plan.target` (else what flows into `out`, for a plan from before that field);
  * - supporting lines (`PlanStep.line`): open, a group `line:<key>` around their steps and those steps' stubs; collapsed
  *   (`collapsedLines`), one box `line:<key>` whose rows are the goods crossing its edge, its own material first;
@@ -862,15 +878,18 @@ export function collapsedLines(plan: Plan, toggled: ReadonlyMap<StuffKey, boolea
  * with `importsInOneColumn`, the target in the last; an open supporting line a compound node holding its boxes
  * (`INCLUDE_CHILDREN`); depth-first cycle breaking; boxes and arrows in id order. An arrow's rate label sits at the end
  * whose port has the other arrows: a centre label would get a layer of its own and push the stub away from its step.
+ * Sink nodes and edges whose `to` is a sink are left out; `placeLeftOvers` positions them after ELK.
  */
 export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGroup[]; importsInOneColumn?: boolean }): ElkNode {
   const arrows = new Map<string, number>();
   for (const e of g.edges) for (const port of [e.fromPort, e.toPort]) arrows.set(port, (arrows.get(port) ?? 0) + 1);
   const groups = g.groups ?? [];
   const groupIds = new Set(groups.map((grp) => grp.id));
+  const sinkIds = new Set(g.nodes.filter((n) => n.kind === 'sink').map((n) => n.id));
   const inside = new Map<string, ElkNode[]>();
   const top: ElkNode[] = [];
   for (const n of g.nodes) {
+    if (n.kind === 'sink') continue;
     const layoutOptions: Record<string, string> = { 'elk.portConstraints': 'FIXED_POS' };
     if (n.kind === 'step' || n.kind === 'line') layoutOptions['elk.alignment'] = 'LEFT';
     if (n.kind === 'import' && g.importsInOneColumn === true) layoutOptions[LAYER_CONSTRAINT] = 'FIRST';
@@ -890,7 +909,7 @@ export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGr
   }
   for (const grp of groups) top.push({ id: grp.id, layoutOptions: { 'elk.padding': GROUP_PADDING }, children: inside.get(grp.id) ?? [] });
   top.sort((a, b) => byString(a.id, b.id));
-  const edges = g.edges.map((e): ElkExtendedEdge => {
+  const edges = g.edges.filter((e) => !sinkIds.has(e.to)).map((e): ElkExtendedEdge => {
     const edge: ElkExtendedEdge = { id: e.id, sources: [e.fromPort], targets: [e.toPort] };
     if (e.label !== undefined) {
       edge.labels = [{
@@ -907,6 +926,7 @@ export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGr
  * The laid-out picture in diagram coordinates: box positions (ELK places a child relative to its parent), each arrow as
  * the start, bend and end points of its first section and its label's box and centre (both relative to the arrow's
  * container), and the open supporting lines' boxes. An arrow ELK did not route runs straight from its row to its row.
+ * After ELK's placement, `placeLeftOvers` positions sink nodes in the left-over band.
  */
 export function fromElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGroup[] }, laid: ElkNode): FlowLayout {
   const placed = new Map<string, Box>();
@@ -954,7 +974,120 @@ export function fromElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: Flow
   const groups = (g.groups ?? []).map((grp) => ({ ...grp, ...(placed.get(grp.id) ?? { x: 0, y: 0, width: 0, height: 0 }) }));
   const width = laid.width ?? Math.max(0, ...nodes.map((n) => n.x + n.width));
   const height = laid.height ?? Math.max(0, ...nodes.map((n) => n.y + n.height));
-  return { width, height, nodes, edges, groups };
+  return placeLeftOvers({ width, height, nodes, edges, groups });
+}
+
+/**
+ * Place sink (left-over) nodes in one band below the rest of the diagram (RUK-740).
+ * Computes the bottom of all non-sink boxes/groups, lays sinks left-to-right in a frame,
+ * and routes each sink's arrow as a 6-point polyline: drop from maker, lane, approach.
+ * Returns `layout` unchanged when there are no sinks.
+ */
+function placeLeftOvers(layout: FlowLayout): FlowLayout {
+  const sinks = layout.nodes.filter((n) => n.kind === 'sink');
+  if (sinks.length === 0) return layout;
+
+  const rest = layout.nodes.filter((n) => n.kind !== 'sink');
+  const bottom = Math.max(
+    0,
+    ...rest.map((n) => n.y + n.height),
+    ...layout.groups.map((g) => g.y + g.height),
+  );
+
+  // Compute start points for each sink
+  const starts = new Map<string, [number, number]>();
+  for (const s of sinks) {
+    const e = layout.edges.find((ed) => ed.to === s.id);
+    const p = e !== undefined ? layout.nodes.find((n) => n.id === e.from) : undefined;
+    if (e === undefined || p === undefined) {
+      starts.set(s.id, [0, bottom]);
+    } else {
+      const i = p.rows.findIndex((r) => r.port === e.fromPort);
+      starts.set(s.id, [p.x + p.width + PORT_SIZE, p.y + (i >= 0 ? rowCentre(p, i) : 0)]);
+    }
+  }
+
+  // Sort sinks by start[0], then start[1], then id
+  const sorted = [...sinks].sort((a, b) => {
+    const sa = starts.get(a.id)!;
+    const sb = starts.get(b.id)!;
+    return sa[0] - sb[0] || sa[1] - sb[1] || byString(a.id, b.id);
+  });
+
+  const n = sorted.length;
+
+  // Compute frame
+  const frameY = bottom + LEFT_OVER_GAP + LANE_STEP * n + 8;
+  const frame = { x: 0, y: frameY, width: 0, height: 0 };
+
+  // Place sinks in one row, left to right
+  const sinkPos = new Map<string, { x: number; y: number }>();
+  let prevX = 0;
+  let prevW = 0;
+  let maxH = 0;
+  for (let k = 0; k < n; k++) {
+    const s = sorted[k]!;
+    const x = k === 0 ? LEFT_OVER_PAD + APPROACH : prevX + prevW + LEFT_OVER_SPACING;
+    const y = frame.y + LEFT_OVER_TITLE;
+    sinkPos.set(s.id, { x, y });
+    prevX = x;
+    prevW = s.width;
+    if (s.height > maxH) maxH = s.height;
+  }
+
+  frame.width = prevX + prevW + LEFT_OVER_PAD;
+  frame.height = LEFT_OVER_TITLE + maxH + LEFT_OVER_PAD;
+
+  // Compute dropX for each sink (avoid crossing boxes)
+  const dropXs = new Map<string, number>();
+  for (let k = 0; k < n; k++) {
+    const s = sorted[k]!;
+    const start = starts.get(s.id)!;
+    let dropX = start[0] + DROP_GAP + DROP_STEP * (k % 4);
+    for (let iter = 0; iter < rest.length; iter++) {
+      const b = rest.find((bx) => bx.x - 4 <= dropX && dropX <= bx.x + bx.width + 4 && bx.y + bx.height > start[1] && bx.y < bottom);
+      if (b === undefined) break;
+      dropX = b.x + b.width + DROP_GAP;
+    }
+    dropXs.set(s.id, dropX);
+  }
+
+  // Build new nodes (sinks at their new positions)
+  const newNodes = layout.nodes.map((n) => {
+    const pos = sinkPos.get(n.id);
+    return pos !== undefined ? { ...n, x: pos.x, y: pos.y } : n;
+  });
+
+  // Build new edges (sinks get 6-point arrows)
+  const newEdges = layout.edges.map((e) => {
+    const k = sorted.findIndex((s) => s.id === e.to);
+    if (k < 0) return e;
+    const s = sorted[k]!;
+    const start = starts.get(s.id)!;
+    const dropX = dropXs.get(s.id)!;
+    const laneY = bottom + LEFT_OVER_GAP + LANE_STEP * k;
+    const newS = newNodes.find((n) => n.id === s.id)!;
+    const end: [number, number] = [newS.x - PORT_SIZE, newS.y + rowCentre(newS, 0)];
+    const points: Array<[number, number]> = [
+      start,
+      [dropX, start[1]],
+      [dropX, laneY],
+      [end[0] - APPROACH, laneY],
+      [end[0] - APPROACH, end[1]],
+      end,
+    ];
+    const { labelAt: _la, labelBox: _lb, ...rest2 } = e as typeof e & { labelAt?: [number, number]; labelBox?: Box };
+    return { ...rest2, points };
+  });
+
+  return {
+    width: Math.max(layout.width, frame.x + frame.width),
+    height: frame.y + frame.height,
+    nodes: newNodes,
+    edges: newEdges,
+    groups: layout.groups,
+    leftOver: frame,
+  };
 }
 
 /**
