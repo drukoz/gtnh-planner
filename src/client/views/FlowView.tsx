@@ -44,9 +44,8 @@ import { layoutFlow } from '../workers/elk.worker.ts';
 import {
   BUSY_BAND, BUSY_TRACK_HEIGHT, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
   NODE_TITLE_HEIGHT, PORT_SIZE, POWER_GAP, READOUT_LEFT, ROW_HEIGHT, SLOT_TOP, STEP_HEAD_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
-  TOGGLE_SPACE,
-  DIM_OPACITY, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
-  fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowNameRoom, rowRate, rowsTop, toElk, useOnlyPatch,
+  TOGGLE_SPACE, DIM_OPACITY, IO_HEAD_HEIGHT, boxTitle, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
+  fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowLabel, rowLines, rowRate, rowsTop, toElk, useOnlyPatch,
   type FlowLayout, type FlowNode, type FlowNodeKind, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
 } from './flow-model.ts';
 import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
@@ -188,7 +187,8 @@ function LineToggle(props: { lineKey: StuffKey; title: string; open: boolean; x:
 /**
  * One row of a box (fix spec §6.2): the good's icon (steps and lines), its name and rate, the port's flange on the box's
  * edge (last, so it is painted over the end of the pipe), lit or dimmed under a focus. A button: hovering lights the good, a
- * click or Enter pins it.
+ * click or Enter pins it. A step's or line's row is drawn in its column, inputs left and outputs right, its name cut to 14
+ * characters (RUK-740).
  */
 function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; sets: FocusSets | null }): ReactElement {
   const { node, row, index, sets } = props;
@@ -200,22 +200,24 @@ function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; se
   if (row.issue !== undefined) classes.push(`issue-${row.issue}`);
   if (sets !== null) classes.push(sets.ports.has(row.port) ? 'hl' : 'dim');
   const rate = rowRate(row);
-  const room = rowNameRoom(node, row);
   const textX = left ? TEXT_LEFT + (icon ? ICON_SPACE : 0) : node.width - TEXT_LEFT - (icon ? ICON_SPACE : 0);
+  // a two-column box's row is its own half: its hover, its focus ring and its clip stop at the middle (RUK-740)
+  const colX = icon && !left ? node.width / 2 : 0;
+  const colW = icon ? node.width / 2 : node.width;
   const where = left ? 'comes from' : 'goes';
   const label = icon ? `${row.side === 'in' ? 'takes' : 'makes'} ${row.name} ${rate}: show where it ${where}` : `${node.title}, ${row.name} ${rate}: show where it ${where}`;
   return (
     <g className={classes.join(' ')} data-port={row.port} data-key={row.key} role="button" tabIndex={0} aria-label={label}>
-      <rect className="flow-hit" x={0} y={y - ROW_HEIGHT / 2} width={node.width} height={ROW_HEIGHT} />
+      <rect className="flow-hit" x={colX} y={y - ROW_HEIGHT / 2} width={colW} height={ROW_HEIGHT} />
       {icon && (
         <foreignObject x={left ? TEXT_LEFT : node.width - TEXT_LEFT - ICON_SIZE} y={y - ICON_SIZE / 2} width={ICON_SIZE} height={ICON_SIZE}>
           <ItemIcon itemKey={row.key} size={ICON_SIZE} name={row.name} tip={false} />
         </foreignObject>
       )}
       {/* A nested svg clips a row wider than the box; the full text is in the box's tooltip and accessible name. */}
-      <svg x={0} y={y - ROW_HEIGHT / 2} width={node.width} height={ROW_HEIGHT}>
-        <text className="flow-row-text" x={textX} y={ROW_HEIGHT / 2 + 4} {...(left ? {} : { textAnchor: 'end' })}>
-          {`${clipText(row.name, room, TEXT_CHAR_WIDTH)} `}
+      <svg x={colX} y={y - ROW_HEIGHT / 2} width={colW} height={ROW_HEIGHT}>
+        <text className="flow-row-text" x={textX - colX} y={ROW_HEIGHT / 2 + 4} {...(left ? {} : { textAnchor: 'end' })}>
+          {`${rowLabel(node, row)} `}
           <tspan className="flow-row-rate">{rate}</tspan>
         </text>
       </svg>
@@ -284,7 +286,8 @@ function MachineReadoutShape(props: { node: PlacedNode; machine: MachineReadout 
  * lines follow under the busy band, each cut with "…" at the box's edge. Its words, one a line (its title, its lines,
  * those warnings and its rows'), are its tooltip and its accessible name (`data-tip` and `aria-label`, Phase 2 spec
  * §6.4), which a focused head or row shows at itself. Under a focus it is lit (`hl`, and `producer` or `consumer`) or
- * dimmed (`dim`).
+ * dimmed (`dim`). A two-column box draws an "Input | Output" header over its columns with a faint line between them
+ * (RUK-740).
  */
 export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; sets?: FocusSets | null }): ReactElement {
   const { node, selected = false } = props;
@@ -332,7 +335,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
         {/* A nested svg clips text that is wider than the box; the full text is in the box's tooltip and accessible name. */}
         <svg width={node.width - toggle} height={head}>
           {machine !== undefined && <MachineReadoutShape node={node} machine={machine} />}
-          <text className="flow-node-title" x={titleX} y={TITLE_BASELINE}>{clipText(node.title, node.width - toggle - titleX - TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
+          <text className="flow-node-title" x={titleX} y={TITLE_BASELINE}>{clipText(boxTitle(node), node.width - toggle - titleX - TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
           {shown.map((line, i) => (
             <text key={`${i}:${line}`} className="flow-node-line" x={TEXT_LEFT} y={linesTop + NODE_LINE_HEIGHT * i + 11}>
               {machine === undefined ? line : clipText(line, node.width - 2 * TEXT_LEFT, TEXT_CHAR_WIDTH)}
@@ -348,6 +351,14 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
       </g>
       {node.kind === 'line' && node.key !== null && (
         <LineToggle lineKey={node.key} title={node.title} open={false} x={node.width - TOGGLE_SIZE - TOGGLE_MARGIN} y={ICON_TOP - 1} />
+      )}
+      {/* A two-column box's "Input | Output" header over its columns and the faint line between them (RUK-740); the rows' names say it already. */}
+      {rowHasIcon(node) && node.rows.length > 0 && (
+        <g className="flow-io" aria-hidden="true">
+          <text className="flow-io-head" x={TEXT_LEFT} y={head - IO_HEAD_HEIGHT + 10}>Input</text>
+          <text className="flow-io-head" x={node.width - TEXT_LEFT} y={head - IO_HEAD_HEIGHT + 10} textAnchor="end">Output</text>
+          <line className="flow-io-divider" x1={node.width / 2} y1={head - IO_HEAD_HEIGHT} x2={node.width / 2} y2={head + ROW_HEIGHT * rowLines(node)} />
+        </g>
       )}
       {node.rows.map((row, i) => <FlowRowShape key={row.port} node={node} row={row} index={i} sets={sets} />)}
     </g>
