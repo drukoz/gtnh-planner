@@ -178,6 +178,10 @@ describe('flow left-over band (RUK-740)', () => {
     const edges = laid.edges.filter((e) => sinks.some((s) => s.id === e.to));
     const laneYs = new Set(edges.map((e) => e.points[2]![1]));
     expect(laneYs.size).toBe(2);
+    // Left to right in start order (start x, then start y)
+    const startOf = (s: { id: string }) => edges.find((e) => e.to === s.id)!.points[0]!;
+    const [ls, rs] = [startOf(left), startOf(right)];
+    expect(ls[0] < rs[0] || (ls[0] === rs[0] && ls[1] <= rs[1])).toBe(true);
   });
 
   it('a plan without sinks lays out exactly as before: leftOver is undefined', async () => {

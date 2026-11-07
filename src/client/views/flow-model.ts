@@ -641,8 +641,7 @@ function stepBox(ctx: GraphContext, step: PlanStep, unavoidable: readonly PlanWa
 /**
  * The arrows of the plan's flows between the boxes they are drawn in, and the stubs at their ends: an import stub beside
  * each box that takes a bought good, a sink for each good a box leaves over (laid in the band at the bottom, no group),
- * a stub into each input nothing
- * supplies or supplies short (carrying what is missing). Flows between one pair of ports add up (a collapsed line's);
+ * a stub into each input nothing supplies or supplies short (carrying what is missing). Flows between one pair of ports add up (a collapsed line's);
  * a flow inside a collapsed line is not drawn. With `importsInOneColumn` no import stub sits in a group.
  */
 function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrows: Map<string, Arrow>; stubs: Map<string, Stub> } {
@@ -829,7 +828,7 @@ function openGroups(ctx: GraphContext, nodes: readonly FlowNode[]): FlowGroup[] 
  *   readout, which its head draws in place of that first line (Phase 2 spec §7);
  * - an import stub `import:<key>@<step>` beside each step that takes a bought good, named by its kind of import;
  * - a stub `missing:<key>@<step>` into each input nothing supplies ("no source in the plan") or supplies short ("short");
-  * - a stub `sink:<key>@<step>` for each good a box leaves over, laid in the band at the bottom;
+ * - a stub `sink:<key>@<step>` for each good a box leaves over, laid in the band at the bottom;
  * - the target `out`, `Plan.target` (else what flows into `out`, for a plan from before that field);
  * - supporting lines (`PlanStep.line`): open, a group `line:<key>` around their steps and those steps' stubs; collapsed
  *   (`collapsedLines`), one box `line:<key>` whose rows are the goods crossing its edge, its own material first;
