@@ -15,7 +15,7 @@ import { EASE_IN, EASE_OUT, GHOST_FALLBACK_MS } from '../../src/client/state/mot
 import { matrixView, panTransform, type PanView } from '../../src/client/views/glide.ts';
 import type { Layout } from '../../src/shared/types/layout.ts';
 import type { Plan, PlanStep } from '../../src/shared/types/plan.ts';
-import { circuitLv, copperUnsourced, manyEdges, platesTwoWays } from './fixtures/plans.ts';
+import { circuitLv, circuitLvWirePlate, copperUnsourced, manyEdges, platesTwoWays } from './fixtures/plans.ts';
 import {
   bodyFocusCount, createProject, finishMotion, login, loosePipeEnds, LV_CIRCUITS, openConnections, openWithPlan, setName, watchBodyFocus,
 } from './helpers.ts';
@@ -1006,7 +1006,11 @@ const canvasOrigin = (page: Page): Promise<[number, number]> => page.locator('sv
   return [box.left + svg.clientLeft, box.top + svg.clientTop];
 });
 
-/** circuitLv's Redstone stub: "Imports in one column" moves it alone, 280 units left, to the first column (the same steps, so no new view). */
+/**
+ * circuitLv's Redstone stub. A replan to circuitLvWirePlate (the Iron Plate's row going from the assembler to the wiremill) lays the same boxes
+ * out again, and moves this stub 61 px; collapsing the wiremill's line lays them out again too, and moves it 48 px up (the same steps, so no new
+ * view).
+ */
 const REDSTONE = 'import:t:redstone@0@circuit-lv';
 
 /**
@@ -1059,14 +1063,15 @@ test('a new layout that comes while Fit pans glides its boxes and lets the pan r
   expect((await loosePipeEnds(page)).loose).toEqual([]);
 });
 
-// Task 13b (notes 11): Fit pressed while a new layout's boxes glide. The stub's glide held half way, Fit's pan held at 60 ms: the glide is the same
-// animation, where it was, and the stub is drawn where the pan's picture of its glide's place puts it
+// Task 13b (notes 11): Fit pressed while a new layout's boxes glide. Closing the wiremill's line lays the same boxes out again: the stub glides
+// a place up, and the view pans to the new fit. The stub's glide held half way, Fit's pan held at 60 ms: the glide is the same animation, where
+// it was, and the stub is drawn where the pan's picture of its glide's place puts it
 test('Fit pressed while a new layout glides pans the view and lets the boxes glide on: the two compose', async ({ page }) => {
   await page.addInitScript(recordAnimations);
-  await openWithPlan(page, circuitLv());
+  await openWithPlan(page, lined());
   await dragCanvas(page, 100, 60);
   await holdAnimationsOf(page, '[data-node-id]');
-  await page.getByRole('checkbox', { name: 'Imports in one column' }).check();
+  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').click();
   await expect.poll(async () => (await records(page)).filter((r) => r.node === REDSTONE).length, { message: 'the stub glides' }).toBe(1);
   await page.locator(`svg.flow-canvas [data-node-id="${REDSTONE}"]`).evaluate((box) => {
     const glide = box.getAnimations()[0];
@@ -1204,11 +1209,19 @@ test('a focused box head keeps the focus and its tip through a replan, the tip g
 });
 
 // Task 13b (notes 11; ledger ruling P2-R36): a panel's Close pressed while a new layout glides the box that opened it judges the box where it
-// lands: `restingBox` reads a gliding box's own attribute too. "Imports in one column" takes the redstone's stub 280 units left, out of the
-// canvas's view; its glide held at its start, the stub still shows where it stood, in the canvas: Close gives the focus to the canvas
-test('Close while a new layout glides the box that opened the panel out of view gives the focus to the canvas', async ({ page }) => {
+// lands: `restingBox` reads a gliding box's own attribute too. A replan to circuitLv (the Iron Plate's row leaving the wiremill) takes the
+// redstone's stub 61 px down, out of the canvas's view; its glide held at its start, the stub still shows where it stood, in the canvas: Close
+// gives the focus to the canvas
+// Skipped, awaiting TL1's ruling on its rework (RUK-745): with the checkbox gone the trigger is a replan, and every replan the fixture can
+// serve grows the canvas at least as far as it glides the stub (72 px against 61), so no view the box can be panned to lets it land wholly
+// below the canvas. The body below stands as the geometry was explored.
+test.skip('Close while a new layout glides the box that opened the panel out of view gives the focus to the canvas', async ({ page }) => {
   await page.addInitScript(recordAnimations);
-  await openWithPlan(page, circuitLv());
+  let served = circuitLvWirePlate();
+  const id = await openServing(page, () => served);
+  if (await page.locator('#project-settings').count() > 0) await page.keyboard.press('Escape');   // its stub sits under the settings drawer
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
+  await expect.poll(() => page.locator(FLOW_PAN).evaluate((g) => g.getAnimations().length), { message: 'the view has fitted' }).toBe(0);
   const canvas = page.locator('svg.flow-canvas');
   const stub = page.locator(`svg.flow-canvas [data-node-id="${REDSTONE}"]`);
   const head = stub.locator('.flow-node-head');
@@ -1216,20 +1229,26 @@ test('Close while a new layout glides the box that opened the panel out of view 
   const panel = page.getByRole('complementary', { name: 'Import: Redstone' });
   await expect(panel).toBeVisible();
   await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
-  // the stub's left edge 40 px inside the canvas's, so its place in the first column, 252 px left at this zoom, is wholly left of the canvas: a
-  // drag to the left from near the canvas's right edge, so the pointer stays in the canvas until the press has become a drag
+  // zoomed in once, so the canvas has room to spare under the tallest layer: the fit view's is filled, and the head could not be panned down in it
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect.poll(() => page.locator(FLOW_PAN).evaluate((g) => g.getAnimations().length), { message: 'the view has zoomed' }).toBe(0);
+  // the stub's head panned to the view's bottom-left limit, where it shows just above the canvas's bottom edge, so where its glide lands, 77 px
+  // lower at this zoom, is wholly below the canvas: a drag from a gap between the boxes, ending with the pointer in the canvas
   const [h, c] = [await head.boundingBox(), await canvas.boundingBox()];
   if (h === null || c === null) throw new Error('no box');
-  const [x, y] = [Math.round(c.x + c.width - 24), Math.round(c.y + 24)];
+  const [x, y] = [Math.round(c.x + 60), Math.round(c.y + c.height - 90)];
   await page.mouse.move(x, y);
   await page.mouse.down();
-  await page.mouse.move(x + Math.round(c.x + 40 - h.x), y, { steps: 6 });
+  await page.mouse.move(x + Math.round(c.x - 19 - h.x), y + Math.round(c.y + c.height - 34 - h.y), { steps: 6 });
   await page.mouse.up();
   await page.mouse.move(1, 1);
   const dragged = await head.boundingBox();
-  expect(dragged?.x, 'the premise: the stub dragged 40 px inside the canvas\'s left edge').toBeCloseTo(c.x + 40, 0);
+  if (dragged === null) throw new Error('no box');
+  expect(dragged.y, 'the premise: the stub\'s head shows just above the canvas\'s bottom edge').toBeCloseTo(c.y + c.height - 34, 0);
+  expect(dragged.x + dragged.width, 'the premise: the head shows in the canvas, its left clipped by its left edge').toBeGreaterThan(c.x + 20);
   await holdAnimationsOf(page, '[data-node-id]');
-  await page.getByRole('checkbox', { name: 'Imports in one column' }).check();
+  served = circuitLv();
+  await replan(page, id, 31);
   await expect.poll(async () => (await records(page)).filter((r) => r.node === REDSTONE).length, { message: 'the stub glides' }).toBe(1);
   const [onScreen, area] = [await head.boundingBox(), await canvas.boundingBox()];
   if (onScreen === null || area === null) throw new Error('no box');
@@ -1241,9 +1260,9 @@ test('Close while a new layout glides the box that opened the panel out of view 
     glide.currentTime = 260;
     const at = box.querySelector('.flow-node-head')?.getBoundingClientRect();
     glide.currentTime = 0;
-    return at?.right ?? Number.NaN;
+    return at?.top ?? Number.NaN;
   });
-  expect(rest, 'the premise: where it lands the head is wholly left of the canvas').toBeLessThan(area.x);
+  expect(rest, 'the premise: where it lands the head is wholly below the canvas').toBeGreaterThanOrEqual(area.y + area.height);
   await watchBodyFocus(page);
   await panel.getByRole('button', { name: 'Close the panel' }).focus();
   await page.keyboard.press('Enter');
@@ -1349,21 +1368,24 @@ test('a replan\'s fade of the goods\' layer leaves each good its own ride and it
 });
 
 // Task 13b (notes 11; ledger ruling P2-R35): the scroll. The page is scrolled so the redstone stub's head shows its bottom in the window while
-// "Imports in one column" glides it, held at its start, 16 px up (and 252 px left, still in the canvas's view), where it lands wholly above the
-// window. Close gives the focus to the head, ends the glide at once, and scrolls the head into the window by where it rests: the whole head is in
-// the window once every motion has ended (the other order scrolls to where it is drawn, and the head then goes up out of the window). At 1000 px
-// the panel stacks under the diagram, so its Close shows while the canvas's top is above the window
+// a replan to circuitLvWirePlate (the Iron Plate's row coming to the wiremill) glides it, held at its start, 61 px up (and 310 px right, still in
+// the canvas's view), where it lands wholly above the window. Close gives the focus to the head, ends the glide at once, and scrolls the head
+// into the window by where it rests: the whole head is in the window once every motion has ended (the other order scrolls to where it is drawn,
+// and the head then goes up out of the window). At 1000 px the panel stacks under the diagram, so its Close shows while the canvas's top is
+// above the window
 test('Close while a new layout glides the box that opened the panel out of the window ends the glide, then scrolls the head in', async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 900 });
   await page.addInitScript(recordAnimations);
-  await openWithPlan(page, circuitLv());
+  let served = circuitLv();
+  const id = await openServing(page, () => served);
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
   const canvas = page.locator('svg.flow-canvas');
   const head = page.locator(`svg.flow-canvas [data-node-id="${REDSTONE}"] .flow-node-head`);
   await head.click();
   const panel = page.getByRole('complementary', { name: 'Import: Redstone' });
   await expect(panel).toBeVisible();
   await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
-  // the stub's left edge 300 px inside the canvas's, so its place in the first column, 252 px left, is in the canvas's view too
+  // the stub's left edge 300 px inside the canvas's, so where it lands, 310 px right of where it stood, is in the canvas's view too
   const [h, c] = [await head.boundingBox(), await canvas.boundingBox()];
   if (h === null || c === null) throw new Error('no box');
   const [x, y] = [Math.round(c.x + c.width / 2), Math.round(c.y + 24)];
@@ -1373,7 +1395,8 @@ test('Close while a new layout glides the box that opened the panel out of the w
   await page.mouse.up();
   await page.mouse.move(1, 1);
   await holdAnimationsOf(page, '[data-node-id]');
-  await page.getByRole('checkbox', { name: 'Imports in one column' }).check();
+  served = circuitLvWirePlate();
+  await replan(page, id, 31);
   await expect.poll(async () => (await records(page)).filter((r) => r.node === REDSTONE).length, { message: 'the stub glides' }).toBe(1);
   // a spacer after the page lets it scroll, and the window's top goes 8 px above the head's bottom as drawn
   const scrolled = await head.evaluate((el) => {
@@ -1410,7 +1433,7 @@ test('Close while a new layout glides the box that opened the panel out of the w
   await expect(head).toBeFocused();
   expect(await page.locator(`svg.flow-canvas [data-node-id="${REDSTONE}"]`).evaluate((box) => box.getAnimations().length), 'the glide ended').toBe(0);
   await finishMotion(page);
-  // the whole head, but for the half pixel a scroll to a whole pixel can leave (the glide left running would leave its top 16 px out)
+  // the whole head, but for the half pixel a scroll to a whole pixel can leave (the glide left running would leave its top 61 px out)
   const landed = await head.boundingBox();
   if (landed === null) throw new Error('no head');
   expect(landed.y, 'the whole head: its top in the window').toBeGreaterThan(-1);
@@ -1981,14 +2004,17 @@ test('Fit pressed while the canvas keeps its height fits the view to its min-hei
 });
 
 // Fix round 2 (item 3): the hold costs one render at most: it is decided as the new layout is drawn, and released straight from its glides' end
-// when no ghost is left. "Imports in one column" moves circuitLv's Redstone stub alone, to the first column, which shortens the diagram and drops
-// no box: from the commit that draws it, the canvas is drawn twice, held, then released
+// when no ghost is left. A replan to circuitLvWirePlate (the Iron Plate's row going from the assembler to the wiremill) takes a row out of the
+// diagram's tallest layer, which shortens the canvas and drops no box: from the commit that draws it, the canvas is drawn twice, held, then
+// released
 test('a new layout that shortens the canvas and drops no box draws the canvas twice: held, then released', async ({ page }) => {
   await page.addInitScript(countCommits);
-  await openWithPlan(page, circuitLv());
+  let served = circuitLv();
+  const id = await openServing(page, () => served);
   const tall = await canvasHeight(page);
   const before = (await commitsOf(page)).at(-1)?.boxes;
-  await page.getByLabel('Imports in one column').check();
+  served = circuitLvWirePlate();
+  await replan(page, id, 31);
   await expect.poll(() => canvasHeight(page), { message: 'the shorter height, once released' }).toBeLessThan(tall);
   await nextFrames(page);
   await expect(page.locator('svg.flow-canvas .flow-ghost'), 'the premise: no ghost').toHaveCount(0);
