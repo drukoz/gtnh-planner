@@ -444,9 +444,10 @@ export function rowNameRoom(node: Pick<FlowNode, 'kind' | 'width'>, row: Pick<Fl
   return (node.width - 2 * TEXT_LEFT - COLUMN_GAP) / 2 - ICON_SPACE - rate;
 }
 
-/** What a row writes for its good: the shortened name, cut to the room its column leaves. */
+/** What a row writes for its good: a step's or line's material is shortened to 14; a stub's words are kept whole. Both cut to the room. */
 export function rowLabel(node: Pick<FlowNode, 'kind' | 'width'>, row: Pick<FlowRow, 'name' | 'rate' | 'share'>): string {
-  return clipText(shortName(row.name), rowNameRoom(node, row), TEXT_CHAR_WIDTH);
+  const name = rowHasIcon(node) ? shortName(row.name) : row.name;
+  return clipText(name, rowNameRoom(node, row), TEXT_CHAR_WIDTH);
 }
 
 /** `text` cut to fit `width` at `charWidth` per character, ending in "…" when cut (the full text is in the tooltip). */

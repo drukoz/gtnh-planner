@@ -5,7 +5,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
-  collapsedLines, firstProducer, edgeTag, rowNameRoom, rowLabel, shortName, boxTitle, rowLine, rowLines, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH,
+  collapsedLines, firstProducer, edgeTag, rowNameRoom, rowLabel, rowHasIcon, shortName, boxTitle, rowLine, rowLines, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH,
   IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS, PORT_SIZE, flowIssueLines, type FlowLayout, type FlowNode,
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
   CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
@@ -1009,7 +1009,7 @@ describe('a removed box\'s ghost', () => {
 });
 
 // RUK-741: a step's or collapsed line's rows are two columns under a 14 px row header, its inputs taking the left and
-// its outputs the right, counted down the same lines; every name a box writes is at most MAX_NAME_CHARS characters.
+// its outputs the right, counted down the same lines; every material name a step's or line's rows write is at most MAX_NAME_CHARS characters.
 describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
   it('counts an input column and an output column down the same lines; a stub keeps its one row', () => {
     const saw = nodeOf(g, 'saw');                                          // one input, two outputs
@@ -1057,7 +1057,7 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
         if (n.width >= 380) continue;
         for (const r of n.rows) {
           const label = rowLabel(n, r);
-          expect(label.length, `${n.id} ${r.port}`).toBeLessThanOrEqual(MAX_NAME_CHARS);
+          if (rowHasIcon(n)) expect(label.length, `${n.id} ${r.port}`).toBeLessThanOrEqual(MAX_NAME_CHARS);   // a stub's row words are kept whole
           expect(textWidth(label, TEXT_CHAR_WIDTH), `${n.id} ${r.port}`).toBeLessThanOrEqual(rowNameRoom(n, r));
         }
       }
