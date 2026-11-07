@@ -1,11 +1,12 @@
 // Keyboard shortcuts (Phase 2 spec §14, D16): what a key pressed on the project page does, decided by a pure function for the page's one
 // handler (ProjectPage, a bubble listener on the document: React has handled the key by then, so `defaultPrevented` says whether an element
-// took it). `/` the Make section's item search, 1–6 the tabs, F the shown diagram's Fit, P its Pause pipes, ? the sheet that lists them
+// took it). `/` the Make section's item search, 1–6 the tabs, F the shown diagram's Fit, P its Pause pipes, R and U the Flow tab's recipe
+// requests for the material under the pointer (state/recipe-request.ts, read by the Flow view), ? the sheet that lists them
 // (components/ShortcutsSheet.tsx). A key is decided on `key`, never on `code`, so a layout that types a digit or ? with Shift held (AZERTY,
 // German, Nordic) still has them, and Shift is no reason to skip one. No React.
 
-/** What a key does: switch to the tab of PROJECT_TABS at `index`, focus the item search, fit the diagram, pause its pipes, or show the sheet. */
-export type Shortcut = { kind: 'tab'; index: 0 | 1 | 2 | 3 | 4 | 5 } | { kind: 'search' } | { kind: 'fit' } | { kind: 'pipes' } | { kind: 'sheet' };
+/** What a key does: switch to the tab of PROJECT_TABS at `index`, focus the item search, fit the diagram, pause its pipes, ask the Flow tab for the recipes that make, or the uses of, the material under the pointer, or show the sheet. */
+export type Shortcut = { kind: 'tab'; index: 0 | 1 | 2 | 3 | 4 | 5 } | { kind: 'search' } | { kind: 'fit' } | { kind: 'pipes' } | { kind: 'recipes' } | { kind: 'uses' } | { kind: 'sheet' };
 
 /**
  * The parts of a keydown event a shortcut is decided by; `altGraph`, the event's `getModifierState('AltGraph')`, says Ctrl and Alt are AltGr's,
@@ -53,6 +54,8 @@ export function shortcutOf(e: KeyLike, target: TargetLike | null): Shortcut | nu
     case '/': return { kind: 'search' };
     case 'f': case 'F': return { kind: 'fit' };
     case 'p': case 'P': return { kind: 'pipes' };
+    case 'r': case 'R': return { kind: 'recipes' };
+    case 'u': case 'U': return { kind: 'uses' };
     case '?': return { kind: 'sheet' };
     default: return null;
   }
@@ -68,6 +71,8 @@ export const SHORTCUT_ROWS: ReadonlyArray<readonly [caps: readonly string[], wha
   [['1', '–', '6'], 'Switch tabs: Map, 3D, Connections, Flow, Materials, Notes'],
   [['F'], 'Fit the diagram'],
   [['P'], 'Pause or play the pipes'],
+  [['R'], 'Show the recipes that make the material under the pointer (Flow)'],
+  [['U'], 'Show what uses the material under the pointer (Flow)'],
   [['Esc'], 'Hide a tip, close a list, a question or the drawer, clear the highlight'],
   [['?'], 'Show this sheet'],
 ];
