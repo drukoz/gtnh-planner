@@ -59,6 +59,17 @@ export function circuitLv(): Plan {
   });
 }
 
+/** The same line with the Iron Plate going to the wiremill, not the assembler: the wiremill takes a row more, the assembler one less. */
+export function circuitLvWirePlate(): Plan {
+  const plan = circuitLv();
+  return {
+    ...plan,
+    steps: plan.steps.map((s) => (s.id === 'wire' ? { ...s, inputs: [...s.inputs, per('t:iron_plate@0', 1)] }
+      : s.id === 'circuit-lv' ? { ...s, inputs: s.inputs.filter((p) => p.key !== 't:iron_plate@0') } : s)),
+    flows: plan.flows.map((f) => (f.from === 'bend-plate' && f.to === 'circuit-lv' ? { ...f, to: 'wire' } : f)),
+  };
+}
+
 /** The same line without the Copper Ingot for the wiremill: nothing supplies it. */
 export function copperUnsourced(): Plan {
   const plan = circuitLv();

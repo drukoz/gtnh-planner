@@ -39,10 +39,10 @@ test('the ticks, radios and carets stay visible in forced colours', async ({ pag
   await createProject(page, 'Forced colours', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 });   // a plan: the Flow toolbar and Materials
   expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), 'the premise: the page is in forced colours').toBe(true);
 
-  // a checkbox that is ticked (reusing the machines we have is on by default) and one that is not (the Flow toolbar's), a radio that is
+  // a checkbox that is ticked (reusing the machines we have is on by default) and one that is not (the settings column's), a radio that is
   // picked (the mode is Rate) and one that is not
   const ticked = page.locator('aside[aria-label="Project settings"] input[name="reuseOwned"]');
-  const unticked = page.getByRole('checkbox', { name: 'Imports in one column' });
+  const unticked = page.locator('aside[aria-label="Project settings"] input[type="checkbox"]:not(:checked)').first();
   const picked = page.getByRole('radio', { name: 'Rate' });
   const unpicked = page.getByRole('radio', { name: 'Make N (batch)' });
   for (const input of [ticked, unticked, picked, unpicked]) await expect(input).toBeVisible();

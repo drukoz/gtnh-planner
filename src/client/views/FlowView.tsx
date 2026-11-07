@@ -656,8 +656,8 @@ export function viewPans(change: LayoutChange): boolean {
 
 /**
  * The laid-out diagram (fix spec §6.2) with pan (a drag once the pointer itself has moved, which keeps the spot it grabbed
- * under the pointer while the canvas moves on the page) and zoom (wheel, buttons, Fit), Find item and the "Imports in
- * one column" toggle; hovering lights what is under the pointer, a click pins it (a box click also calls `onOpen`),
+ * under the pointer while the canvas moves on the page) and zoom (wheel, buttons, Fit), Find item; hovering lights what
+ * is under the pointer, a click pins it (a box click also calls `onOpen`),
  * Esc or a click on the empty canvas clears it. It opens on the target (or on what someone asked to see) whenever the
  * plan's steps change (`viewKey`), and centres the focus whenever a view asks (`revealFlowFocus`). Its first view is drawn at once; Fit,
  * the zoom buttons, a reveal, a line opened or closed and a later plan's view are panned to over 250 ms (Phase 2 spec §16.2, `usePan`; the
@@ -671,9 +671,9 @@ export function viewPans(change: LayoutChange): boolean {
  */
 function FlowCanvas(props: {
   layout: FlowLayout; viewKey: string; selectedId: string | null; goods: Array<{ key: StuffKey; name: string }>;
-  importsInOneColumn: boolean; onImportsInOneColumn(on: boolean): void; onOpen(node: PlacedNode): void; onToggleLine(key: StuffKey): void;
+  onOpen(node: PlacedNode): void; onToggleLine(key: StuffKey): void;
 }): ReactElement {
-  const { layout, viewKey, selectedId, goods, importsInOneColumn, onImportsInOneColumn, onOpen, onToggleLine } = props;
+  const { layout, viewKey, selectedId, goods, onOpen, onToggleLine } = props;
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, x: PAD, y: PAD });
   /** The pan group (`g.flow-pan`), whose attribute is the view; `glideTo` pans to a view, `holdView` holds a pan for an instant move. */
@@ -1065,10 +1065,6 @@ function FlowCanvas(props: {
           <option value="">Find item…</option>
           {goods.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}
         </select>
-        <label className="check small">
-          <input type="checkbox" checked={importsInOneColumn} onChange={(e) => onImportsInOneColumn(e.currentTarget.checked)} />
-          Imports in one column
-        </label>
         <span className="muted small">
           Hover or click a good for its sources and uses, click a box for details, Esc clears. Drag moves, scroll zooms.{keysOn && SHEET_KEY_HINT}
         </span>
@@ -1154,7 +1150,7 @@ type Selected = { kind: 'step'; id: string } | { kind: 'import'; key: StuffKey; 
 /**
  * Plans the diagram, lays it out and shows the panel of the clicked box, below what the last settings change did and
  * what does not add up. Supporting lines start collapsed in a plan of more than 25 steps; the group opens and closes
- * them one by one (kept across replans), and can put every import in one column.
+ * them one by one (kept across replans). Every import stands in the diagram's first column.
  */
 function FlowDiagram(props: {
   plan: Plan; previousPlan: Plan | null | undefined; settings: PlanSettings; per: 'min' | 'hour'; send: ProjectViewProps['send'];
@@ -1163,9 +1159,8 @@ function FlowDiagram(props: {
 }): ReactElement {
   const { plan, previousPlan, settings, per, send } = props;
   const [lineToggles, setLineToggles] = useState<ReadonlyMap<StuffKey, boolean>>(() => new Map());
-  const [importsInOneColumn, setImportsInOneColumn] = useState(false);
   const closed = useMemo(() => collapsedLines(plan, lineToggles), [plan, lineToggles]);
-  const graph = useMemo(() => flowGraph(plan, per, { collapsedLines: closed, importsInOneColumn }), [plan, per, closed, importsInOneColumn]);
+  const graph = useMemo(() => flowGraph(plan, per, { collapsedLines: closed, importsInOneColumn: true }), [plan, per, closed]);
   const goods = useMemo(() => findableGoods(graph, plan), [graph, plan]);
   // The view starts over only when the plan's steps change, not when a line opens or a rate moves.
   const viewKey = useMemo(() => plan.steps.map((s) => s.id).sort().join('\n'), [plan]);
@@ -1330,7 +1325,7 @@ function FlowDiagram(props: {
         ) : (
           <FlowCanvas
             layout={laid.layout} viewKey={laid.viewKey} selectedId={selectedId} goods={goods}
-            importsInOneColumn={importsInOneColumn} onImportsInOneColumn={setImportsInOneColumn} onOpen={open} onToggleLine={toggleLine}
+            onOpen={open} onToggleLine={toggleLine}
           />
         )}
       </div>
