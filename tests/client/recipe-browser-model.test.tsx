@@ -1,4 +1,4 @@
-// The recipe browser's popup model (RUK-740, RUK-T4): the plan's alternatives and the pack's producer and consumer
+// The recipe browser's popup model (RUK-740, RUK-743): the plan's alternatives and the pack's producer and consumer
 // recipes as cards, what the popup calls them, which button they get and which settings patch that button sends.
 
 import { describe, expect, it } from 'vitest';

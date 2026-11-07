@@ -3,7 +3,7 @@
 // recipes that use it (the pack's consumers) — in the server's order, with the marks the popup draws (in use, pinned,
 // unusable, fake, kept, partial, slot options), the note line above the cards, which button the cards get (pin a recipe,
 // make a bought good with it, none) and the settings patch that button sends, and the good a flow-chart focus stands on.
-// RUK-T8 draws the popup from this; no React, no fetch and no DOM here.
+// RUK-740 task 8 draws the popup from this; no React, no fetch and no DOM here.
 
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { RecipeSummary, StuffInfo } from '../../shared/types/api.ts';
@@ -137,7 +137,7 @@ function packCard(s: RecipeSummary, plan: Plan, settings: PlanSettings, good: St
  * 'uses', in the server's order, and the note saying what the list is. A 'recipes' popup of a good the line buys
  * (a raw input of the plan, not one capped by a surplus) gets `action` 'make' — every card offers making the bought
  * good with that recipe instead — and every other list is read-only ('none'). "Import it instead" is not offered:
- * the popup's own good, not this pack entry's, decides it, and RUK-T8 keeps the plan list's.
+ * the popup's own good, not this pack entry's, decides it, and the popup (RUK-740 task 8) keeps the plan list's.
  */
 export function packList(info: StuffInfo, plan: Plan, settings: PlanSettings, mode: RecipeMode): BrowserList {
   const name = info.name;
