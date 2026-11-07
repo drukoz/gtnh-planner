@@ -109,7 +109,7 @@ export interface FlowGraph {
   nodes: FlowNode[]; edges: FlowEdge[];
   /** The supporting lines drawn open, each around its steps and their stubs. */
   groups: FlowGroup[];
-  /** Imports in the first column ("Imports in one column") instead of beside the step that takes them. */
+  /** Imports in the first column, stacked together, instead of beside the step that takes them. */
   importsInOneColumn: boolean;
 }
 

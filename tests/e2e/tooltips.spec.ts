@@ -153,7 +153,7 @@ test('a step head focused from the keyboard shows its box\'s tip below it, descr
   await page.keyboard.press('Escape');
   await expect(tip).toHaveCount(0);
   await expect(row).not.toHaveAttribute('aria-describedby');
-  // the canvas's first stop for the keyboard, and out of the canvas to the toolbar's last control, which has no tip
+  // the canvas's first stop for the keyboard, and out of the canvas to the toolbar's last control, the Find item field, which has no tip
   const first = page.locator('svg.flow-canvas [tabindex="0"]').first();
   const words = await first.evaluate((el) => el.closest('[data-tip]')?.getAttribute('data-tip')?.split('\n')[0] ?? '');
   expect(words).not.toBe('');
@@ -161,7 +161,7 @@ test('a step head focused from the keyboard shows its box\'s tip below it, descr
   await expect(title).toHaveText(words);
   await expect(first).toHaveAttribute('aria-describedby', id!);
   await page.keyboard.press('Shift+Tab');
-  await expect(page.getByRole('checkbox', { name: 'Imports in one column' })).toBeFocused();
+  await expect(page.getByRole('combobox', { name: 'Find item' })).toBeFocused();
   await expect(tip).toHaveCount(0);
   await expect(first).not.toHaveAttribute('aria-describedby');
 });

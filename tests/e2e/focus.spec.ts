@@ -73,10 +73,13 @@ test('in the dark look a link on a panel rings yellow', async ({ page }) => {
 
 test('the focus ring of a tick and of a disclosure on a panel is near black too', async ({ page }) => {
   await login(page); await setName(page, 'Ann');
-  await createProject(page, 'Focus tick', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1 });   // a plan, so the Flow toolbar is there
-  // A tick (the Flow toolbar's, inside the tab panel) and a summary (the settings column's) sit on a light panel. Neither has a dark
+  const id = await createProject(page, 'Focus tick', { target: 't:circuit@0', amount: 30, per: 'min', tier: 1, rawCap: null });
+  // A tick (the step panel's "reuse", on a light panel inside the Flow tab panel) and a summary (the settings column's). Neither has a dark
   // edge of its own for a yellow ring to touch, so both take the focus ink of the panel, like a link there (ruling R13).
-  const controls = [page.getByRole('checkbox', { name: 'Imports in one column' }), page.locator('details.settings-section > summary').first()];
+  const ops = [{ op: 'settings', patch: { ownedManual: [{ mteId: 121, count: 2 }] } }];
+  expect((await page.request.post(`/api/projects/${id}/ops`, { headers: { 'X-Planner-Name': 'e2e' }, data: { ops } })).ok()).toBe(true);
+  await page.locator('svg.flow-canvas [data-step-id]', { hasText: 'Basic Assembler' }).click();
+  const controls = [page.getByRole('checkbox', { name: /Reuse your/ }), page.locator('details.settings-section > summary').first()];
   for (const control of controls) {
     await expect(control).toBeVisible();
     await control.focus();
