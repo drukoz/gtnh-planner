@@ -1212,10 +1212,12 @@ test('a focused box head keeps the focus and its tip through a replan, the tip g
 // lands: `restingBox` reads a gliding box's own attribute too. A replan to circuitLv (the Iron Plate's row leaving the wiremill) takes the
 // redstone's stub 61 px down, out of the canvas's view; its glide held at its start, the stub still shows where it stood, in the canvas: Close
 // gives the focus to the canvas
-// Skipped, awaiting TL1's ruling on its rework (RUK-745): with the checkbox gone the trigger is a replan, and every replan the fixture can
-// serve grows the canvas at least as far as it glides the stub (72 px against 61), so no view the box can be panned to lets it land wholly
-// below the canvas. The body below stands as the geometry was explored.
-test.skip('Close while a new layout glides the box that opened the panel out of view gives the focus to the canvas', async ({ page }) => {
+// Reworked for RUK-745's rework ruling: the trigger is a replan. The viewport is 1280x360, where the canvas's 75vh cap (270 px) binds both the
+// served layout's canvas (276 px) and the replanned, taller one (348 px), so the canvas keeps its height while the stub glides. The view is
+// zoomed in on the wheel about the stub's head and panned to its limits, where the head shows just above the canvas's bottom edge; where its
+// glide lands, wholly below the canvas, Close gives the focus to the canvas. Every offset is read from bounding boxes.
+test('Close while a new layout glides the box that opened the panel out of view gives the focus to the canvas', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 360 });
   await page.addInitScript(recordAnimations);
   let served = circuitLvWirePlate();
   const id = await openServing(page, () => served);
@@ -1229,22 +1231,35 @@ test.skip('Close while a new layout glides the box that opened the panel out of 
   const panel = page.getByRole('complementary', { name: 'Import: Redstone' });
   await expect(panel).toBeVisible();
   await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
-  // zoomed in once, so the canvas has room to spare under the tallest layer: the fit view's is filled, and the head could not be panned down in it
-  await page.getByRole('button', { name: 'Zoom in' }).click();
-  await expect.poll(() => page.locator(FLOW_PAN).evaluate((g) => g.getAnimations().length), { message: 'the view has zoomed' }).toBe(0);
-  // the stub's head panned to the view's bottom-left limit, where it shows just above the canvas's bottom edge, so where its glide lands, 77 px
-  // lower at this zoom, is wholly below the canvas: a drag from a gap between the boxes, ending with the pointer in the canvas
-  const [h, c] = [await head.boundingBox(), await canvas.boundingBox()];
+  // panned right to the view's limit, the head to the canvas's left edge: at the fit zoom the layer is no taller than the canvas, so there is nothing to pan down
+  let [h, c] = [await head.boundingBox(), await canvas.boundingBox()];
   if (h === null || c === null) throw new Error('no box');
-  const [x, y] = [Math.round(c.x + 60), Math.round(c.y + c.height - 90)];
-  await page.mouse.move(x, y);
+  const [gx, gy] = [Math.round(c.x + 400), Math.round(c.y + c.height * 0.7)];   // a gap between the boxes, well inside the canvas and the short viewport
+  await page.mouse.move(gx, gy);
   await page.mouse.down();
-  await page.mouse.move(x + Math.round(c.x - 19 - h.x), y + Math.round(c.y + c.height - 34 - h.y), { steps: 6 });
+  await page.mouse.move(gx - Math.round(h.x - c.x), gy, { steps: 6 });
+  await page.mouse.up();
+  await page.mouse.move(1, 1);
+  // zoomed in on the wheel about the head, so the layer has room to spare under the tallest layer and the head can be panned down in it
+  [h, c] = [await head.boundingBox(), await canvas.boundingBox()];
+  if (h === null || c === null) throw new Error('no box');
+  await page.mouse.move(Math.round(h.x + 40), Math.round(Math.min(h.y + h.height / 2, c.y + c.height - 10)));
+  await page.mouse.wheel(0, -420);   // 1.88x about the cursor
+  await expect.poll(() => page.locator(FLOW_PAN).evaluate((g) => g.getAnimations().length), { message: 'the view has zoomed' }).toBe(0);
+  // the stub's head panned to the view's bottom limit, the pan ending 20 px past it so the clamp saturates, where the head shows just above the
+  // canvas's bottom edge; the drag ends with the pointer in the canvas
+  [h, c] = [await head.boundingBox(), await canvas.boundingBox()];
+  if (h === null || c === null) throw new Error('no box');
+  await page.mouse.move(gx, gy);
+  await page.mouse.down();
+  await page.mouse.move(gx, gy + Math.round(c.y + c.height - 40 - h.y) + 20, { steps: 6 });
   await page.mouse.up();
   await page.mouse.move(1, 1);
   const dragged = await head.boundingBox();
   if (dragged === null) throw new Error('no box');
-  expect(dragged.y, 'the premise: the stub\'s head shows just above the canvas\'s bottom edge').toBeCloseTo(c.y + c.height - 34, 0);
+  const above = c.y + c.height - dragged.y;
+  expect(above, 'the premise: the stub\'s head shows just above the canvas\'s bottom edge').toBeGreaterThan(10);
+  expect(above, 'the premise: the head shows in the canvas, near its bottom edge').toBeLessThan(28);
   expect(dragged.x + dragged.width, 'the premise: the head shows in the canvas, its left clipped by its left edge').toBeGreaterThan(c.x + 20);
   await holdAnimationsOf(page, '[data-node-id]');
   served = circuitLv();
