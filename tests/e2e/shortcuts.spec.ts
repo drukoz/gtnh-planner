@@ -122,7 +122,7 @@ test('? and the Shortcuts button open the sheet; Escape closes it and gives the 
   await expect(sheet).toBeVisible();
   await expect(close).toBeFocused();
   // its rows, and the page behind it out of reach
-  await expect(sheet.locator('dt')).toHaveCount(6);
+  await expect(sheet.locator('dt')).toHaveCount(8);
   await expect(page.locator('#root')).toHaveAttribute('inert', '');
   // the keyboard stays with it: Tab and Shift+Tab go round its two controls, the tick (fix round 1, P2-R85) and Close, and a press on its words
   // keeps the focus in it, so the Escape after them is still the sheet's
