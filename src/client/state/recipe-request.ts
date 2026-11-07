@@ -4,8 +4,13 @@
 
 import { useSyncExternalStore } from 'react';
 
+/** Which list the recipe browser shows (RUK-740): the recipes that make the material (R), or what uses it (U). An integer enum (a const object,
+ * as `erasableSyntaxOnly` rules out `enum`): the numbers never change, and a new member takes the next one. */
+export const RecipeMode = { Recipes: 0, Uses: 1 } as const;
+export type RecipeMode = (typeof RecipeMode)[keyof typeof RecipeMode];
+
 /** A request for the recipe browser (RUK-740): which list, and a number that grows with every request, so the same key twice asks twice. */
-export interface RecipeRequest { mode: 'recipes' | 'uses'; seq: number }
+export interface RecipeRequest { mode: RecipeMode; seq: number }
 
 let current: RecipeRequest | null = null;
 /** How many requests have been made; every one takes the next number, so two of the same mode never share a `seq`. */
@@ -25,7 +30,7 @@ export function subscribeRecipeRequest(fn: () => void): () => void {
 }
 
 /** Asks for `mode`'s recipes: sets `{ mode, seq }` with the next `seq` and tells every listener. */
-export function requestRecipes(mode: 'recipes' | 'uses'): void {
+export function requestRecipes(mode: RecipeMode): void {
   seq += 1;
   current = { mode, seq };
   for (const fn of [...listeners]) fn();

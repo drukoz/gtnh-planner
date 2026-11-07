@@ -3,7 +3,7 @@
 // a listener told once per request and no more once unsubscribed, and `clearRecipeRequest` back to nothing.
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { clearRecipeRequest, getRecipeRequest, requestRecipes, subscribeRecipeRequest } from '../../src/client/state/recipe-request.ts';
+import { RecipeMode, clearRecipeRequest, getRecipeRequest, requestRecipes, subscribeRecipeRequest } from '../../src/client/state/recipe-request.ts';
 
 describe('the recipe-request store', () => {
   const unsubs: Array<() => void> = [];
@@ -23,27 +23,27 @@ describe('the recipe-request store', () => {
   });
 
   it('keeps the mode and a seq that grows with every request, so the same mode twice asks twice', () => {
-    requestRecipes('recipes');
+    requestRecipes(RecipeMode.Recipes);
     const first = getRecipeRequest();
-    requestRecipes('recipes');
+    requestRecipes(RecipeMode.Recipes);
     const second = getRecipeRequest();
-    expect(first?.mode).toBe('recipes'); expect(second?.mode).toBe('recipes');
+    expect(first?.mode).toBe(RecipeMode.Recipes); expect(second?.mode).toBe(RecipeMode.Recipes);
     expect(second!.seq).toBeGreaterThan(first!.seq);
-    requestRecipes('uses');
-    expect(getRecipeRequest()).toEqual({ mode: 'uses', seq: second!.seq + 1 });
+    requestRecipes(RecipeMode.Uses);
+    expect(getRecipeRequest()).toEqual({ mode: RecipeMode.Uses, seq: second!.seq + 1 });
   });
 
   it('tells a listener once per request', () => {
     const fn = vi.fn();
     listen(fn);
-    requestRecipes('recipes');
+    requestRecipes(RecipeMode.Recipes);
     expect(fn).toHaveBeenCalledTimes(1);
-    requestRecipes('uses');
+    requestRecipes(RecipeMode.Uses);
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it('is empty again after clearRecipeRequest', () => {
-    requestRecipes('uses');
+    requestRecipes(RecipeMode.Uses);
     expect(getRecipeRequest()).not.toBeNull();
     clearRecipeRequest();
     expect(getRecipeRequest()).toBeNull();
@@ -52,10 +52,10 @@ describe('the recipe-request store', () => {
   it('does not tell an unsubscribed listener', () => {
     const fn = vi.fn();
     const unsub = subscribeRecipeRequest(fn);
-    requestRecipes('recipes');
+    requestRecipes(RecipeMode.Recipes);
     expect(fn).toHaveBeenCalledTimes(1);
     unsub();
-    requestRecipes('uses');
+    requestRecipes(RecipeMode.Uses);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 });

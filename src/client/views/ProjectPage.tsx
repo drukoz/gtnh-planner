@@ -40,7 +40,7 @@ import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
-import { clearRecipeRequest, requestRecipes } from '../state/recipe-request.ts';
+import { RecipeMode, clearRecipeRequest, requestRecipes } from '../state/recipe-request.ts';
 import { shortcutOf } from '../state/shortcuts.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { dismissToast, setToastsInert, showToast } from '../state/toasts.ts';
@@ -685,7 +685,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
         if (tabFromHash(location.hash) !== 'flow') return;
         e.preventDefault();
         heldShortcut.current = e.key;
-        requestRecipes(shortcut.kind);   // the Flow view reads the request (RUK-T9)
+        requestRecipes(shortcut.kind === 'recipes' ? RecipeMode.Recipes : RecipeMode.Uses);   // the Flow view reads the request (RUK-T9)
         return;
       }
       // a key the page acts on is taken, and its repeats while it is held: the `/` is not typed into the search it focuses, nor opens a
