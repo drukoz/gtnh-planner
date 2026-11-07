@@ -330,7 +330,7 @@ function preserveDrawingBuffer(): boolean {
  */
 export default function View3D(props: ProjectViewProps): ReactElement {
   const { project, plan } = props;
-  const line = useLayout(project.id, plan, project);
+  const line = useLayout(project.id, plan, project, props.planAnswers);
   const { layout } = line;
   const [webgl] = useState(webgl2Available);
   const [maxLayer, setMaxLayer] = useState<number | null>(null);
