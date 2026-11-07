@@ -1038,16 +1038,19 @@ async function expectComposed(page: Page): Promise<void> {
   expect(run.rect[2], 'its width, at the pan\'s zoom').toBeCloseTo(view.scale * run.width, 0);
 }
 
-// Task 13b (notes 11): a new layout that comes while Fit pans. "Imports in one column" lays the same steps out again (no new view: the redstone's
-// stub moves to the first column), its glide held half way, while Fit's pan is held at 60 ms: the pan runs on, untouched, and the stub is drawn
-// where the pan's picture of its glide's place puts it, the two transforms (on the pan group and on the box's group) composed
+// Task 13b (notes 11; RUK-745: the checkbox is gone, the trigger is a replan). A replan to circuitLvWirePlate lays the same boxes out again, the
+// wiremill taking a row more and the assembler one less (no new view: the redstone's stub moves 61 px), its glide held half way, while Fit's pan
+// is held at 60 ms: the pan runs on, untouched, and the stub is drawn where the pan's picture of its glide's place puts it, the two transforms
+// (on the pan group and on the box's group) composed
 test('a new layout that comes while Fit pans glides its boxes and lets the pan run on: the two compose', async ({ page }) => {
   await page.addInitScript(recordAnimations);
-  await openWithPlan(page, circuitLv());
+  let served = circuitLv();
+  const id = await openServing(page, () => served);
   await dragCanvas(page, 100, 60);
   await fitHeldAt(page, 60);
   await holdAnimationsOf(page, '[data-node-id]');
-  await page.getByRole('checkbox', { name: 'Imports in one column' }).check();
+  served = circuitLvWirePlate();
+  await replan(page, id, 31);
   await expect.poll(async () => (await records(page)).filter((r) => r.node === REDSTONE).length, { message: 'the stub glides' }).toBe(1);
   const run = await page.locator(FLOW_PAN).evaluate((g, stub) => {
     const glide = g.querySelector(`[data-node-id="${stub}"]`)?.getAnimations()[0];
@@ -1057,7 +1060,9 @@ test('a new layout that comes while Fit pans glides its boxes and lets the pan r
   }, REDSTONE);
   expect(run.pans, 'Fit\'s pan runs on where it was, untouched by the new layout').toEqual([['pan', 'paused', 60]]);
   const moved = (await records(page)).filter((r) => r.frames.some((frame) => 'transform' in frame) && r.cls !== 'flow-pan');
-  expect(moved.map((r) => r.node), 'the stub alone moved').toEqual([REDSTONE]);
+  expect(moved.map((r) => r.node).sort(), 'the whole layout glides, the stub among it').toEqual([
+    'bend-plate', 'circuit-lv', 'import:t:copper_ingot@0@wire', 'import:t:iron_ingot@0@bend-plate', REDSTONE, 'out', 'wire',
+  ]);
   await expectComposed(page);
   await finishMotion(page);
   expect((await loosePipeEnds(page)).loose).toEqual([]);
