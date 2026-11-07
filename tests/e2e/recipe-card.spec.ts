@@ -12,7 +12,7 @@
 
 import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
 import { circuitLv, circuitMvPerHour, copperUnsourced, platesTwoWays } from './fixtures/plans.ts';
-import { LV_CIRCUITS, openWithPlan, sideways } from './helpers.ts';
+import { finishMotion, LV_CIRCUITS, openWithPlan, sideways } from './helpers.ts';
 
 /** Opens circuitLv and the Basic Assembler's panel; returns the panel and the project's id. */
 async function openAssembler(page: Page): Promise<{ panel: Locator; id: string }> {
@@ -264,7 +264,9 @@ test('a held Enter on Close closes the panel once, the focus back on the box hea
 
 test('Close after a replan removed the box that opened the panel gives the focus to the diagram', async ({ page }) => {
   const id = await openWithPlan(page, platesTwoWays());
+  await finishMotion(page);   // the layout's open animation lands first: a Fit pressed under it pans from its start, not from where the view rests
   await page.getByRole('button', { name: 'Fit' }).click();
+  await finishMotion(page);   // the Fit's own pan lands: the import stubs stand inside the canvas, clear of the drawer
   const opener = page.locator('[data-node-id="import:t:iron_ingot@0@hammer-plate"]');      // the hammer's Iron Ingot stub
   await opener.click();
   const panel = page.getByRole('complementary', { name: 'Import: Iron Ingot' });
@@ -283,7 +285,9 @@ test('Close after a replan removed the box that opened the panel gives the focus
 
 test('a press on the canvas focuses it with no ring, and a keyboard Close whose opener is gone rings it inside', async ({ page }) => {
   const id = await openWithPlan(page, platesTwoWays());
+  await finishMotion(page);   // the layout's open animation lands first: a Fit pressed under it pans from its start, not from where the view rests
   await page.getByRole('button', { name: 'Fit' }).click();
+  await finishMotion(page);   // the Fit's own pan lands: the import stubs stand inside the canvas, clear of the drawer
   const canvas = page.locator('svg.flow-canvas');
   /** The canvas's outline as Chromium computes it: its style, width, colour and offset. */
   const ring = (): Promise<string> => canvas.evaluate((el) => {
