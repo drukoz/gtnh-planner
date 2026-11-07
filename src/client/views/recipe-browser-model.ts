@@ -10,11 +10,9 @@ import type { RecipeSummary, StuffInfo } from '../../shared/types/api.ts';
 import type { Plan, PlanSettings, PlanStep } from '../../shared/types/plan.ts';
 import { mapName, swapPatch } from '../components/SwapRecipe.tsx';
 import { formatNumber } from '../format.ts';
+import { RecipeMode } from '../state/recipe-request.ts';
 import { importInsteadPatch, tierText, type FlowEdge, type FlowNode, type Focus } from './flow-model.ts';
 import { toggleList } from './settings-model.ts';
-
-/** What the popup shows for one good: the recipes that make it, or the recipes that use it. */
-export type BrowserMode = 'recipes' | 'uses';
 
 /**
  * One input or output of a card: its key, its name, its amount per run, whether it is a fluid, the names of the
@@ -37,12 +35,13 @@ export interface BrowserCard {
   inUse: boolean; pinned: boolean; unusable?: string[]; fake?: boolean;
 }
 
-/** The button every card of a list gets: pin the recipe, make the bought good with it, or none (read-only). */
-export type BrowserAction = 'pin' | 'make' | 'none';
+/** What a card's button does: nothing (read only), pin the recipe for the good, or make the bought good with it. Numbers never change; a new member takes the next. */
+export const BrowserAction = { None: 0, Pin: 1, Make: 2 } as const;
+export type BrowserAction = (typeof BrowserAction)[keyof typeof BrowserAction];
 
 /** One popup: the good, its name, the mode, the cards in the server's order, and the note and button above them. */
 export interface BrowserList {
-  mode: BrowserMode; good: StuffKey; name: string; action: BrowserAction; cards: BrowserCard[];
+  mode: RecipeMode; good: StuffKey; name: string; action: BrowserAction; cards: BrowserCard[];
   /** A line of words above the cards, or null. */
   note: string | null;
   /** Whether "Import it instead" is offered. */
@@ -92,15 +91,15 @@ export function planList(plan: Plan, settings: PlanSettings, good: StuffKey): Br
     inUse: plan.steps.some((st) => st.mainOutput === good && st.recipeId === a.recipeId),
     pinned: pinnedRecipe !== undefined && pinnedRecipe === a.recipeId,
   }));
-  return { mode: 'recipes', good, name: nameOf(good), action: 'pin', cards, note: null, canImport: good !== settings.target };
+  return { mode: RecipeMode.Recipes, good, name: nameOf(good), action: BrowserAction.Pin, cards, note: null, canImport: good !== settings.target };
 }
 
 /**
  * Whether the popup must fetch `GET /api/pack/stuff/:key` for `good`: always for 'uses', and for 'recipes' when no
  * step of the line has `good` as its main output (the plan's alternatives cover a made good).
  */
-export function needsPack(plan: Plan, good: StuffKey, mode: BrowserMode): boolean {
-  return mode === 'uses' || !plan.steps.some((st) => st.mainOutput === good);
+export function needsPack(plan: Plan, good: StuffKey, mode: RecipeMode): boolean {
+  return mode === RecipeMode.Uses || !plan.steps.some((st) => st.mainOutput === good);
 }
 
 /**
@@ -140,16 +139,16 @@ function packCard(s: RecipeSummary, plan: Plan, settings: PlanSettings, good: St
  * good with that recipe instead — and every other list is read-only ('none'). "Import it instead" is not offered:
  * the popup's own good, not this pack entry's, decides it, and RUK-T8 keeps the plan list's.
  */
-export function packList(info: StuffInfo, plan: Plan, settings: PlanSettings, mode: BrowserMode): BrowserList {
+export function packList(info: StuffInfo, plan: Plan, settings: PlanSettings, mode: RecipeMode): BrowserList {
   const name = info.name;
-  const summaries = mode === 'recipes' ? info.producers : info.consumers;
+  const summaries = mode === RecipeMode.Recipes ? info.producers : info.consumers;
   const cards = summaries.map((s) => packCard(s, plan, settings, info.key));
   const bought = plan.rawInputs.some((r) => r.key === info.key && r.from === undefined);
-  const action: BrowserAction = mode === 'recipes' && bought ? 'make' : 'none';
+  const action: BrowserAction = mode === RecipeMode.Recipes && bought ? BrowserAction.Make : BrowserAction.None;
   let note: string;
-  if (cards.length === 0) note = mode === 'uses' ? `Nothing in this pack uses ${name}.` : `Nothing in this pack makes ${name}.`;
-  else if (mode === 'uses') note = `What uses ${name}`;
-  else if (action === 'make') note = `The line buys ${name}. Make it with one of these recipes instead:`;
+  if (cards.length === 0) note = mode === RecipeMode.Uses ? `Nothing in this pack uses ${name}.` : `Nothing in this pack makes ${name}.`;
+  else if (mode === RecipeMode.Uses) note = `What uses ${name}`;
+  else if (action === BrowserAction.Make) note = `The line buys ${name}. Make it with one of these recipes instead:`;
   else note = `Nothing in this line makes ${name} on purpose. The pack's recipes for it:`;
   if (cards.length === 50) note += ' (the first 50)';
   return { mode, good: info.key, name, action, cards, note, canImport: false };
@@ -157,8 +156,8 @@ export function packList(info: StuffInfo, plan: Plan, settings: PlanSettings, mo
 
 /** The patch a card's button sends: `swapPatch` pinning it ('pin'), `makeWithPatch` ('make'), null for a read-only card ('none'). */
 export function cardPatch(list: BrowserList, settings: PlanSettings, recipeId: string): Partial<PlanSettings> | null {
-  if (list.action === 'pin') return swapPatch(settings.recipeChoice, list.good, recipeId);
-  if (list.action === 'make') return makeWithPatch(settings, list.good, recipeId);
+  if (list.action === BrowserAction.Pin) return swapPatch(settings.recipeChoice, list.good, recipeId);
+  if (list.action === BrowserAction.Make) return makeWithPatch(settings, list.good, recipeId);
   return null;
 }
 

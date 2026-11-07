@@ -3,8 +3,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  cardPatch, focusGood, importPatch, makeWithPatch, needsPack, packList, planList, plannerChoosesPatch,
+  BrowserAction, cardPatch, focusGood, importPatch, makeWithPatch, needsPack, packList, planList, plannerChoosesPatch,
 } from '../../src/client/views/recipe-browser-model.ts';
+import { RecipeMode } from '../../src/client/state/recipe-request.ts';
 import type { FlowEdge, FlowNode, Focus } from '../../src/client/views/flow-model.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { RecipeSummary, StuffInfo } from '../../src/shared/types/api.ts';
@@ -63,7 +64,7 @@ const stuff = (p: Partial<StuffInfo> & Pick<StuffInfo, 'key'>): StuffInfo => ({ 
 describe('planList', () => {
   it('shows the plan alternatives of a made good, in order, marked', () => {
     const list = planList(line, S(), WIRE)!;
-    expect([list.mode, list.action, list.note, list.name, list.canImport]).toEqual(['recipes', 'pin', null, '1x Copper Wire', true]);
+    expect([list.mode, list.action, list.note, list.name, list.canImport]).toEqual([RecipeMode.Recipes, BrowserAction.Pin, null, '1x Copper Wire', true]);
     expect(list.good).toBe(WIRE);
     expect(list.cards.map((c) => c.recipeId)).toEqual(['mill', 'ext']);
     const a = list.cards[0]!;
@@ -87,10 +88,10 @@ describe('planList', () => {
 
   it('is null for a good no step makes, which sends the popup to the pack', () => {
     expect(planList(line, S(), BOARD)).toBeNull();
-    expect(needsPack(line, WIRE, 'recipes')).toBe(false);
-    expect(needsPack(line, BOARD, 'recipes')).toBe(true);
-    expect(needsPack(line, WIRE, 'uses')).toBe(true);
-    expect(needsPack(line, 't:nothing@0', 'uses')).toBe(true);
+    expect(needsPack(line, WIRE, RecipeMode.Recipes)).toBe(false);
+    expect(needsPack(line, BOARD, RecipeMode.Recipes)).toBe(true);
+    expect(needsPack(line, WIRE, RecipeMode.Uses)).toBe(true);
+    expect(needsPack(line, 't:nothing@0', RecipeMode.Uses)).toBe(true);
   });
 
   it('offers import except for the line target itself', () => {
@@ -101,26 +102,26 @@ describe('planList', () => {
 
 describe('packList', () => {
   it('says what the list is and which button its cards get', () => {
-    const made = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix' })] }), buys, S(), 'recipes');
-    expect([made.mode, made.good, made.name, made.canImport]).toEqual(['recipes', GLUE, 'Glue', false]);
-    expect(made.action).toBe('make');
+    const made = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix' })] }), buys, S(), RecipeMode.Recipes);
+    expect([made.mode, made.good, made.name, made.canImport]).toEqual([RecipeMode.Recipes, GLUE, 'Glue', false]);
+    expect(made.action).toBe(BrowserAction.Make);
     expect(made.note).toBe('The line buys Glue. Make it with one of these recipes instead:');
-    const madeFree = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix' })] }), line, S(), 'recipes');
-    expect(madeFree.action).toBe('none');
+    const madeFree = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix' })] }), line, S(), RecipeMode.Recipes);
+    expect(madeFree.action).toBe(BrowserAction.None);
     expect(madeFree.note).toBe("Nothing in this line makes Glue on purpose. The pack's recipes for it:");
-    const supplied = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix' })] }), capped, S(), 'recipes');
-    expect(supplied.action).toBe('none');
-    const uses = packList(stuff({ key: GLUE, consumers: [summary({ id: 'asm' })] }), buys, S(), 'uses');
-    expect(uses.mode).toBe('uses');
-    expect(uses.action).toBe('none');
+    const supplied = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix' })] }), capped, S(), RecipeMode.Recipes);
+    expect(supplied.action).toBe(BrowserAction.None);
+    const uses = packList(stuff({ key: GLUE, consumers: [summary({ id: 'asm' })] }), buys, S(), RecipeMode.Uses);
+    expect(uses.mode).toBe(RecipeMode.Uses);
+    expect(uses.action).toBe(BrowserAction.None);
     expect(uses.note).toBe('What uses Glue');
   });
 
   it('says so when the pack has none, and marks a list cut at fifty', () => {
-    expect(packList(stuff({ key: GLUE }), buys, S(), 'recipes').note).toBe('Nothing in this pack makes Glue.');
-    expect(packList(stuff({ key: GLUE }), buys, S(), 'uses').note).toBe('Nothing in this pack uses Glue.');
+    expect(packList(stuff({ key: GLUE }), buys, S(), RecipeMode.Recipes).note).toBe('Nothing in this pack makes Glue.');
+    expect(packList(stuff({ key: GLUE }), buys, S(), RecipeMode.Uses).note).toBe('Nothing in this pack uses Glue.');
     const many = Array.from({ length: 50 }, (_, i): RecipeSummary => summary({ id: `c${i}` }));
-    expect(packList(stuff({ key: GLUE, consumers: many }), buys, S(), 'uses').note).toBe('What uses Glue (the first 50)');
+    expect(packList(stuff({ key: GLUE, consumers: many }), buys, S(), RecipeMode.Uses).note).toBe('What uses Glue (the first 50)');
   });
 
   it('writes a pack card facts and slots as the popup reads them', () => {
@@ -137,7 +138,7 @@ describe('packList', () => {
         { key: 'fluid:water', name: 'Water', amount: 10, chance: 1 },
       ],
     });
-    const card = packList(stuff({ key: GLUE, producers: [rich] }), buys, S({ recipeChoice: { [GLUE]: 'mix' } }), 'recipes').cards[0]!;
+    const card = packList(stuff({ key: GLUE, producers: [rich] }), buys, S({ recipeChoice: { [GLUE]: 'mix' } }), RecipeMode.Recipes).cards[0]!;
     expect(card.machine).toBe('Mixer');
     expect(card.facts).toBe('LV · 30 EU/t · 5 s');
     expect(card.inUse).toBe(true);
@@ -152,7 +153,7 @@ describe('packList', () => {
 
   it('leaves a crafting recipe facts empty and marks a display-only recipe', () => {
     const craft = summary({ id: 'craft', source: 'crafting', machineName: 'Crafting Table', tier: 0, euPerTick: 0, durationTicks: 0 });
-    const card = packList(stuff({ key: GLUE, producers: [craft, summary({ id: 'fake', fake: true })] }), buys, S(), 'recipes').cards;
+    const card = packList(stuff({ key: GLUE, producers: [craft, summary({ id: 'fake', fake: true })] }), buys, S(), RecipeMode.Recipes).cards;
     expect(card[0]!.facts).toBe('');
     expect(card[0]!.fake).toBeUndefined();
     expect(card[1]!.fake).toBe(true);
@@ -173,9 +174,9 @@ describe('patches', () => {
   });
 
   it('a card button sends its list patch, and a read-only card sends none', () => {
-    const made = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix9' })] }), buys, settings, 'recipes');
+    const made = packList(stuff({ key: GLUE, producers: [summary({ id: 'mix9' })] }), buys, settings, RecipeMode.Recipes);
     expect(cardPatch(made, settings, 'mix9')).toEqual(makeWithPatch(settings, GLUE, 'mix9'));
-    const uses = packList(stuff({ key: GLUE, consumers: [summary({ id: 'asm' })] }), buys, settings, 'uses');
+    const uses = packList(stuff({ key: GLUE, consumers: [summary({ id: 'asm' })] }), buys, settings, RecipeMode.Uses);
     expect(cardPatch(uses, settings, 'asm')).toBeNull();
     const wire = planList(line, settings, WIRE)!;
     expect(cardPatch(wire, settings, 'ext')).toEqual({ recipeChoice: { [BOARD]: 'c1', [GLUE]: 'old', [WIRE]: 'ext' } });
