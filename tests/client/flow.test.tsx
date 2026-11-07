@@ -797,6 +797,30 @@ describe('flow diagram: machine readouts', () => {
       expect(chipWidth(count) - 2 * CHIP_PADDING, count).toBeGreaterThanOrEqual(widest);
     }
   });
+  it('draws an Input | Output header over a step box\'s two columns, each row in its own half, and cuts a long name to 14', () => {
+    const box = nodeOf(flowGraph(plan, 'min'), 'circuit-lv');                                     // 318 px wide: one input, one output
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
+    const top = rowsTop(box) - IO_HEAD_HEIGHT;                                                    // the header band runs from here to rowsTop
+    expect(html).toContain(`<text class="flow-io-head" x="8" y="${top + 10}">Input</text>`);
+    expect(html).toContain(`<text class="flow-io-head" x="${box.width - 8}" y="${top + 10}" text-anchor="end">Output</text>`);
+    expect(html.match(/<line class="flow-io-divider"/g)).toHaveLength(1);
+    expect(html).toContain(`<line class="flow-io-divider" x1="${box.width / 2}" y1="${top}" x2="${box.width / 2}"`);
+    // a row's hover, clip and focus ring are its own column: inputs the left half, outputs the right
+    const halves = [...html.matchAll(/<g class="flow-row (in|out)[^"]*"[^>]*><rect class="flow-hit" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"/g)].map((m) => [m[1], m[2], m[3]]);
+    expect(halves).toEqual([['in', '0', String(box.width / 2)], ['out', String(box.width / 2), String(box.width / 2)]]);
+    // a 31-character name shows 13 characters and an ellipsis; the box's tooltip and accessible name keep it whole
+    const LONG = 'Extremely Long Copper Wire Name';
+    const longPlan = { ...plan, names: { ...plan.names, 't:redstone@0': LONG } } as Plan;
+    const lhtml = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph(longPlan, 'min'), 'circuit-lv'))} /></svg>);
+    expect(lhtml).toContain('>Extremely Lon… <tspan class="flow-row-rate">');
+    expect(lhtml).toContain(`data-tip="Basic Assembler\nLV · 16 EU/t · 5 machines · 100% busy\ntakes ${LONG} 30/min\nmakes Basic Circuit 30/min"`);
+    // a stub draws no header over its one row, cuts its long title to 14, and keeps its row the full width
+    const stub = nodeOf(flowGraph(longPlan, 'min'), 'import:t:redstone@0@circuit-lv');
+    const shtml = renderToStaticMarkup(<svg><FlowNodeShape node={at0(stub)} /></svg>);
+    expect(shtml).not.toContain('flow-io-head');
+    expect(shtml.match(/<text class="flow-node-title"[^>]*>([^<]*)/)?.[1]?.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
+    expect(shtml).toContain(`<rect class="flow-hit" x="0" y="${rowsTop(stub)}" width="${stub.width}" height="18">`);
+  });
 });
 
 // The recipe card's numbers (Phase 2 spec §8.2, §8.5; Task 5a): what one run takes and makes as NEI's slots draw it, the stack counts as

@@ -1048,6 +1048,9 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-row.issue-orphan-input .flow-row-rate, .flow-row.issue-short-input .flow-row-rate { fill: var(--flow-error); }
 /* The grey of a left over is darker than a panel: its quieter lines and rates would fall under 4.5:1 there. */
 .flow-node.sink .flow-node-line, .flow-node.sink .flow-row-rate { fill: var(--text); }
+/* A step's or a line's "Input | Output" header over its two columns, and the faint line between them (RUK-740). */
+.flow-node .flow-io-head { fill: var(--text-muted); font-size: 11px; }
+.flow-io-divider { stroke: var(--outline); stroke-opacity: 0.25; stroke-width: 1; }
 /* A port is a pipe flange (FlowView's FLANGE_DEPTH by FLANGE_HEIGHT): a slot grey with a black edge, yellow when its row is lit. */
 .flow-port { fill: var(--flange); stroke: var(--outline); stroke-width: 1; }
 .flow-row.hl .flow-port { fill: var(--accent); }
