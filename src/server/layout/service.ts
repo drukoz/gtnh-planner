@@ -6,20 +6,24 @@
 // call, so a service registered later is the one used.
 
 import type { AppContext } from '../app.ts';
+import { exportDirFor } from '../config.ts';
 import { planForProject } from '../http/routes/projects.ts';
 import { worldService } from '../http/routes/world.ts';
 import { allMachines } from '../pack/lookup.ts';
 import { expandBomLines, fromSeedBank, partName, seedBankKeys, type BomMake } from '../planner/bom.ts';
 import { bomBuildCost } from '../planner/build-cost.ts';
+import type { DiskCache } from '../planner/disk-cache.ts';
 import { emptyContext, planCacheKey } from '../planner/plan.ts';
+import { planStoreFor } from '../planner/plan-store.ts';
 import { linePricing } from '../planner/pricing.ts';
 import { partSteps } from '../planner/steps.ts';
+import { planningThreadOf, type PartStep, type PartStepsInput } from '../planner/thread.ts';
 import { emptyScan, layoutLine, type LayoutDeps } from './layout.ts';
 import { isOptional, mergeLayoutIntoPlan, subtractReplaced } from './merge.ts';
 import type { StuffKey } from '../../shared/keys.ts';
 import type { Layout } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
-import type { BomLine, BuildStep, Plan, PlanStep } from '../../shared/types/plan.ts';
+import type { BomLine, BuildStep, Plan, PlanContext, PlanStep } from '../../shared/types/plan.ts';
 import type { Project } from '../../shared/types/project.ts';
 import type { BBox, Voxels, WorldScan } from '../../shared/types/world.ts';
 
@@ -72,6 +76,18 @@ export interface LayoutServiceDeps {
    * no farms, the export pack.
    */
   linePack?(pack: Pack, project: Project): Promise<Pack>;
+  // optional addition (RUK-563)
+  /**
+   * A placed line's build steps, `partSteps` on the line's farm pack worked out elsewhere (the app's planning thread);
+   * `finishPlan` then asks no `linePack`. Without it, `finishPlan` words them here, on `linePack`'s pack.
+   */
+  steps?(pack: Pack, project: Project, input: PartStepsInput): Promise<PartStep[]>;
+  // optional addition (RUK-563)
+  /**
+   * Where what finishing `project`'s plans works out is kept between runs (`planStoreFor`'s `finished`), asked when a
+   * layout entry is made; without it, or when it gives undefined, the entry keeps it in memory only.
+   */
+  store?(project: Project): DiskCache | undefined;
 }
 
 export interface LayoutService {
@@ -83,8 +99,17 @@ export interface LayoutService {
   readonly computations: number;
 }
 
-/** A cached layout and, once a plan was finished with it, its expansion and the raw material of its parts. */
-interface Entry { layout: Promise<Layout>; expansion: Promise<Expansion> | null; cost: Promise<number> | null }
+/**
+ * What finishing a plan with its layout works out: the whole build broken down (what the group takes from its seed bank
+ * marked so), the raw material of the layout's parts (null without `layoutCost`), and the build steps worded.
+ */
+interface Finished { expansion: Expansion; cost: number | null; worded: PartStep[] }
+
+/**
+ * A cached layout, by its key; once a plan was finished with it, what that worked out; and where that is kept between
+ * runs, decided when the entry is made, before its layout reads the scan.
+ */
+interface Entry { key: string; layout: Promise<Layout>; finished: Promise<Finished> | null; store: DiskCache | undefined }
 
 /**
  * The layout's parts `cost.layout` prices (plan 12, architecture §11 entry 39): its required (non-optional) parts but its
@@ -144,7 +169,8 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       return hit;
     }
     computations++;
-    const entry: Entry = { layout: compute(plan, project), expansion: null, cost: null };
+    const store = deps.store?.(project);
+    const entry: Entry = { key, layout: compute(plan, project), finished: null, store };
     entries.set(key, entry);
     if (entries.size > LAYOUT_CACHE_SIZE) entries.delete(entries.keys().next().value as string);
     entry.layout.catch(() => {
@@ -153,30 +179,45 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
     return entry;
   }
 
-  /** The whole build of `plan` placed as `layout` (its entry's), broken down once (architecture §11 entry 41 (9)), started on first use. */
-  function expansionOf(entry: Entry, pack: Pack, layout: Layout, project: Project, plan: Plan): Promise<Expansion> {
-    if (entry.expansion !== null) return entry.expansion;
+  /**
+   * `Finished` of `plan` placed as `layout`: the whole build broken down with the plan's steps (architecture §11 entry
+   * 41 (9)), then the layout's parts priced (`layoutParts`) and the build steps worded, side by side.
+   */
+  async function workOut(pack: Pack, layout: Layout, project: Project, plan: Plan): Promise<Finished> {
     const tops = plan.buildList.map(({ key, amount, why, group }): BomLine => ({ key, amount, why, ...(group === undefined ? {} : { group }) }));
     const whole = [...subtractReplaced(tops, layout.replaced ?? []), ...layout.bom.filter((l) => !isOptional(l))];
-    const expansion = deps.expand(pack, whole, project, plan.steps);
-    entry.expansion = expansion;
-    expansion.catch(() => {
-      if (entry.expansion === expansion) entry.expansion = null;
-    });
-    return expansion;
+    const broken = await deps.expand(pack, whole, project, plan.steps);
+    const price = deps.layoutCost;
+    const cost = price === undefined ? Promise.resolve(null) : price(pack, layoutParts(pack, layout), project);
+    // what the group takes from its seed bank is no import, as the plan's breakdown decided it (its `seedBank` lines)
+    const bank = seedBankKeys(plan.buildList);
+    const expansion: Expansion = { ...broken, lines: fromSeedBank(broken.lines, bank), totals: fromSeedBank(broken.totals, bank) };
+    const input: PartStepsInput = { steps: plan.steps, bom: { lines: expansion.lines, totals: expansion.totals, makes: expansion.makes ?? [] }, tier: plan.tier };
+    const worded = deps.steps !== undefined
+      ? deps.steps(pack, project, input)
+      : (async () => partSteps(deps.linePack === undefined ? pack : await deps.linePack(pack, project), input))();
+    const [priced, steps] = await Promise.all([cost, worded]);
+    return { expansion, cost: priced, worded: steps };
   }
 
-  /** The raw material of `layout`'s parts (`layoutParts`, its entry's), started on first use; null without the dep. */
-  function costOf(entry: Entry, pack: Pack, layout: Layout, project: Project): Promise<number> | null {
-    const price = deps.layoutCost;
-    if (price === undefined) return null;
-    if (entry.cost !== null) return entry.cost;
-    const cost = price(pack, layoutParts(pack, layout), project);
-    entry.cost = cost;
-    cost.catch(() => {
-      if (entry.cost === cost) entry.cost = null;
+  /**
+   * What finishing `plan` with `layout` (its entry's) works out, once per entry: from the entry's store when it holds
+   * it, else worked out (`workOut`) and kept there too. One that fails is not kept, so the next finish tries again.
+   */
+  function finishedOf(entry: Entry, pack: Pack, layout: Layout, project: Project, plan: Plan): Promise<Finished> {
+    if (entry.finished !== null) return entry.finished;
+    const finished = (async (): Promise<Finished> => {
+      const stored = await entry.store?.get(entry.key);
+      if (typeof stored === 'object' && stored !== null && 'expansion' in stored && 'worded' in stored) return stored as Finished;
+      const made = await workOut(pack, layout, project, plan);
+      void entry.store?.put(entry.key, made);
+      return made;
+    })();
+    entry.finished = finished;
+    finished.catch(() => {
+      if (entry.finished === finished) entry.finished = null;
     });
-    return cost;
+    return finished;
   }
 
   return {
@@ -191,18 +232,10 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
       const entry = await entryFor(project, plan);
       const layout = await entry.layout;
       const pack = await deps.pack();
-      const expansion = await expansionOf(entry, pack, layout, project, plan);
-      const cost = costOf(entry, pack, layout, project);
-      const stepsPack = deps.linePack === undefined ? pack : await deps.linePack(pack, project);
-      // what the group takes from its seed bank is no import, as the plan's breakdown decided it (its `seedBank` lines)
-      const bank = seedBankKeys(plan.buildList);
-      const lines = fromSeedBank(expansion.lines, bank);
-      const totals = fromSeedBank(expansion.totals, bank);
-      const bom = { lines, totals, makes: expansion.makes ?? [] };
-      const parts = partSteps(stepsPack, { steps: plan.steps, bom, tier: plan.tier })
-        .map((s, i): BuildStep => ({ ...s, order: i + 1 }));
+      const { expansion, cost, worded } = await finishedOf(entry, pack, layout, project, plan);
+      const parts = worded.map((s, i): BuildStep => ({ ...s, order: i + 1 }));
       const nameOf = (k: string): string => (k.startsWith('map:') ? pack.maps.get(k.slice(4))?.name ?? k.slice(4) : partName(pack, k));
-      return mergeLayoutIntoPlan(plan, layout, { ...expansion, lines, totals, parts }, nameOf, cost === null ? undefined : await cost);
+      return mergeLayoutIntoPlan(plan, layout, { ...expansion, parts }, nameOf, cost === null ? undefined : cost);
     },
   };
 }
@@ -216,20 +249,31 @@ export function createLayoutService(deps: LayoutServiceDeps): LayoutService {
 export function layoutService(app: AppContext): LayoutService {
   const existing = app.services.layout as LayoutService | undefined;
   if (existing !== undefined) return existing;
+  // The planning work on the app's planning thread when it has one (main.ts starts it), so this thread keeps answering.
+  const thread = planningThreadOf(app);
+  const contextOf = async (project: Project): Promise<PlanContext> => app.services.planContext?.(project) ?? emptyContext();
+  const dirOf = (pack: Pack): string => exportDirFor(app.config, pack.manifest.exportId);
   const service = createLayoutService({
     pack: () => app.pack(),
     plan: (project) => planForProject(app, project),
     scan: (scanId) => worldService(app).getScan(scanId),
     readArea: (scanId, dim, bbox) => worldService(app).readArea(scanId, dim, bbox),
-    expand: async (pack, lines, project, steps) =>
-      expandBomLines(pack, lines, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), steps === undefined ? undefined : { steps }),
+    expand: async (pack, lines, project, steps) => (thread !== undefined
+      ? thread.expand(dirOf(pack), lines, project.settings, await contextOf(project), steps)
+      : expandBomLines(pack, lines, project.settings, await contextOf(project), steps === undefined ? undefined : { steps })),
     // the layout's parts at the prices the plan's machines are priced at (plan 12: `cost.layout`)
-    layoutCost: async (pack, lines, project) =>
-      bomBuildCost(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext()), lines),
+    layoutCost: async (pack, lines, project) => (thread !== undefined
+      ? thread.layoutCost(dirOf(pack), project.settings, await contextOf(project), lines)
+      : bomBuildCost(pack, project.settings, await contextOf(project), lines)),
     // the line's farm pack from its pricing (memoized: the plan route priced the line), so its build steps say what its
     // crop farms plant as the plan's own do (add-on 17)
-    linePack: async (pack, project) =>
-      (await linePricing(pack, project.settings, await (app.services.planContext?.(project) ?? emptyContext())))?.pack ?? pack,
+    linePack: async (pack, project) => (await linePricing(pack, project.settings, await contextOf(project)))?.pack ?? pack,
+    ...(thread === undefined ? {} : {
+      steps: async (pack: Pack, project: Project, input: PartStepsInput) =>
+        thread.partSteps(dirOf(pack), project.settings, await contextOf(project), input),
+    }),
+    // what finishing a plan worked out, kept on disk between runs when the app has a store (main.ts opens it)
+    store: (project) => planStoreFor(app, project)?.finished,
   });
   app.services.layout = service;
   return service;
