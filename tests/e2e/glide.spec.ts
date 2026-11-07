@@ -1188,20 +1188,21 @@ test('a focused box head keeps the focus and its tip through a replan, the tip g
   await page.addInitScript(recordAnimations);
   let served = circuitLv();
   const id = await openServing(page, () => served);
-  const head = page.locator('[data-step-id="wire"] .flow-node-head');
+  const head = page.locator('[data-step-id="circuit-lv"] .flow-node-head');   // the assembler's box, which stands inside the canvas in both the old and the new view
+
   await head.focus();
   await page.keyboard.press('Shift+Tab');
   await page.keyboard.press('Tab');
   await expect(head).toBeFocused();
   const tip = page.getByRole('tooltip');
-  await expect(tip.locator(':scope > :first-child')).toHaveText('Basic Wiremill');
+  await expect(tip.locator(':scope > :first-child')).toHaveText('Basic Assembler');
   await expect.poll(() => tipBelow(tip, head)).toBe(true);
   await holdAnimationsOf(page, '[data-node-id], g.flow-pan');
   served = platesTwoWays();
   await replan(page, id, 31);
   await expect(stepBoxes(page)).toHaveCount(4);
   await expect(head).toBeFocused();
-  const glide = (await records(page)).find((r) => r.node === 'wire' && r.frames.some((frame) => 'transform' in frame));
+  const glide = (await records(page)).find((r) => r.node === 'circuit-lv' && r.frames.some((frame) => 'transform' in frame));
   expect(glide, 'the premise: the box glides').toBeDefined();
   await page.evaluate(() => {
     for (const a of document.getAnimations()) if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition) && a.playState === 'paused') a.currentTime = 130;
@@ -1209,7 +1210,7 @@ test('a focused box head keeps the focus and its tip through a replan, the tip g
   await expect.poll(() => tipBelow(tip, head), { message: 'half way' }).toBe(true);
   await finishMotion(page);
   await expect.poll(() => tipBelow(tip, head), { message: 'where the box lands' }).toBe(true);
-  await expect(tip.locator(':scope > :first-child')).toHaveText('Basic Wiremill');
+  await expect(tip.locator(':scope > :first-child')).toHaveText('Basic Assembler');
   await expect(head).toBeFocused();
 });
 
@@ -1899,6 +1900,7 @@ function cobbleSupplied(): Plan {
 // when it opens on a pick inside the last one (P2-R35), and nothing scrolls, so the line stays in sight where the button was
 test('a panel control that goes while its panel stays leaves the focus on the panel, where the press left it', async ({ page }) => {
   await openWithPlan(page, cobbleSupplied());
+  await dragCanvas(page, 250, 0);   // the layout is wider than the canvas: stand the breaker's head inside it, clear of the settings drawer, where a click can reach it
   await page.locator('[data-step-id="breaker"] .flow-node-head').click();
   const panel = page.getByRole('complementary', { name: 'Step: Basic Rock Breaker' });
   await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
