@@ -131,8 +131,8 @@ test('an arrow\'s tip has three lines', async ({ page }) => {
 // above it; this one checks the tip below, so the window is tall.
 test.describe('a step head\'s focus tip, in a tall window', () => {
   test.use({ viewport: { width: 1280, height: 900 } });
-    test('a step head focused from the keyboard shows its box\'s tip below it, described by it, and tabbing away clears both', async ({ page }) => {
-      await openWithPlan(page, circuitLv());
+  test('a step head focused from the keyboard shows its box\'s tip below it, described by it, and tabbing away clears both', async ({ page }) => {
+    await openWithPlan(page, circuitLv());
     await page.keyboard.press('f');                                                          // Fit: a card's narrow Input tiles sit at its left edge, so fit the box fully into the canvas
     const tip = page.getByRole('tooltip');
     const title = tip.locator(':scope > :first-child');
