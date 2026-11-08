@@ -34,8 +34,9 @@ import { SHEET_KEY_HINT } from '../components/ShortcutsSheet.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
 import {
-  endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus, } from '../state/flow-focus.ts';
-import { EASE_IN, EXIT_MS, GHOST_FALLBACK_MS, prefersReducedMotion } from '../state/motion.ts';
+  endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
+} from '../state/flow-focus.ts';
+import { EASE_IN, EXIT_MS, GHOST_FALLBACK_MS } from '../state/motion.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
 import { clearRecipeRequest, RecipeMode, requestRecipes, useRecipeRequest } from '../state/recipe-request.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
@@ -708,43 +709,6 @@ export function FlowIssues(props: {
 /** What a pointer or key is on: a line's open/collapse button, a row (its good), an arrow, a box, or nothing. */
 interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
 
-/** The px height the canvas's style asks for a diagram `height` tall (in its units): the diagram and the room around it (75vh at most). */
-const canvasPx = (height: number): number => Math.ceil(height + 2 * PAD);
-
-/** A computed style's length in px (`'2px'`), 0 for none. */
-const stylePx = (value: string): number => Number.parseFloat(value) || 0;
-
-/**
- * Where the Flow canvas `svg` stands once it is as tall as its own style makes it for a diagram `height` tall (in its units), 75vh at most and
- * its min-height at least, from its top as it is now: its border box (`box`) and its inner height (`inner`, less its border). While a hold
- * keeps the canvas taller (ledger ruling P2-R121), the canvas the hold ends at, which a view is made for (`canvas()`, fix round 2) and a
- * panel's Close judges the box head against (P2-R36, fix round 3); at rest, the canvas as it is drawn.
- */
-function settledCanvas(svg: SVGSVGElement, height: number): { box: DOMRect; inner: number } {
-  const style = getComputedStyle(svg);
-  const drawn = svg.getBoundingClientRect();
-  const tall = Math.max(stylePx(style.minHeight), Math.min(canvasPx(height), innerHeight * 0.75));
-  return { box: new DOMRect(drawn.left, drawn.top, drawn.width, tall), inner: tall - stylePx(style.borderTopWidth) - stylePx(style.borderBottomWidth) };
-}
-
-/**
- * The height (the diagram's, in its units) the canvas keeps once the layout `after` replaces `before`, `held` the one it keeps now, null for
- * none (ledger ruling P2-R121): a new layout that glides into place and draws the canvas shorter keeps it at the height it was drawn at, so
- * nothing gliding up from below and no ghost under the new edge is cut off, until its glides have run and its ghosts have gone (FlowCanvas
- * releases it); one that snaps (it changes more than GLIDE_LIMIT boxes, or the user asks for less motion) or that leaves the canvas as tall
- * takes its own height at once; the same layout again (every SSE refetch's) keeps what is kept. The canvas is as tall as its diagram, `room`
- * px (75vh) at most, so a hold that would draw it no taller than the new layout is none. Pure, but for the motion setting, so the canvas
- * decides it as it draws the new layout, and holding costs it no render of its own (fix round 2).
- */
-export function heldHeight(
-  before: FlowLayout, after: FlowLayout, held: number | null, room: number, change: LayoutChange = layoutChange(before, after),
-): number | null {
-  if (change.moved.length + change.entered.length + change.left.length + change.rerouted.length === 0) return held;
-  if (prefersReducedMotion() || !glidable(change)) return null;
-  const drawnAt = held ?? before.height;
-  return Math.min(canvasPx(drawnAt), room) > Math.min(canvasPx(after.height), room) ? drawnAt : null;
-}
-
 /**
  * Whether the view a new layout brings (a new plan's, or the box of a line opened or closed, centred) is panned to over PAN_MS (Phase 2 spec
  * §16.2): only when the layout glides into place, as `glidable` decides for its glide too; a layout that snaps (it changes more than
@@ -809,23 +773,14 @@ function FlowCanvas(props: {
   const shownGhosts = useRef<Ghost[]>([]);
   /**
    * The layout drawn last, and what it changed of the one before (`layoutChange`), worked out once, as the new layout is drawn: the one result
-   * its glide, the height the canvas keeps and the way its view is taken all go by (ledger rulings P2-R121, P2-R126; Task F4).
+   * its glide and the way its view is taken all go by (ledger rulings P2-R121, P2-R126; Task F4).
    */
   const [drawn, setDrawn] = useState(() => ({ layout, change: layoutChange(null, layout) }));
-  /**
-   * While a new layout that shortens the diagram glides, the height the canvas keeps (the diagram's, in its units), null at rest (ledger ruling
-   * P2-R121, `heldHeight`). It is decided as each new layout is drawn, so the layout's own commit draws the canvas held, and it is released
-   * once, by whichever ends last of the layout's glides and its ghosts: holding costs the canvas one render, the release's (fix round 2).
-   */
-  const [hold, setHold] = useState<number | null>(null);
   if (drawn.layout !== layout) {
     const next = layoutChange(drawn.layout, layout);
     setDrawn({ layout, change: next });
-    setHold(heldHeight(drawn.layout, layout, hold, innerHeight * 0.75, next));
   }
   const { change } = drawn;
-  /** The glides of the layout that holds the canvas, until they have run; null once they have, or when no layout holds it. */
-  const holding = useRef<Promise<unknown> | null>(null);
   /** What in the canvas has the focus (its last `focusin`), until the focus has really moved from it (ledger ruling P2-R122). */
   const focusedIn = useRef<Element | null>(null);
   const focus = useFlowFocus();
@@ -842,15 +797,11 @@ function FlowCanvas(props: {
   /** The arrows a good rides (Phase 2 spec §15.1): past 200 arrows the lit ones only, and never more than `RIDER_LIMIT`. */
   const riders = useMemo(() => riderEdges(layout.edges, sets?.edges ?? null, missingIds), [layout, sets, missingIds]);
 
-  /**
-   * The canvas's inner size in px, which Fit, the zoom buttons, a reveal and a new plan's view fit their view to. While a hold keeps it taller,
-   * the height it settles at once the hold ends, as the svg's own style computes it (`settledCanvas`), so the view is made for the canvas it will
-   * be shown in, never cropped or off-centre once the hold ends (fix round 2).
-   */
+  /** The canvas's inner size in px, which Fit, the zoom buttons, a reveal and a new plan's view fit their view to. */
   const canvas = (): { width: number; height: number } => {
     const svg = svgRef.current;
     if (svg === null) return { width: 0, height: 0 };
-    return { width: svg.clientWidth, height: hold === null ? svg.clientHeight : settledCanvas(svg, layout.height).inner };
+    return { width: svg.clientWidth, height: svg.clientHeight };
   };
   /**
    * Pans to the box (or open line) `id`, centred (a reveal, a line opened or closed), or moves there at once (`pans` false: the box of a line
@@ -883,11 +834,9 @@ function FlowCanvas(props: {
   // arrows and goods that changed (`glideLayout`); while it glides, the boxes it dropped fade out as ghosts where they were drawn in the last
   // (part way along its glide, if it still glided them: ledger ruling P2-R117), each from the opacity it was drawn at under the focus, and, if it
   // still faded in, at that much of it (fix round 2). A new layout that changes anything takes the last one's ghosts away (M1); the ghosts are set
-  // only when there are ghosts to add or take away, so a new layout that adds none draws the canvas once (M2). A layout whose render held the
-  // canvas's height (`heldHeight`, ledger ruling P2-R121) releases it once its glides have run and its ghosts have gone, whichever is last (and
-  // at once when nothing glides after all: the browser cannot, `canGlide`); an older layout's glides then release nothing. The first layout
+  // only when there are ghosts to add or take away, so a new layout that adds none draws the canvas once (M2). The first layout
   // changes nothing (its change is empty). A second run of this effect for the same layout (StrictMode's, Fast Refresh's, an Activity shown
-  // again) finds that layout placed already and leaves its glides, ghosts and hold as they are: `change` is the render's, the change from the
+  // again) finds that layout placed already and leaves its glides and ghosts as they are: `change` is the render's, the change from the
   // layout drawn before, which that first run glided (the final fix wave, FW-14).
   // What had the focus and is gone with the last layout gives it on, never to the body (ledger rulings P2-R36, P2-R57): to the same line's
   // open/collapse button where the new layout draws it again, else to the canvas, where nothing moves the page.
@@ -902,7 +851,7 @@ function FlowCanvas(props: {
     const again = line === null ? undefined : [...svg.querySelectorAll('[data-line-toggle]')].find((el) => el.getAttribute('data-line-toggle') === line);
     if (!focusOn(again, { preventScroll: true })) focusOn(svg, { preventScroll: true });
   }, [layout]);
-  /** The glide of a new layout from `before`, the layout placed last (null for none), its ghosts and its hold (the effect above). */
+  /** The glide of a new layout from `before`, the layout placed last (null for none), and its ghosts (the effect above). */
   function glideIn(before: FlowLayout | null): void {
     const pan = panRef.current;
     const gone: Ghost[] = [];
@@ -916,22 +865,11 @@ function FlowCanvas(props: {
         gone.push({ id, kind, owned, ...(leaf === undefined ? {} : { leaf }), x: atX, y: atY, width, height, opacity });
       }
     }
-    const started = pan === null ? [] : glideLayout(pan, change, FLOW_GLIDE);
+    if (pan !== null) glideLayout(pan, change, FLOW_GLIDE);
     const changed = change.moved.length + change.entered.length + change.left.length + change.rerouted.length > 0;
     if (gone.length > 0 || (changed && shownGhosts.current.length > 0)) {
       shownGhosts.current = gone;
       setGhosts(gone);
-    }
-    if (changed) {
-      const waits = hold !== null && (started.length > 0 || gone.length > 0);
-      const glides = waits ? Promise.all(started.map((a) => a.finished.catch(() => undefined))) : null;
-      holding.current = glides;
-      if (hold !== null && glides === null) setHold(null);
-      void glides?.then(() => {
-        if (holding.current !== glides) return;
-        holding.current = null;
-        if (shownGhosts.current.length === 0) setHold(null);
-      });
     }
   }
   useEffect(() => {
@@ -995,15 +933,14 @@ function FlowCanvas(props: {
 
   const fit = (minZoom: number): void => glideTo(fitView(layout, canvas().width, canvas().height, minZoom));
   /**
-   * A ghost whose fade has run goes (that one: a newer ghost of the same box stays); the last to go releases a hold whose glides have run, in
-   * the same render. It reads no render's state, as a ghost keeps the one it was drawn with.
+   * A ghost whose fade has run goes (that one: a newer ghost of the same box stays). It reads no render's state, as a ghost keeps the one it
+   * was drawn with.
    */
   const dropGhost = (ghost: Ghost): void => {
     const left = shownGhosts.current.filter((other) => other !== ghost);
     if (left.length === shownGhosts.current.length) return;
     shownGhosts.current = left;
     setGhosts(left);
-    if (left.length === 0 && holding.current === null) setHold(null);
   };
   const zoomCentre = (factor: number): void => glideTo((v) => zoomed(v, canvas().width / 2, canvas().height / 2, factor));
 
@@ -1190,7 +1127,6 @@ function FlowCanvas(props: {
         role="group"
         aria-label="Flow diagram"
         tabIndex={-1}
-        style={{ height: `min(${canvasPx(Math.max(layout.height, hold ?? 0))}px, 75vh)` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}
@@ -1361,8 +1297,7 @@ function FlowDiagram(props: {
   // The new panel stands where the old one stood, so neither moves the page unless the window shows nothing of the panel's head or of the
   // box head (a plain focus would jump the page to show a panel's cut-off end): then that comes in by the least scroll (P2-R35, P2-R36).
   // While Fit, a zoom button or a reveal still pans the diagram, or a new layout glides the box, the box head is judged where it will rest
-  // (`boxAtRest`, Tasks 13a and 13b), and while a hold keeps the canvas taller, against the canvas the hold ends at (`settledCanvas`, fix
-  // round 3): a head in the band the hold gives up would take the focus and then be cut off.
+  // (`boxAtRest`, Tasks 13a and 13b).
   useLayoutEffect(() => {
     if (focusPanel.current) {
       focusPanel.current = false;
@@ -1376,7 +1311,7 @@ function FlowDiagram(props: {
       const node = [...(canvas?.querySelectorAll('[data-node-id]') ?? [])].find((el) => el.getAttribute('data-node-id') === box);
       const head = node?.querySelector<SVGGElement>('.flow-node-head[tabindex]') ?? null;
       // a head panned out of the canvas's own view would take the focus unseen, and scroll the page to it for nothing: the canvas takes it
-      const view = canvas === null || laid === null ? null : settledCanvas(canvas, laid.layout.height).box;
+      const view = canvas === null ? null : canvas.getBoundingClientRect();
       const seen = head !== null && view !== null && !disjoint(boxAtRest(head), view);
       const target = seen ? head : canvas;
       if (target !== null) focusInWindow(target);

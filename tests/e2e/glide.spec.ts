@@ -887,19 +887,15 @@ test('under reduced motion a replan moves at once', async ({ page }) => {
   let served = circuitLv();
   const id = await openServing(page, () => served);
   const before = await places(page);
-  const short = await canvasHeight(page);
   served = platesTwoWays();
   await replan(page, id, 31);
   await expect(stepBoxes(page)).toHaveCount(4);
   const after = await places(page);
   expect(Object.keys(after).some((box) => before[box] !== undefined && before[box] !== after[box]), 'the premise: boxes moved').toBe(true);
-  expect(await canvasHeight(page), 'the premise: platesTwoWays is taller').toBeGreaterThan(short);
   served = circuitLv();
   await replan(page, id, 32);
   await expect(stepBoxes(page)).toHaveCount(3);
   await expect(page.locator('[data-node-id="hammer-plate"]'), 'the premise: the hand step\'s box went').toHaveCount(0);
-  // fix round 1 (ledger ruling P2-R121): nothing glides, so the canvas takes the shorter height at once
-  expect(await canvasHeight(page), 'the height at once').toBe(short);
   expect(await allRecords(page), 'no animation, and no probe of what the browser can glide').toEqual([]);
   expect((await finiteAnimations(page)).filter((a) => a.ends > 1)).toEqual([]);
   await expect.poll(() => finiteAnimations(page)).toEqual([]);
@@ -1219,10 +1215,10 @@ test('a focused box head keeps the focus and its tip through a replan, the tip g
 // lands: `restingBox` reads a gliding box's own attribute too. A replan to circuitLv (the Iron Plate's row leaving the wiremill) takes the
 // redstone's stub 61 px down, out of the canvas's view; its glide held at its start, the stub still shows where it stood, in the canvas: Close
 // gives the focus to the canvas
-// Reworked for RUK-745's rework ruling: the trigger is a replan. The viewport is 1280x360, where the canvas's 75vh cap (270 px) binds both the
-// served layout's canvas (276 px) and the replanned, taller one (348 px), so the canvas keeps its height while the stub glides. The view is
-// zoomed in on the wheel about the stub's head and panned to its limits, where the head shows just above the canvas's bottom edge; where its
-// glide lands, wholly below the canvas, Close gives the focus to the canvas. Every offset is read from bounding boxes.
+// Reworked for RUK-745's rework ruling: the trigger is a replan. The viewport is 1280x360, where the canvas is at its 320 px floor, short enough
+// that a stub gliding 61 px down can leave it. The view is zoomed in on the wheel about the stub's head and panned to its limits, where the head
+// shows just above the canvas's bottom edge; where its glide lands, wholly below the canvas, Close gives the focus to the canvas. Every offset is
+// read from bounding boxes.
 test('Close while a new layout glides the box that opened the panel out of view gives the focus to the canvas', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 360 });
   await page.addInitScript(recordAnimations);
@@ -1706,32 +1702,6 @@ test('a lit arrow\'s tag fades in with its arrow when a replan reroutes it', asy
   expect(arrow).toMatchObject({ frames: [{ opacity: 0, offset: 0 }], delay: 130, duration: 130, fill: 'backwards' });
 });
 
-/** The px height the Flow canvas is given, `min(<px>px, 75vh)`. */
-const canvasHeight = (page: Page): Promise<number> => page.locator('svg.flow-canvas').evaluate((svg) => {
-  const px = /^min\(([\d.]+)px, 75vh\)$/.exec((svg as SVGSVGElement).style.height)?.[1];
-  if (px === undefined) throw new Error(`no height in "${(svg as SVGSVGElement).style.height}"`);
-  return Number(px);
-});
-
-// Fix round 1 (ledger ruling P2-R121): the canvas is as tall as its diagram (75vh at most); a new layout that shortens it (the wiremill's line
-// closed from the keyboard: its frame goes) would cut off what glides up from below and the ghosts under the new edge on the first frame, so
-// while its boxes glide and its ghosts fade the canvas keeps the old height, and takes the new one once they have
-test('the canvas keeps its height while a new layout that shortens it glides, and takes the new one after', async ({ page }) => {
-  await page.addInitScript(recordAnimations);
-  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
-  await openWithPlan(page, lined());
-  const open = await canvasHeight(page);
-  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
-  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').focus();
-  await page.keyboard.press('Enter');
-  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
-  await expect(page.locator('svg.flow-canvas .flow-ghost'), 'the premise: its boxes go as ghosts').not.toHaveCount(0);
-  expect(await canvasHeight(page), 'the old height while it glides').toBe(open);
-  await finishMotion(page);
-  await expect.poll(() => canvasHeight(page), { message: 'the new, shorter height once it has' }).toBeLessThan(open);
-  await expect(page.locator('svg.flow-canvas .flow-ghost')).toHaveCount(0);
-});
-
 // Fix round 1 (ledger ruling P2-R122): a window that loses the focus fires a focusout on what has it, which keeps it: the canvas still knows it
 // had it, so a replan that then drops that box gives the focus to the canvas, never to the body. A browser blurs the window so: a focusout on
 // the focused element, then the window's blur (a second page brought to the front blurs nothing under Playwright's focus emulation)
@@ -1865,15 +1835,6 @@ test('a new layout that adds no ghost draws the canvas once', async ({ page }) =
 
 // ---- Task 13b fix round 2 ----
 
-/** Resolves once the page has drawn `n` more frames. */
-const nextFrames = (page: Page, n = 2): Promise<void> => page.evaluate((count) => new Promise<void>((done) => {
-  const step = (left: number): void => {
-    if (left === 0) done();
-    else requestAnimationFrame(() => step(left - 1));
-  };
-  step(count);
-}), n);
-
 const COBBLE = 'minecraft:cobblestone@0';
 
 /**
@@ -1961,179 +1922,6 @@ test('"N more…" that shows the rest hands the focus to the first way it shows,
   expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
 });
 
-// Fix round 2 (item 2): while the canvas keeps its height (P2-R121), Fit fits the view to the height the canvas settles at, not to the held one,
-// so the picture is not left off-centre once the hold ends. The wiremill's line closed from the keyboard, its glides and ghosts held: Fit pressed
-// then makes the view a Fit pressed after the hold makes, which pans nowhere
-test('Fit pressed while the canvas keeps its height fits the view to the height it settles at', async ({ page }) => {
-  await page.addInitScript(recordAnimations);
-  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
-  await openWithPlan(page, lined());
-  const open = await canvasHeight(page);
-  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
-  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').focus();
-  await page.keyboard.press('Enter');
-  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
-  expect(await canvasHeight(page), 'the premise: the canvas keeps its height').toBe(open);
-  const pan = page.locator(FLOW_PAN);
-  const centred = await pan.getAttribute('transform');
-  await page.getByRole('button', { name: 'Fit', exact: true }).click();
-  const fitted = await pan.getAttribute('transform');
-  expect(fitted, 'the premise: Fit moves the view').not.toBe(centred);
-  await finishMotion(page);
-  await expect.poll(() => canvasHeight(page), { message: 'the hold has ended' }).toBeLessThan(open);
-  const pans = (await records(page)).filter((r) => r.cls === 'flow-pan').length;
-  await page.getByRole('button', { name: 'Fit', exact: true }).click();
-  expect(await pan.getAttribute('transform'), 'Fit after the hold: the same view').toBe(fitted);
-  expect((await records(page)).filter((r) => r.cls === 'flow-pan').length, 'and no pan').toBe(pans);
-});
-
-/** The wiremill alone, making 1x Copper Wire from mined Copper Ingot: a diagram of one row, shorter than the canvas's min-height (240 px). */
-function wireOnly(): Plan {
-  const plan = circuitLv();
-  return {
-    ...plan, target: 't:copper_wire@0', steps: plan.steps.filter((s) => s.id === 'wire'),
-    flows: [...plan.flows.filter((f) => f.to === 'wire'), { from: 'wire', to: 'out', key: 't:copper_wire@0', perSecond: 1 }],
-    rawInputs: plan.rawInputs.filter((r) => r.key === 't:copper_ingot@0'),
-  };
-}
-
-// Fix round 2 (item 2): the height the canvas settles at is what its own style gives it, its min-height included: a replan to the wiremill alone
-// (platesTwoWays, then wireOnly), its glides and ghosts held, leaves the canvas at its min-height once the hold ends, and Fit pressed while the
-// canvas keeps its height fits the view there
-test('Fit pressed while the canvas keeps its height fits the view to its min-height where the new layout is shorter', async ({ page }) => {
-  await page.addInitScript(recordAnimations);
-  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
-  let served = platesTwoWays();
-  const id = await openServing(page, () => served);
-  const tall = await canvasHeight(page);
-  await holdAnimationsOf(page, '[data-node-id], .flow-ghost');
-  served = wireOnly();
-  await replan(page, id, 31);
-  await expect(stepBoxes(page)).toHaveCount(1);
-  expect(await canvasHeight(page), 'the premise: the canvas keeps its height').toBe(tall);
-  const pan = page.locator(FLOW_PAN);
-  const opened = await pan.getAttribute('transform');
-  await page.getByRole('button', { name: 'Fit', exact: true }).click();
-  const fitted = await pan.getAttribute('transform');
-  expect(fitted, 'the premise: Fit moves the view').not.toBe(opened);
-  await finishMotion(page);
-  await expect.poll(() => canvasHeight(page), { message: 'the hold has ended' }).toBeLessThan(tall);
-  const [styled, inner] = await page.locator('svg.flow-canvas').evaluate((svg) => [
-    Number(/^min\(([\d.]+)px/.exec((svg as SVGSVGElement).style.height)?.[1]), svg.clientHeight,
-  ]);
-  expect(inner, 'the premise: the min-height gives the canvas more than its diagram asks').toBeGreaterThan(styled - 4);
-  await page.getByRole('button', { name: 'Fit', exact: true }).click();
-  expect(await pan.getAttribute('transform'), 'Fit after the hold: the same view').toBe(fitted);
-});
-
-// Fix round 2 (item 3): the hold costs one render at most: it is decided as the new layout is drawn, and released straight from its glides' end
-// when no ghost is left. A replan to circuitLvWirePlate (the Iron Plate's row going from the assembler to the wiremill) takes a row out of the
-// diagram's tallest layer, which shortens the canvas and drops no box: from the commit that draws it, the canvas is drawn twice, held, then
-// released
-test('a new layout that shortens the canvas and drops no box draws the canvas twice: held, then released', async ({ page }) => {
-  await page.addInitScript(countCommits);
-  let served = circuitLv();
-  const id = await openServing(page, () => served);
-  const tall = await canvasHeight(page);
-  const before = (await commitsOf(page)).at(-1)?.boxes;
-  served = circuitLvWirePlate();
-  await replan(page, id, 31);
-  await expect.poll(() => canvasHeight(page), { message: 'the shorter height, once released' }).toBeLessThan(tall);
-  await nextFrames(page);
-  await expect(page.locator('svg.flow-canvas .flow-ghost'), 'the premise: no ghost').toHaveCount(0);
-  const commits = await commitsOf(page);
-  const laid = commits.findIndex((c) => c.boxes !== before && c.boxes !== '');
-  expect(laid, 'the commit that draws the new layout').toBeGreaterThanOrEqual(0);
-  const drawn = commits.slice(laid).filter((c) => c.canvas);
-  expect(drawn.map((c) => c.height), 'held, then released').toEqual([`min(${tall}px, 75vh)`, `min(${await canvasHeight(page)}px, 75vh)`]);
-});
-
-// Fix round 2 (item 4, ledger ruling P2-R121 in full): the canvas keeps its height until both the new layout's glides and its ghosts have ended,
-// whichever ends first, then takes the height of the layout it shows: the closed line's own, as a page that closes the line under reduced motion
-// (where nothing holds it) draws it. Closed with every glide and ghost held, then each kind finished in turn: the glides, then the ghosts; and,
-// the line opened and closed again, the ghosts, then the glides
-test('the canvas keeps its height until both the glides and the ghosts have ended, then takes the closed line\'s own', async ({ page, browser }) => {
-  const still = await browser.newPage();
-  await still.emulateMedia({ reducedMotion: 'reduce' });
-  await openWithPlan(still, lined());
-  await still.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').click();
-  await expect(still.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]')).toHaveCount(1);
-  const closed = await canvasHeight(still);
-  await still.close();
-  await page.addInitScript(recordAnimations);
-  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
-  await openWithPlan(page, lined());
-  const open = await canvasHeight(page);
-  expect(closed, 'the premise: closing the line shortens the canvas').toBeLessThan(open);
-  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
-  const toggle = page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]');
-  const ghosts = page.locator('svg.flow-canvas .flow-ghost');
-  /** Ends the held motion of the ghosts (`ofGhosts`), or every other motion of the canvas that ends (the glides, the fades in). */
-  const finish = (ofGhosts: boolean): Promise<void> => page.locator('svg.flow-canvas').evaluate((svg, g) => {
-    for (const a of svg.getAnimations({ subtree: true })) {
-      const target = (a.effect as KeyframeEffect | null)?.target;
-      if (target?.matches('.flow-ghost') === g && a.effect?.getComputedTiming().endTime !== Infinity) a.finish();
-    }
-  }, ofGhosts);
-  await toggle.focus();
-  for (const first of [false, true]) {
-    await page.keyboard.press('Enter');
-    await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
-    await expect(ghosts, 'the premise: its boxes go as ghosts').not.toHaveCount(0);
-    const shown = await ghosts.count();
-    expect(shown, 'the premise: its boxes go as ghosts').toBeGreaterThan(0);
-    await finish(first);
-    await nextFrames(page, 3);
-    if (first) {
-      await expect(ghosts, 'the ghosts gone').toHaveCount(0);
-    } else {
-      // fix round 3: the ghosts drawn before the glides ended, every one, still there
-      await expect(ghosts, 'the ghosts still there').not.toHaveCount(0);
-      await expect(ghosts, 'every one of them').toHaveCount(shown);
-    }
-    expect(await canvasHeight(page), `${first ? 'the ghosts' : 'the glides'} ended, the other not: held`).toBe(open);
-    await finish(!first);
-    await expect.poll(() => canvasHeight(page), { message: 'both ended: the closed line\'s own height' }).toBe(closed);
-    await expect(ghosts).toHaveCount(0);
-    await page.keyboard.press('Enter');                                                  // open again: a taller layout, held by nothing
-    await expect(page.locator('svg.flow-canvas [data-group-id="line:t:copper_wire@0"]'), 'the line open again').toHaveCount(1);
-    expect(await canvasHeight(page)).toBe(open);
-    await finishMotion(page);
-  }
-});
-
-// Fix round 2 (item 4, ledger ruling P2-R121): under reduced motion nothing glides, so nothing holds the canvas: a replan that shortens it
-// (platesTwoWays, then circuitLv, which drops the hand step) draws it at the new height from the first frame that shows the new layout, as
-// every frame from the replan on records it
-test('under reduced motion a replan that shortens the canvas draws the new height from its first frame', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  let served = platesTwoWays();
-  const id = await openServing(page, () => served);
-  const tall = await canvasHeight(page);
-  await page.evaluate(() => {
-    const w = window as unknown as { __frames: Array<{ height: string; laid: boolean }> };
-    w.__frames = [];
-    const each = (): void => {
-      const svg = document.querySelector<SVGSVGElement>('svg.flow-canvas');
-      w.__frames.push({ height: svg?.style.height ?? '', laid: svg?.querySelector('[data-node-id="hammer-plate"]') === null });
-      requestAnimationFrame(each);
-    };
-    requestAnimationFrame(each);
-  });
-  served = circuitLv();
-  await replan(page, id, 31);
-  await expect(stepBoxes(page)).toHaveCount(3);
-  await nextFrames(page, 3);
-  const short = await canvasHeight(page);
-  expect(short, 'the premise: circuitLv is shorter').toBeLessThan(tall);
-  const frames = await page.evaluate(() => (window as unknown as { __frames: Array<{ height: string; laid: boolean }> }).__frames);
-  const first = frames.findIndex((f) => f.laid);
-  expect(first, 'the premise: frames of the old layout first').toBeGreaterThan(0);
-  expect(frames.slice(0, first).every((f) => f.height === `min(${tall}px, 75vh)`), 'the old layout at its height').toBe(true);
-  expect(frames.slice(first).map((f) => f.height), 'the new layout at its own height from its first frame')
-    .toEqual(frames.slice(first).map(() => `min(${short}px, 75vh)`));
-});
-
 // Fix round 2 (item 6, ledger ruling P2-R109 widened): a box a new layout drops while it still fades in leaves a ghost that fades out from the
 // opacity the box is drawn at, never from whole: the hand step comes in (platesTwoWays), its fade held half way in (33 ms of 260, where
 // --ease-out has drawn about half its opacity), and goes again (circuitLv)
@@ -2164,61 +1952,4 @@ test('a box dropped while it fades in leaves its ghost at the opacity it is draw
   expect(Number(fade?.frames[0]?.opacity), 'its fade starts where the box is drawn').toBeCloseTo(drawn, 2);
   expect(fade?.frames[1]).toEqual({ opacity: 0 });
   expect(Number(await ghost.evaluate((g) => getComputedStyle(g).opacity)), 'and so does the ghost, held at its start').toBeCloseTo(drawn, 2);
-});
-
-// ---- Task 13b fix round 3 ----
-
-// Fix round 3 (ledger ruling P2-R36 under P2-R121's hold): the panel's Close gives the focus back to the box head only where the canvas will
-// show it, and while a hold keeps the canvas taller that is the canvas the hold ends at: a head drawn in the band below it would take the focus
-// and then be cut off as the hold ends, so the canvas takes it. The assembler's panel open, the wiremill's line closed from the keyboard with
-// every glide and ghost held (its centring pan, and the assembler's own glide, ended), the view dragged until the assembler's head sits in that
-// band, Close pressed from the keyboard
-test('Close while the canvas keeps its height gives the focus to the canvas when the head is in the band the hold gives up', async ({ page }) => {
-  await page.addInitScript(recordAnimations);
-  await page.addInitScript(holdGhostFallback, GHOST_FALLBACK_MS);
-  await openWithPlan(page, lined());
-  const canvas = page.locator('svg.flow-canvas');
-  const head = page.locator('[data-step-id="circuit-lv"] .flow-node-head');
-  await head.click();
-  const panel = page.getByRole('complementary', { name: 'Step: Basic Assembler' });
-  await expect(panel).toBeVisible();
-  await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
-  const open = await canvasHeight(page);
-  await holdAnimationsOf(page, '[data-node-id], [data-group-id], .flow-ghost');
-  await page.locator('svg.flow-canvas [data-line-toggle="t:copper_wire@0"]').focus();
-  await page.keyboard.press('Enter');
-  await expect(page.locator('svg.flow-canvas [data-node-id="line:t:copper_wire@0"]'), 'the line closed').toHaveCount(1);
-  expect(await canvasHeight(page), 'the premise: the canvas keeps its height').toBe(open);
-  await page.locator('svg.flow-canvas [data-node-id="circuit-lv"]').evaluate((box) => {
-    for (const a of box.getAnimations()) if (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) a.finish();
-  });
-  await page.locator(FLOW_PAN).evaluate((g) => {
-    for (const a of g.getAnimations()) a.finish();
-  });
-  // the head's top 30 px above the held canvas's bottom: inside the 45 px band the hold gives up, below the height the canvas settles at (checked once the hold has ended)
-  const area = await canvas.boundingBox();
-  const at = await head.boundingBox();
-  if (area === null || at === null) throw new Error('no box');
-  const dy = area.y + open - 30 - at.y;
-  const from = dy > 0 ? area.y + 6 : area.y + area.height - 6;
-  await page.mouse.move(area.x + 6, from);
-  await page.mouse.down();
-  await page.mouse.move(area.x + 6, from + dy, { steps: 6 });
-  await page.mouse.up();
-  const dragged = await head.boundingBox();
-  if (dragged === null) throw new Error('no head');
-  expect(dragged.y, 'the premise: the head drawn inside the held canvas').toBeCloseTo(area.y + open - 30, 0);
-  await watchBodyFocus(page);
-  await panel.getByRole('button', { name: 'Close the panel' }).focus();
-  await page.keyboard.press('Enter');
-  await expect(panel).toHaveCount(0);
-  await expect(canvas).toBeFocused();
-  await expect(head).not.toBeFocused();
-  expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
-  // once the hold has ended, the canvas is too short to show the head: it was in the band the hold gives up
-  await finishMotion(page);
-  await expect.poll(() => canvasHeight(page), { message: 'the hold has ended' }).toBeLessThan(open);
-  const settled = await canvas.boundingBox();
-  if (settled === null) throw new Error('no canvas');
-  expect(dragged.y, 'the premise: the head below the canvas the hold ends at').toBeGreaterThanOrEqual(settled.y + settled.height);
 });
