@@ -5,7 +5,7 @@ import { FlowLeftOverShape } from '../../src/client/views/FlowView.tsx';
 import {
   flowGraph, toElk, fromElk, rowCentre,
   PORT_SIZE, LEFT_OVER_GAP, LANE_STEP, LEFT_OVER_TITLE, LEFT_OVER_PAD, LEFT_OVER_SPACING,
-  APPROACH, LEFT_OVER_WORDS, TITLE_CHAR_WIDTH, leftOverTitleWidth, type FlowLayout, type FlowNode,
+  APPROACH, LEFT_OVER_WORDS, TITLE_CHAR_WIDTH, leftOverTitleWidth, FlowNodeKind, type FlowLayout, type FlowNode,
 } from '../../src/client/views/flow-model.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Product, LeafClass } from '../../src/shared/types/pack.ts';
@@ -127,7 +127,7 @@ describe('flow left-over band (RUK-740)', () => {
   it('the sink is at least LEFT_OVER_GAP below every other box, and leftOver frame contains it', async () => {
     const laid = await layOut(board);
     const sink = nodeOf(laid, 'sink:t:copper_dust@0@saw');
-    const nonSinks = laid.nodes.filter((n) => n.kind !== 'sink');
+    const nonSinks = laid.nodes.filter((n) => n.kind !== FlowNodeKind.Sink);
     const maxBottom = Math.max(...nonSinks.map((n) => n.y + n.height));
     expect(sink.y).toBeGreaterThanOrEqual(maxBottom + LEFT_OVER_GAP);
     expect(laid.leftOver).toBeDefined();
@@ -157,7 +157,7 @@ describe('flow left-over band (RUK-740)', () => {
     const edge = laid.edges.find((e) => e.to === sink.id)!;
     const start = edge.points[0]!;
     const dropX = edge.points[1]![0];
-    const nonSinks = laid.nodes.filter((n) => n.kind !== 'sink');
+    const nonSinks = laid.nodes.filter((n) => n.kind !== FlowNodeKind.Sink);
     for (const b of nonSinks) {
       const crosses = dropX >= b.x && dropX <= b.x + b.width && b.y + b.height > start[1] && b.y < Math.max(...nonSinks.map((n) => n.y + n.height));
       expect(crosses, `dropX=${dropX} crosses box ${b.id}`).toBe(false);
@@ -166,7 +166,7 @@ describe('flow left-over band (RUK-740)', () => {
 
   it('two sinks sit in one row, left to right in start order, LEFT_OVER_SPACING apart, on different lanes', async () => {
     const laid = await layOut(cells);
-    const sinks = laid.nodes.filter((n) => n.kind === 'sink');
+    const sinks = laid.nodes.filter((n) => n.kind === FlowNodeKind.Sink);
     expect(sinks).toHaveLength(2);
     const brineSink = sinks.find((s) => s.id.includes('naoh'))!;
     const waterSink = sinks.find((s) => s.id.includes('oxygen'))!;
@@ -193,7 +193,7 @@ describe('flow left-over band (RUK-740)', () => {
     expect(laid.leftOver).toBeUndefined();
     // Verify by comparing to fromElk directly (which is what placeLeftOvers returns for no-sink):
     // The nodes, edges, width and height match the raw ELK output since placeLeftOvers is a pass-through.
-    expect(laid.nodes.every((n) => n.kind !== 'sink')).toBe(true);
+    expect(laid.nodes.every((n) => n.kind !== FlowNodeKind.Sink)).toBe(true);
   });
 
   it('a sink inside an open supporting line has no group and the group does not list it', async () => {

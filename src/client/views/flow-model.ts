@@ -24,8 +24,15 @@ import { toggleList } from './settings-model.ts';
 
 export { formatNumber, formatRate };
 
-/** What a box stands for (fix spec §6.2). */
-export type FlowNodeKind = 'step' | 'import' | 'missing' | 'sink' | 'out' | 'line';
+/** What a box stands for (fix spec §6.2). Numbers are fixed: never renumber or reuse one; a new kind takes the next number. */
+export const FlowNodeKind = { Step: 0, Import: 1, Missing: 2, Sink: 3, Out: 4, Line: 5 } as const;
+export type FlowNodeKind = (typeof FlowNodeKind)[keyof typeof FlowNodeKind];
+
+/** The text a kind becomes in the page: the box's CSS class and its `data-kind` attribute (styles.css and the browser tests read these). */
+export const FLOW_KIND_CLASS: Readonly<Record<FlowNodeKind, string>> = {
+  [FlowNodeKind.Step]: 'step', [FlowNodeKind.Import]: 'import', [FlowNodeKind.Missing]: 'missing',
+  [FlowNodeKind.Sink]: 'sink', [FlowNodeKind.Out]: 'out', [FlowNodeKind.Line]: 'line',
+};
 
 /**
  * One good on the edge of a box (fix spec §6.2): taken on the left (`in`) or made on the right (`out`), its ELK port
@@ -429,7 +436,7 @@ export function rowCentre(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoi
 
 /** Whether a box draws an icon beside each row: steps and collapsed lines; a stub's title already shows its one good. */
 export function rowHasIcon(node: Pick<FlowNode, 'kind'>): boolean {
-  return node.kind === 'step' || node.kind === 'line';
+  return node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Line;
 }
 
 /** A row's rate as its box writes it, with the share behind its issue. */
@@ -451,7 +458,7 @@ export function shortName(name: string): string {
 
 /** A box's title as its box writes it: a step's machine and a collapsed line's are kept whole, a stub's material name is cut to 14. */
 export function boxTitle(node: Pick<FlowNode, 'kind' | 'title'>): string {
-  return node.kind === 'step' || node.kind === 'line' ? node.title : shortName(node.title);
+  return node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Line ? node.title : shortName(node.title);
 }
 
 /**
@@ -486,7 +493,7 @@ function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
   const { machine } = node;
   const widths = [
     ...(machine === undefined
-      ? [2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(boxTitle(node), TITLE_CHAR_WIDTH)]
+      ? [2 * TEXT_LEFT + icon + (node.kind === FlowNodeKind.Line ? TOGGLE_SPACE : 0) + textWidth(boxTitle(node), TITLE_CHAR_WIDTH)]
       : readoutWidths(node.title, machine)),
     ...(machine === undefined ? node.lines : node.lines.slice(1)).map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
     ...(node.avoidBadge === undefined ? [] : [2 * TEXT_LEFT + textWidth(node.avoidBadge.text, TEXT_CHAR_WIDTH)]),
@@ -607,7 +614,7 @@ function stepRows(step: PlanStep, ctx: RowContext): FlowRow[] {
 }
 
 /** A stub on its way to becoming a box: what it is, its good, how much flows through it and where it sits. */
-interface Stub { kind: 'import' | 'missing' | 'sink'; key: StuffKey; perSecond: number; group?: string; leaf?: LeafClass; issue?: PlanIssueCode }
+interface Stub { kind: typeof FlowNodeKind.Import | typeof FlowNodeKind.Missing | typeof FlowNodeKind.Sink; key: StuffKey; perSecond: number; group?: string; leaf?: LeafClass; issue?: PlanIssueCode }
 
 /** An arrow before its words: its ends, its good and how much flows. */
 type Arrow = Omit<FlowEdge, 'name' | 'rate' | 'label' | 'title' | 'route'>;
@@ -680,7 +687,7 @@ function groupOf(ctx: GraphContext, stepId: string): string | undefined {
 function stepBox(ctx: GraphContext, step: PlanStep, unavoidable: readonly PlanWarning[] | undefined): Unsized {
   const key = step.mainOutput ?? null;
   const box: Unsized = {
-    id: step.id, kind: 'step', key, title: step.machine.name, lines: stepLines(step, ctx.nameOf), owned: ownedState(step), rows: stepRows(step, ctx),
+    id: step.id, kind: FlowNodeKind.Step, key, title: step.machine.name, lines: stepLines(step, ctx.nameOf), owned: ownedState(step), rows: stepRows(step, ctx),
     machine: machineReadout(step),
   };
   if (key !== null) box.keyName = ctx.nameOf(key);
@@ -727,13 +734,13 @@ function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrow
       const consumer = f.to === OUT ? OUT : boxOf(ctx, f.to);
       const id = importId(f.key, consumer);
       const leaf = leafOf.get(f.key);
-      addStub(id, { kind: 'import', key: f.key, perSecond: f.perSecond, ...(leaf === undefined ? {} : { leaf }) },
+      addStub(id, { kind: FlowNodeKind.Import, key: f.key, perSecond: f.perSecond, ...(leaf === undefined ? {} : { leaf }) },
         f.to === OUT || importsInOneColumn ? undefined : groupOf(ctx, f.to));
       addArrow(id, consumer, f.key, f.perSecond);
     } else if (f.to === SINK) {
       const producer = boxOf(ctx, f.from);
       const id = sinkId(f.key, producer);
-      addStub(id, { kind: 'sink', key: f.key, perSecond: f.perSecond }, undefined);
+      addStub(id, { kind: FlowNodeKind.Sink, key: f.key, perSecond: f.perSecond }, undefined);
       addArrow(producer, id, f.key, f.perSecond);
     } else {
       const from = boxOf(ctx, f.from);
@@ -746,7 +753,7 @@ function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrow
     const consumer = boxOf(ctx, issue.stepId);
     const id = `missing:${issue.key}@${consumer}`;
     const missing = Math.max(0, (issue.needPerSecond ?? 0) - (issue.gotPerSecond ?? 0));
-    addStub(id, { kind: 'missing', key: issue.key, perSecond: missing, issue: issue.code }, groupOf(ctx, issue.stepId));
+    addStub(id, { kind: FlowNodeKind.Missing, key: issue.key, perSecond: missing, issue: issue.code }, groupOf(ctx, issue.stepId));
     addArrow(id, consumer, issue.key, missing);
   }
   return { arrows, stubs };
@@ -759,14 +766,14 @@ function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrow
 function stubBox(ctx: GraphContext, id: string, stub: Stub): Unsized {
   const base = { key: stub.key, rate: ctx.rateOf(stub.perSecond, stub.key), perSecond: stub.perSecond };
   let row: FlowRow;
-  if (stub.kind === 'import') {
+  if (stub.kind === FlowNodeKind.Import) {
     row = { ...base, side: 'out', port: portId(id, 'out', stub.key), name: ctx.imports.get(stub.key) ?? 'import' };
     const bought = ctx.boughtShare.get(stub.key);
     if (bought !== undefined) {
       row.issue = 'bought-and-made';
       row.share = formatPercent(bought);
     }
-  } else if (stub.kind === 'missing') {
+  } else if (stub.kind === FlowNodeKind.Missing) {
     const orphan = stub.issue === 'orphan-input';
     row = { ...base, side: 'out', port: portId(id, 'out', stub.key), name: orphan ? 'no source in the plan' : 'short', issue: orphan ? 'orphan-input' : 'short-input' };
   } else {
@@ -806,7 +813,7 @@ function lineBox(ctx: GraphContext, key: StuffKey, arrows: ReadonlyMap<string, A
   let machines = 0;
   for (const step of line.steps) machines += step.count;
   return {
-    id, kind: 'line', key, title: `${line.name} line`, owned: 'none', keyName: ctx.nameOf(key),
+    id, kind: FlowNodeKind.Line, key, title: `${line.name} line`, owned: 'none', keyName: ctx.nameOf(key),
     lines: [`${line.steps.length === 1 ? '1 step' : `${line.steps.length} steps`} · ${machinesText(machines)}`],
     rows: [...ranked(ins).map(([good, perSecond]) => row('in', good, perSecond)), ...ranked(outs).map(([good, perSecond]) => row('out', good, perSecond))],
   };
@@ -820,7 +827,7 @@ function targetBox(ctx: GraphContext): Unsized | undefined {
   let perSecond = 0;
   for (const f of plan.flows) if (f.to === OUT && f.key === target) perSecond += f.perSecond;
   return {
-    id: OUT, kind: 'out', key: target, title: ctx.nameOf(target), lines: [], owned: 'none', keyName: ctx.nameOf(target),
+    id: OUT, kind: FlowNodeKind.Out, key: target, title: ctx.nameOf(target), lines: [], owned: 'none', keyName: ctx.nameOf(target),
     rows: [{ side: 'in', key: target, port: portId(OUT, 'in', target), name: 'target', rate: ctx.rateOf(perSecond, target), perSecond }],
   };
 }
@@ -840,17 +847,17 @@ function finishArrows(ctx: GraphContext, arrows: Iterable<Arrow>, nodes: readonl
   const endWords = (id: string): string => {
     const node = byId.get(id);
     switch (node?.kind) {
-      case 'step': {
+      case FlowNodeKind.Step: {
         const main = ctx.stepById.get(id)?.mainOutput;
         return main === undefined ? node.title : `${node.title} (${ctx.nameOf(main)})`;
       }
-      case 'import': {
+      case FlowNodeKind.Import: {
         const words = ctx.imports.get(node.key ?? '');
         return words === undefined ? 'import' : `import (${words})`;
       }
-      case 'missing': return node.rows[0]?.name ?? 'no source in the plan';
-      case 'sink': return 'left over';
-      case 'out': return 'the target';
+      case FlowNodeKind.Missing: return node.rows[0]?.name ?? 'no source in the plan';
+      case FlowNodeKind.Sink: return 'left over';
+      case FlowNodeKind.Out: return 'the target';
       default: return node?.title ?? id;
     }
   };
@@ -939,15 +946,15 @@ export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGr
   for (const e of g.edges) for (const port of [e.fromPort, e.toPort]) arrows.set(port, (arrows.get(port) ?? 0) + 1);
   const groups = g.groups ?? [];
   const groupIds = new Set(groups.map((grp) => grp.id));
-  const sinkIds = new Set(g.nodes.filter((n) => n.kind === 'sink').map((n) => n.id));
+  const sinkIds = new Set(g.nodes.filter((n) => n.kind === FlowNodeKind.Sink).map((n) => n.id));
   const inside = new Map<string, ElkNode[]>();
   const top: ElkNode[] = [];
   for (const n of g.nodes) {
-    if (n.kind === 'sink') continue;
+    if (n.kind === FlowNodeKind.Sink) continue;
     const layoutOptions: Record<string, string> = { 'elk.portConstraints': 'FIXED_POS' };
-    if (n.kind === 'step' || n.kind === 'line') layoutOptions['elk.alignment'] = 'LEFT';
-    if (n.kind === 'import' && g.importsInOneColumn === true) layoutOptions[LAYER_CONSTRAINT] = 'FIRST';
-    if (n.kind === 'out') layoutOptions[LAYER_CONSTRAINT] = 'LAST';
+    if (n.kind === FlowNodeKind.Step || n.kind === FlowNodeKind.Line) layoutOptions['elk.alignment'] = 'LEFT';
+    if (n.kind === FlowNodeKind.Import && g.importsInOneColumn === true) layoutOptions[LAYER_CONSTRAINT] = 'FIRST';
+    if (n.kind === FlowNodeKind.Out) layoutOptions[LAYER_CONSTRAINT] = 'LAST';
     const ports = n.rows.map((r, i): ElkPort => ({
       id: r.port, width: PORT_SIZE, height: PORT_SIZE, x: r.side === 'in' ? -PORT_SIZE : n.width, y: rowCentre(n, i) - PORT_SIZE / 2,
       layoutOptions: { 'elk.port.side': r.side === 'in' ? 'WEST' : 'EAST' },
@@ -1038,10 +1045,10 @@ export function fromElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: Flow
  * Returns `layout` unchanged when there are no sinks.
  */
 function placeLeftOvers(layout: FlowLayout): FlowLayout {
-  const sinks = layout.nodes.filter((n) => n.kind === 'sink');
+  const sinks = layout.nodes.filter((n) => n.kind === FlowNodeKind.Sink);
   if (sinks.length === 0) return layout;
 
-  const rest = layout.nodes.filter((n) => n.kind !== 'sink');
+  const rest = layout.nodes.filter((n) => n.kind !== FlowNodeKind.Sink);
   const bottom = Math.max(
     0,
     ...rest.map((n) => n.y + n.height),
@@ -1198,7 +1205,7 @@ export function focusSets(graph: { nodes: FlowNode[]; edges: FlowEdge[] }, focus
 }
 
 /** Which boxes count as making a good first: steps (and collapsed lines), then imports, then the stubs of what is missing. */
-const PRODUCER_RANK: Readonly<Record<FlowNodeKind, number>> = { step: 0, line: 0, import: 1, missing: 2, out: 3, sink: 3 };
+const PRODUCER_RANK: Readonly<Record<FlowNodeKind, number>> = { [FlowNodeKind.Step]: 0, [FlowNodeKind.Line]: 0, [FlowNodeKind.Import]: 1, [FlowNodeKind.Missing]: 2, [FlowNodeKind.Out]: 3, [FlowNodeKind.Sink]: 3 };
 
 /**
  * The box Find and the Show buttons centre for a good (fix spec §6.2): the step that makes most of it, else its import

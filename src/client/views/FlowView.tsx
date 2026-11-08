@@ -49,7 +49,8 @@ import {
   NODE_TITLE_HEIGHT, PORT_SIZE, POWER_GAP, READOUT_LEFT, ROW_HEIGHT, SLOT_TOP, STEP_HEAD_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
   TOGGLE_SPACE, DIM_OPACITY, IO_HEAD_HEIGHT, boxTitle, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
   fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowLabel, rowLines, rowRate, rowsTop, toElk, useOnlyPatch,
-  type Box, type FlowLayout, type FlowNode, type FlowNodeKind, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
+  FLOW_KIND_CLASS, FlowNodeKind,
+  type Box, type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
 } from './flow-model.ts';
 import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
 import { pointIn } from './pan-zoom.ts';
@@ -146,7 +147,7 @@ function fromPan(p: PanView): View {
 
 /** The view a new diagram opens with (fix spec §6.2): zoom 0.9, centred on the target as far as the diagram reaches. */
 function initialView(layout: FlowLayout, canvas: { width: number; height: number }): View {
-  const out = layout.nodes.find((n) => n.kind === 'out');
+  const out = layout.nodes.find((n) => n.kind === FlowNodeKind.Out);
   const centred = out === undefined ? { zoom: INITIAL_ZOOM, x: PAD, y: PAD } : centreOn(out, { zoom: INITIAL_ZOOM, x: 0, y: 0 }, canvas);
   return {
     zoom: INITIAL_ZOOM,
@@ -163,7 +164,7 @@ function focusText(f: Focus): string {
 
 /** What hovering or clicking a box (not one of its rows) lights: a step or a line with what it connects, a stub its good. */
 function boxFocus(node: FlowNode): Focus {
-  if (node.kind === 'step' || node.kind === 'line' || node.key === null) return { kind: 'node', id: node.id };
+  if (node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Line || node.key === null) return { kind: 'node', id: node.id };
   return { kind: 'item', key: node.key };
 }
 
@@ -296,8 +297,8 @@ function MachineReadoutShape(props: { node: PlacedNode; machine: MachineReadout 
 export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; sets?: FocusSets | null }): ReactElement {
   const { node, selected = false } = props;
   const sets = props.sets ?? null;
-  const classes = ['flow-node', node.kind];
-  if (node.kind === 'step') classes.push(OWNED_CLASS[node.owned]);
+  const classes = ['flow-node', FLOW_KIND_CLASS[node.kind]];
+  if (node.kind === FlowNodeKind.Step) classes.push(OWNED_CLASS[node.owned]);
   if (node.leaf !== undefined) classes.push(`leaf-${node.leaf}`);
   if (sets !== null) {
     classes.push(sets.nodes.has(node.id) ? 'hl' : 'dim');
@@ -310,20 +311,20 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
   const icon = machine === undefined ? node.key : null;
   const badge = node.avoidBadge;
   const head = rowsTop(node);
-  const toggle = node.kind === 'line' ? TOGGLE_SPACE : 0;
+  const toggle = node.kind === FlowNodeKind.Line ? TOGGLE_SPACE : 0;
   const titleX = machine !== undefined ? READOUT_LEFT : TEXT_LEFT + (icon !== null ? ICON_SPACE : 0);
   // the lines drawn below the title, or below a readout's band, whose chips and band say the first one
   const linesTop = machine === undefined ? NODE_TITLE_HEIGHT : STEP_HEAD_HEIGHT + BUSY_BAND;
   const shown = machine === undefined ? node.lines : node.lines.slice(1);
   const described = [node.title, ...node.lines, ...(badge?.warnings ?? [])];
   const tip = tipText([...described, ...node.rows.map((r) => rowWords(node, r))]);
-  const opens = node.kind === 'step' || node.kind === 'import';
+  const opens = node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Import;
   return (
     <g
       className={classes.join(' ')}
       data-node-id={node.id}
-      {...(node.kind === 'step' ? { 'data-step-id': node.id } : {})}
-      data-kind={node.kind}
+      {...(node.kind === FlowNodeKind.Step ? { 'data-step-id': node.id } : {})}
+      data-kind={FLOW_KIND_CLASS[node.kind]}
       transform={`translate(${node.x} ${node.y})`}
       aria-label={tip}
       data-tip={tip}
@@ -353,7 +354,7 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
           )}
         </svg>
       </g>
-      {node.kind === 'line' && node.key !== null && (
+      {node.kind === FlowNodeKind.Line && node.key !== null && (
         <LineToggle lineKey={node.key} title={node.title} open={false} x={node.width - TOGGLE_SIZE - TOGGLE_MARGIN} y={ICON_TOP - 1} />
       )}
       {/* A two-column box's "Input | Output" header over its columns and the faint line between them (RUK-740); the rows' names say it already. */}
@@ -505,7 +506,7 @@ export function FlowGhostShape(props: { ghost: Ghost; onGone(ghost: Ghost): void
       running.cancel();
     };
   }, [ghost]);   // a new ghost of the same box fades again from the start; `onGone` takes away the ghost it is given, whichever render made it
-  const classes = ['flow-ghost', ghost.kind === 'step' ? OWNED_CLASS[ghost.owned] : ghost.kind, ...(ghost.leaf === undefined ? [] : [`leaf-${ghost.leaf}`])];
+  const classes = ['flow-ghost', ghost.kind === FlowNodeKind.Step ? OWNED_CLASS[ghost.owned] : FLOW_KIND_CLASS[ghost.kind], ...(ghost.leaf === undefined ? [] : [`leaf-${ghost.leaf}`])];
   return (
     <g ref={ref} className={classes.join(' ')} aria-hidden="true" transform={`translate(${ghost.x} ${ghost.y})`}>
       <rect className="flow-ghost-box" width={ghost.width} height={ghost.height} />
@@ -768,7 +769,7 @@ function FlowCanvas(props: {
   const sets = useMemo(() => focusSets(layout, focus), [layout, focus]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
   /** The arrows from a stub of what is missing: nothing moves in them, and no good rides them. */
-  const missingIds = useMemo(() => new Set(layout.edges.filter((e) => byId.get(e.from)?.kind === 'missing').map((e) => e.id)), [layout, byId]);
+  const missingIds = useMemo(() => new Set(layout.edges.filter((e) => byId.get(e.from)?.kind === FlowNodeKind.Missing).map((e) => e.id)), [layout, byId]);
   /** The arrows a good rides (Phase 2 spec §15.1): past 200 arrows the lit ones only, and never more than `RIDER_LIMIT`. */
   const riders = useMemo(() => riderEdges(layout.edges, sets?.edges ?? null, missingIds), [layout, sets, missingIds]);
 
@@ -1119,7 +1120,7 @@ function FlowCanvas(props: {
         <g className="flow-pan" ref={panRef} transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
           {layout.leftOver !== undefined && (
             <FlowLeftOverShape
-              box={layout.leftOver} dim={sets !== null && !layout.nodes.some((n) => n.kind === 'sink' && sets.nodes.has(n.id))}
+              box={layout.leftOver} dim={sets !== null && !layout.nodes.some((n) => n.kind === FlowNodeKind.Sink && sets.nodes.has(n.id))}
             />
           )}
           {layout.groups.map((group) => (
@@ -1359,8 +1360,8 @@ function FlowDiagram(props: {
     selectedId = selected.nodeId;
   }
   const open = (node: PlacedNode): void => {
-    if (node.kind === 'step') setSelected({ kind: 'step', id: node.id });
-    else if (node.kind === 'import' && node.key !== null) setSelected({ kind: 'import', key: node.key, nodeId: node.id });
+    if (node.kind === FlowNodeKind.Step) setSelected({ kind: 'step', id: node.id });
+    else if (node.kind === FlowNodeKind.Import && node.key !== null) setSelected({ kind: 'import', key: node.key, nodeId: node.id });
   };
   const toggleLine = (key: StuffKey): void => {
     setLineToggles((toggles) => new Map(toggles).set(key, collapsedLines(plan, toggles).has(key)));

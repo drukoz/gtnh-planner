@@ -10,6 +10,7 @@ import {
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
   CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
   layoutChange, glidable, GLIDE_LIMIT, type LayoutChange, type PlacedPicture,
+  FlowNodeKind, FLOW_KIND_CLASS,
 } from '../../src/client/views/flow-model.ts';
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
@@ -73,7 +74,7 @@ describe('flow model', () => {
   it('builds nodes and edges from the plan', () => {
     const g = flowGraph(plan, 'min');
     expect(g.nodes.map((n) => [n.id, n.kind, n.title, n.owned])).toEqual([
-      ['circuit-lv', 'step', 'Basic Assembler', 'none'], ['import:t:redstone@0@circuit-lv', 'import', 'Redstone', 'none'], ['out', 'out', 'Basic Circuit', 'none']]);
+      ['circuit-lv', FlowNodeKind.Step, 'Basic Assembler', 'none'], ['import:t:redstone@0@circuit-lv', FlowNodeKind.Import, 'Redstone', 'none'], ['out', FlowNodeKind.Out, 'Basic Circuit', 'none']]);
     expect(g.nodes[0]?.lines).toEqual(['LV · 16 EU/t · 5 machines · 100% busy']);
     expect(g.edges.map((e) => [e.from, e.to, e.fromPort, e.toPort, e.label])).toEqual([
       ['circuit-lv', 'out', 'circuit-lv|out|t:circuit@0', 'out|in|t:circuit@0', undefined],
@@ -281,7 +282,7 @@ describe('flow diagram: boxes, rows and stubs (fix spec §6.2)', () => {
     expect(nodeOf(sg, 'hammer').lines).toEqual(['by hand · 3% busy']);
   });
   it('puts one import stub beside each step that takes a bought good, called by its kind of import', () => {
-    expect(g.nodes.filter((n) => n.kind === 'import').map((n) => [n.id, n.title, n.leaf, n.rows.map((r) => [r.side, r.name, r.rate])])).toEqual([
+    expect(g.nodes.filter((n) => n.kind === FlowNodeKind.Import).map((n) => [n.id, n.title, n.leaf, n.rows.map((r) => [r.side, r.name, r.rate])])).toEqual([
       ['import:fluid:molten.copper@solid', 'Molten Copper', 'derived', [['out', LEAF_WORD.derived, '141 L/h']]],
       ['import:t:copper_block@0@saw', 'Block of Copper', 'direct', [['out', LEAF_WORD.direct, '0.02/h']]],
       ['import:t:copper_ingot@0@mill', 'Copper Ingot', 'derived', [['out', LEAF_WORD.derived, '1/h']]],
@@ -291,12 +292,12 @@ describe('flow diagram: boxes, rows and stubs (fix spec §6.2)', () => {
       steps: [mv({ id: 'a', inputs: [per('t:x@0', 1)] }), mv({ id: 'b', inputs: [per('t:x@0', 1)] })],
       flows: [flow('raw', 'a', 't:x@0', 1 / H), flow('raw', 'b', 't:x@0', 1 / H)], rawInputs: [raw('t:x@0', 2 / H, 'natural')],
     });
-    expect(flowGraph(twice, 'hour').nodes.filter((n) => n.kind === 'import').map((n) => [n.id, n.rows[0]?.name])).toEqual([
+    expect(flowGraph(twice, 'hour').nodes.filter((n) => n.kind === FlowNodeKind.Import).map((n) => [n.id, n.rows[0]?.name])).toEqual([
       ['import:t:x@0@a', 'gathered'], ['import:t:x@0@b', 'gathered']]);
   });
   it('gives an input nothing supplies, or supplies short, a stub of its own into that input', () => {
     const missing = nodeOf(g, 'missing:fluid:pva@mixer');
-    expect(missing.kind).toBe('missing');
+    expect(missing.kind).toBe(FlowNodeKind.Missing);
     expect(missing.rows).toHaveLength(1);
     expect(missing.rows[0]).toMatchObject({ side: 'out', name: 'no source in the plan', rate: '0.223 L/h', issue: 'orphan-input' });
     expect(g.edges.filter((e) => e.from === 'missing:fluid:pva@mixer').map((e) => e.toPort)).toEqual(['mixer|in|fluid:pva']);
@@ -305,13 +306,13 @@ describe('flow diagram: boxes, rows and stubs (fix spec §6.2)', () => {
     const short = flowGraph({ ...board, flows: board.flows.map((f) => (f.key === 'fluid:glue' ? { ...f, perSecond: f.perSecond / 2 } : f)) }, 'hour');
     expect(nodeOf(short, 'missing:fluid:glue@asm').rows[0]).toMatchObject({ name: 'short', rate: '0.279 L/h', issue: 'short-input' });
     expect(nodeOf(short, 'asm').rows.find((r) => r.key === 'fluid:glue')).toMatchObject({ issue: 'short-input', share: '50%' });
-    expect(g.nodes.filter((n) => n.kind === 'missing').map((n) => n.id)).toEqual(['missing:fluid:pva@mixer']);
+    expect(g.nodes.filter((n) => n.kind === FlowNodeKind.Missing).map((n) => n.id)).toEqual(['missing:fluid:pva@mixer']);
   });
   it('gives each good left over a sink stub beside the step that makes it', () => {
     const sink = nodeOf(g, 'sink:t:copper_dust@0@saw');
     expect(sink.rows.map((r) => [r.side, r.name])).toEqual([['in', 'left over']]);
     expect(g.edges.filter((e) => e.to === sink.id).map((e) => e.fromPort)).toEqual(['saw|out|t:copper_dust@0']);
-    expect(g.nodes.filter((n) => n.kind === 'sink').map((n) => n.id)).toEqual(['sink:t:copper_dust@0@saw']);
+    expect(g.nodes.filter((n) => n.kind === FlowNodeKind.Sink).map((n) => n.id)).toEqual(['sink:t:copper_dust@0@saw']);
   });
   it('labels an arrow with its rate only where a port has two or more, and titles every arrow', () => {
     expect(g.edges.filter((e) => e.label !== undefined).map((e) => [e.from, e.toPort, e.label])).toEqual([
@@ -374,7 +375,7 @@ describe('flow diagram: the ELK graph (web-stack §7, fix spec §6.2)', () => {
 
     const closed = flowGraph(red, 'hour', { collapsedLines: new Set([RED]) });
     const box = nodeOf(closed, 'line:fluid:molten.redalloy');
-    expect(box).toMatchObject({ kind: 'line', key: RED, title: 'Red Alloy line' });
+    expect(box).toMatchObject({ kind: FlowNodeKind.Line, key: RED, title: 'Red Alloy line' });
     expect(box.rows.map((r) => [r.side, r.name, r.main === true])).toEqual([
       ['in', 'Copper Ingot', false], ['in', 'Redstone', false], ['out', 'Molten Red Alloy', true]]);
     expect(closed.nodes.map((n) => n.id)).not.toContain('smelt');
@@ -398,7 +399,7 @@ describe('flow diagram: the ELK graph (web-stack §7, fix spec §6.2)', () => {
   it('lays every import right before its step and starts every arrow on the row of its good (ELK in Node)', async () => {
     const check = (laid: FlowLayout): void => {
       const at = new Map(laid.nodes.map((n) => [n.id, n]));
-      for (const stub of laid.nodes.filter((n) => n.kind === 'import')) {
+      for (const stub of laid.nodes.filter((n) => n.kind === FlowNodeKind.Import)) {
         const consumer = at.get(laid.edges.find((e) => e.from === stub.id)!.to)!;
         const gap = consumer.x - (stub.x + stub.width);
         expect(gap, stub.id).toBeGreaterThanOrEqual(0);
@@ -696,7 +697,7 @@ describe('flow diagram: machine readouts', () => {
     // only a step has a readout: a stub, the target and a collapsed line keep their heads
     const closed = flowGraph(red, 'hour', { collapsedLines: new Set([RED]) });
     expect(closed.nodes.filter((n) => n.machine !== undefined).map((n) => n.id)).toEqual(['wire']);
-    expect(g.nodes.filter((n) => n.machine === undefined).map((n) => n.kind).sort()).toEqual(['import', 'import', 'import', 'missing', 'out', 'sink']);
+    expect(g.nodes.filter((n) => n.machine === undefined).map((n) => n.kind).sort()).toEqual([FlowNodeKind.Import, FlowNodeKind.Import, FlowNodeKind.Import, FlowNodeKind.Missing, FlowNodeKind.Sink, FlowNodeKind.Out]);
   });
   it('draws a readout box\'s machine, chips and busy bar in its head', () => {
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph(plan, 'min'), 'circuit-lv'))} /></svg>);
@@ -1012,22 +1013,22 @@ describe('a removed box\'s ghost', () => {
     <svg><FlowGhostShape ghost={{ id: 'wire', kind, owned, ...(leaf === undefined ? {} : { leaf }), x: 10, y: 20.5, width: 190, height: 80, opacity: 0.18 }} onGone={() => {}} /></svg>,
   );
   it('draws a plain copy of the box, where it was, in its kind\'s colours', () => {
-    expect(ghost('step')).toBe('<svg><g class="flow-ghost new" aria-hidden="true" transform="translate(10 20.5)"><rect class="flow-ghost-box" width="190" height="80"></rect></g></svg>');
+    expect(ghost(FlowNodeKind.Step)).toBe('<svg><g class="flow-ghost new" aria-hidden="true" transform="translate(10 20.5)"><rect class="flow-ghost-box" width="190" height="80"></rect></g></svg>');
     // fix round 1 (ledger ruling P2-R118): a partly owned step's ghost has its box's half-and-half fill, through a class of its own
-    expect(['all', 'some', 'none'].map((owned) => /class="flow-ghost ([\w-]+)"/.exec(ghost('step', owned as FlowNode['owned']))?.[1])).toEqual(['owned', 'partly-owned', 'new']);
-    for (const kind of ['import', 'missing', 'sink', 'out', 'line'] as const) expect(ghost(kind), kind).toContain(`<g class="flow-ghost ${kind}" aria-hidden="true"`);
+    expect(['all', 'some', 'none'].map((owned) => /class="flow-ghost ([\w-]+)"/.exec(ghost(FlowNodeKind.Step, owned as FlowNode['owned']))?.[1])).toEqual(['owned', 'partly-owned', 'new']);
+    for (const kind of [FlowNodeKind.Import, FlowNodeKind.Missing, FlowNodeKind.Sink, FlowNodeKind.Out, FlowNodeKind.Line]) expect(ghost(kind), FLOW_KIND_CLASS[kind]).toContain(`<g class="flow-ghost ${FLOW_KIND_CLASS[kind]}" aria-hidden="true"`);
     // and an import's ghost its kind of import, which dashes a free one's edge and reddens an unreachable one's, as the box's class does
-    for (const leaf of ['free', 'unavailable', 'direct'] as const) expect(ghost('import', 'none', leaf), leaf).toContain(`<g class="flow-ghost import leaf-${leaf}" aria-hidden="true"`);
+    for (const leaf of ['free', 'unavailable', 'direct'] as const) expect(ghost(FlowNodeKind.Import, 'none', leaf), leaf).toContain(`<g class="flow-ghost import leaf-${leaf}" aria-hidden="true"`);
   });
   it('carries nothing a box carries for the pointer, the focus, the tips or the tests', () => {
-    for (const kind of ['step', 'import', 'missing', 'sink', 'out', 'line'] as const) {
+    for (const kind of [FlowNodeKind.Step, FlowNodeKind.Import, FlowNodeKind.Missing, FlowNodeKind.Sink, FlowNodeKind.Out, FlowNodeKind.Line]) {
       const html = ghost(kind, 'some');
       for (const attr of ['data-node-id', 'data-step-id', 'data-kind', 'data-port', 'data-key', 'data-tip', 'role', 'tabindex', 'aria-label']) {
-        expect(html, `${kind}: ${attr}`).not.toContain(`${attr}=`);
+        expect(html, `${FLOW_KIND_CLASS[kind]}: ${attr}`).not.toContain(`${attr}=`);
       }
-      expect(html, kind).not.toMatch(/\b(hl|dim)\b/);
-      expect(html, `${kind}: its opacity is its fade's`).not.toContain('opacity');
-      expect(html, kind).not.toMatch(/flow-port|flow-node-box|flow-node\b/);
+      expect(html, FLOW_KIND_CLASS[kind]).not.toMatch(/\b(hl|dim)\b/);
+      expect(html, `${FLOW_KIND_CLASS[kind]}: its opacity is its fade's`).not.toContain('opacity');
+      expect(html, FLOW_KIND_CLASS[kind]).not.toMatch(/flow-port|flow-node-box|flow-node\b/);
     }
   });
 });
@@ -1071,7 +1072,7 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
     expect(boxTitle(nodeOf(g, 'mill'))).toBe('Advanced Wiremill');          // a step's machine name is kept whole, never cut
     expect(boxTitle(nodeOf(g, 'import:t:copper_ingot@0@mill'))).toBe('Copper Ingot');   // a stub's material title, short enough to stay whole
     const block = nodeOf(g, 'import:t:copper_block@0@saw');                // a 15-character good's import stub: its title is a material, cut to 14
-    expect(block.kind).toBe('import'); expect(boxTitle(block)).toBe('Block of Copp…'); expect(boxTitle(block).length).toBe(MAX_NAME_CHARS);
+    expect(block.kind).toBe(FlowNodeKind.Import); expect(boxTitle(block)).toBe('Block of Copp…'); expect(boxTitle(block).length).toBe(MAX_NAME_CHARS);
     const mill = nodeOf(g, 'mill');
     expect(mill.rows.map((r) => rowLabel(mill, r))).toEqual(['Copper Ingot', '1x Copper Wire']);   // 14 characters fit the column whole
     const smelt = nodeOf(flowGraph(red, 'hour'), 'smelt');
@@ -1097,7 +1098,7 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
   });
   it('lifts a step box\'s rows the row header over the same box read as a stub, and puts each row\'s port on its line', () => {
     const mill = nodeOf(g, 'mill');
-    expect(rowsTop(mill) - rowsTop({ ...mill, kind: 'import' })).toBe(IO_HEAD_HEIGHT);   // the header, and nothing else, is the step's extra height
+    expect(rowsTop(mill) - rowsTop({ ...mill, kind: FlowNodeKind.Import })).toBe(IO_HEAD_HEIGHT);   // the header, and nothing else, is the step's extra height
     const elk = toElk(g);
     const ports = elk.children?.find((c) => c.id === 'mill')?.ports;
     expect(ports?.map((p) => p.y)).toEqual(mill.rows.map((_, i) => rowCentre(mill, i) - PORT_SIZE / 2));
