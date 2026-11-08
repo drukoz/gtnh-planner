@@ -1,10 +1,10 @@
-// The flow diagram (spec §3.9, fix spec §6.2): base materials on the left, the target on the right, one box per recipe
-// step (its machine as a readout, Phase 2 spec §7: the machine's icon, its tier and count chips, its power and a band of
-// how busy it is) listing the goods it takes and makes as rows, an import stub beside each step that takes a bought good,
-// a red stub where nothing supplies an input, and supporting lines as groups that collapse. Green boxes are machines the
-// group owns, grey ones are new; a warning badge marks a step that uses a material
+// The flow diagram (spec §3.9, fix spec §6.2): base materials on the left, the target on the right, one card per recipe
+// step (RUK-740 round 2: its head of title, tier and count chips, power and lines, its machine column, its goods as tiles
+// in two columns, its power tile and its busy foot band) beside a small card for each bought good a step imports, for each
+// input nothing supplies and for each good left over (its caption over one tile), and supporting lines as groups that
+// collapse. Green boxes are machines the group owns, grey ones are new; a warning badge marks a step that uses a material
 // on the avoid list as nothing at the tier avoids it (spec §3.3). Each arrow is a pipe whose contents move from the output
-// toward the input, ending on the flange of its port (design spec §7); Pause pipes stops them (ruling R31). Hovering a row,
+// toward the input, ending on the flange of its port (design spec §7); Pause pipes stops them (ruling R31). Hovering a tile,
 // a box or an arrow lights what it connects (the flow focus); a click pins it, and a click on a box also opens its panel;
 // Esc or a click on the empty canvas clears it. Find item and the Show buttons light a good and centre the step that makes
 // it. ELK lays the diagram out in its own worker (web-stack §7); drag pans and the wheel zooms, at once, while Fit, the zoom buttons, a reveal,
@@ -38,18 +38,21 @@ import { tipText } from '../components/tooltip-model.ts';
 import {
   endHoverFlowFocus, getFlowFocus, hoverFlowFocus, revealFlowFocus, setFlowFocus, useFlowFocus, useFlowReveal, type Focus,
 } from '../state/flow-focus.ts';
-import { EASE_IN, EXIT_MS, GHOST_FALLBACK_MS, prefersReducedMotion } from '../state/motion.ts';
+import { EASE_IN, EXIT_MS, GHOST_FALLBACK_MS } from '../state/motion.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
 import { clearRecipeRequest, RecipeMode, requestRecipes, useRecipeRequest } from '../state/recipe-request.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { showToast } from '../state/toasts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
-  BUSY_BAND, BUSY_TRACK_HEIGHT, LEFT_OVER_PAD, LEFT_OVER_TITLE, LEFT_OVER_WORDS, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
-  NODE_TITLE_HEIGHT, PORT_SIZE, POWER_GAP, READOUT_LEFT, ROW_HEIGHT, SLOT_TOP, STEP_HEAD_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
-  TOGGLE_SPACE, DIM_OPACITY, IO_HEAD_HEIGHT, boxTitle, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
-  fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowLabel, rowLines, rowRate, rowsTop, toElk, useOnlyPatch,
-  FLOW_KIND_CLASS, FlowNodeKind,
+  CARD_CAPTION, CARD_HEAD, CARD_LINE, CARD_MACHINE_ICON, CARD_PAD, CARD_SLOT, STUB_HEAD, STUB_TILE, TILE_HEIGHT, TILE_ICON, TILE_ICON_INSET, TILE_TEXT, TILE_WIDTH,
+  cardGeometry, type Tile,
+} from './card-model.ts';
+import {
+  BUSY_TRACK_HEIGHT, LEFT_OVER_PAD, LEFT_OVER_TITLE, LEFT_OVER_WORDS, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, PORT_SIZE, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
+  TOGGLE_SPACE, DIM_OPACITY, boxTitle, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
+  fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowRate, toElk, useOnlyPatch,
+  FLOW_KIND_CLASS, FlowNodeKind, cardShape, rowLine, shortName, stubCaption,
   type Box, type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
 } from './flow-model.ts';
 import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
@@ -93,18 +96,8 @@ const FLANGE_HEIGHT = 10;
 /** The open/collapse button of a supporting line, and its room from the top right corner of its box. */
 const TOGGLE_SIZE = 20;
 const TOGGLE_MARGIN = 8;
-/** A box's title baseline. */
-const TITLE_BASELINE = 19;
-/** A machine readout's chip row (Phase 2 spec §7.3): its top, its chips' baseline, and the power's baseline beside them. */
-const CHIP_TOP = 25;
+/** A card head's chip row (Phase 2 spec §7.3): the baseline of its figures. */
 const CHIP_BASELINE = 12.5;
-const POWER_BASELINE = 37;
-/** The slot's inverted bevel, 2 px strips over its face: the dark top and left, then the light bottom and right (a Minecraft slot's). */
-const BEVEL = 2;
-const SLOT_RIGHT = TEXT_LEFT + MACHINE_SLOT;
-const SLOT_BOTTOM = SLOT_TOP + MACHINE_SLOT;
-const SLOT_LO = `M ${TEXT_LEFT} ${SLOT_TOP} H ${SLOT_RIGHT} V ${SLOT_TOP + BEVEL} H ${TEXT_LEFT + BEVEL} V ${SLOT_BOTTOM} H ${TEXT_LEFT} Z`;
-const SLOT_HI = `M ${SLOT_RIGHT} ${SLOT_TOP} V ${SLOT_BOTTOM} H ${TEXT_LEFT} V ${SLOT_BOTTOM - BEVEL} H ${SLOT_RIGHT - BEVEL} V ${SLOT_TOP} Z`;
 
 const OWNED_CLASS: Record<FlowNode['owned'], string> = { all: 'owned', some: 'partly-owned', none: 'new' };
 
@@ -189,110 +182,182 @@ function LineToggle(props: { lineKey: StuffKey; title: string; open: boolean; x:
   );
 }
 
+/** A card tile's text (RUK-740 round 2): its 12 px semibold rate and its 10 px name, about this wide a character, and their baselines in the tile. */
+const RATE_CHAR_WIDTH = 7;
+const NAME_CHAR_WIDTH = 5.6;
+const TILE_RATE_BASELINE = 15;
+const TILE_NAME_BASELINE = 28;
+/** A card's title baseline and its chips' top in the head band; the room a caption's baseline leaves above the first tile. */
+const CARD_TITLE_BASELINE = 20;
+const CARD_CHIP_TOP = 7;
+const CAPTION_RISE = 4;
+/** A stub card's caption (RUK-740 round 2): its baseline in the 18 px band, and its 10 px semibold width per character. */
+const STUB_CAPTION_BASELINE = 13;
+const CAPTION_CHAR_WIDTH = 5.8;
+/** The machine column: the count's and the owned words' baselines under the slot. */
+const COUNT_DROP = 18;
+const OWNED_DROP = 32;
+/** The power tile's lightning bolt, in a 24 px square. */
+const BOLT = 'M 14 1 L 4 14 H 11 L 9 23 L 20 9 H 13 Z';
+/** What the machine column says under the count: whether the group has the machines already. */
+const OWNED_WORDS: Record<FlowNode['owned'], string> = { all: 'owned', some: 'some owned', none: 'new' };
+/** How `machineReadout` ends the count of a pool's machines ("×1 shared"). */
+const SHARED_SUFFIX = ' shared';
+
 /**
- * One row of a box (fix spec §6.2): the good's icon (steps and lines), its name and rate, the port's flange on the box's
- * edge (last, so it is painted over the end of the pipe), lit or dimmed under a focus. A button: hovering lights the good, a
- * click or Enter pins it. A step's or line's row is drawn in its column, inputs left and outputs right, its name cut to 14
- * characters (RUK-740).
+ * One good of a card (RUK-740 round 2), a tile in its column: its icon, its rate on top and its name under it (cut to 14 letters), an input's
+ * from the left and an output's mirrored from the right. Like a row, it is a button with its port's flange at the box's edge; hovering it lights
+ * the good, a click or Enter pins it. In a stub card (`stub`) it is the box's one tile: it reads from the left and names the good, the box's title.
  */
-function FlowRowShape(props: { node: PlacedNode; row: FlowRow; index: number; sets: FocusSets | null }): ReactElement {
-  const { node, row, index, sets } = props;
-  const y = rowCentre(node, index);
-  const icon = rowHasIcon(node);
-  const left = row.side === 'in';
-  const classes = ['flow-row', row.side];
+function CardTileShape(props: { node: PlacedNode; row: FlowRow; index: number; tile: Tile; sets: FocusSets | null; stub?: boolean }): ReactElement {
+  const { node, row, index, tile, sets } = props;
+  // a stub's one tile reads from the left like an input's, whichever side its flange is on; it shows the good's name (the box's title)
+  const stub = props.stub === true;
+  const left = stub || row.side === 'in';
+  const flangeLeft = row.side === 'in';
+  const name = stub ? node.title : row.name;
+  const classes = ['flow-row', 'flow-tile', row.side];
   if (row.main === true) classes.push('main');
   if (row.issue !== undefined) classes.push(`issue-${row.issue}`);
   if (sets !== null) classes.push(sets.ports.has(row.port) ? 'hl' : 'dim');
   const rate = rowRate(row);
-  const textX = left ? TEXT_LEFT + (icon ? ICON_SPACE : 0) : node.width - TEXT_LEFT - (icon ? ICON_SPACE : 0);
-  // a two-column box's row is its own half: its hover, its focus ring and its clip stop at the middle (RUK-740)
-  const colX = icon && !left ? node.width / 2 : 0;
-  const colW = icon ? node.width / 2 : node.width;
-  const where = left ? 'comes from' : 'goes';
-  const label = icon ? `${row.side === 'in' ? 'takes' : 'makes'} ${row.name} ${rate}: show where it ${where}` : `${node.title}, ${row.name} ${rate}: show where it ${where}`;
+  const y = rowCentre(node, index);
+  const room = TILE_WIDTH - TILE_TEXT - TILE_ICON_INSET;
+  const textX = left ? TILE_TEXT : TILE_WIDTH - TILE_TEXT;
+  const anchor = left ? {} : { textAnchor: 'end' as const };
+  const where = flangeLeft ? 'comes from' : 'goes';
   return (
-    <g className={classes.join(' ')} data-port={row.port} data-key={row.key} role="button" tabIndex={0} aria-label={label}>
-      <rect className="flow-hit" x={colX} y={y - ROW_HEIGHT / 2} width={colW} height={ROW_HEIGHT} />
-      {icon && (
-        <foreignObject x={left ? TEXT_LEFT : node.width - TEXT_LEFT - ICON_SIZE} y={y - ICON_SIZE / 2} width={ICON_SIZE} height={ICON_SIZE}>
-          <ItemIcon itemKey={row.key} size={ICON_SIZE} name={row.name} tip={false} />
-        </foreignObject>
-      )}
-      {/* A nested svg clips a row wider than the box; the full text is in the box's tooltip and accessible name. */}
-      <svg x={colX} y={y - ROW_HEIGHT / 2} width={colW} height={ROW_HEIGHT}>
-        <text className="flow-row-text" x={textX - colX} y={ROW_HEIGHT / 2 + 4} {...(left ? {} : { textAnchor: 'end' })}>
-          {`${rowLabel(node, row)} `}
-          <tspan className="flow-row-rate">{rate}</tspan>
-        </text>
+    <g className={classes.join(' ')} data-port={row.port} data-key={row.key} role="button" tabIndex={0}
+      aria-label={stub ? `${node.title}, ${row.name} ${rate}: show where it ${where}` : `${flangeLeft ? 'takes' : 'makes'} ${row.name} ${rate}: show where it ${where}`}>
+      <rect className="flow-tile-box" x={tile.x} y={tile.y} width={TILE_WIDTH} height={TILE_HEIGHT} />
+      <foreignObject
+        x={left ? tile.x + TILE_ICON_INSET : tile.x + TILE_WIDTH - TILE_ICON_INSET - TILE_ICON} y={tile.y + TILE_ICON_INSET}
+        width={TILE_ICON} height={TILE_ICON}
+      >
+        <ItemIcon itemKey={row.key} size={TILE_ICON} name={name} tip={false} />
+      </foreignObject>
+      {/* A nested svg clips a text wider than the tile; the full text is in the box's tooltip and accessible name. */}
+      <svg x={tile.x} y={tile.y} width={TILE_WIDTH} height={TILE_HEIGHT}>
+        <text className="flow-tile-rate" x={textX} y={TILE_RATE_BASELINE} {...anchor}>{clipText(rate, room, RATE_CHAR_WIDTH)}</text>
+        <text className="flow-tile-name" x={textX} y={TILE_NAME_BASELINE} {...anchor}>{clipText(shortName(name), room, NAME_CHAR_WIDTH)}</text>
       </svg>
-      <rect className="flow-port" x={(left ? 0 : node.width) - FLANGE_DEPTH / 2} y={y - FLANGE_HEIGHT / 2} width={FLANGE_DEPTH} height={FLANGE_HEIGHT} />
+      <rect className="flow-port" x={(flangeLeft ? 0 : node.width) - FLANGE_DEPTH / 2} y={y - FLANGE_HEIGHT / 2} width={FLANGE_DEPTH} height={FLANGE_HEIGHT} />
+    </g>
+  );
+}
+
+/** A step card's power tile, under its inputs: a lightning bolt, the power ("16 EU/t") and "Power". It only draws; the box's tip says it. */
+function PowerTileShape(props: { tile: Tile; power: string }): ReactElement {
+  const { tile, power } = props;
+  return (
+    <g className="flow-tile power" aria-hidden="true">
+      <rect className="flow-tile-box" x={tile.x} y={tile.y} width={TILE_WIDTH} height={TILE_HEIGHT} />
+      <path className="flow-power-bolt" d={BOLT} transform={`translate(${tile.x + TILE_ICON_INSET} ${tile.y + TILE_ICON_INSET})`} />
+      <text className="flow-tile-rate" x={tile.x + TILE_TEXT} y={tile.y + TILE_RATE_BASELINE}>{power}</text>
+      <text className="flow-tile-name" x={tile.x + TILE_TEXT} y={tile.y + TILE_NAME_BASELINE}>Power</text>
     </g>
   );
 }
 
 /**
- * A step box's machine readout (Phase 2 spec §7.3), in its head: the machine's 32 px icon (a hand step's main output; none without either)
- * in a 36 px slot with the inverted bevel of a Minecraft slot; the tier chip in its tier's ink (none by hand or on a crafting table or a
- * furnace: plan ruling pseudo-tier-chip) and the count chip, each 4 px after the one before, their figures in VT323 (`Figs`, plan ruling
- * digits-mixed); the power 6 px after the last chip, or "by hand" in their place; and under the head the busy band, its track filled to how
- * busy the machines are (`high`, amber, from 90 %) and its percentage at the box's right edge. It only draws: the box's first line says it
- * all in words, the head's name and the box's tip, so it is aria-hidden and its icon shows no tip of its own.
+ * A card's head band (RUK-740 round 2): the machine's name (a line's "<name> line"), cut at the chips; at its right the tier chip and, before
+ * it, the amperage chip ("4A"); under the band the step's other lines (a line's lines) and the avoid badge.
  */
-function MachineReadoutShape(props: { node: PlacedNode; machine: MachineReadout }): ReactElement {
-  const { node, machine } = props;
-  const icon = machine.iconKey ?? node.key;
+function CardHeadShape(props: { node: PlacedNode }): ReactElement {
+  const { node } = props;
+  const { machine } = node;
   const chips: Array<{ part: string; className: string; text: string }> = [];
-  if (machine.tier !== null) chips.push({ part: 'tier', className: `flow-chip tier-${machine.tier.slug}`, text: machine.tier.name });
-  if (machine.count !== null) chips.push({ part: 'count', className: 'flow-chip', text: machine.count });
-  let next = READOUT_LEFT;
+  if (machine?.tier != null) chips.push({ part: 'tier', className: `flow-chip tier-${machine.tier.slug}`, text: machine.tier.name });
+  if (machine?.amps != null) chips.push({ part: 'amps', className: 'flow-chip amps', text: machine.amps });
+  let right = node.width - TEXT_LEFT - (node.kind === FlowNodeKind.Line ? TOGGLE_SPACE : 0);
   const drawn = chips.map((chip) => {
     const width = chipWidth(chip.text);
-    const x = next;
-    next += width + CHIP_GAP;
+    right -= width;
+    const x = right;
+    right -= CHIP_GAP;
     return (
-      <g key={chip.part} className={chip.className} transform={`translate(${x} ${CHIP_TOP})`}>
+      <g key={chip.part} className={chip.className} transform={`translate(${x} ${CARD_CHIP_TOP})`}>
         <rect width={width} height={CHIP_HEIGHT} />
         <text x={width / 2} y={CHIP_BASELINE}><Figs text={chip.text} svg /></text>
       </g>
     );
   });
-  // only a hand step has no count: it has no machine, and its chip row says so
-  const power = machine.count === null ? HAND_WORDS : machine.power;
-  const powerX = chips.length === 0 ? READOUT_LEFT : next - CHIP_GAP + POWER_GAP;
-  const track = busyTrack(node);
-  const trackY = STEP_HEAD_HEIGHT + BUSY_TRACK_TOP;
+  const shown = machine === undefined ? node.lines : node.lines.slice(1);
+  const badge = node.avoidBadge;
   return (
-    <g className="flow-machine" aria-hidden="true">
-      <rect className="flow-machine-slot" x={TEXT_LEFT} y={SLOT_TOP} width={MACHINE_SLOT} height={MACHINE_SLOT} />
-      <path className="flow-slot-lo" d={SLOT_LO} />
-      <path className="flow-slot-hi" d={SLOT_HI} />
+    <>
+      <text className="flow-node-title" x={TEXT_LEFT} y={CARD_TITLE_BASELINE}>{clipText(boxTitle(node), right - 2 * TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
+      <g aria-hidden="true">{drawn}</g>
+      {shown.map((line, i) => (
+        <text key={`${i}:${line}`} className="flow-node-line" x={TEXT_LEFT} y={CARD_HEAD + CARD_LINE * i + 11}>
+          {clipText(line, node.width - 2 * TEXT_LEFT, TEXT_CHAR_WIDTH)}
+        </text>
+      ))}
+      {badge !== undefined && (
+        <g className="flow-avoid-badge" data-avoid-badge="" transform={`translate(${BADGE_LEFT} ${CARD_HEAD + CARD_LINE * shown.length})`}>
+          <rect width={node.width - 2 * BADGE_LEFT} height={CARD_LINE - 2} />
+          <text x={TEXT_LEFT - BADGE_LEFT} y={11}>{badge.text}</text>
+        </g>
+      )}
+    </>
+  );
+}
+
+/**
+ * A step card's machine column (RUK-740 round 2): the machine's 40 px icon in a 44 px slot (a hand step's main output), its count ("×5") under
+ * it, and under that "shared" for a pool's machines, else whether the group owns them ("owned", "some owned", "new"), or "by hand". It only
+ * draws: the box's tip says it all.
+ */
+function CardMachineShape(props: { node: PlacedNode; machine: MachineReadout; column: { x: number; y: number; width: number } }): ReactElement {
+  const { node, machine, column } = props;
+  const icon = machine.iconKey ?? node.key;
+  const cx = column.x + column.width / 2;
+  const slotX = cx - CARD_SLOT / 2;
+  const inset = (CARD_SLOT - CARD_MACHINE_ICON) / 2;
+  // "×1 shared" is too wide for the column: the count goes alone, and "shared" under it
+  const count = machine.count === null ? null : machine.count.replace(SHARED_SUFFIX, '');
+  const shared = machine.count !== null && machine.count.endsWith(SHARED_SUFFIX);
+  return (
+    <g className="flow-machine flow-card-machine" aria-hidden="true">
+      <rect className="flow-machine-slot" x={slotX} y={column.y} width={CARD_SLOT} height={CARD_SLOT} />
       {icon !== null && (
-        <foreignObject x={TEXT_LEFT + BEVEL} y={SLOT_TOP + BEVEL} width={MACHINE_ICON} height={MACHINE_ICON}>
-          <ItemIcon itemKey={icon} size={MACHINE_ICON} name={machine.iconKey === null ? node.keyName : node.title} tip={false} />
+        <foreignObject x={slotX + inset} y={column.y + inset} width={CARD_MACHINE_ICON} height={CARD_MACHINE_ICON}>
+          <ItemIcon itemKey={icon} size={CARD_MACHINE_ICON} name={machine.iconKey === null ? node.keyName : node.title} tip={false} />
         </foreignObject>
       )}
-      {drawn}
-      {power !== null && <text className="flow-node-power" x={powerX} y={POWER_BASELINE}>{power}</text>}
-      <g className={machine.high ? 'flow-busy high' : 'flow-busy'}>
-        <rect className="flow-busy-track" x={TEXT_LEFT} y={trackY} width={track} height={BUSY_TRACK_HEIGHT} />
-        <rect className="flow-busy-fill" x={TEXT_LEFT} y={trackY} width={track * machine.busy} height={BUSY_TRACK_HEIGHT} />
-        <text className="flow-busy-text" x={node.width - TEXT_LEFT} y={trackY + BUSY_TRACK_HEIGHT}>{machine.busyText}</text>
-      </g>
+      {count !== null && (
+        <text className="flow-card-count" x={cx} y={column.y + CARD_SLOT + COUNT_DROP} textAnchor="middle"><Figs text={count} svg /></text>
+      )}
+      <text className="flow-card-owned" x={cx} y={column.y + CARD_SLOT + OWNED_DROP} textAnchor="middle">
+        {count === null ? HAND_WORDS : shared ? 'shared' : OWNED_WORDS[node.owned]}
+      </text>
+    </g>
+  );
+}
+
+/** A step card's foot band (RUK-740 round 2): its track filled to how busy the machines are (amber from 90 %), the percentage at its right. */
+function CardFootShape(props: { node: PlacedNode; machine: MachineReadout; top: number }): ReactElement {
+  const { node, machine, top } = props;
+  const track = busyTrack(node);
+  const y = top + BUSY_TRACK_TOP;
+  return (
+    <g className={machine.high ? 'flow-busy high' : 'flow-busy'} aria-hidden="true">
+      <rect className="flow-busy-track" x={TEXT_LEFT} y={y} width={track} height={BUSY_TRACK_HEIGHT} />
+      <rect className="flow-busy-fill" x={TEXT_LEFT} y={y} width={track * machine.busy} height={BUSY_TRACK_HEIGHT} />
+      <text className="flow-busy-text" x={node.width - TEXT_LEFT} y={y + BUSY_TRACK_HEIGHT}>{machine.busyText}</text>
     </g>
   );
 }
 
 /**
- * One box: `data-node-id` and `data-kind` on a group (and `data-step-id` on a step's only, ruling P17) holding the box,
- * a head with its item icon, title and lines (a button on a step or an import stub, whose click opens its panel), the
- * badge of avoided goods it uses (`data-avoid-badge`, whose warnings join its tooltip), and a row per good. A step's head
- * is its machine readout (`MachineReadoutShape`, Phase 2 spec §7) beside its title, which draws its first line; its other
- * lines follow under the busy band, each cut with "…" at the box's edge. Its words, one a line (its title, its lines,
- * those warnings and its rows'), are its tooltip and its accessible name (`data-tip` and `aria-label`, Phase 2 spec
- * §6.4), which a focused head or row shows at itself. Under a focus it is lit (`hl`, and `producer` or `consumer`) or
- * dimmed (`dim`). A two-column box draws an "Input | Output" header over its columns with a faint line between them
- * (RUK-740).
+ * One box: `data-node-id` and `data-kind` on a group (and `data-step-id` on a step's only, ruling P17). A step's or a line's box is a card
+ * (RUK-740 round 2): its head band of title, chips, power and lines, the "Input" and "Output" captions over its two tile columns, a step's
+ * machine column, its power tile under its inputs and its busy foot band; the badge of avoided goods it uses (`data-avoid-badge`, whose
+ * warnings join its tooltip) is in its head. A stub's box (an import, a missing input, a left over, the target) is a small card: its caption
+ * (`stubCaption`) over one tile of its good. A head is a button on a step or an import, whose click opens its panel; a tile is a button on its
+ * good. A box's words, one a line (its title, its lines, its rows' and the badge's warnings), are its tooltip and its accessible name
+ * (`data-tip` and `aria-label`, Phase 2 spec §6.4), which a focused head or tile shows at itself. Under a focus it is lit (`hl`, and `producer`
+ * or `consumer`) or dimmed (`dim`).
  */
 export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; sets?: FocusSets | null }): ReactElement {
   const { node, selected = false } = props;
@@ -307,23 +372,61 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
   }
   if (selected) classes.push('selected');
   const { machine } = node;
-  // a readout draws the machine's icon in its slot, so the head's 16 px icon of the main output is not drawn
-  const icon = machine === undefined ? node.key : null;
   const badge = node.avoidBadge;
-  const head = rowsTop(node);
-  const toggle = node.kind === FlowNodeKind.Line ? TOGGLE_SPACE : 0;
-  const titleX = machine !== undefined ? READOUT_LEFT : TEXT_LEFT + (icon !== null ? ICON_SPACE : 0);
-  // the lines drawn below the title, or below a readout's band, whose chips and band say the first one
-  const linesTop = machine === undefined ? NODE_TITLE_HEIGHT : STEP_HEAD_HEIGHT + BUSY_BAND;
-  const shown = machine === undefined ? node.lines : node.lines.slice(1);
   const described = [node.title, ...node.lines, ...(badge?.warnings ?? [])];
   const tip = tipText([...described, ...node.rows.map((r) => rowWords(node, r))]);
   const opens = node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Import;
+  // A step's or a collapsed line's box is a card (RUK-740 round 2, card-model.ts): its head band, the "Input" and "Output" captions, its tiles
+  // in two columns with a step's machine column between them and its power tile under its inputs, and a step's foot band.
+  if (rowHasIcon(node)) {
+    const card = cardGeometry(cardShape(node));
+    const headHeight = card.bodyTop - CARD_CAPTION;
+    const power = card.tiles.find((t) => t.power);
+    const tileOf = (i: number): Tile | undefined => {
+      const row = node.rows[i];
+      const line = rowLine(node, i);
+      return row === undefined ? undefined : card.tiles.find((t) => !t.power && t.side === row.side && t.line === line);
+    };
+    return (
+      <g
+        className={classes.join(' ')}
+        data-node-id={node.id}
+        {...(node.kind === FlowNodeKind.Step ? { 'data-step-id': node.id } : {})}
+        data-kind={FLOW_KIND_CLASS[node.kind]}
+        transform={`translate(${node.x} ${node.y})`}
+        aria-label={tip}
+        data-tip={tip}
+      >
+        <rect className="flow-node-box" width={node.width} height={node.height} />
+        <g className="flow-node-head" {...(opens ? { role: 'button', tabIndex: 0, 'aria-label': described.join(', '), 'aria-pressed': selected } : {})}>
+          <rect className="flow-hit" width={node.width} height={headHeight} />
+          {/* A nested svg clips text that is wider than the box; the full text is in the box's tooltip and accessible name. */}
+          <svg width={node.width} height={headHeight}><CardHeadShape node={node} /></svg>
+        </g>
+        {node.kind === FlowNodeKind.Line && node.key !== null && (
+          <LineToggle lineKey={node.key} title={node.title} open={false} x={node.width - TOGGLE_SIZE - TOGGLE_MARGIN} y={ICON_TOP - 1} />
+        )}
+        {node.rows.length > 0 && (
+          <g className="flow-io" aria-hidden="true">
+            <text className="flow-io-head" x={CARD_PAD} y={card.bodyTop - CAPTION_RISE}>Input</text>
+            <text className="flow-io-head" x={node.width - CARD_PAD} y={card.bodyTop - CAPTION_RISE} textAnchor="end">Output</text>
+          </g>
+        )}
+        {machine !== undefined && card.machine !== null && <CardMachineShape node={node} machine={machine} column={card.machine} />}
+        {machine?.power != null && power !== undefined && <PowerTileShape tile={power} power={machine.power} />}
+        {node.rows.map((row, i) => {
+          const tile = tileOf(i);
+          return tile === undefined ? null : <CardTileShape key={row.port} node={node} row={row} index={i} tile={tile} sets={sets} />;
+        })}
+        {machine !== undefined && card.footTop !== null && <CardFootShape node={node} machine={machine} top={card.footTop} />}
+      </g>
+    );
+  }
   return (
+    // A stub (an import, a missing input, a left-over, the target) is a small card (RUK-740 round 2): its caption over one tile with its good.
     <g
       className={classes.join(' ')}
       data-node-id={node.id}
-      {...(node.kind === FlowNodeKind.Step ? { 'data-step-id': node.id } : {})}
       data-kind={FLOW_KIND_CLASS[node.kind]}
       transform={`translate(${node.x} ${node.y})`}
       aria-label={tip}
@@ -331,41 +434,12 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
     >
       <rect className="flow-node-box" width={node.width} height={node.height} />
       <g className="flow-node-head" {...(opens ? { role: 'button', tabIndex: 0, 'aria-label': described.join(', '), 'aria-pressed': selected } : {})}>
-        <rect className="flow-hit" width={node.width} height={head} />
-        {icon !== null && (
-          <foreignObject x={TEXT_LEFT} y={ICON_TOP} width={ICON_SIZE} height={ICON_SIZE}>
-            <ItemIcon itemKey={icon} size={ICON_SIZE} name={node.keyName} tip={false} />
-          </foreignObject>
-        )}
-        {/* A nested svg clips text that is wider than the box; the full text is in the box's tooltip and accessible name. */}
-        <svg width={node.width - toggle} height={head}>
-          {machine !== undefined && <MachineReadoutShape node={node} machine={machine} />}
-          <text className="flow-node-title" x={titleX} y={TITLE_BASELINE}>{clipText(boxTitle(node), node.width - toggle - titleX - TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
-          {shown.map((line, i) => (
-            <text key={`${i}:${line}`} className="flow-node-line" x={TEXT_LEFT} y={linesTop + NODE_LINE_HEIGHT * i + 11}>
-              {machine === undefined ? line : clipText(line, node.width - 2 * TEXT_LEFT, TEXT_CHAR_WIDTH)}
-            </text>
-          ))}
-          {badge !== undefined && (
-            <g className="flow-avoid-badge" data-avoid-badge="" transform={`translate(${BADGE_LEFT} ${linesTop + NODE_LINE_HEIGHT * shown.length})`}>
-              <rect width={node.width - 2 * BADGE_LEFT} height={NODE_LINE_HEIGHT - 2} />
-              <text x={TEXT_LEFT - BADGE_LEFT} y={11}>{badge.text}</text>
-            </g>
-          )}
+        <rect className="flow-hit" width={node.width} height={STUB_HEAD} />
+        <svg width={node.width} height={STUB_HEAD}>
+          <text className="flow-stub-caption" x={CARD_PAD} y={STUB_CAPTION_BASELINE}>{clipText(stubCaption(node), node.width - 2 * CARD_PAD, CAPTION_CHAR_WIDTH)}</text>
         </svg>
       </g>
-      {node.kind === FlowNodeKind.Line && node.key !== null && (
-        <LineToggle lineKey={node.key} title={node.title} open={false} x={node.width - TOGGLE_SIZE - TOGGLE_MARGIN} y={ICON_TOP - 1} />
-      )}
-      {/* A two-column box's "Input | Output" header over its columns and the faint line between them (RUK-740); the rows' names say it already. */}
-      {rowHasIcon(node) && node.rows.length > 0 && (
-        <g className="flow-io" aria-hidden="true">
-          <text className="flow-io-head" x={TEXT_LEFT} y={head - IO_HEAD_HEIGHT + 10}>Input</text>
-          <text className="flow-io-head" x={node.width - TEXT_LEFT} y={head - IO_HEAD_HEIGHT + 10} textAnchor="end">Output</text>
-          <line className="flow-io-divider" x1={node.width / 2} y1={head - IO_HEAD_HEIGHT} x2={node.width / 2} y2={head + ROW_HEIGHT * rowLines(node)} />
-        </g>
-      )}
-      {node.rows.map((row, i) => <FlowRowShape key={row.port} node={node} row={row} index={i} sets={sets} />)}
+      {node.rows[0] !== undefined && <CardTileShape node={node} row={node.rows[0]} index={0} tile={STUB_TILE} sets={sets} stub />}
     </g>
   );
 }
@@ -639,43 +713,6 @@ export function FlowIssues(props: {
 /** What a pointer or key is on: a line's open/collapse button, a row (its good), an arrow, a box, or nothing. */
 interface Hit { focus: Focus; node?: PlacedNode; toggle?: StuffKey }
 
-/** The px height the canvas's style asks for a diagram `height` tall (in its units): the diagram and the room around it (75vh at most). */
-const canvasPx = (height: number): number => Math.ceil(height + 2 * PAD);
-
-/** A computed style's length in px (`'2px'`), 0 for none. */
-const stylePx = (value: string): number => Number.parseFloat(value) || 0;
-
-/**
- * Where the Flow canvas `svg` stands once it is as tall as its own style makes it for a diagram `height` tall (in its units), 75vh at most and
- * its min-height at least, from its top as it is now: its border box (`box`) and its inner height (`inner`, less its border). While a hold
- * keeps the canvas taller (ledger ruling P2-R121), the canvas the hold ends at, which a view is made for (`canvas()`, fix round 2) and a
- * panel's Close judges the box head against (P2-R36, fix round 3); at rest, the canvas as it is drawn.
- */
-function settledCanvas(svg: SVGSVGElement, height: number): { box: DOMRect; inner: number } {
-  const style = getComputedStyle(svg);
-  const drawn = svg.getBoundingClientRect();
-  const tall = Math.max(stylePx(style.minHeight), Math.min(canvasPx(height), innerHeight * 0.75));
-  return { box: new DOMRect(drawn.left, drawn.top, drawn.width, tall), inner: tall - stylePx(style.borderTopWidth) - stylePx(style.borderBottomWidth) };
-}
-
-/**
- * The height (the diagram's, in its units) the canvas keeps once the layout `after` replaces `before`, `held` the one it keeps now, null for
- * none (ledger ruling P2-R121): a new layout that glides into place and draws the canvas shorter keeps it at the height it was drawn at, so
- * nothing gliding up from below and no ghost under the new edge is cut off, until its glides have run and its ghosts have gone (FlowCanvas
- * releases it); one that snaps (it changes more than GLIDE_LIMIT boxes, or the user asks for less motion) or that leaves the canvas as tall
- * takes its own height at once; the same layout again (every SSE refetch's) keeps what is kept. The canvas is as tall as its diagram, `room`
- * px (75vh) at most, so a hold that would draw it no taller than the new layout is none. Pure, but for the motion setting, so the canvas
- * decides it as it draws the new layout, and holding costs it no render of its own (fix round 2).
- */
-export function heldHeight(
-  before: FlowLayout, after: FlowLayout, held: number | null, room: number, change: LayoutChange = layoutChange(before, after),
-): number | null {
-  if (change.moved.length + change.entered.length + change.left.length + change.rerouted.length === 0) return held;
-  if (prefersReducedMotion() || !glidable(change)) return null;
-  const drawnAt = held ?? before.height;
-  return Math.min(canvasPx(drawnAt), room) > Math.min(canvasPx(after.height), room) ? drawnAt : null;
-}
-
 /**
  * Whether the view a new layout brings (a new plan's, or the box of a line opened or closed, centred) is panned to over PAN_MS (Phase 2 spec
  * §16.2): only when the layout glides into place, as `glidable` decides for its glide too; a layout that snaps (it changes more than
@@ -740,23 +777,14 @@ function FlowCanvas(props: {
   const shownGhosts = useRef<Ghost[]>([]);
   /**
    * The layout drawn last, and what it changed of the one before (`layoutChange`), worked out once, as the new layout is drawn: the one result
-   * its glide, the height the canvas keeps and the way its view is taken all go by (ledger rulings P2-R121, P2-R126; Task F4).
+   * its glide and the way its view is taken all go by (ledger rulings P2-R121, P2-R126; Task F4).
    */
   const [drawn, setDrawn] = useState(() => ({ layout, change: layoutChange(null, layout) }));
-  /**
-   * While a new layout that shortens the diagram glides, the height the canvas keeps (the diagram's, in its units), null at rest (ledger ruling
-   * P2-R121, `heldHeight`). It is decided as each new layout is drawn, so the layout's own commit draws the canvas held, and it is released
-   * once, by whichever ends last of the layout's glides and its ghosts: holding costs the canvas one render, the release's (fix round 2).
-   */
-  const [hold, setHold] = useState<number | null>(null);
   if (drawn.layout !== layout) {
     const next = layoutChange(drawn.layout, layout);
     setDrawn({ layout, change: next });
-    setHold(heldHeight(drawn.layout, layout, hold, innerHeight * 0.75, next));
   }
   const { change } = drawn;
-  /** The glides of the layout that holds the canvas, until they have run; null once they have, or when no layout holds it. */
-  const holding = useRef<Promise<unknown> | null>(null);
   /** What in the canvas has the focus (its last `focusin`), until the focus has really moved from it (ledger ruling P2-R122). */
   const focusedIn = useRef<Element | null>(null);
   const focus = useFlowFocus();
@@ -773,15 +801,11 @@ function FlowCanvas(props: {
   /** The arrows a good rides (Phase 2 spec §15.1): past 200 arrows the lit ones only, and never more than `RIDER_LIMIT`. */
   const riders = useMemo(() => riderEdges(layout.edges, sets?.edges ?? null, missingIds), [layout, sets, missingIds]);
 
-  /**
-   * The canvas's inner size in px, which Fit, the zoom buttons, a reveal and a new plan's view fit their view to. While a hold keeps it taller,
-   * the height it settles at once the hold ends, as the svg's own style computes it (`settledCanvas`), so the view is made for the canvas it will
-   * be shown in, never cropped or off-centre once the hold ends (fix round 2).
-   */
+  /** The canvas's inner size in px, which Fit, the zoom buttons, a reveal and a new plan's view fit their view to. */
   const canvas = (): { width: number; height: number } => {
     const svg = svgRef.current;
     if (svg === null) return { width: 0, height: 0 };
-    return { width: svg.clientWidth, height: hold === null ? svg.clientHeight : settledCanvas(svg, layout.height).inner };
+    return { width: svg.clientWidth, height: svg.clientHeight };
   };
   /**
    * Pans to the box (or open line) `id`, centred (a reveal, a line opened or closed), or moves there at once (`pans` false: the box of a line
@@ -814,11 +838,9 @@ function FlowCanvas(props: {
   // arrows and goods that changed (`glideLayout`); while it glides, the boxes it dropped fade out as ghosts where they were drawn in the last
   // (part way along its glide, if it still glided them: ledger ruling P2-R117), each from the opacity it was drawn at under the focus, and, if it
   // still faded in, at that much of it (fix round 2). A new layout that changes anything takes the last one's ghosts away (M1); the ghosts are set
-  // only when there are ghosts to add or take away, so a new layout that adds none draws the canvas once (M2). A layout whose render held the
-  // canvas's height (`heldHeight`, ledger ruling P2-R121) releases it once its glides have run and its ghosts have gone, whichever is last (and
-  // at once when nothing glides after all: the browser cannot, `canGlide`); an older layout's glides then release nothing. The first layout
+  // only when there are ghosts to add or take away, so a new layout that adds none draws the canvas once (M2). The first layout
   // changes nothing (its change is empty). A second run of this effect for the same layout (StrictMode's, Fast Refresh's, an Activity shown
-  // again) finds that layout placed already and leaves its glides, ghosts and hold as they are: `change` is the render's, the change from the
+  // again) finds that layout placed already and leaves its glides and ghosts as they are: `change` is the render's, the change from the
   // layout drawn before, which that first run glided (the final fix wave, FW-14).
   // What had the focus and is gone with the last layout gives it on, never to the body (ledger rulings P2-R36, P2-R57): to the same line's
   // open/collapse button where the new layout draws it again, else to the canvas, where nothing moves the page.
@@ -833,7 +855,7 @@ function FlowCanvas(props: {
     const again = line === null ? undefined : [...svg.querySelectorAll('[data-line-toggle]')].find((el) => el.getAttribute('data-line-toggle') === line);
     if (!focusOn(again, { preventScroll: true })) focusOn(svg, { preventScroll: true });
   }, [layout]);
-  /** The glide of a new layout from `before`, the layout placed last (null for none), its ghosts and its hold (the effect above). */
+  /** The glide of a new layout from `before`, the layout placed last (null for none), and its ghosts (the effect above). */
   function glideIn(before: FlowLayout | null): void {
     const pan = panRef.current;
     const gone: Ghost[] = [];
@@ -847,22 +869,11 @@ function FlowCanvas(props: {
         gone.push({ id, kind, owned, ...(leaf === undefined ? {} : { leaf }), x: atX, y: atY, width, height, opacity });
       }
     }
-    const started = pan === null ? [] : glideLayout(pan, change, FLOW_GLIDE);
+    if (pan !== null) glideLayout(pan, change, FLOW_GLIDE);
     const changed = change.moved.length + change.entered.length + change.left.length + change.rerouted.length > 0;
     if (gone.length > 0 || (changed && shownGhosts.current.length > 0)) {
       shownGhosts.current = gone;
       setGhosts(gone);
-    }
-    if (changed) {
-      const waits = hold !== null && (started.length > 0 || gone.length > 0);
-      const glides = waits ? Promise.all(started.map((a) => a.finished.catch(() => undefined))) : null;
-      holding.current = glides;
-      if (hold !== null && glides === null) setHold(null);
-      void glides?.then(() => {
-        if (holding.current !== glides) return;
-        holding.current = null;
-        if (shownGhosts.current.length === 0) setHold(null);
-      });
     }
   }
   useEffect(() => {
@@ -926,15 +937,14 @@ function FlowCanvas(props: {
 
   const fit = (minZoom: number): void => glideTo(fitView(layout, canvas().width, canvas().height, minZoom));
   /**
-   * A ghost whose fade has run goes (that one: a newer ghost of the same box stays); the last to go releases a hold whose glides have run, in
-   * the same render. It reads no render's state, as a ghost keeps the one it was drawn with.
+   * A ghost whose fade has run goes (that one: a newer ghost of the same box stays). It reads no render's state, as a ghost keeps the one it
+   * was drawn with.
    */
   const dropGhost = (ghost: Ghost): void => {
     const left = shownGhosts.current.filter((other) => other !== ghost);
     if (left.length === shownGhosts.current.length) return;
     shownGhosts.current = left;
     setGhosts(left);
-    if (left.length === 0 && holding.current === null) setHold(null);
   };
   const zoomCentre = (factor: number): void => glideTo((v) => zoomed(v, canvas().width / 2, canvas().height / 2, factor));
 
@@ -1121,7 +1131,6 @@ function FlowCanvas(props: {
         role="group"
         aria-label="Flow diagram"
         tabIndex={-1}
-        style={{ height: `min(${canvasPx(Math.max(layout.height, hold ?? 0))}px, 75vh)` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}
@@ -1292,8 +1301,7 @@ function FlowDiagram(props: {
   // The new panel stands where the old one stood, so neither moves the page unless the window shows nothing of the panel's head or of the
   // box head (a plain focus would jump the page to show a panel's cut-off end): then that comes in by the least scroll (P2-R35, P2-R36).
   // While Fit, a zoom button or a reveal still pans the diagram, or a new layout glides the box, the box head is judged where it will rest
-  // (`boxAtRest`, Tasks 13a and 13b), and while a hold keeps the canvas taller, against the canvas the hold ends at (`settledCanvas`, fix
-  // round 3): a head in the band the hold gives up would take the focus and then be cut off.
+  // (`boxAtRest`, Tasks 13a and 13b).
   useLayoutEffect(() => {
     if (focusPanel.current) {
       focusPanel.current = false;
@@ -1307,7 +1315,7 @@ function FlowDiagram(props: {
       const node = [...(canvas?.querySelectorAll('[data-node-id]') ?? [])].find((el) => el.getAttribute('data-node-id') === box);
       const head = node?.querySelector<SVGGElement>('.flow-node-head[tabindex]') ?? null;
       // a head panned out of the canvas's own view would take the focus unseen, and scroll the page to it for nothing: the canvas takes it
-      const view = canvas === null || laid === null ? null : settledCanvas(canvas, laid.layout.height).box;
+      const view = canvas === null ? null : canvas.getBoundingClientRect();
       const seen = head !== null && view !== null && !disjoint(boxAtRest(head), view);
       const target = seen ? head : canvas;
       if (target !== null) focusInWindow(target);

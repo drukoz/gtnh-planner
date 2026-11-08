@@ -1,7 +1,7 @@
-// What the flow diagram shows (spec §3.9, fix spec §6.2), as pure functions: the boxes and arrows of a plan — a box per
+// What the flow diagram shows (spec §3.9, fix spec §6.2), as pure functions: the boxes and arrows of a plan — a card per
 // step listing the goods it takes and makes as rows (each row an ELK port, so an arrow leaves the row of its good), its
-// head a machine readout (Phase 2 spec §7: the machine, its tier and count, its power, how busy), an import stub beside
-// each step that takes a bought good, a red stub where nothing supplies an input, a stub for each good left over, the
+// head a machine readout (Phase 2 spec §7: the machine, its tier and count, its power, how busy), a small card beside
+// each step that takes a bought good, a red small card where nothing supplies an input, a small card for each good left over, the
 // target, and supporting lines drawn open around their steps or collapsed into one box (a step that cannot avoid a
 // material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
 // laid-out picture read back from it, what a focus lights (an item, a box or an arrow), what does not add up, the rate
@@ -11,6 +11,7 @@
 // what a new layout changed of the last, which the diagrams glide (Phase 2 spec §16.3). Base materials sit on the left
 // and the target on the right.
 
+import { cardBodyTop, cardGeometry, tileCentre, STUB_HEAD, STUB_HEIGHT, STUB_WIDTH, type CardShape } from './card-model.ts';
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { PSEUDO_IDS, PSEUDO_MACHINES, TIER_NAMES, V } from '../../shared/gt/tiers.ts';
@@ -75,11 +76,13 @@ export interface FlowNode {
  * A step box's machine readout (Phase 2 spec §7): what the head draws in place of `lines[0]`, which stays as its words. The machine's icon
  * (`gregtech:gt.blockmachines@<mteId>`, the crafting table's or the furnace's for a pseudo machine, none by hand); its voltage tier (none by
  * hand or on a pseudo machine, plan ruling pseudo-tier-chip); its machines, "×5" or "×1 shared" for a pool's (none by hand, so `count` is
- * null for a hand step only); its power (none by hand or at 0 EU/t); how busy, between 0 and 1, in the box's words, and from 90 % `high`.
+ * null for a hand step only); its power (none by hand or at 0 EU/t); how busy, between 0 and 1, in the box's words, and from 90 % `high`;
+ * its amperage, "4A", when the machine takes more than 1 A, else null.
  */
 export interface MachineReadout {
   iconKey: StuffKey | null; tier: { name: string; slug: string } | null; count: string | null; power: string | null;
   busy: number; busyText: string; high: boolean;
+  amps: string | null;
 }
 
 /**
@@ -157,8 +160,6 @@ export const IO_HEAD_HEIGHT = 14;
 export const COLUMN_GAP = 12;
 /** The most characters a material's name takes in the diagram; a longer one is cut to `MAX_NAME_CHARS - 1` and "…" (its full name is in the tooltip). */
 export const MAX_NAME_CHARS = 14;
-/** Room below the last row. */
-const ROWS_BOTTOM = 6;
 /** Estimated text widths per character: the 13 px semibold title, and the 11.5 px lines and rows. */
 export const TITLE_CHAR_WIDTH = 7.4;
 export const TEXT_CHAR_WIDTH = 6.2;
@@ -174,6 +175,14 @@ const TICKS_PER_SECOND = 20;
 const LABEL_CHAR_WIDTH = 6.5;
 const LABEL_PADDING = 8;
 const LABEL_HEIGHT = 14;
+/** How far right of its drop, and above its lane, an arrow into the left-over band puts its rate label (RUK-817). */
+const DROP_LABEL_GAP = 3;
+
+/** The width of an edge label box for `text`, as ELK is given it. */
+function labelWidth(text: string): number {
+  return Math.ceil(text.length * LABEL_CHAR_WIDTH) + LABEL_PADDING;
+}
+
 /**
  * An ELK port is a tiny box on the edge of its box, centred on its row, so ELK ends the arrow on that row: on the port's
  * outer face, `PORT_SIZE` outside the box (where FlowView's flange has its outer face too).
@@ -202,7 +211,6 @@ export const POWER_GAP = 6;
 /** The busy band's track: its height and its top in the band; it is at least this long, with this gap before the band's percentage. */
 export const BUSY_TRACK_HEIGHT = 6;
 export const BUSY_TRACK_TOP = 5;
-const BUSY_TRACK_MIN = 60;
 const BUSY_GAP = 6;
 /** The room the band leaves for its percentage: the widest share `formatPercent` writes below a whole 100 % (`121%` is narrower). */
 const WIDEST_BUSY = '>99.9%';
@@ -292,6 +300,7 @@ export function machineReadout(step: PlanStep): MachineReadout {
     tier: voltage ? { name: tierText(step.machine.tier), slug: tierSlug(step.machine.tier) } : null,
     count: hand ? null : `×${step.count}${step.pool === undefined ? '' : ' shared'}`,
     power: hand || step.euPerTick === 0 ? null : `${formatNumber(step.euPerTick)} EU/t`,
+    amps: !hand && step.oc !== undefined && step.oc.machineAmps > 1 ? `${step.oc.machineAmps}A` : null,
     busy: Number.isNaN(step.utilization) ? 0 : Math.min(1, Math.max(0, step.utilization)),
     busyText: formatPercent(step.utilization),
     high: step.utilization >= HIGH_BUSY,
@@ -306,21 +315,6 @@ export function chipWidth(text: string): number {
 /** How long a readout box's busy track is: its width but the sides, the gap and the widest percentage at its end. */
 export function busyTrack(node: Pick<FlowNode, 'width'>): number {
   return node.width - 2 * TEXT_LEFT - BUSY_GAP - textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH);
-}
-
-/**
- * How wide a box with a machine readout must be for its head (the slot, the 13 px title), its chip row (each chip and the gap after it, the
- * power 2 px further, or "by hand") and its busy band (the shortest track, the gap and the widest percentage), each with its margins.
- */
-function readoutWidths(title: string, machine: MachineReadout): number[] {
-  let chipRow = READOUT_LEFT;
-  for (const chip of [machine.tier?.name, machine.count]) if (chip !== undefined && chip !== null) chipRow += chipWidth(chip) + CHIP_GAP;
-  if (machine.count === null) chipRow += textWidth(HAND_WORDS, TEXT_CHAR_WIDTH);
-  else if (machine.power !== null) chipRow += POWER_GAP - CHIP_GAP + textWidth(machine.power, TEXT_CHAR_WIDTH);
-  return [
-    READOUT_LEFT + textWidth(title, TITLE_CHAR_WIDTH) + TEXT_LEFT, chipRow + TEXT_LEFT,
-    TEXT_LEFT + BUSY_TRACK_MIN + BUSY_GAP + textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH) + TEXT_LEFT,
-  ];
 }
 
 /** A rate of a good in the project's unit, in litres for a fluid. */
@@ -401,15 +395,11 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
 }
 
 /**
- * Where a box's rows start: below its title, its lines and its avoid badge; a step box's below its machine readout's head and busy band,
- * which draw its first line, then its other lines and its badge (Phase 2 spec §7.2). The ELK ports, the drawn rows and `fromElk`'s fallback
- * all read it, so they move together.
+ * Where a box's rows start: a card's below its head band, its extra lines and its avoid badge; a stub's below its caption band
+ * (RUK-740 round 2). The ELK ports, the drawn rows and `fromElk`'s fallback all read it, so they move together.
  */
 export function rowsTop(node: Pick<FlowNode, 'kind' | 'lines' | 'avoidBadge' | 'machine'>): number {
-  const badge = node.avoidBadge === undefined ? 0 : 1;
-  const io = rowHasIcon(node) ? IO_HEAD_HEIGHT : 0;   // the two columns' "Input | Output" header (RUK-741)
-  if (node.machine === undefined) return NODE_TITLE_HEIGHT + io + NODE_LINE_HEIGHT * (node.lines.length + badge);
-  return STEP_HEAD_HEIGHT + BUSY_BAND + io + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
+  return rowHasIcon(node) ? cardBodyTop(cardExtraLines(node)) : STUB_HEAD;   // a card's first tile line, a stub's one tile (RUK-740 round 2)
 }
 
 /**
@@ -431,12 +421,39 @@ export function rowLines(node: Pick<FlowNode, 'kind' | 'rows'>): number {
 
 /** The middle of a box's `i`-th row, from the box's top: where that row's port sits, on its column's line. */
 export function rowCentre(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
-  return rowsTop(node) + ROW_HEIGHT * rowLine(node, i) + ROW_HEIGHT / 2;
+  return tileCentre(rowsTop(node), rowLine(node, i));   // the middle of the row's tile
+}
+
+/** The lines a card draws under its head band: a step's lines but its first (its readout says it), a line's lines, and the avoid badge. */
+export function cardExtraLines(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>): number {
+  const lines = node.machine === undefined ? node.lines.length : Math.max(0, node.lines.length - 1);
+  return lines + (node.avoidBadge === undefined ? 0 : 1);
+}
+
+/** What a step's or a supporting line's card is sized from (card-model.ts): its inputs, its outputs, its power tile and its extra lines. */
+export function cardShape(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoidBadge' | 'machine'>): CardShape {
+  const inputs = node.rows.filter((r) => r.side === 'in').length;
+  const { machine } = node;
+  return {
+    step: node.kind === FlowNodeKind.Step, inputs, outputs: node.rows.length - inputs,
+    power: machine !== undefined && machine.count !== null && machine.power !== null,
+    extraLines: cardExtraLines(node),
+  };
 }
 
 /** Whether a box draws an icon beside each row: steps and collapsed lines; a stub's title already shows its one good. */
 export function rowHasIcon(node: Pick<FlowNode, 'kind'>): boolean {
   return node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Line;
+}
+
+/** A stub card's caption (RUK-740 round 2): what kind of box it is, with its row's words where they say more. */
+export function stubCaption(node: Pick<FlowNode, 'kind' | 'rows'>): string {
+  const words = node.rows[0]?.name ?? '';
+  if (node.kind === FlowNodeKind.Import) return `Import · ${words}`;
+  if (node.kind === FlowNodeKind.Missing) return `Missing · ${words}`;
+  if (node.kind === FlowNodeKind.Sink) return 'Left over';
+  if (node.kind === FlowNodeKind.Out) return 'Target';
+  return words;
 }
 
 /** A row's rate as its box writes it, with the share behind its issue. */
@@ -484,27 +501,15 @@ export function clipText(text: string, width: number, charWidth: number): string
 }
 
 /**
- * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–380 px, as tall as its rows need. A step box's head is its
- * machine readout, which draws its first line (Phase 2 spec §7.2): its head, chip row and busy band count instead of its title and that line.
+ * A box's size (fix spec §6.2): a step's or a supporting line's card from `cardGeometry`, a stub's small card from `card-model.ts`
+ * (RUK-740 round 2). Both are fixed widths, no longer sized to their text.
  */
 function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
-  const icon = node.key !== null ? ICON_SPACE : 0;
-  const rowIcon = rowHasIcon(node) ? ICON_SPACE : 0;
-  const { machine } = node;
-  const widths = [
-    ...(machine === undefined
-      ? [2 * TEXT_LEFT + icon + (node.kind === FlowNodeKind.Line ? TOGGLE_SPACE : 0) + textWidth(boxTitle(node), TITLE_CHAR_WIDTH)]
-      : readoutWidths(node.title, machine)),
-    ...(machine === undefined ? node.lines : node.lines.slice(1)).map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
-    ...(node.avoidBadge === undefined ? [] : [2 * TEXT_LEFT + textWidth(node.avoidBadge.text, TEXT_CHAR_WIDTH)]),
-    // a two-column box is as wide as its widest row's name and rate needs twice, the columns' gap between (RUK-741)
-    ...(rowHasIcon(node)
-      ? [2 * TEXT_LEFT + COLUMN_GAP + 2 * Math.max(0, ...node.rows.map((r) => rowIcon + textWidth(shortName(r.name), TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)))]
-      : node.rows.map((r) => 2 * TEXT_LEFT + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH))),
-  ];
-  const width = Math.min(MAX_NODE_WIDTH, Math.max(MIN_NODE_WIDTH, ...widths));
-  const height = rowsTop(node) + ROW_HEIGHT * rowLines(node) + (node.rows.length > 0 ? ROWS_BOTTOM : 0);
-  return { ...node, width, height };
+  if (rowHasIcon(node)) {
+    const card = cardGeometry(cardShape(node));   // a step's or a line's card has a fixed width (RUK-740 round 2)
+    return { ...node, width: card.width, height: card.height };
+  }
+  return { ...node, width: STUB_WIDTH, height: STUB_HEIGHT };   // a stub's small card
 }
 
 /** "3 machines", "1 machine"; with `shared`, "3 shared machines", "1 shared machine". */
@@ -974,7 +979,7 @@ export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGr
     const edge: ElkExtendedEdge = { id: e.id, sources: [e.fromPort], targets: [e.toPort] };
     if (e.label !== undefined) {
       edge.labels = [{
-        id: `${e.id}#label`, text: e.label, width: Math.ceil(e.label.length * LABEL_CHAR_WIDTH) + LABEL_PADDING, height: LABEL_HEIGHT,
+        id: `${e.id}#label`, text: e.label, width: labelWidth(e.label), height: LABEL_HEIGHT,
         layoutOptions: { 'elk.edgeLabels.placement': (arrows.get(e.toPort) ?? 0) > 1 ? 'HEAD' : 'TAIL' },
       }];
     }
@@ -1100,18 +1105,30 @@ function placeLeftOvers(layout: FlowLayout): FlowLayout {
   frame.width = Math.max(prevX + prevW + LEFT_OVER_PAD, leftOverTitleWidth());
   frame.height = LEFT_OVER_TITLE + maxH + LEFT_OVER_PAD;
 
-  // Compute dropX for each sink (avoid crossing boxes)
+  // Compute dropX for each sink: clear of every box, and of every rate label on its way down (RUK-817), so a pipe never
+  // hides the first digits of a label. A sink's own arrow, when it has a label, gets a box just right of its drop, above
+  // its lane, where only drops and lanes run.
+  const labels: Box[] = layout.edges.flatMap((e) => (e.labelBox === undefined ? [] : [e.labelBox]));
   const dropXs = new Map<string, number>();
+  const sinkLabels = new Map<string, Box>();
   for (let k = 0; k < n; k++) {
     const s = sorted[k]!;
     const start = starts.get(s.id)!;
+    const laneY = bottom + LEFT_OVER_GAP + LANE_STEP * k;
     let dropX = start[0] + DROP_GAP + DROP_STEP * (k % 4);
-    for (let iter = 0; iter < rest.length; iter++) {
-      const b = rest.find((bx) => bx.x - 4 <= dropX && dropX <= bx.x + bx.width + 4 && bx.y + bx.height > start[1] && bx.y < bottom);
+    for (let iter = 0; iter < rest.length + labels.length; iter++) {
+      const b = rest.find((bx) => bx.x - 4 <= dropX && dropX <= bx.x + bx.width + 4 && bx.y + bx.height > start[1] && bx.y < bottom)
+        ?? labels.find((l) => l.x - 4 <= dropX && dropX <= l.x + l.width + 4 && l.y + l.height > start[1] && l.y < laneY);
       if (b === undefined) break;
       dropX = b.x + b.width + DROP_GAP;
     }
     dropXs.set(s.id, dropX);
+    const label = layout.edges.find((ed) => ed.to === s.id)?.label;
+    if (label !== undefined) {
+      const box = { x: dropX + DROP_LABEL_GAP, y: laneY - DROP_LABEL_GAP - LABEL_HEIGHT, width: labelWidth(label), height: LABEL_HEIGHT };
+      sinkLabels.set(s.id, box);
+      labels.push(box);
+    }
   }
 
   // Build new nodes (sinks at their new positions)
@@ -1139,7 +1156,9 @@ function placeLeftOvers(layout: FlowLayout): FlowLayout {
       end,
     ];
     const { labelAt: _la, labelBox: _lb, ...rest2 } = e as typeof e & { labelAt?: [number, number]; labelBox?: Box };
-    return { ...rest2, points };
+    const box = sinkLabels.get(s.id);
+    if (box === undefined) return { ...rest2, points };
+    return { ...rest2, points, labelBox: box, labelAt: [box.x + box.width / 2, box.y + box.height / 2] as [number, number] };
   });
 
   return {

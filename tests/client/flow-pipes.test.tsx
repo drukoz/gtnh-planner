@@ -185,15 +185,16 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
     expect(html).not.toContain('<circle');
   });
 
-  // Phase 2 spec §7.6 (Task 4): the same box with its machine readout, whose head (46 px) and busy band (16 px) push the rows down 18 px;
-  // each flange still sits on its row's centre line, as ELK's port does (both read rowCentre), and the box keeps the pins above
-  it('ends each row on its flange under a machine readout too, the rows below the head and the busy band', () => {
+  // Phase 2 spec §7.6 (Task 4), card geometry (RUK-740 round 2): the same box with its machine readout, whose head draws the first line's
+  // words, so its tiles stand one 16 px card line higher than the card's; each flange still sits on its row's centre line, as ELK's port
+  // does (both read rowCentre), and the box keeps the pins above
+  it('ends each row on its flange under a machine readout too, the rows a card line higher with the readout words drawn', () => {
     const wiremill: PlanStep = {
       id: 'mill', recipeId: 'mill', mapId: 'gt.recipe.wiremill', machine: { mteId: 111, name: 'Wiremill', tier: 1 }, count: 1, owned: 0, runsPerSecond: 1,
       utilization: 0.5, euPerTick: 32, durationTicks: 100, overclocks: 0, inputs: [], outputs: [], alternatives: [], handCraft: false, warnings: [],
     };
     const readout = { ...node, machine: machineReadout(wiremill) };
-    expect(rowCentre(readout, 1)).toBe(rowCentre(node, 1) + 18);
+    expect(rowCentre(readout, 1)).toBe(rowCentre(node, 1) - 16);   // the readout draws lines[0], so the card's body stands a line higher
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={readout} /></svg>);
     expect(html).toContain(`<rect class="flow-port" x="198" y="${rowCentre(readout, 1) - 5}" width="4" height="10"`);
     expect(html).toContain(`<rect class="flow-port" x="-2" y="${rowCentre(readout, 0) - 5}" width="4" height="10"`);
@@ -211,7 +212,7 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
       nodes: new Set(['mill']), edges: new Set(), ports: new Set(['mill|out|t:copper_wire@0']), producers: new Set(['mill']), consumers: new Set(),
     };
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={node} sets={sets} /></svg>);
-    expect(html).toMatch(/<g class="flow-row out main hl" data-port="mill\|out\|t:copper_wire@0"/);
+    expect(html).toMatch(/<g class="flow-row flow-tile out main hl" data-port="mill\|out\|t:copper_wire@0"/);
     expect(html).toContain(`<rect class="flow-port" x="198" y="${rowCentre(node, 1) - 5}" width="4" height="10"></rect></g>`);
   });
 
@@ -220,7 +221,7 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
   it('draws no item tip inside a box, whose own tip tells it', () => {
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={node} /></svg>);
     expect(html).not.toMatch(/<span class="item-icon[^"]*"[^>]*data-tip=/);
-    expect(html.match(/<span class="item-icon/g)).toHaveLength(3);                      // the head's icon and one a row, all without one
+    expect(html.match(/<span class="item-icon/g)).toHaveLength(2);                      // one a tile, all without one
     expect(html).toContain(' data-tip="Wiremill\nLV · 32 EU/t · 1 machine\ntakes Copper Ingot 1/s\nmakes Copper Wire 2/s">');
   });
 

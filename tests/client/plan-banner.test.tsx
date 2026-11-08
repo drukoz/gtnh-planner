@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { drawerStatus, PlanBanner } from '../../src/client/views/ProjectPage.tsx';
 import { getFlowFocus, setFlowFocus } from '../../src/client/state/flow-focus.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
-import type { Plan, PlanSettings, PlanStep } from '../../src/shared/types/plan.ts';
+import type { Plan, PlanSettings, PlanStep, PlanWarning } from '../../src/shared/types/plan.ts';
 
 /** What a reader sees: the markup without its tags and comments, entities decoded, runs of white space as one space. */
 function text(html: string): string {
@@ -240,6 +240,45 @@ describe('plan banner: the hint to pick something to make', () => {
   it('adds nothing of its own: a plan with nothing to say is still no banner, and a plan not yet loaded is none either', () => {
     expect(htmlWithPicker(planOf({}))).toBe('');
     expect(renderToStaticMarkup(<PlanBanner plan={null} planError={null} planLoading={true} settings={S()} send={() => {}} onPickTarget={() => {}} />)).toBe('');
+  });
+});
+
+// A user's real project carried about 30 general notes, and its banner stood 1,155 px tall: the Flow chart started below the window.
+// The banner shows the first BANNER_SHOWN notes and folds the rest under a closed <details> (the browser's own, so PlanBanner stays a
+// plain function with no hook, and every note stays in the tree and the markup). RUK-740 round 2.
+describe('plan banner: the notes after 3 fold under "N more notes"', () => {
+  const notes = (n: number): PlanWarning[] => Array.from({ length: n }, (_, i) => ({ code: 'surplus-shared', text: `n${i + 1}` }));
+  const withPicker = (plan: Plan, onPickTarget: () => void) => PlanBanner({ plan, planError: null, planLoading: false, settings: S(), send: vi.fn(), onPickTarget });
+  const htmlWithPicker = (plan: Plan, onPickTarget: () => void = () => {}): string => renderToStaticMarkup(
+    <PlanBanner plan={plan} planError={null} planLoading={false} settings={S()} send={() => {}} onPickTarget={onPickTarget} />);
+
+  it('shows 3 notes and folds the other 2 into one closed details whose summary says "2 more notes"', () => {
+    const out = html(planOf({ warnings: notes(5) }));
+    expect(out.match(/<details class="banner-more">/g)).toHaveLength(1);
+    expect(out).toMatch(/<details class="banner-more"><summary>2 more notes<\/summary>/);
+    expect(out.indexOf('n3')).toBeLessThan(out.indexOf('<details'));
+    expect(out.indexOf('<details')).toBeLessThan(out.indexOf('n4'));
+    expect(out.indexOf('n4')).toBeLessThan(out.indexOf('n5'));
+  });
+
+  it('says "1 more note" for the single note after 3', () => {
+    expect(html(planOf({ warnings: notes(4) }))).toMatch(/<summary>1 more note<\/summary>/);
+  });
+
+  it('draws no details for 3 notes', () => {
+    const out = html(planOf({ warnings: notes(3) }));
+    expect(out).not.toContain('<details');
+    expect(out).toContain('n1');
+    expect(out).toContain('n3');
+  });
+
+  it('puts the hint to pick something to make among the first 3, before the fold, and keeps it in the tree', () => {
+    const late = planOf({ warnings: [...notes(4), { code: 'no-target', text: 'Pick something to make' }] });
+    const out = htmlWithPicker(late);
+    expect(out.indexOf('<button type="button" class="link">')).toBeLessThan(out.indexOf('<details'));
+    const hint = findAll(withPicker(late, () => {}), (e) => e.type === 'button' && e.props.className === 'link');
+    expect(hint).toHaveLength(1);
+    expect(hint[0]!.props.children).toBe('Pick something to make');
   });
 });
 

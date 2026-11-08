@@ -194,7 +194,8 @@ describe('the Machine GUI stylesheet', () => {
     const reduced = ruleBody('@media (prefers-reduced-motion: reduce)');
     expect(reduced).toContain('animation-duration: 1ms !important');
     expect(reduced).toContain('animation-iteration-count: 1 !important');
-    expect(reduced).toContain('transition-duration: 1ms !important');
+    expect(reduced).toContain('transition-duration: 0s !important');   // 0, not 1 ms: `all` would transition every property (RUK-816)
+    expect(reduced).toContain('transition-delay: 0s !important');
     for (const name of ['--dur-fast', '--dur-base', '--dur-slow', '--dur-exit']) expect(reduced, name).toContain(`${name}: 0ms`);
   });
 

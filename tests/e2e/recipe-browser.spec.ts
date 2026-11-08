@@ -40,6 +40,18 @@ test('R on a good shows the recipes that make it, U what uses it, and Escape clo
   await expect(dialog.locator('[data-recipe-id="wire"]')).toContainText('in use');
   await page.keyboard.press('u');
   await expect(page.getByRole('dialog', { name: 'Uses of 1x Copper Wire' })).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Close' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+// the port tip left showing when R opens the popup is on the inert page, so it is no layer above the modal: the first Escape closes the popup (RUK-818)
+test('Escape with the port tip still showing closes the popup, not just the tip', async ({ page }) => {
+  await openWithPlan(page, twoWiremillRecipes());
+  await page.locator(`[data-port$="|out|${WIRE}"]`).hover();
+  await expect(page.getByRole('tooltip')).toHaveAttribute('data-state', 'open');
+  await page.keyboard.press('r');
+  await expect(page.getByRole('dialog', { name: 'Recipes for 1x Copper Wire' })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });

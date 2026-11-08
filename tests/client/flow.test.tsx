@@ -5,17 +5,18 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
-  collapsedLines, firstProducer, edgeTag, rowNameRoom, rowLabel, rowHasIcon, shortName, boxTitle, rowLine, rowLines, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH,
-  IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS, PORT_SIZE, flowIssueLines, type FlowLayout, type FlowNode,
+  collapsedLines, firstProducer, edgeTag, rowNameRoom, rowLabel, rowHasIcon, shortName, boxTitle, rowLine, rowLines, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, cardShape,
+  IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS, PORT_SIZE, flowIssueLines, stubCaption, type FlowLayout, type FlowNode,
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
-  CHIP_PADDING, CHIP_CHAR_WIDTH, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
+  CHIP_PADDING, CHIP_CHAR_WIDTH, CHIP_GAP, BUSY_TRACK_TOP, BUSY_TRACK_HEIGHT, TEXT_LEFT, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
   layoutChange, glidable, GLIDE_LIMIT, type LayoutChange, type PlacedPicture,
   FlowNodeKind, FLOW_KIND_CLASS,
 } from '../../src/client/views/flow-model.ts';
+import { cardBodyTop, tileCentre, STEP_CARD_WIDTH, LINE_CARD_WIDTH, TILE_PITCH, TILE_GAP, CARD_PAD, CARD_CAPTION, CARD_FOOT, CARD_HEAD, TILE_WIDTH, TILE_HEIGHT, TILE_ICON_INSET, TILE_TEXT, STUB_WIDTH, STUB_HEIGHT, STUB_HEAD, STUB_TILE, cardGeometry } from '../../src/client/views/card-model.ts';
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
-import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, heldHeight, outsideWindow, viewPans } from '../../src/client/views/FlowView.tsx';
+import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, outsideWindow, viewPans } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import { settingsHash } from '../../src/shared/project/settings-hash.ts';
@@ -247,11 +248,14 @@ describe('flow diagram: boxes, rows and stubs (fix spec §6.2)', () => {
     expect(nodeOf(g, 'saw').rows.map((r) => [r.side, r.key, r.main === true])).toEqual([
       ['in', 't:copper_block@0', false], ['out', PLATE, true], ['out', 't:copper_dust@0', false]]);
     for (const n of g.nodes) {
-      expect(n.width).toBeGreaterThanOrEqual(190);
-      expect(n.width).toBeLessThanOrEqual(380);
+      if (rowHasIcon(n)) expect(n.width, n.id).toBe(n.kind === FlowNodeKind.Step ? STEP_CARD_WIDTH : LINE_CARD_WIDTH);   // a card is its fixed width (RUK-740 round 2)
+      else {
+        expect(n.width, n.id).toBe(STUB_WIDTH);                       // a stub is a small card (RUK-740 round 2)
+        expect(n.height, n.id).toBe(STUB_HEIGHT);
+      }
     }
     const long = flowGraph(planOf({ steps: [mv({ id: 'x', machine: { mteId: 1, name: 'Extremely Advanced Large Multiblock Assembling Machine of Great Length', tier: 2 } })] }), 'hour');
-    expect(nodeOf(long, 'x').width).toBe(380);
+    expect(nodeOf(long, 'x').width).toBe(STEP_CARD_WIDTH);   // a card is its width, whatever its words
   });
   it('says when a step shares its machines with other steps (plan 12)', () => {
     // The hammer steps of Task 5's AE2 sand plan: one forge hammer for both.
@@ -670,7 +674,8 @@ describe('flow diagram: machine readouts', () => {
     expect(machineIconKey({ mteId: -3, name: 'By hand', tier: 0 }, false)).toBeNull();                    // PSEUDO_MACHINES.HAND has no item
   });
   it('reads a step\'s tier, machines, power and how busy it is', () => {
-    expect(machineReadout(step({}))).toEqual({ iconKey: 'gregtech:gt.blockmachines@121', tier: { name: 'LV', slug: 'lv' }, count: '×5', power: '16 EU/t', busy: 1, busyText: '100%', high: true });
+    expect(machineReadout(step({}))).toEqual({ iconKey: 'gregtech:gt.blockmachines@121', tier: { name: 'LV', slug: 'lv' }, count: '×5', power: '16 EU/t', amps: null, busy: 1, busyText: '100%', high: true });
+    expect(machineReadout(step({ oc: { ...step({}).oc!, machineAmps: 4 } })).amps).toBe('4A');   // an amp-drawing machine's amperage, for its card's power tile
     expect(machineReadout(step({ count: 1, pool: { id: 'pool:a', steps: ['a', 'circuit-lv'] } })).count).toBe('×1 shared');
     expect(machineReadout(step({ utilization: 0.625 }))).toMatchObject({ busy: 0.625, busyText: '63%', high: false });
     expect(machineReadout(step({ utilization: 0.9 })).high).toBe(true); expect(machineReadout(step({ utilization: 1.4 })).busy).toBe(1);
@@ -686,11 +691,11 @@ describe('flow diagram: machine readouts', () => {
     expect([0, 1, 6, 14].map(tierSlug)).toEqual(['ulv', 'lv', 'luv', 'max']); expect(tierSlug(15)).toBe('unknown'); expect(tierSlug(-1)).toBe('unknown');
     expect(tierSlug(1.5)).toBe('unknown');
   });
-  it('starts a readout box\'s rows below its 46 px head, 16 px busy band and 14 px row header', () => {
+  it('starts a card\'s rows on its first tile line, under its 30 px head band, its extra lines and its 14 px captions', () => {
     const box = nodeOf(flowGraph(plan, 'min'), 'circuit-lv');
-    expect(box.machine).toBeDefined(); expect(rowsTop(box)).toBe(46 + 16 + 14 + 16 * (box.lines.length - 1));
-    expect(rowsTop({ ...box, avoidBadge: { text: 'x', warnings: [] } })).toBe(46 + 16 + 14 + 16 * box.lines.length);
-    expect(rowsTop({ ...box, machine: undefined })).toBe(28 + 14 + 16 * box.lines.length);   // the stub of a two-column kind keeps its row header
+    expect(box.machine).toBeDefined(); expect(rowsTop(box)).toBe(cardBodyTop(box.lines.length - 1));
+    expect(rowsTop({ ...box, avoidBadge: { text: 'x', warnings: [] } })).toBe(cardBodyTop(box.lines.length));
+    expect(rowsTop({ ...box, machine: undefined })).toBe(cardBodyTop(box.lines.length));   // a step read as a stub is a card too, its lines counted whole
     expect(box.lines).toEqual(['LV · 16 EU/t · 5 machines · 100% busy']);                    // the words stay (:71)
     expect([MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT, CHIP_PADDING]).toEqual([32, 36, 46, 16, 16, 5]);
     expect([IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS]).toEqual([14, 12, 14]);   // the two columns (RUK-741)
@@ -699,71 +704,93 @@ describe('flow diagram: machine readouts', () => {
     expect(closed.nodes.filter((n) => n.machine !== undefined).map((n) => n.id)).toEqual(['wire']);
     expect(g.nodes.filter((n) => n.machine === undefined).map((n) => n.kind).sort()).toEqual([FlowNodeKind.Import, FlowNodeKind.Import, FlowNodeKind.Import, FlowNodeKind.Missing, FlowNodeKind.Sink, FlowNodeKind.Out]);
   });
-  it('draws a readout box\'s machine, chips and busy bar in its head', () => {
+  it('draws a readout card\'s machine column, its tier chip in the head band and its busy bar in the foot', () => {
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph(plan, 'min'), 'circuit-lv'))} /></svg>);
-    expect(html).toContain('<g class="flow-machine" aria-hidden="true">'); expect(html).toContain('data-item-key="gregtech:gt.blockmachines@121"');
-    expect(html).toMatch(/<g class="flow-chip tier-lv" transform="translate\(52 25\)"><rect width="30" height="16"><\/rect><text x="15" y="12.5">LV<\/text><\/g>/);
-    expect(html).toContain('>×<tspan class="fig">5</tspan></text>'); expect(html).toContain('>16 EU/t</text>'); expect(html).toContain('<g class="flow-busy high">');   // a count's digits in VT323 (spec §25)
+    expect(html).toContain('<g class="flow-machine flow-card-machine" aria-hidden="true">'); expect(html).toContain('data-item-key="gregtech:gt.blockmachines@121"');
+    expect(html).toMatch(/<g class="flow-chip tier-lv" transform="translate\(350 7\)"><rect width="30" height="16"><\/rect><text x="15" y="12.5">LV<\/text><\/g>/);
+    expect(html).toContain('>×<tspan class="fig">5</tspan></text>'); expect(html).toContain('>16 EU/t</text>'); expect(html).toContain('<g class="flow-busy high" aria-hidden="true">');   // a count's digits in VT323 (spec §25)
     const node = at0(nodeOf(flowGraph(plan, 'min'), 'circuit-lv'));
-    expect(html).toContain(`<rect class="flow-busy-fill" x="8" y="51" width="${busyTrack(node)}" height="6">`);
+    const foot = node.height - CARD_FOOT + BUSY_TRACK_TOP;                        // the busy bar in the foot band
+    expect(html).toContain(`<rect class="flow-busy-fill" x="8" y="${foot}" width="${busyTrack(node)}" height="${BUSY_TRACK_HEIGHT}">`);
     expect(html.match(/<g class="([^"]*)" data-node-id/)?.[1]).toBe('flow-node step new'); expect(html).not.toMatch(/\b(hl|dim)\b/); expect(html).not.toContain('<circle');
-    // the slot and its 2 px bevel, the 32 px icon filling its own foreignObject inside it, the count chip 4 px after the tier's and the
-    // power 6 px after the count's; the band's track, and its words at the box's right edge
-    expect(html).toContain('<rect class="flow-machine-slot" x="8" y="6" width="36" height="36"></rect><path class="flow-slot-lo" d="M 8 6 H 44 V 8 H 10 V 42 H 8 Z"></path><path class="flow-slot-hi" d="M 44 6 V 42 H 8 V 40 H 42 V 6 Z"></path><foreignObject x="10" y="8" width="32" height="32"><span class="item-icon');
-    expect(html).toContain('<g class="flow-chip" transform="translate(86 25)"><rect width="30" height="16"></rect><text x="15" y="12.5">×<tspan class="fig">5</tspan></text></g><text class="flow-node-power" x="122" y="37">16 EU/t</text>');
-    expect(html).toContain(`<rect class="flow-busy-track" x="8" y="51" width="${busyTrack(node)}" height="6"></rect>`);
-    expect(html).toContain(`<text class="flow-busy-text" x="${node.width - 8}" y="57">100%</text>`);
-    // the title beside the slot, on its baseline; no 16 px head icon and no first line: the readout draws them
-    expect(html).toContain('<text class="flow-node-title" x="52" y="19">Basic Assembler</text>');
+    // the 44 px slot with its 40 px icon in the machine column between the tile columns, the count and the owned words under it,
+    // and the power tile under the inputs: its bolt, its "16 EU/t" and "Power"
+    expect(html).toContain('<rect class="flow-machine-slot" x="172" y="44" width="44" height="44"></rect><foreignObject x="174" y="46" width="40" height="40"><span class="item-icon');
+    expect(html).toContain('<text class="flow-card-count" x="194" y="106" text-anchor="middle">×<tspan class="fig">5</tspan></text><text class="flow-card-owned" x="194" y="120" text-anchor="middle">new</text>');
+    expect(html).toContain('<rect class="flow-tile-box" x="6" y="82" width="140" height="34"></rect><path class="flow-power-bolt" d="M 14 1 L 4 14 H 11 L 9 23 L 20 9 H 13 Z" transform="translate(11 87)"></path><text class="flow-tile-rate" x="40" y="97">16 EU/t</text><text class="flow-tile-name" x="40" y="110">Power</text>');
+    expect(html).toContain(`<rect class="flow-busy-track" x="8" y="${foot}" width="${busyTrack(node)}" height="${BUSY_TRACK_HEIGHT}"></rect>`);
+    expect(html).toContain(`<text class="flow-busy-text" x="${node.width - 8}" y="${foot + BUSY_TRACK_HEIGHT}">100%</text>`);
+    // the title on the band's baseline, cut at the chips; no 16 px head icon and no first line: the readout draws them
+    expect(html).toContain('<text class="flow-node-title" x="8" y="20">Basic Assembler</text>');
     expect(html).not.toContain('class="flow-node-line"');
-    expect(html.match(/<foreignObject [^>]*>/g)).toEqual(['<foreignObject x="10" y="8" width="32" height="32">', expect.stringContaining('width="16" height="16"'), expect.stringContaining('width="16" height="16"')]);
+    expect(html.match(/<foreignObject [^>]*>/g)).toEqual(['<foreignObject x="174" y="46" width="40" height="40">', expect.stringContaining('width="24" height="24"'), expect.stringContaining('width="24" height="24"')]);
     // the words stay the box's name and tip
     expect(html).toContain('aria-label="Basic Assembler, LV · 16 EU/t · 5 machines · 100% busy"');
     expect(html).toContain('data-tip="Basic Assembler\nLV · 16 EU/t · 5 machines · 100% busy\ntakes Redstone 30/min\nmakes Basic Circuit 30/min"');
   });
-  it('draws a pseudo machine\'s count chip first, and a hand step\'s "by hand" with no chip', () => {
+  it('draws a pseudo machine\'s count under its slot, and a hand step\'s "by hand" with no chip', () => {
     const box = (s: PlanStep): string => renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph({ ...plan, steps: [s] } as Plan, 'min'), 'circuit-lv'))} /></svg>);
     const furnace = box({ ...plan.steps[0]!, machine: { mteId: -2, name: 'Furnace', tier: 0 }, euPerTick: 0 });
-    expect(furnace).toContain('<g class="flow-chip" transform="translate(52 25)"><rect width="30" height="16"></rect><text x="15" y="12.5">×<tspan class="fig">5</tspan></text></g>');
-    expect(furnace).not.toContain('flow-chip tier-'); expect(furnace).toContain('data-item-key="minecraft:furnace@0"');
+    expect(furnace).toContain('<text class="flow-card-count" x="194" y="106" text-anchor="middle">×<tspan class="fig">5</tspan></text>');
+    expect(furnace).not.toContain('flow-chip tier-'); expect(furnace).not.toContain('flow-chip'); expect(furnace).toContain('data-item-key="minecraft:furnace@0"');
     const hand = box({ ...plan.steps[0]!, handCraft: true, machine: { mteId: -1, name: 'Crafting table (by hand)', tier: 0 }, euPerTick: 0 });
-    expect(hand).toContain('<text class="flow-node-power" x="52" y="37">by hand</text>'); expect(hand).not.toContain('flow-chip');
-    expect(hand).toMatch(/<foreignObject x="10" y="8" width="32" height="32"><span class="item-icon[^>]*data-item-key="t:circuit@0"/);   // its slot shows its main output
-    expect(hand).toContain('<g class="flow-busy high">');                                                     // it keeps its band
+    expect(hand).toContain('<text class="flow-card-owned" x="194" y="120" text-anchor="middle">by hand</text>'); expect(hand).not.toContain('flow-chip');
+    expect(hand).toMatch(/<foreignObject x="174" y="46" width="40" height="40"><span class="item-icon[^>]*data-item-key="t:circuit@0"/);   // its slot shows its main output
+    expect(hand).toContain('<g class="flow-busy high" aria-hidden="true">');                                          // it keeps its band
     // a hand step that makes nothing in particular has an empty slot
     expect(box({ ...plan.steps[0]!, handCraft: true, mainOutput: undefined, machine: { mteId: -1, name: 'Crafting table (by hand)', tier: 0 } }))
-      .not.toContain('<foreignObject x="10" y="8"');
+      .not.toContain('<foreignObject x="174" y="46"');
+  });
+  it('draws a shared pool card\'s amps chip, its power tile and "shared" under its count', () => {
+    const s = { ...plan.steps[0]!, count: 3, euPerTick: 120,
+      pool: { id: 'pool:circuit-lv', steps: ['circuit-lv', 'circuit-mv'] },
+      oc: { ...plan.steps[0]!.oc!, machineAmps: 4 } } as PlanStep;
+    const box = at0(nodeOf(flowGraph({ ...plan, steps: [s] } as Plan, 'min'), 'circuit-lv'));
+    const html = renderToStaticMarkup(<svg><FlowNodeShape node={box} /></svg>);
+    // the band's chips at its right: the tier chip at the edge, the amperage chip 4 px before it
+    const tierX = box.width - TEXT_LEFT - chipWidth('LV');
+    expect(html).toContain(`<g class="flow-chip tier-lv" transform="translate(${tierX} 7)"><rect width="${chipWidth('LV')}" height="16"></rect><text x="${chipWidth('LV') / 2}" y="12.5">LV</text></g>`);
+    expect(html).toContain(`<g class="flow-chip amps" transform="translate(${tierX - CHIP_GAP - chipWidth('4A')} 7)"><rect width="${chipWidth('4A')}" height="16"></rect><text x="${chipWidth('4A') / 2}" y="12.5"><tspan class="fig">4</tspan>A</text></g>`);
+    // the count alone in the machine column, and "shared" under it
+    expect(html).toContain('<text class="flow-card-count" x="194" y="106" text-anchor="middle">×<tspan class="fig">3</tspan></text><text class="flow-card-owned" x="194" y="120" text-anchor="middle">shared</text>');
+    // the power tile under the inputs, with the power's words
+    expect(html).toContain('<g class="flow-tile power" aria-hidden="true"><rect class="flow-tile-box" x="6" y="82" width="140" height="34"></rect>');
+    expect(html).toContain('<text class="flow-tile-rate" x="40" y="97">120 EU/t</text><text class="flow-tile-name" x="40" y="110">Power</text>');
+    // the foot's band: 100 % busy, so its bar is the high one
+    expect(html).toContain('<g class="flow-busy high" aria-hidden="true">');
+    // the words stay the box's
+    expect(html).toContain('data-tip="Basic Assembler\nLV · 120 EU/t · 3 shared machines · 100% busy\ntakes Redstone 30/min\nmakes Basic Circuit 30/min"');
   });
   it('reads a farm step as the farm machine it needs, tier chip and all, and cuts its farm words below the band', () => {
     // add-on 17: a Tree Growth Simulator's tier is its energy hatch's and a Crop Manager's its own, voltage tiers both, so plan ruling pseudo-tier-chip does not apply
     const words = 'Tree Growth Simulator (LV): Rubber Sapling in the controller; Saw and Knife (Steel) in an input bus';
     const tgs: PlanStep = { ...plan.steps[0]!, machine: { mteId: 15541, name: 'Tree Growth Simulator', tier: 1 }, count: 1, euPerTick: 30, utilization: 0.5,
       farm: { kind: 'tgs', tier: 1, footprint: [7, 7, 7], text: words, sapling: 't:rubber_sapling@0', tools: ['gregtech:gt.metatool.01@10'] } };
-    expect(machineReadout(tgs)).toEqual({ iconKey: 'gregtech:gt.blockmachines@15541', tier: { name: 'LV', slug: 'lv' }, count: '×1', power: '30 EU/t', busy: 0.5, busyText: '50%', high: false });
+    expect(machineReadout(tgs)).toEqual({ iconKey: 'gregtech:gt.blockmachines@15541', tier: { name: 'LV', slug: 'lv' }, count: '×1', power: '30 EU/t', amps: null, busy: 0.5, busyText: '50%', high: false });
     // a Crop Manager draws a fraction of an EU/t: its recipe's EU/t × the 121 crop sticks it tends (farmOc)
     expect(machineReadout({ ...tgs, machine: { mteId: 28001, name: 'Basic Crop Manager', tier: 1 }, euPerTick: (4.5235540375 / 5120) * 121 }))
       .toMatchObject({ iconKey: 'gregtech:gt.blockmachines@28001', tier: { name: 'LV', slug: 'lv' }, count: '×1', power: '0.107 EU/t' });
     const box = nodeOf(flowGraph({ ...plan, steps: [tgs] } as Plan, 'min'), 'circuit-lv');
     expect(box.lines).toEqual(['LV · 30 EU/t · 1 machine · 50% busy', words]);   // the words keep the whole sentence
-    expect(box.width).toBe(380); expect(rowsTop(box)).toBe(46 + 16 + 14 + 16);
+    expect(box.width).toBe(STEP_CARD_WIDTH); expect(rowsTop(box)).toBe(cardBodyTop(box.lines.length - 1));
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
-    expect(html).toContain('data-item-key="gregtech:gt.blockmachines@15541"'); expect(html).toContain('<g class="flow-chip tier-lv" transform="translate(52 25)">');
-    expect(html).toContain('<text class="flow-node-line" x="8" y="73">Tree Growth Simulator (LV): Rubber Sapling in the control…</text>');
+    expect(html).toContain('data-item-key="gregtech:gt.blockmachines@15541"'); expect(html).toContain('<g class="flow-chip tier-lv" transform="translate(350 7)">');
+    expect(html).toContain('<text class="flow-node-line" x="8" y="41">Tree Growth Simulator (LV): Rubber Sapling in the controlle…</text>');   // cut to the 388 px card
     expect(html).not.toContain('t:rubber_sapling@0');                                                         // the slot never shows the sapling
     expect(html).toContain(`data-tip="Tree Growth Simulator\nLV · 30 EU/t · 1 machine · 50% busy\n${words}\n`);   // the tip keeps them whole
   });
-  it('sizes a readout box to its head, its chip row and its band, and puts a second line and the badge below the band', () => {
+  it('sizes a step card to its fixed 388 px whatever its chips, and puts a second line and the badge below the head band', () => {
     // the chip row of a UMV pool step: 52 + 40 (UMV) + 4 + 110 (×12 shared) + 6 + 62 (1,920 EU/t) + 8; the band alone needs 120
     const pooled = step({ machine: { mteId: 121, name: 'Basic Assembler', tier: 12 }, count: 12, euPerTick: 1920, pool: { id: 'pool:a', steps: ['a', 'circuit-lv'] } });
-    // 318: the two columns, each wide enough for "Basic Circuit 30/min", are wider than the 282 px chip row (RUK-741)
-    expect(nodeOf(flowGraph({ ...plan, steps: [pooled] } as Plan, 'min'), 'circuit-lv').width).toBe(2 * 8 + 12 + 2 * (20 + 81 + 44));
+    // a card is as wide as its columns: a step's 388 px, whatever its chip row and its words want (RUK-740 round 2)
+    expect(nodeOf(flowGraph({ ...plan, steps: [pooled] } as Plan, 'min'), 'circuit-lv').width).toBe(STEP_CARD_WIDTH);
     expect(machineReadout(pooled)).toMatchObject({ tier: { name: 'UMV', slug: 'umv' }, count: '×12 shared', power: '1,920 EU/t' });
     expect(8 + 60 + 6 + textWidth('>99.9%', TEXT_CHAR_WIDTH) + 8).toBe(120);
     expect(busyTrack({ width: 190 })).toBe(130); expect(busyTrack({ width: 380 })).toBe(320);
-    // a long machine name sizes the head: 8 + 36 + 8 + its 13 px title + 8, up to the widest box
+    // a long machine name no longer sizes the head: the card is its width, and the title is cut to fit
     const named = (name: string): number => nodeOf(flowGraph({ ...plan, steps: [step({ machine: { mteId: 121, name, tier: 1 } })] } as Plan, 'min'), 'circuit-lv').width;
-    expect(named('Electric Blast Furnace Controller')).toBe(318);   // its 297 px title, under the 318 px the two columns want
-    expect(named('Extremely Advanced Large Multiblock Assembling Machine')).toBe(380);
+    expect(named('Electric Blast Furnace Controller')).toBe(STEP_CARD_WIDTH);
+    expect(named('Extremely Advanced Large Multiblock Assembling Machine')).toBe(STEP_CARD_WIDTH);
     // an owned step's second line and the avoid badge, below the band
     const text = 'Basic Assembler uses Redstone — no recipe at LV avoids it';
     const owned = flowGraph({ ...plan, steps: [step({ owned: 2, inputs: plan.steps[0]!.inputs, outputs: plan.steps[0]!.outputs })],
@@ -771,10 +798,10 @@ describe('flow diagram: machine readouts', () => {
     const box = nodeOf(owned, 'circuit-lv');
     expect(box.lines).toEqual(['LV · 16 EU/t · 5 machines · 100% busy', '2 owned']);
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
-    expect(html).toContain('<text class="flow-node-line" x="8" y="73">2 owned</text>');
-    expect(html).toContain('<g class="flow-avoid-badge" data-avoid-badge="" transform="translate(4 78)">');
-    expect(rowsTop(box)).toBe(46 + 16 + 14 + 16 + 16);
-    expect(html).toContain(`<rect class="flow-hit" width="${box.width}" height="${rowsTop(box)}"></rect>`);   // the head's hit area holds the band
+    expect(html).toContain('<text class="flow-node-line" x="8" y="41">2 owned</text>');
+    expect(html).toContain('<g class="flow-avoid-badge" data-avoid-badge="" transform="translate(4 46)">');
+    expect(rowsTop(box)).toBe(cardBodyTop(box.lines.length));   // the second line and the badge are the extra lines
+    expect(html).toContain(`<rect class="flow-hit" width="${box.width}" height="${rowsTop(box) - CARD_CAPTION}"></rect>`);   // the head's hit area holds the band, not the caption
   });
   it('makes every chip wide enough for its text in Pixelify and in its fallback, MAX in bold too (ledger ruling P2-R8)', () => {
     expect(CHIP_CHAR_WIDTH).toBe(10);
@@ -798,29 +825,29 @@ describe('flow diagram: machine readouts', () => {
       expect(chipWidth(count) - 2 * CHIP_PADDING, count).toBeGreaterThanOrEqual(widest);
     }
   });
-  it('draws an Input | Output header over a step box\'s two columns, each row in its own half, and cuts a long name to 14', () => {
-    const box = nodeOf(flowGraph(plan, 'min'), 'circuit-lv');                                     // 318 px wide: one input, one output
+  it('draws an Input and an Output caption over a step card\'s two tile columns, each tile in its own half, and cuts a long name', () => {
+    const box = nodeOf(flowGraph(plan, 'min'), 'circuit-lv');                                     // 388 px wide: one input, one output
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={at0(box)} /></svg>);
-    const top = rowsTop(box) - IO_HEAD_HEIGHT;                                                    // the header band runs from here to rowsTop
-    expect(html).toContain(`<text class="flow-io-head" x="8" y="${top + 10}">Input</text>`);
-    expect(html).toContain(`<text class="flow-io-head" x="${box.width - 8}" y="${top + 10}" text-anchor="end">Output</text>`);
-    expect(html.match(/<line class="flow-io-divider"/g)).toHaveLength(1);
-    expect(html).toContain(`<line class="flow-io-divider" x1="${box.width / 2}" y1="${top}" x2="${box.width / 2}"`);
-    // a row's hover, clip and focus ring are its own column: inputs the left half, outputs the right
-    const halves = [...html.matchAll(/<g class="flow-row (in|out)[^"]*"[^>]*><rect class="flow-hit" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"/g)].map((m) => [m[1], m[2], m[3]]);
-    expect(halves).toEqual([['in', '0', String(box.width / 2)], ['out', String(box.width / 2), String(box.width / 2)]]);
+    const card = cardGeometry(cardShape(box));
+    const caption = card.bodyTop - 4;                                                                       // the captions stand 4 px under the body top, above the first tile line
+    expect(html).toContain(`<text class="flow-io-head" x="${CARD_PAD}" y="${caption}">Input</text>`);
+    expect(html).toContain(`<text class="flow-io-head" x="${box.width - CARD_PAD}" y="${caption}" text-anchor="end">Output</text>`);
+    // a tile's column is its own half: inputs the left, outputs the right
+    const columns = [...html.matchAll(/<g class="flow-row flow-tile (in|out)[^"]*"[^>]*><rect class="flow-tile-box" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"/g)].map((m) => [m[1], m[2], m[3]]);
+    expect(columns).toEqual([['in', String(CARD_PAD), String(TILE_WIDTH)], ['out', String(box.width - CARD_PAD - TILE_WIDTH), String(TILE_WIDTH)]]);
     // a 31-character name shows 13 characters and an ellipsis; the box's tooltip and accessible name keep it whole
     const LONG = 'Extremely Long Copper Wire Name';
     const longPlan = { ...plan, names: { ...plan.names, 't:redstone@0': LONG } } as Plan;
     const lhtml = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph(longPlan, 'min'), 'circuit-lv'))} /></svg>);
-    expect(lhtml).toContain('>Extremely Lon… <tspan class="flow-row-rate">');
+    expect(lhtml).toContain('<text class="flow-tile-name" x="34" y="28">Extremely Lon…</text>');
     expect(lhtml).toContain(`data-tip="Basic Assembler\nLV · 16 EU/t · 5 machines · 100% busy\ntakes ${LONG} 30/min\nmakes Basic Circuit 30/min"`);
-    // a stub draws no header over its one row, cuts its long title to 14, and keeps its row the full width
+    // a stub is a small card (RUK-740 round 2): no column captions, its good's name in its one tile cut to 14, its kind in its caption
     const stub = nodeOf(flowGraph(longPlan, 'min'), 'import:t:redstone@0@circuit-lv');
     const shtml = renderToStaticMarkup(<svg><FlowNodeShape node={at0(stub)} /></svg>);
     expect(shtml).not.toContain('flow-io-head');
-    expect(shtml.match(/<text class="flow-node-title"[^>]*>([^<]*)/)?.[1]?.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
-    expect(shtml).toContain(`<rect class="flow-hit" x="0" y="${rowsTop(stub)}" width="${stub.width}" height="18">`);
+    expect(shtml).toContain('flow-stub-caption');
+    expect(shtml.match(/<text class="flow-tile-name"[^>]*>([^<]*)/)?.[1]?.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
+    expect(shtml).toContain(`<rect class="flow-tile-box" x="${STUB_TILE.x}" y="${STUB_TILE.y}" width="${TILE_WIDTH}" height="${TILE_HEIGHT}">`);
   });
 });
 
@@ -955,43 +982,6 @@ describe('what a new layout changed', () => {
   });
 });
 
-// Fix round 2 (item 3, ledger ruling P2-R121): while a new layout that shortens the canvas glides, the canvas keeps the height it was drawn at,
-// decided from the two layouts alone, as the new one is drawn, so holding costs no render of its own; one that leaves the canvas as tall, the
-// same layout again, and one that snaps (more than GLIDE_LIMIT boxes changed, or reduced motion) each have their own rule
-describe('the height the canvas keeps while a new layout glides', () => {
-  const laid = (height: number, boxes: Array<[string, number, number]>): FlowLayout =>
-    ({ width: 400, height, nodes: boxes.map(([id, x, y]) => ({ id, x, y })), edges: [], groups: [] }) as unknown as FlowLayout;
-  const room = 540;                                                                    // 75vh of a 720 px window
-  const tall = laid(300, [['a', 0, 0], ['b', 0, 200]]);
-  const short = laid(200, [['a', 0, 0], ['b', 200, 0]]);
-  it('keeps the height it was drawn at while a layout that shortens it glides, and none for one that does not', () => {
-    expect(heldHeight(tall, short, null, room)).toBe(300);
-    expect(heldHeight(short, tall, null, room), 'taller').toBeNull();
-    expect(heldHeight(short, laid(200, [['a', 0, 10], ['b', 200, 0]]), null, room), 'as tall').toBeNull();
-  });
-  it('keeps what it keeps for the same layout again, and the first height through a layout that shortens it again', () => {
-    expect(heldHeight(short, laid(200, [['a', 0, 0], ['b', 200, 0]]), 300, room), 'the same layout again (an SSE refetch)').toBe(300);
-    expect(heldHeight(short, laid(200, [['a', 0, 0], ['b', 200, 0]]), null, room)).toBeNull();
-    expect(heldHeight(short, laid(100, [['a', 0, 0], ['b', 100, 0]]), 300, room), 'still the height first drawn').toBe(300);
-    expect(heldHeight(short, laid(320, [['a', 0, 0], ['b', 0, 220]]), 300, room), 'a layout taller than the hold ends it').toBeNull();
-  });
-  it('keeps none where 75vh draws both layouts as tall', () => {
-    expect(heldHeight(laid(900, [['a', 0, 0], ['b', 0, 800]]), laid(700, [['a', 0, 0], ['b', 0, 600]]), null, room)).toBeNull();
-    expect(heldHeight(laid(900, [['a', 0, 0], ['b', 0, 800]]), laid(400, [['a', 0, 0], ['b', 0, 300]]), null, room), 'drawn shorter').toBe(900);
-  });
-  it('keeps none for a layout that snaps', () => {
-    const boxes = (n: number, x: number): Array<[string, number, number]> => Array.from({ length: n }, (_, i): [string, number, number] => [`n${i}`, x, i * 10]);
-    expect(heldHeight(laid(400, boxes(GLIDE_LIMIT + 1, 0)), laid(200, boxes(GLIDE_LIMIT + 1, 5)), null, room), 'more than GLIDE_LIMIT boxes moved').toBeNull();
-    expect(heldHeight(laid(400, boxes(GLIDE_LIMIT, 0)), laid(200, boxes(GLIDE_LIMIT, 5)), null, room), 'the premise: GLIDE_LIMIT glide').toBe(400);
-    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' }));
-    try {
-      expect(heldHeight(tall, short, null, room), 'reduced motion').toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-});
-
 // Task F4 (ledger ruling P2-R126): the view a new layout brings is panned to only when the layout glides; one that snaps (more than GLIDE_LIMIT
 // boxes changed, the count its glide goes by) takes its view at once
 describe('how a new layout\'s view is taken', () => {
@@ -1042,26 +1032,26 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
     expect([0, 1, 2].map((i) => rowLine(saw, i))).toEqual([0, 0, 1]);
     expect(rowLines(saw)).toBe(2);
     expect(rowCentre(saw, 0)).toBe(rowCentre(saw, 1));                     // the input sits beside its main output
-    expect(rowCentre(saw, 2)).toBe(rowCentre(saw, 1) + 18);                // the byproduct a line lower
+    expect(rowCentre(saw, 2)).toBe(rowCentre(saw, 1) + TILE_PITCH);           // the byproduct a tile line lower
     const asm = nodeOf(g, 'asm');                                          // three inputs, one output
     expect(asm.rows.map((r) => r.side)).toEqual(['in', 'in', 'in', 'out']);
     expect([0, 1, 2, 3].map((i) => rowLine(asm, i))).toEqual([0, 1, 2, 0]);
     expect(rowLines(asm)).toBe(3);
-    // a box is as tall as its taller column: the saw's two rows, not its three
-    expect(saw.height).toBe(rowsTop(saw) + 18 * 2 + 6);
+    // a box is as tall as its taller column, its tiles' pitch and its foot: the saw's two rows, not its three
+    expect(saw.height).toBe(rowsTop(saw) + 2 * TILE_PITCH - TILE_GAP + CARD_PAD + CARD_FOOT);
     // a stub's one row is its own: line 0, no columns and no header over them
     const stub = nodeOf(g, 'import:t:copper_ingot@0@mill');
     expect(rowLine(stub, 0)).toBe(0); expect(rowLines(stub)).toBe(1);
-    expect(rowsTop(stub)).toBe(28 + 16 * stub.lines.length);
+    expect(rowsTop(stub)).toBe(STUB_HEAD);                               // a stub card's one tile under its caption band
   });
-  it('leaves a 14 px header for the two columns above a step box\'s and a collapsed line box\'s rows', () => {
-    const mill = nodeOf(g, 'mill');                                        // a step: head, band, then the header
-    expect(rowsTop(mill)).toBe(46 + 16 + 14);
+  it('leaves a 14 px caption band for the two columns under a step card\'s head band and a collapsed line card\'s lines', () => {
+    const mill = nodeOf(g, 'mill');                                        // a step card: head band, captions, then the tiles
+    expect(rowsTop(mill)).toBe(30 + 14);
     const closed = flowGraph(red, 'hour', { collapsedLines: new Set([RED]) });
-    const line = nodeOf(closed, `line:${RED}`);                            // a collapsed line: title, then the header
-    expect(rowsTop(line)).toBe(28 + 14 + 16 * line.lines.length);
+    const line = nodeOf(closed, `line:${RED}`);                            // a collapsed line card: its lines, then the captions
+    expect(rowsTop(line)).toBe(30 + 14 + 16 * line.lines.length);
     const stub = nodeOf(g, 'import:t:copper_ingot@0@mill');                // a stub: no header over its one row
-    expect(rowsTop(stub)).toBe(28 + 16 * stub.lines.length);
+    expect(rowsTop(stub)).toBe(STUB_HEAD);                               // its one tile under its caption band (RUK-740 round 2)
   });
   it('writes every name in at most 14 characters, fitted to its column, and leaves a stub\'s title whole', () => {
     expect(shortName('Redstone')).toBe('Redstone');
@@ -1093,15 +1083,33 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
     expect(smelt.rows.map((r) => r.side)).toEqual(['in', 'in', 'out']);
     expect(rowLines(smelt)).toBe(2);
     expect(rowCentre(smelt, 0)).toBe(rowCentre(smelt, 2));                // input 0 sits beside the output
-    expect(rowCentre(smelt, 1)).toBe(rowCentre(smelt, 0) + 18);          // input 1 one ROW_HEIGHT lower
-    expect(smelt.height).toBe(rowsTop(smelt) + 2 * 18 + 6);
+    expect(rowCentre(smelt, 1)).toBe(rowCentre(smelt, 0) + TILE_PITCH);   // input 1 one tile line lower
+    expect(smelt.height).toBe(rowsTop(smelt) + 3 * TILE_PITCH - TILE_GAP + CARD_PAD + CARD_FOOT);   // three lines tall: its two inputs and the power tile
   });
-  it('lifts a step box\'s rows the row header over the same box read as a stub, and puts each row\'s port on its line', () => {
+  it('starts a step card\'s tiles under its 30 px head band and 14 px captions, and puts each row\'s port on its tile', () => {
     const mill = nodeOf(g, 'mill');
-    expect(rowsTop(mill) - rowsTop({ ...mill, kind: FlowNodeKind.Import })).toBe(IO_HEAD_HEIGHT);   // the header, and nothing else, is the step's extra height
+    expect(rowsTop(mill)).toBe(30 + 14);   // the head band and the captions, and nothing else, stand over the step's first tile line
     const elk = toElk(g);
     const ports = elk.children?.find((c) => c.id === 'mill')?.ports;
     expect(ports?.map((p) => p.y)).toEqual(mill.rows.map((_, i) => rowCentre(mill, i) - PORT_SIZE / 2));
     expect(ports?.[0]?.y).toBe(ports?.[1]?.y);                            // the input's port is on its output's line
+  });
+});
+
+describe('stub cards (RUK-740 round 2)', () => {
+  it('captions a stub by its kind, with its row\'s words where they say more', () => {
+    const bought = flowGraph({ ...plan, rawInputs: [{ ...plan.rawInputs[0]!, leafClass: 'direct' }] } as unknown as Plan, 'min');   // an import of mined redstone, the target, nothing left over
+    expect(stubCaption(nodeOf(bought, 'import:t:redstone@0@circuit-lv'))).toBe('Import · mined');
+    expect(stubCaption(nodeOf(bought, 'out'))).toBe('Target');
+    expect(stubCaption(nodeOf(g, 'sink:t:copper_dust@0@saw'))).toBe('Left over');
+    expect(stubCaption(nodeOf(g, 'import:t:copper_ingot@0@mill'))).toBe('Import · bought (made elsewhere)');
+  });
+  it('lays a stub out as a 152 × 58 card with its one port on its tile', () => {
+    const bought = flowGraph(plan, 'min');
+    const stub = nodeOf(bought, 'import:t:redstone@0@circuit-lv');
+    expect([stub.width, stub.height]).toEqual([152, 58]);
+    expect([STUB_WIDTH, STUB_HEIGHT]).toEqual([152, 58]);
+    expect(rowCentre(stub, 0)).toBe(35);                                 // its one tile's centre under the caption band
+    expect(toElk(bought).children?.find((c) => c.id === stub.id)?.ports?.[0]?.y).toBe(35 - PORT_SIZE / 2);
   });
 });
