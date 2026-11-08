@@ -51,7 +51,7 @@ Run them from the repository root.
 - Perf: `npm run perf -- --source <copy of the data> --out <new folder> --reference <folder> [--restart] [--profile]
   [--threads N]` plans every project of a copy of the group's data on its own server and checks the bytes; see
   `tools/perf/README.md`.
-- See the app with test data: `npm run build`, then
+- See the app with test data (`npm start` rebuilds `dist/client` first through `prestart`):
   `node --disable-warning=ExperimentalWarning tests/e2e/prepare.ts`, then
   `GTNH_PLANNER_CONFIG=data/e2e/config.json npm start`, and open `http://127.0.0.1:18787`. The password is
   `E2E_PASSWORD` in `tests/e2e/helpers.ts`.

@@ -22,6 +22,7 @@
     "export": "node --disable-warning=ExperimentalWarning src/server/cli/export.ts",
     "scan": "node --disable-warning=ExperimentalWarning src/server/cli/scan.ts",
     "set-password": "node --disable-warning=ExperimentalWarning src/server/cli/set-password.ts",
+    "prestart": "vite build",
     "start": "node --disable-warning=ExperimentalWarning src/server/main.ts",
     "extract-assets": "node --disable-warning=ExperimentalWarning src/server/cli/extract-assets.ts",
     "import-nei-icons": "node --disable-warning=ExperimentalWarning src/server/cli/import-nei-icons.ts"
