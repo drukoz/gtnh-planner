@@ -38,6 +38,7 @@ import { Skeleton } from '../components/Skeleton.tsx';
 import { formatPercent } from '../format.ts';
 import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
+import { setFlowFullView, setPlannerHidden, useFlowFullView, usePlannerHidden } from '../state/flow-full-view.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
 import { RecipeMode, clearRecipeRequest, requestRecipes } from '../state/recipe-request.ts';
@@ -610,6 +611,9 @@ export function ProjectPage(props: { id: string }): ReactElement {
   // body as the drawer is hidden. The sheet turns the single-key shortcuts off for this browser (ledger ruling P2-R85, WCAG 2.1.4): off, no
   // key acts and nothing says a key.
   const keysOn = useSingleKeyShortcuts();
+  /** The Flow tab's Full view and its hidden planner (RUK-740 round 2), this browser's choices; they apply on the Flow tab only. */
+  const fullViewOn = useFlowFullView();
+  const plannerHiddenOn = usePlannerHidden();
   const [sheetOpen, setSheetOpen] = useState(false);
   const shortcutsButton = useRef<HTMLButtonElement | null>(null);
   /** The drawer's way to the sheet, where the head's button is not drawn. */
@@ -730,6 +734,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
   }
   const active = PROJECT_TABS.find((t) => t.id === tab) ?? PROJECT_TABS[0]!;
   const View = active.component;
+  const fullView = fullViewOn && active.id === 'flow';
+  const plannerHidden = fullView && plannerHiddenOn;
   // A rename says so (Phase 2 spec §12.1), with Undo, which sends the name it had back; a newer rename's toast replaces this one. A name the
   // store refuses (empty, too long) is not sent, and says why in the banner, so it gets no toast.
   const before = project.name;
@@ -740,7 +746,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
     showToast(`Renamed to “${name}”`, { key: `rename:${project.id}`, action: undo });
   };
   return (
-    <main className="page project-page">
+    <main className={['page', 'project-page', ...(fullView ? ['flow-full'] : []), ...(plannerHidden ? ['planner-hidden'] : [])].join(' ')}>
       <div className="project-head" inert={settingsOpen}>
         <SettingsToggle
           open={settingsOpen} onToggle={() => (settingsOpen ? closeSettings() : openSettings('close'))} ref={settingsToggle}
@@ -749,6 +755,18 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <ProjectName name={project.name} onRename={rename} ref={projectName} />
         {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
+        {/* Full view (RUK-740 round 2): on the Flow tab, hides the banners so the chart takes the window; the planner stays, and can be hidden.
+            From 1024 px only: the stylesheet draws neither these nor Full view itself below, where the head's row has no room for them. */}
+        {active.id === 'flow' && (
+          <button type="button" className="small full-view-toggle" onClick={() => setFlowFullView(!fullView)}>
+            {fullView ? 'Exit full view' : 'Full view'}
+          </button>
+        )}
+        {fullView && (
+          <button type="button" className="small planner-toggle" aria-controls="project-settings" onClick={() => setPlannerHidden(!plannerHidden)}>
+            {plannerHidden ? 'Show planner' : 'Hide planner'}
+          </button>
+        )}
         {/* The keys' sheet (Phase 2 spec §14.1, P2-D29). It comes before Delete project (ledger ruling P2-R83), so it stays on the first row
             when the type-the-name confirm takes Delete project's place on a row of its own, and the destructive control stays at the row's
             end. Below 900 px the head's row is full and the stylesheet does not draw it: the drawer's Keyboard shortcuts button opens the sheet
