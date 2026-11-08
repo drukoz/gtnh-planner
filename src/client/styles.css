@@ -518,6 +518,8 @@ details.settings-section > summary .muted { color: inherit; }
 .plan-banner:has(> p.muted:only-child) { animation: none; margin: 0; padding: 0; border: 0; background: none; }
 .plan-banner p { margin: 0 0 4px; }
 .plan-banner ul { margin: 0 0 4px; padding-left: 20px; }
+.plan-banner .banner-more { margin: 0 0 4px; }
+.plan-banner .banner-more > summary { cursor: pointer; padding-left: 20px; font-weight: 600; }
 .plan-banner .banner-heading { margin-top: 6px; font: 600 14px/1.45 var(--font-pixel); }
 .plan-banner > .error, .banner-integrity, .banner-heading.error { color: var(--ink-error); }
 .banner-integrity, .banner-heading.error { font-family: var(--font-pixel); }
