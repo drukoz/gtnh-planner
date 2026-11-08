@@ -1998,6 +1998,23 @@ details.mat-needed[open]::details-content { block-size: auto; }
   .top-nav { gap: 12px; padding: 6px 14px; }
 }
 
+/* Full view (RUK-740 round 2): on the Flow tab the banners go and the canvas ends at the window's bottom; the planner can be hidden to give
+   the chart its width. Wide windows only: the head's buttons appear from 1024 px, where the row has room (the block below). */
+@media (min-width: 901px) {
+  .project-page.flow-full .project-banners { display: none; }
+  .project-page.flow-full .flow-canvas { --flow-chrome: 330px; }
+  /* The panel is the row's tallest part (it sticks and scrolls inside itself), so the window's height less the head, the tabs and the
+     page's padding is the most Full view can give it without the page scrolling. */
+  .project-page.flow-full .settings-panel { max-height: calc(100dvh - 130px); }
+  .project-page.planner-hidden .project-body { grid-template-columns: minmax(0, 1fr); }
+  .project-page.planner-hidden .settings-panel { display: none; }
+}
+/* The head keeps its one row at the drawer's edge (P2-M8), so the two buttons are drawn where the row has room for them: the toggles
+   appear from 1024 px. Below 901 px the settings panel is a drawer and there is no planner to hide beside it. */
+@media (max-width: 1023px) {
+  .full-view-toggle, .planner-toggle { display: none; }
+}
+
 /*
  * Forced colours, a Windows contrast theme (final review I1). The browser paints every background in the theme's Canvas colour and drops
  * every shadow, so what is drawn with those alone vanishes: the wells and marks of the ticks and radios (and with them whether they are
