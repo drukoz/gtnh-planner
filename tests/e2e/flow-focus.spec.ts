@@ -167,8 +167,11 @@ test('a replan that turns the plan infeasible while an issue line\'s Show has th
 test('(6) a line at 1 an hour never reads 0/h and gives fluids in litres', async ({ page }) => {
   await openWithPlan(page, circuitMvPerHour(), { target: 't:circuit@0', amount: 1, per: 'hour', tier: 2 });
   const canvas = page.locator('svg.flow-canvas');
-  await expect(canvas).toContainText('Molten Iron 72 L/h');
-  await expect(canvas).toContainText('1x Copper Wire 2/h');
+  // a card's tile says its good's name and its rate in two words: the name and the rate each in their own text
+  await expect(canvas.locator('.flow-tile-name').filter({ hasText: 'Molten Iron' }).first()).toBeVisible();
+  await expect(canvas.locator('.flow-tile-rate').filter({ hasText: '72 L/h' }).first()).toBeVisible();
+  await expect(canvas.locator('.flow-tile-name').filter({ hasText: '1x Copper Wire' }).first()).toBeVisible();
+  await expect(canvas.locator('.flow-tile-rate').filter({ hasText: '2/h' }).first()).toBeVisible();
   await expect(canvas).not.toContainText(/(?<![\d.,])0\/h/);
 });
 

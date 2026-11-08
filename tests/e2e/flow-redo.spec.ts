@@ -126,13 +126,12 @@ test('check 2: every import stands in the first column, and no Imports-in-one-co
   await shot(page, '2-imports');
 });
 
-test('check 3: step boxes are headed Input and Output, a divider between, inputs left and outputs right', async ({ page }) => {
+test('check 3: step cards are headed Input and Output, inputs left and outputs right', async ({ page }) => {
   await openWithPlan(page);
   const box = page.locator('[data-step-id="circuit-lv"]');
   await expect(box.locator('text.flow-io-head')).toHaveCount(2);
   await expect(box.getByText('Input')).toBeVisible();
   await expect(box.getByText('Output')).toBeVisible();
-  await expect(box.locator('line.flow-io-divider')).toHaveCount(1);
   const b = await box.boundingBox();
   expect(b).not.toBeNull();
   const middle = b!.x + b!.width / 2;
@@ -149,9 +148,9 @@ test('check 3: step boxes are headed Input and Output, a divider between, inputs
   await shot(page, '3-io-head');
 });
 
-test('check 4: every good keeps its X/Y rate on its row', async ({ page }) => {
+test('check 4: every good keeps its X/Y rate on its tile', async ({ page }) => {
   await openWithPlan(page);
-  const rates = page.locator('svg.flow-canvas tspan.flow-row-rate');
+  const rates = page.locator('svg.flow-canvas .flow-tile-rate, svg.flow-canvas .flow-row-rate');
   await expect(rates.filter({ hasText: '60/min' }).first()).toBeVisible(); // the wire the wiremill makes, one a second
   await expect(rates.filter({ hasText: '30/min' }).first()).toBeVisible(); // the mined goods, half a second each
   await expect(rates.filter({ hasText: '15/min' }).first()).toBeVisible(); // the left-over wire, a quarter a second
@@ -161,7 +160,7 @@ test('check 4: every good keeps its X/Y rate on its row', async ({ page }) => {
 test('check 5: a material name over 14 letters is cut to 13 and an ellipsis, and a machine name is kept whole', async ({ page }) => {
   await openWithPlan(page);
   const row = page.locator(`[data-step-id="circuit-lv"] .flow-row.in[data-key="${RED}"]`);
-  await expect(row.locator('.flow-row-text')).toContainText('Refined Redst…');
+  await expect(row.locator('.flow-tile-name')).toContainText('Refined Redst…');
   await expect(row).toHaveAttribute('aria-label', `takes ${RED_NAME} 30/min: show where it comes from`);
   await expect(page.locator(`[data-node-id="${STUB_RED}"]`)).toContainText('Refined Redst…');
   await expect(page.locator('[data-step-id="bend-plate"]')).toContainText('Basic Bending Machine');

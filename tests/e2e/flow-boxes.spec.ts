@@ -1,21 +1,22 @@
-// The Flow step boxes as machine readouts (Phase 2 spec §7, Task 4): a step box's head shows its machine's icon in a 36 px slot, its tier and
-// its machine count on Pixelify chips (a count's digits in VT323, spec §25) and its power, over a busy band filled to how busy its machines
-// are. These cases ask Chromium what it draws: the wiremill's machine, chips and fill; every chip's text inside its chip, with the web fonts
-// and with them refused (ledger ruling P2-R8: a tier label in the fallback face is wider than in Pixelify), over a step at every tier; and in
-// forced colours a fill that still differs from its track, chips that keep an edge and a slot framed in the text colour (spec §20, ledger
-// ruling P2-R26).
+// The Flow step cards (Phase 2 spec §7, Task 4; RUK-812): a step card's head shows its title and its tier on a Pixelify chip, its machine's
+// icon, count and owned word stand in the column between its tiles, its power is a tile of its own, and a busy band at its foot is filled to
+// how busy its machines are. These cases ask Chromium what it draws: the wiremill's machine, chip and fill; every chip's text inside its chip,
+// with the web fonts and with them refused (ledger ruling P2-R8: a tier label in the fallback face is wider than in Pixelify), over a step at
+// every tier; and in forced colours a fill that still differs from its track, chips that keep an edge and the machine's slot keeping its face
+// (spec §20, ledger ruling P2-R26).
 
 import { test, expect, type Browser } from '@playwright/test';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { circuitLv, everyTier } from './fixtures/plans.ts';
 import { openWithPlan } from './helpers.ts';
 
-test('a step box shows its machine, its tier and count chips and how busy it is', async ({ page }) => {
+test('a step card shows its machine, its tier chip and count, and how busy it is', async ({ page }) => {
   await openWithPlan(page, circuitLv());
   const wire = page.locator('[data-step-id="wire"]');
-  // the wiremill's own icon, once: its rows show the goods
+  // the wiremill's own icon, once: its tiles show the goods
   await expect(wire.locator('[data-item-key="gregtech:gt.blockmachines@111"]')).toHaveCount(1);
-  await expect(wire.locator('.flow-chip text')).toHaveText(['LV', '×2']);
+  await expect(wire.locator('.flow-chip text')).toHaveText(['LV']);
+  await expect(wire.locator('.flow-card-count')).toHaveText('×2');
   // the fixture's wiremill is 62.5 % busy: its fill is that share of its track
   const width = (selector: string): Promise<number> => wire.locator(selector).evaluate((el) => (el as SVGGraphicsElement).getBBox().width);
   expect((await width('.flow-busy-fill')) / (await width('.flow-busy-track'))).toBeCloseTo(0.625, 2);
@@ -40,7 +41,7 @@ async function measureChips(browser: Browser, blockFonts: boolean): Promise<{ lo
       await document.fonts.ready;                                                       // every font the page asked for has loaded or failed
       return [...document.fonts].filter((face) => face.status === 'loaded').map((face) => face.family);
     });
-    // with the files served, the chips' faces come in once the chips are laid out: a tier label's Pixelify and a count's VT323 digits
+    // with the files served, the chips' faces come in once the chips are laid out: the tier labels' Pixelify
     if (!blockFonts) {
       await expect.poll(async () => {
         const faces = await loaded();
@@ -65,9 +66,8 @@ test('every chip\'s text fits its chip, with the fonts and without them', async 
   expect(withFonts.loaded.some((family) => family.includes('Pixelify')), 'Pixelify loaded with the font files served').toBe(true);
   expect(withFonts.loaded, 'VT323 loaded with the font files served').toContain('VT323');
   for (const [faces, { chips }] of [['the fallback faces', without], ['the web fonts', withFonts]] as const) {
-    // every tier label is measured, and the fixture's count chips, "×2" to "×1024 shared"
-    expect(chips.map((c) => c.text).filter((t) => !t.startsWith('×')).sort(), faces).toEqual([...TIER_NAMES].sort());
-    expect(chips.map((c) => c.text), faces).toEqual(expect.arrayContaining(['×1 shared', '×2', '×1024 shared', '×128']));
+    // every tier label is measured; the counts are card words now, not chips (RUK-812), and the client tests cover them
+    expect(chips.map((c) => c.text).sort(), faces).toEqual([...TIER_NAMES].sort());
     // 5 px of padding on each side, as CHIP_PADDING
     for (const chip of chips) expect(chip.length, `${chip.text} in ${faces}: ${chip.length} px in a ${chip.width} px chip`).toBeLessThanOrEqual(chip.width - 2 * 5);
   }
@@ -91,10 +91,7 @@ test('in forced colours the busy fill and track differ and the chips stay visibl
     return computed;
   }, name);
   expect(wireFill, 'the fill is the Highlight').toBe(await system('Highlight'));
-  // ledger ruling P2-R26: the machine's slot keeps a frame, its two bevel strips in the theme's text colour, round a face of its canvas
-  for (const strip of ['.flow-slot-lo', '.flow-slot-hi']) {
-    expect(await paint(`[data-step-id="wire"] ${strip}`, 'fill'), `the slot's frame (${strip}) is the text colour`).toBe(await system('CanvasText'));
-  }
+  // the machine's slot keeps its face, of the theme's canvas (its bevel strips return with RUK-814)
   expect(await paint('[data-step-id="wire"] .flow-machine-slot', 'fill'), 'the slot\'s face is the canvas').toBe(await system('Canvas'));
   // the assembler is 100 % busy, so its band is the high one, whose fill the block repaints the same
   await expect(page.locator('[data-step-id="circuit-lv"] .flow-busy')).toHaveClass('flow-busy high');
@@ -102,12 +99,11 @@ test('in forced colours the busy fill and track differ and the chips stay visibl
   // every chip and every track keeps an edge
   const strokes = (selector: string): Promise<string[]> => page.locator(selector).evaluateAll((els) => els.map((el) => getComputedStyle(el).stroke));
   const chipEdges = await strokes('.flow-chip rect');
-  expect(chipEdges).toHaveLength(6);                                                    // three steps, a tier chip and a count chip each
+  expect(chipEdges).toHaveLength(3);                                                    // three steps, a tier chip each
   for (const edge of [...chipEdges, ...await strokes('.flow-busy-track')]) expect(edge).not.toBe('none');
   // out of forced colours a chip has no edge, the high fill is its own colour and the slot's strips are its two bevel colours again: the
   // forced-colours block is what drew the above
   await page.emulateMedia({ forcedColors: 'none' });
   expect(await paint('.flow-chip rect', 'stroke')).toBe('none');
   expect(await paint('[data-step-id="circuit-lv"] .flow-busy-fill', 'fill')).not.toBe(await paint('[data-step-id="wire"] .flow-busy-fill', 'fill'));
-  expect(await paint('[data-step-id="wire"] .flow-slot-lo', 'fill')).not.toBe(await paint('[data-step-id="wire"] .flow-slot-hi', 'fill'));
 });

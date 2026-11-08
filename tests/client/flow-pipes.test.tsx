@@ -212,7 +212,7 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
       nodes: new Set(['mill']), edges: new Set(), ports: new Set(['mill|out|t:copper_wire@0']), producers: new Set(['mill']), consumers: new Set(),
     };
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={node} sets={sets} /></svg>);
-    expect(html).toMatch(/<g class="flow-row out main hl" data-port="mill\|out\|t:copper_wire@0"/);
+    expect(html).toMatch(/<g class="flow-row flow-tile out main hl" data-port="mill\|out\|t:copper_wire@0"/);
     expect(html).toContain(`<rect class="flow-port" x="198" y="${rowCentre(node, 1) - 5}" width="4" height="10"></rect></g>`);
   });
 
@@ -221,7 +221,7 @@ describe('flow diagram: flanges (design spec §7 "Connected")', () => {
   it('draws no item tip inside a box, whose own tip tells it', () => {
     const html = renderToStaticMarkup(<svg><FlowNodeShape node={node} /></svg>);
     expect(html).not.toMatch(/<span class="item-icon[^"]*"[^>]*data-tip=/);
-    expect(html.match(/<span class="item-icon/g)).toHaveLength(3);                      // the head's icon and one a row, all without one
+    expect(html.match(/<span class="item-icon/g)).toHaveLength(2);                      // one a tile, all without one
     expect(html).toContain(' data-tip="Wiremill\nLV · 32 EU/t · 1 machine\ntakes Copper Ingot 1/s\nmakes Copper Wire 2/s">');
   });
 
