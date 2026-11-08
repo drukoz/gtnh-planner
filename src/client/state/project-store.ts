@@ -16,8 +16,8 @@
 // still waits its turn is then sent at once, in as few posts as the server takes (M4).
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { applyOp, validateOp } from '../../shared/project/apply-op.ts';
-import type { OpEvent, OpsBody, OpsResult } from '../../shared/types/api.ts';
+import { applyOp, REPLAN_OPS, validateOp } from '../../shared/project/apply-op.ts';
+import type { OpEvent, OpsBody, OpsResult, PlanEvent } from '../../shared/types/api.ts';
 import type { Plan } from '../../shared/types/plan.ts';
 import type { Project, ProjectOp } from '../../shared/types/project.ts';
 import { apiGet, apiPost, isTimeout, messageOf } from '../api/client.ts';
@@ -40,6 +40,11 @@ export interface ProjectViewState {
    * views that show the layout check it again after every answer, not only when `plan` is another object.
    */
   planAnswers: number;
+  /**
+   * A change this tab sent replans the project (`REPLAN_OPS`), and the plan made for it is not in yet (RUK-740 round 3). The server plans
+   * first and sends `event: plan` after, which takes seconds on a big line, so `planLoading` alone is true only for the last fetch.
+   */
+  replanning: boolean;
 }
 
 export interface StoreDeps {
@@ -90,7 +95,13 @@ export interface ProjectStore {
 const PLAN_COALESCE_MS = 100;
 
 /** A batch this tab sent: its ops, who and when (so it re-applies identically), and the rev the server answered. */
-interface Batch { ops: ProjectOp[]; by: string; at: string; ackRev: number | null }
+interface Batch {
+  ops: ProjectOp[]; by: string; at: string; ackRev: number | null;
+  /** It holds an op of `REPLAN_OPS`, so `replanning` waits for its plan. */
+  replans: boolean;
+  /** A `plan` event of its rev or a later one came (or the stream came back after a gap): the next plan fetch answers for it. */
+  planned: boolean;
+}
 /** A batch shown but not posted yet (`sendLater`), and whom to tell once it is. */
 interface Deferred { batch: Batch; opts: { onFlush?(): void } }
 
@@ -208,8 +219,12 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
   let queued = 0;
   let state: ProjectViewState = {
     project: null, plan: null, planLoading: false, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
-    planAnswers: 0,
+    planAnswers: 0, replanning: false,
   };
+  /** This tab's batches that replan, posted and not failed, whose plan has not been fetched yet (`replanning`). */
+  let replanWaits: Batch[] = [];
+  /** The highest rev a `plan` event came with (-1: none yet). */
+  let lastPlanEventRev = -1;
   const listeners = new Set<() => void>();
   let closed = false;
   let fetching = false;
@@ -315,27 +330,46 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
    */
   function loadPlan(): void {
     const request = ++planRequest;
+    // the batches this fetch answers for: those whose plan event has come; a later fetch answers for them too
+    const covers = replanWaits.filter((b) => b.planned);
+    const stillReplanning = (): boolean => {
+      replanWaits = replanWaits.filter((b) => !covers.includes(b));
+      return replanWaits.length > 0;
+    };
     update({ planLoading: true });
     deps.fetchPlan(id).then(
       (plan) => {
         if (request !== planRequest) return;
         const shown = state.plan;
         const planAnswers = state.planAnswers + 1;
+        const replanning = stillReplanning();
         // RUK-529: the same plan again keeps the shown object, so no tab is rebuilt; the new count still has the layout checked
         if (shown !== null && sameJson(shown, plan)) {
-          update({ planLoading: false, planError: null, planAnswers });
+          update({ planLoading: false, planError: null, planAnswers, replanning });
           return;
         }
         const previousPlan = shown !== null && shown.settingsHash !== plan.settingsHash ? shown : state.previousPlan;
-        update({ plan, previousPlan, planLoading: false, planError: null, planAnswers });
+        update({ plan, previousPlan, planLoading: false, planError: null, planAnswers, replanning });
       },
       (err: unknown) => {
-        if (request === planRequest) update({ planLoading: false, planError: messageOf(err) });
+        if (request === planRequest) update({ planLoading: false, planError: messageOf(err), replanning: stillReplanning() });
       },
     );
   }
 
-  function onPlanEvent(): void {
+  /** `replanning` follows `replanWaits`. */
+  function setReplanning(): void {
+    const on = replanWaits.length > 0;
+    if (state.replanning !== on) update({ replanning: on });
+  }
+
+  /**
+   * A `plan` event (`e`), or the stream back after a gap (no `e`: every batch the server has answered may have missed its event): the
+   * batches it answers for are planned, and the plan is fetched once the burst is over.
+   */
+  function onPlanEvent(e?: PlanEvent): void {
+    if (e !== undefined) lastPlanEventRev = Math.max(lastPlanEventRev, e.rev);
+    for (const b of replanWaits) if (b.ackRev !== null && (e === undefined || b.ackRev <= e.rev)) b.planned = true;
     if (planTimer !== null) return;
     planTimer = setTimeout(() => {
       planTimer = null;
@@ -356,7 +390,9 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
   }
 
   /** A batch of `ops` this tab makes now. */
-  const batchOf = (ops: ProjectOp[]): Batch => ({ ops, by: deps.me(), at: deps.now(), ackRev: null });
+  const batchOf = (ops: ProjectOp[]): Batch => ({
+    ops, by: deps.me(), at: deps.now(), ackRev: null, replans: ops.some((op) => REPLAN_OPS.has(op.op)), planned: false,
+  });
 
   /**
    * Posts `batch` in its turn in the project's queue (P2-R59), at once when nothing is on its way and `now`, else once everything before it has
@@ -364,6 +400,10 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
    */
   function post(batch: Batch, keepalive: boolean, now = true): void {
     queued += 1;
+    if (batch.replans) {
+      replanWaits = [...replanWaits, batch];
+      setReplanning();
+    }
     const done = (): void => {
       queued -= 1;
       if (closed && queued === 0) stopHearingPageHide();
@@ -376,6 +416,8 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
         try {
           batch.ackRev = result.rev;
           if (confirmed !== null) confirm(confirmed);
+          // a plan already cached on the server can send its event before this answer: fetch once more for it
+          if (batch.replans && lastPlanEventRev >= result.rev) onPlanEvent({ rev: lastPlanEventRev });
         } finally {
           done();
         }
@@ -383,6 +425,8 @@ export function createProjectStore(id: string, deps: StoreDeps, queues: PostQueu
       failed: (err) => {
         try {
           pending = pending.filter((b) => b !== batch);
+          replanWaits = replanWaits.filter((b) => b !== batch);
+          setReplanning();
           errorFrom = 'send';
           update({ project: visible(), error: messageOf(err) });
           // P2-R64: an unanswered post may have landed all the same, and what follows it goes against the project as the server has it
@@ -520,7 +564,7 @@ export function liveDeps(): StoreDeps {
 
 const LOADING: ProjectViewState = {
   project: null, plan: null, planLoading: true, planError: null, connected: false, error: null, deleted: null, previousPlan: null,
-  planAnswers: 0,
+  planAnswers: 0, replanning: false,
 };
 const noStore = (): (() => void) => () => {};
 const loading = (): ProjectViewState => LOADING;

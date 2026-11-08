@@ -108,3 +108,43 @@ test('the toolbar Recipes and Uses buttons open the popup on the clicked materia
   await expect(page.getByText('Hover or click a material first')).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
+
+// RUK-740 round 3: the server plans a big line for seconds before it says the plan changed, so from the pick until the plan is in, the chart
+// is dimmed under a badge that says what it waits for; a toast says when it is done. The plan fetch is held here to stand for that time.
+test('a recipe picked in the popup shows the chart re-planning until its plan is in, then says it is updated', async ({ page }) => {
+  const plan = twoWiremillRecipes();
+  await openWithPlan(page, plan);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/api/projects/*/plan', async (route) => { await held; await route.fulfill({ json: plan }); });
+  await page.locator(`[data-port$="|out|${WIRE}"]`).hover();
+  await page.keyboard.press('r');
+  const dialog = page.getByRole('dialog', { name: 'Recipes for 1x Copper Wire' });
+  await dialog.locator('[data-recipe-id="wire-slow"]').getByRole('button', { name: 'Use this recipe' }).click();
+  const badge = page.locator('.flow-wait');
+  await expect(badge).toBeVisible();
+  await expect(badge.locator('.flow-wait-text')).toHaveText('Re-planning with your choice for 1x Copper Wire…');
+  await expect(page.locator('.flow-stage')).toHaveAttribute('aria-busy', 'true');
+  await expect(badge.locator('.flow-wait-time')).toHaveText(/^\d+ s$/, { timeout: 5000 });   // counted from 2 s on
+  release();
+  await expect(badge).toBeHidden();
+  await expect(page.locator('.flow-stage')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByText('Plan updated with your choice for 1x Copper Wire')).toBeVisible();
+});
+
+test('in Full view, where the banners are hidden, the badge still says the plan is being made', async ({ page }) => {
+  const plan = twoWiremillRecipes();
+  await openWithPlan(page, plan);
+  await page.getByRole('button', { name: 'Full view' }).click();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/api/projects/*/plan', async (route) => { await held; await route.fulfill({ json: plan }); });
+  await page.locator(`[data-port$="|out|${WIRE}"]`).hover();
+  await page.keyboard.press('r');
+  await page.getByRole('dialog').locator('[data-recipe-id="wire-slow"]').getByRole('button', { name: 'Use this recipe' }).click();
+  const badge = page.locator('.flow-wait');
+  await expect(badge).toBeVisible();
+  await expect(badge).toBeInViewport();
+  release();
+  await expect(badge).toBeHidden();
+});

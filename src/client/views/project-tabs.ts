@@ -26,6 +26,11 @@ export interface ProjectViewProps {
   // optional addition (RUK-529)
   /** How many plan fetches have answered (`ProjectViewState.planAnswers`): the views that show the layout check it again after each. */
   planAnswers?: number;
+  // optional addition (RUK-740 round 3)
+  /** A new plan is on its way: a change this tab sent is being planned (`replanning`), or the plan is being fetched (`planLoading`). */
+  planBusy?: boolean;
+  /** Why the last plan fetch failed (`ProjectViewState.planError`), else null. */
+  planError?: string | null;
 }
 export interface ProjectTab { id: 'map' | '3d' | 'connections' | 'flow' | 'materials' | 'notes'; label: string; component: ComponentType<ProjectViewProps> }
 
