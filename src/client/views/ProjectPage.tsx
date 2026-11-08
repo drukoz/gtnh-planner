@@ -193,7 +193,8 @@ export const BANNER_SHOWN = 3;
  * import in the flow, with "Plan them as supporting lines" while those are off; how much more raw material the plan
  * uses than the least (where build cost counts, the leanest line's) to save machines (`Plan.rawCost`, Machines vs raw
  * material and the raw cap: `rawCostText`); every other server warning (plan 08's avoid list, missing recipes, add-on
- * 17's `surplus-shared`, …) (the first `BANNER_SHOWN`, the rest folded under "N more notes": RUK-740 round 2); what the plan uses beyond its line — "This plan uses a Tree Growth Simulator (Rubber
+ * 17's `surplus-shared`, …) (the first `BANNER_SHOWN`, the rest folded under "N more notes": RUK-740 round 2); what
+ * the plan uses beyond its line — "This plan uses a Tree Growth Simulator (Rubber
  * Sapling)", "This plan draws Latex from Rubber line" (`sourceNotes`, ruling R18: farms and other projects' surplus are
  * on for every project, so their use is said) — and what unlocks the line. Above that box, and on its own when there is
  * nothing to warn about, what the plan costs to run and to build its new machines (`costLine`, plan 12).
