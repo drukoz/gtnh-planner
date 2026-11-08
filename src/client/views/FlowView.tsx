@@ -28,6 +28,7 @@ import type { LeafClass, Plan, PlanSettings } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { useItemIcon } from '../assets/icons.ts';
 import { Figs } from '../components/Figs.tsx';
+import { GtArrow } from '../components/GtArrow.tsx';
 import { focusLost, focusMain, focusOn } from '../components/focus.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
@@ -58,6 +59,7 @@ import {
 import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
 import { pointIn } from './pan-zoom.ts';
 import { RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, rideRoute, riderEdges, riderPhase, riderSeconds } from './pipe-motion.ts';
+import { choiceDoneText, flowWait, flowWaitText, FlowWait, waitSeconds } from './flow-wait.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 import { focusGood } from './recipe-browser-model.ts';
 import { RawPanel, StepPanel } from './StepPanel.tsx';
@@ -741,8 +743,10 @@ export function viewPans(change: LayoutChange): boolean {
 function FlowCanvas(props: {
   layout: FlowLayout; viewKey: string; selectedId: string | null; goods: Array<{ key: StuffKey; name: string }>;
   onOpen(node: PlacedNode): void; onToggleLine(key: StuffKey): void;
+  /** What the chart waits for, in words (`flowWaitText`), else '': the badge over the chart says it, and the chart is dimmed. */
+  waitText: string;
 }): ReactElement {
-  const { layout, viewKey, selectedId, goods, onOpen, onToggleLine } = props;
+  const { layout, viewKey, selectedId, goods, onOpen, onToggleLine, waitText } = props;
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<View>({ zoom: 1, x: PAD, y: PAD });
   /** The pan group (`g.flow-pan`), whose attribute is the view; `glideTo` pans to a view, `holdView` holds a pan for an instant move. */
@@ -1125,6 +1129,7 @@ function FlowCanvas(props: {
           Hover or click a good for its sources and uses, click a box for details, Esc clears. Drag moves, scroll zooms.{keysOn && SHEET_KEY_HINT}
         </span>
       </div>
+      <div className="flow-stage" aria-busy={waitText === '' ? undefined : true}>
       <svg
         ref={svgRef}
         className={canvasClasses.join(' ')}
@@ -1162,6 +1167,8 @@ function FlowCanvas(props: {
           {sets !== null && layout.edges.filter((edge) => sets.edges.has(edge.id)).map((edge) => <EdgeTagShape key={edge.id} edge={edge} />)}
         </g>
       </svg>
+      <FlowWaitBadge text={waitText} />
+      </div>
       <FlowLegend />
     </div>
   );
@@ -1204,6 +1211,40 @@ function focusInWindow(el: HTMLElement | SVGElement, seen: Element = el): void {
   seen.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+/**
+ * The badge over the top of the chart while a new plan or layout is on its way (`flow-wait.ts`, RUK-740 round 3): the GT arrow, `text`, and
+ * from `COUNT_FROM_SECONDS` on how long it has waited, counted here so the canvas is not drawn again every second. Always in the page, so a
+ * screen reader hears the words when they change; the count is hidden from it. Empty, the stylesheet hides it.
+ */
+function FlowWaitBadge(props: { text: string }): ReactElement {
+  const waiting = props.text !== '';
+  const [since, setSince] = useState<number | null>(null);
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    if (!waiting) {
+      setSince(null);
+      return undefined;
+    }
+    const start = Date.now();
+    setSince(start);
+    setNow(start);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [waiting]);
+  const count = since === null ? '' : waitSeconds(now - since);
+  return (
+    <p className="flow-wait" role="status">
+      {waiting && (
+        <>
+          <GtArrow tone="chat" />
+          <span className="flow-wait-text">{props.text}</span>
+          {count !== '' && <span className="flow-wait-time" aria-hidden="true">{count}</span>}
+        </>
+      )}
+    </p>
+  );
+}
+
 /** The box whose panel is open: a step, or an import stub (its panel is about its good). */
 type Selected = { kind: 'step'; id: string } | { kind: 'import'; key: StuffKey; nodeId: string } | null;
 
@@ -1216,15 +1257,18 @@ function FlowDiagram(props: {
   plan: Plan; previousPlan: Plan | null | undefined; settings: PlanSettings; per: 'min' | 'hour'; send: ProjectViewProps['send'];
   /** The project links a world base (the step panel says the machines it reuses stand there). */
   base: boolean;
+  /** A new plan is on its way (`ProjectViewProps.planBusy`), and why the last plan fetch failed, else null. */
+  planBusy: boolean; planError: string | null;
 }): ReactElement {
-  const { plan, previousPlan, settings, per, send } = props;
+  const { plan, previousPlan, settings, per, send, planBusy, planError } = props;
   const [lineToggles, setLineToggles] = useState<ReadonlyMap<StuffKey, boolean>>(() => new Map());
   const closed = useMemo(() => collapsedLines(plan, lineToggles), [plan, lineToggles]);
   const graph = useMemo(() => flowGraph(plan, per, { collapsedLines: closed, importsInOneColumn: true }), [plan, per, closed]);
   const goods = useMemo(() => findableGoods(graph, plan), [graph, plan]);
   // The view starts over only when the plan's steps change, not when a line opens or a rate moves.
   const viewKey = useMemo(() => plan.steps.map((s) => s.id).sort().join('\n'), [plan]);
-  const [laid, setLaid] = useState<{ layout: FlowLayout; viewKey: string } | null>(null);
+  /** The layout on screen, the steps it opened on (`viewKey`) and the plan it was laid out for. */
+  const [laid, setLaid] = useState<{ layout: FlowLayout; viewKey: string; plan: Plan } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected>(null);
   /** The side panel's wrapper: it stays mounted while a panel is open, so it slides in once (Phase 2 spec §8.6). */
@@ -1241,6 +1285,10 @@ function FlowDiagram(props: {
   const focusedInIssues = useRef<Element | null>(null);
   /** The recipe browser's good and list while it is open (RUK-740), else null. */
   const [browser, setBrowser] = useState<{ good: StuffKey; mode: RecipeMode } | null>(null);
+  /** The name of the good a choice in the recipe browser was made for, until its plan and chart are on screen (RUK-740 round 3). */
+  const [choiceFor, setChoiceFor] = useState<string | null>(null);
+  /** That choice's wait has begun (the plan went busy), so its end is the toast's cue. */
+  const choiceWaited = useRef(false);
   /** The page's last R or U (state/recipe-request.ts), until this view takes it. */
   const request = useRecipeRequest();
 
@@ -1284,7 +1332,7 @@ function FlowDiagram(props: {
     layoutFlow(toElk(graph)).then(
       (result) => {
         if (!live) return;
-        setLaid({ layout: fromElk(graph, result), viewKey });
+        setLaid({ layout: fromElk(graph, result), viewKey, plan });
         setError(null);
       },
       (err: unknown) => {
@@ -1294,7 +1342,21 @@ function FlowDiagram(props: {
     return () => {
       live = false;
     };
-  }, [graph, viewKey]);
+  }, [graph, viewKey, plan]);
+  // What the chart waits for (RUK-740 round 3): a new plan, then the layout of a new plan (a line opened or closed is laid out quietly).
+  const wait = flowWait(planBusy, laid !== null && laid.plan !== plan && error === null);
+  // A choice made in the recipe browser: once its wait is over, a toast says the plan is updated, or why not.
+  useEffect(() => {
+    if (choiceFor === null) return;
+    if (wait !== FlowWait.None) {
+      choiceWaited.current = true;
+      return;
+    }
+    if (!choiceWaited.current) return;
+    choiceWaited.current = false;
+    showToast(choiceDoneText(choiceFor, planError), { key: 'flow-choice' });
+    setChoiceFor(null);
+  }, [wait, choiceFor, planError]);
   // Before it paints, the focus goes to the panel of a step picked inside the old panel, and the panel's Close gives it back to the head of
   // the box that opened the panel, or to the canvas once a replan has removed that box or a pan has taken it out of the canvas's view; a
   // pick on the canvas leaves the focus where it is.
@@ -1400,7 +1462,7 @@ function FlowDiagram(props: {
         ) : (
           <FlowCanvas
             layout={laid.layout} viewKey={laid.viewKey} selectedId={selectedId} goods={goods}
-            onOpen={open} onToggleLine={toggleLine}
+            onOpen={open} onToggleLine={toggleLine} waitText={flowWaitText(wait, choiceFor)}
           />
         )}
       </div>
@@ -1408,7 +1470,11 @@ function FlowDiagram(props: {
       {browser !== null && (
         <RecipeBrowser
           good={browser.good} mode={browser.mode} plan={plan} settings={settings}
-          patch={(p) => send([{ op: 'settings', patch: p }])}
+          patch={(p) => {
+            choiceWaited.current = false;
+            setChoiceFor(plan.names?.[browser.good] ?? browser.good);
+            send([{ op: 'settings', patch: p }]);
+          }}
           onMode={(mode) => setBrowser({ good: browser.good, mode })}
           onClose={() => setBrowser(null)}
         />
@@ -1467,5 +1533,10 @@ export function FlowView(props: ProjectViewProps): ReactElement {
   if (plan.status === 'infeasible') return <Infeasible plan={plan} />;
   const { settings } = project;
   const per = settings.mode === 'makeN' ? 'hour' : settings.per;
-  return <FlowDiagram plan={plan} previousPlan={props.previousPlan} settings={settings} per={per} send={send} base={project.world.baseId !== null} />;
+  return (
+    <FlowDiagram
+      plan={plan} previousPlan={props.previousPlan} settings={settings} per={per} send={send} base={project.world.baseId !== null}
+      planBusy={props.planBusy ?? false} planError={props.planError ?? null}
+    />
+  );
 }
