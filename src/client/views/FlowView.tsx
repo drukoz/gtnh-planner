@@ -31,6 +31,7 @@ import { Figs } from '../components/Figs.tsx';
 import { focusLost, focusMain, focusOn } from '../components/focus.ts';
 import { ItemIcon } from '../components/ItemIcon.tsx';
 import { PipesButton } from '../components/PipesButton.tsx';
+import { RecipeBrowser } from '../components/RecipeBrowser.tsx';
 import { SHEET_KEY_HINT } from '../components/ShortcutsSheet.tsx';
 import { Skeleton } from '../components/Skeleton.tsx';
 import { tipText } from '../components/tooltip-model.ts';
@@ -39,7 +40,9 @@ import {
 } from '../state/flow-focus.ts';
 import { EASE_IN, EXIT_MS, GHOST_FALLBACK_MS, prefersReducedMotion } from '../state/motion.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
+import { clearRecipeRequest, useRecipeRequest, type RecipeMode } from '../state/recipe-request.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
+import { showToast } from '../state/toasts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
   BUSY_BAND, BUSY_TRACK_HEIGHT, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
@@ -52,6 +55,7 @@ import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, useP
 import { pointIn } from './pan-zoom.ts';
 import { RIDER_SIZE, pathLength, pipeAnimationMode, pipeSeconds, rideRoute, riderEdges, riderPhase, riderSeconds } from './pipe-motion.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
+import { focusGood } from './recipe-browser-model.ts';
 import { RawPanel, StepPanel } from './StepPanel.tsx';
 import { WhatChanged } from './WhatChanged.tsx';
 
@@ -1190,6 +1194,20 @@ function FlowDiagram(props: {
   const focusedInPanel = useRef<Element | null>(null);
   /** What in the issues above the diagram has the focus (a Show, a Keep only), until the focus leaves them (the final fix wave, FW-7). */
   const focusedInIssues = useRef<Element | null>(null);
+  /** The recipe browser's good and list while it is open (RUK-740), else null. */
+  const [browser, setBrowser] = useState<{ good: StuffKey; mode: RecipeMode } | null>(null);
+  /** The page's last R or U (state/recipe-request.ts), until this view takes it. */
+  const request = useRecipeRequest();
+
+  useEffect(() => {
+    // An R or U, pressed here or before the view drew: it opens the browser on the good the flow focus stands on (the row or box under the
+    // pointer, or the one clicked). It is taken at once, so a later mount of the view does not open it again.
+    if (request === null) return;
+    clearRecipeRequest();
+    const good = focusGood(graph, getFlowFocus());
+    if (good === null) showToast('Point at a material first', { key: 'recipe-browser' });
+    else setBrowser({ good, mode: request.mode });
+  }, [request, graph]);
 
   useEffect(() => {
     // what in the side panel, or in the issues above the diagram, takes the focus; the focus leaving it, once it has really moved (a window that
@@ -1341,6 +1359,14 @@ function FlowDiagram(props: {
         )}
       </div>
       {panel !== null && <div className="flow-side" ref={sideRef}>{panel}</div>}
+      {browser !== null && (
+        <RecipeBrowser
+          good={browser.good} mode={browser.mode} plan={plan} settings={settings}
+          patch={(p) => send([{ op: 'settings', patch: p }])}
+          onMode={(mode) => setBrowser({ good: browser.good, mode })}
+          onClose={() => setBrowser(null)}
+        />
+      )}
     </div>
   );
 }
