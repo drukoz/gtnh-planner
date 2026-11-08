@@ -21,7 +21,7 @@ import {
   type SurplusBoard,
 } from '../../projects/surplus.ts';
 import { HttpError, readJson, sendJson, type RequestContext, type Route } from '../router.ts';
-import { validateOp } from '../../../shared/project/apply-op.ts';
+import { REPLAN_OPS, validateOp } from '../../../shared/project/apply-op.ts';
 import type { StuffKey } from '../../../shared/keys.ts';
 import type {
   CompareEvent, CompareMode, CompareResult, CreateProjectBody, DeletedEvent, DeletedProjectSummary, OpEvent, OpsResult, PlanEvent,
@@ -32,12 +32,6 @@ import type { Plan, PlanContext, PlanObjective, PlanSettings } from '../../../sh
 import type { Project, ProjectOp } from '../../../shared/types/project.ts';
 
 const MAX_OPS_PER_REQUEST = 100;
-/**
- * Ops after which the plan may differ: settings and world change it (architecture §11.8); placement changes only
- * Plan 5's finished plan and layout, so those batches hit the cache but still tell the tabs (§11.16).
- */
-const REPLAN_OPS: ReadonlySet<ProjectOp['op']> = new Set(['settings', 'world', 'placement', 'clearPlacement']);
-
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Who is acting: nothing is created or changed without a display name. */

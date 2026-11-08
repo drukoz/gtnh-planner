@@ -794,7 +794,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
         <KeyNumbers plan={plan} settings={project.settings} />
         {view.error !== null && <p className="banner error" role="alert">{view.error}</p>}
         <PlanBanner
-          plan={plan} planError={view.planError} planLoading={view.planLoading} settings={project.settings} send={send} onPickTarget={pickTarget}
+          plan={plan} planError={view.planError} planLoading={view.planLoading || view.replanning} settings={project.settings} send={send} onPickTarget={pickTarget}
           cost={project.settings.target === null ? 'none' : 'strip'}
         />
         {comparable && (
@@ -814,7 +814,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
           <button type="button" className="settings-close" onClick={closeSettings} ref={settingsClose}>Close settings</button>
           {/* The drawer's own status (R43): the banners behind it are inert while it is open, so their status is not announced. Always
               there, so a screen reader hears it change; empty while the drawer is closed. */}
-          <p className="visually-hidden" role="status">{settingsOpen ? drawerStatus(plan, view.error, view.planError, view.planLoading) : ''}</p>
+          <p className="visually-hidden" role="status">{settingsOpen ? drawerStatus(plan, view.error, view.planError, view.planLoading || view.replanning) : ''}</p>
           {pack.error !== null && <p className="error small">{`Could not load the pack: ${pack.error}`}</p>}
           <SettingsPanel project={project} plan={plan} send={send} me={me} info={pack.info} names={names} />
           {deleted === null && <ProjectorPanel projectId={project.id} />}
@@ -845,7 +845,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
           {/* The view remounts on a tab switch anyway; the key makes the section new too, so its fade-in plays again. */}
           <section key={active.id} className="tab-panel" role="tabpanel" id={`panel-${active.id}`} aria-labelledby={`tab-${active.id}`}>
             <View project={project} plan={plan} previousPlan={view.previousPlan} send={send} sendLater={view.sendLater} me={me}
-              planAnswers={view.planAnswers} />
+              planAnswers={view.planAnswers} planBusy={view.planLoading || view.replanning} planError={view.planError} />
           </section>
         </div>
       </div>
