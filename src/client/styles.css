@@ -1115,6 +1115,8 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-power-bolt { fill: var(--flow-warn); }
 .flow-node .flow-card-count { font-size: 16px; font-weight: 700; fill: var(--text); }
 .flow-node .flow-card-owned { font-size: 10px; fill: var(--text-muted); }
+/* A stub card's caption (RUK-740 round 2), 10 px semibold like a tile's rate. */
+.flow-node .flow-stub-caption { font-size: 10px; font-weight: 600; fill: var(--text); }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
 /*

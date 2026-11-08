@@ -1,7 +1,7 @@
-// What the flow diagram shows (spec §3.9, fix spec §6.2), as pure functions: the boxes and arrows of a plan — a box per
+// What the flow diagram shows (spec §3.9, fix spec §6.2), as pure functions: the boxes and arrows of a plan — a card per
 // step listing the goods it takes and makes as rows (each row an ELK port, so an arrow leaves the row of its good), its
-// head a machine readout (Phase 2 spec §7: the machine, its tier and count, its power, how busy), an import stub beside
-// each step that takes a bought good, a red stub where nothing supplies an input, a stub for each good left over, the
+// head a machine readout (Phase 2 spec §7: the machine, its tier and count, its power, how busy), a small card beside
+// each step that takes a bought good, a red small card where nothing supplies an input, a small card for each good left over, the
 // target, and supporting lines drawn open around their steps or collapsed into one box (a step that cannot avoid a
 // material on the avoid list badged, spec §3.3) — the ELK graph that lays them out (web-stack §7) and the
 // laid-out picture read back from it, what a focus lights (an item, a box or an arrow), what does not add up, the rate
@@ -11,7 +11,7 @@
 // what a new layout changed of the last, which the diagrams glide (Phase 2 spec §16.3). Base materials sit on the left
 // and the target on the right.
 
-import { cardBodyTop, cardGeometry, tileCentre, type CardShape } from './card-model.ts';
+import { cardBodyTop, cardGeometry, tileCentre, STUB_HEAD, STUB_HEIGHT, STUB_WIDTH, type CardShape } from './card-model.ts';
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { PSEUDO_IDS, PSEUDO_MACHINES, TIER_NAMES, V } from '../../shared/gt/tiers.ts';
@@ -160,8 +160,6 @@ export const IO_HEAD_HEIGHT = 14;
 export const COLUMN_GAP = 12;
 /** The most characters a material's name takes in the diagram; a longer one is cut to `MAX_NAME_CHARS - 1` and "…" (its full name is in the tooltip). */
 export const MAX_NAME_CHARS = 14;
-/** Room below the last row. */
-const ROWS_BOTTOM = 6;
 /** Estimated text widths per character: the 13 px semibold title, and the 11.5 px lines and rows. */
 export const TITLE_CHAR_WIDTH = 7.4;
 export const TEXT_CHAR_WIDTH = 6.2;
@@ -205,7 +203,6 @@ export const POWER_GAP = 6;
 /** The busy band's track: its height and its top in the band; it is at least this long, with this gap before the band's percentage. */
 export const BUSY_TRACK_HEIGHT = 6;
 export const BUSY_TRACK_TOP = 5;
-const BUSY_TRACK_MIN = 60;
 const BUSY_GAP = 6;
 /** The room the band leaves for its percentage: the widest share `formatPercent` writes below a whole 100 % (`121%` is narrower). */
 const WIDEST_BUSY = '>99.9%';
@@ -312,21 +309,6 @@ export function busyTrack(node: Pick<FlowNode, 'width'>): number {
   return node.width - 2 * TEXT_LEFT - BUSY_GAP - textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH);
 }
 
-/**
- * How wide a box with a machine readout must be for its head (the slot, the 13 px title), its chip row (each chip and the gap after it, the
- * power 2 px further, or "by hand") and its busy band (the shortest track, the gap and the widest percentage), each with its margins.
- */
-function readoutWidths(title: string, machine: MachineReadout): number[] {
-  let chipRow = READOUT_LEFT;
-  for (const chip of [machine.tier?.name, machine.count]) if (chip !== undefined && chip !== null) chipRow += chipWidth(chip) + CHIP_GAP;
-  if (machine.count === null) chipRow += textWidth(HAND_WORDS, TEXT_CHAR_WIDTH);
-  else if (machine.power !== null) chipRow += POWER_GAP - CHIP_GAP + textWidth(machine.power, TEXT_CHAR_WIDTH);
-  return [
-    READOUT_LEFT + textWidth(title, TITLE_CHAR_WIDTH) + TEXT_LEFT, chipRow + TEXT_LEFT,
-    TEXT_LEFT + BUSY_TRACK_MIN + BUSY_GAP + textWidth(WIDEST_BUSY, TEXT_CHAR_WIDTH) + TEXT_LEFT,
-  ];
-}
-
 /** A rate of a good in the project's unit, in litres for a fluid. */
 function goodRate(perSecond: number, per: 'min' | 'hour', key: StuffKey): string {
   return formatRate(perSecond, per, { fluid: isFluidKey(key) });
@@ -405,16 +387,11 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
 }
 
 /**
- * Where a box's rows start: below its title, its lines and its avoid badge; a step box's below its machine readout's head and busy band,
- * which draw its first line, then its other lines and its badge (Phase 2 spec §7.2). The ELK ports, the drawn rows and `fromElk`'s fallback
- * all read it, so they move together.
+ * Where a box's rows start: a card's below its head band, its extra lines and its avoid badge; a stub's below its caption band
+ * (RUK-740 round 2). The ELK ports, the drawn rows and `fromElk`'s fallback all read it, so they move together.
  */
 export function rowsTop(node: Pick<FlowNode, 'kind' | 'lines' | 'avoidBadge' | 'machine'>): number {
-  const badge = node.avoidBadge === undefined ? 0 : 1;
-  if (rowHasIcon(node)) return cardBodyTop(cardExtraLines(node));   // a card's first tile line (RUK-740 round 2)
-  const io = rowHasIcon(node) ? IO_HEAD_HEIGHT : 0;   // the two columns' "Input | Output" header (RUK-741)
-  if (node.machine === undefined) return NODE_TITLE_HEIGHT + io + NODE_LINE_HEIGHT * (node.lines.length + badge);
-  return STEP_HEAD_HEIGHT + BUSY_BAND + io + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
+  return rowHasIcon(node) ? cardBodyTop(cardExtraLines(node)) : STUB_HEAD;   // a card's first tile line, a stub's one tile (RUK-740 round 2)
 }
 
 /**
@@ -436,8 +413,7 @@ export function rowLines(node: Pick<FlowNode, 'kind' | 'rows'>): number {
 
 /** The middle of a box's `i`-th row, from the box's top: where that row's port sits, on its column's line. */
 export function rowCentre(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
-  if (rowHasIcon(node)) return tileCentre(rowsTop(node), rowLine(node, i));   // the middle of the row's tile
-  return rowsTop(node) + ROW_HEIGHT * rowLine(node, i) + ROW_HEIGHT / 2;
+  return tileCentre(rowsTop(node), rowLine(node, i));   // the middle of the row's tile
 }
 
 /** The lines a card draws under its head band: a step's lines but its first (its readout says it), a line's lines, and the avoid badge. */
@@ -460,6 +436,16 @@ export function cardShape(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoi
 /** Whether a box draws an icon beside each row: steps and collapsed lines; a stub's title already shows its one good. */
 export function rowHasIcon(node: Pick<FlowNode, 'kind'>): boolean {
   return node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Line;
+}
+
+/** A stub card's caption (RUK-740 round 2): what kind of box it is, with its row's words where they say more. */
+export function stubCaption(node: Pick<FlowNode, 'kind' | 'rows'>): string {
+  const words = node.rows[0]?.name ?? '';
+  if (node.kind === FlowNodeKind.Import) return `Import · ${words}`;
+  if (node.kind === FlowNodeKind.Missing) return `Missing · ${words}`;
+  if (node.kind === FlowNodeKind.Sink) return 'Left over';
+  if (node.kind === FlowNodeKind.Out) return 'Target';
+  return words;
 }
 
 /** A row's rate as its box writes it, with the share behind its issue. */
@@ -507,31 +493,15 @@ export function clipText(text: string, width: number, charWidth: number): string
 }
 
 /**
- * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–380 px, as tall as its rows need. A step box's head is its
- * machine readout, which draws its first line (Phase 2 spec §7.2): its head, chip row and busy band count instead of its title and that line.
+ * A box's size (fix spec §6.2): a step's or a supporting line's card from `cardGeometry`, a stub's small card from `card-model.ts`
+ * (RUK-740 round 2). Both are fixed widths, no longer sized to their text.
  */
 function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
   if (rowHasIcon(node)) {
     const card = cardGeometry(cardShape(node));   // a step's or a line's card has a fixed width (RUK-740 round 2)
     return { ...node, width: card.width, height: card.height };
   }
-  const icon = node.key !== null ? ICON_SPACE : 0;
-  const rowIcon = rowHasIcon(node) ? ICON_SPACE : 0;
-  const { machine } = node;
-  const widths = [
-    ...(machine === undefined
-      ? [2 * TEXT_LEFT + icon + (node.kind === FlowNodeKind.Line ? TOGGLE_SPACE : 0) + textWidth(boxTitle(node), TITLE_CHAR_WIDTH)]
-      : readoutWidths(node.title, machine)),
-    ...(machine === undefined ? node.lines : node.lines.slice(1)).map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
-    ...(node.avoidBadge === undefined ? [] : [2 * TEXT_LEFT + textWidth(node.avoidBadge.text, TEXT_CHAR_WIDTH)]),
-    // a two-column box is as wide as its widest row's name and rate needs twice, the columns' gap between (RUK-741)
-    ...(rowHasIcon(node)
-      ? [2 * TEXT_LEFT + COLUMN_GAP + 2 * Math.max(0, ...node.rows.map((r) => rowIcon + textWidth(shortName(r.name), TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)))]
-      : node.rows.map((r) => 2 * TEXT_LEFT + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH))),
-  ];
-  const width = Math.min(MAX_NODE_WIDTH, Math.max(MIN_NODE_WIDTH, ...widths));
-  const height = rowsTop(node) + ROW_HEIGHT * rowLines(node) + (node.rows.length > 0 ? ROWS_BOTTOM : 0);
-  return { ...node, width, height };
+  return { ...node, width: STUB_WIDTH, height: STUB_HEIGHT };   // a stub's small card
 }
 
 /** "3 machines", "1 machine"; with `shared`, "3 shared machines", "1 shared machine". */

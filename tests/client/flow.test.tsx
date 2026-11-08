@@ -6,13 +6,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   formatNumber, formatRate, flowGraph, toElk, fromElk, ocLines, reusePatch, LEAF_WORD, focusSets, centreOn, flowEdgeId, rowCentre,
   collapsedLines, firstProducer, edgeTag, rowNameRoom, rowLabel, rowHasIcon, shortName, boxTitle, rowLine, rowLines, textWidth, LINE_COLLAPSE_STEPS, TEXT_CHAR_WIDTH, cardShape,
-  IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS, PORT_SIZE, flowIssueLines, type FlowLayout, type FlowNode,
+  IO_HEAD_HEIGHT, COLUMN_GAP, MAX_NAME_CHARS, PORT_SIZE, flowIssueLines, stubCaption, type FlowLayout, type FlowNode,
   machineIconKey, machineReadout, tierSlug, rowsTop, busyTrack, chipWidth, MACHINE_ICON, MACHINE_SLOT, STEP_HEAD_HEIGHT, BUSY_BAND, CHIP_HEIGHT,
   CHIP_PADDING, CHIP_CHAR_WIDTH, CHIP_GAP, BUSY_TRACK_TOP, BUSY_TRACK_HEIGHT, TEXT_LEFT, recipeSlots, stackText, recipeStats, ocChips, powerShare, chanceTag,
   layoutChange, glidable, GLIDE_LIMIT, type LayoutChange, type PlacedPicture,
   FlowNodeKind, FLOW_KIND_CLASS,
 } from '../../src/client/views/flow-model.ts';
-import { cardBodyTop, tileCentre, STEP_CARD_WIDTH, LINE_CARD_WIDTH, TILE_PITCH, TILE_GAP, CARD_PAD, CARD_CAPTION, CARD_FOOT, CARD_HEAD, TILE_WIDTH, TILE_ICON_INSET, TILE_TEXT, cardGeometry } from '../../src/client/views/card-model.ts';
+import { cardBodyTop, tileCentre, STEP_CARD_WIDTH, LINE_CARD_WIDTH, TILE_PITCH, TILE_GAP, CARD_PAD, CARD_CAPTION, CARD_FOOT, CARD_HEAD, TILE_WIDTH, TILE_HEIGHT, TILE_ICON_INSET, TILE_TEXT, STUB_WIDTH, STUB_HEIGHT, STUB_HEAD, STUB_TILE, cardGeometry } from '../../src/client/views/card-model.ts';
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
@@ -250,8 +250,8 @@ describe('flow diagram: boxes, rows and stubs (fix spec §6.2)', () => {
     for (const n of g.nodes) {
       if (rowHasIcon(n)) expect(n.width, n.id).toBe(n.kind === FlowNodeKind.Step ? STEP_CARD_WIDTH : LINE_CARD_WIDTH);   // a card is its fixed width (RUK-740 round 2)
       else {
-        expect(n.width, n.id).toBeGreaterThanOrEqual(190);
-        expect(n.width, n.id).toBeLessThanOrEqual(380);
+        expect(n.width, n.id).toBe(STUB_WIDTH);                       // a stub is a small card (RUK-740 round 2)
+        expect(n.height, n.id).toBe(STUB_HEIGHT);
       }
     }
     const long = flowGraph(planOf({ steps: [mv({ id: 'x', machine: { mteId: 1, name: 'Extremely Advanced Large Multiblock Assembling Machine of Great Length', tier: 2 } })] }), 'hour');
@@ -841,12 +841,13 @@ describe('flow diagram: machine readouts', () => {
     const lhtml = renderToStaticMarkup(<svg><FlowNodeShape node={at0(nodeOf(flowGraph(longPlan, 'min'), 'circuit-lv'))} /></svg>);
     expect(lhtml).toContain('<text class="flow-tile-name" x="34" y="28">Extremely Lon…</text>');
     expect(lhtml).toContain(`data-tip="Basic Assembler\nLV · 16 EU/t · 5 machines · 100% busy\ntakes ${LONG} 30/min\nmakes Basic Circuit 30/min"`);
-    // a stub keeps its head drawing: no captions, its title cut to 14, and its row the full width
+    // a stub is a small card (RUK-740 round 2): no column captions, its good's name in its one tile cut to 14, its kind in its caption
     const stub = nodeOf(flowGraph(longPlan, 'min'), 'import:t:redstone@0@circuit-lv');
     const shtml = renderToStaticMarkup(<svg><FlowNodeShape node={at0(stub)} /></svg>);
     expect(shtml).not.toContain('flow-io-head');
-    expect(shtml.match(/<text class="flow-node-title"[^>]*>([^<]*)/)?.[1]?.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
-    expect(shtml).toContain(`<rect class="flow-hit" x="0" y="${rowsTop(stub)}" width="${stub.width}" height="18">`);
+    expect(shtml).toContain('flow-stub-caption');
+    expect(shtml.match(/<text class="flow-tile-name"[^>]*>([^<]*)/)?.[1]?.length).toBeLessThanOrEqual(MAX_NAME_CHARS);
+    expect(shtml).toContain(`<rect class="flow-tile-box" x="${STUB_TILE.x}" y="${STUB_TILE.y}" width="${TILE_WIDTH}" height="${TILE_HEIGHT}">`);
   });
 });
 
@@ -1078,7 +1079,7 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
     // a stub's one row is its own: line 0, no columns and no header over them
     const stub = nodeOf(g, 'import:t:copper_ingot@0@mill');
     expect(rowLine(stub, 0)).toBe(0); expect(rowLines(stub)).toBe(1);
-    expect(rowsTop(stub)).toBe(28 + 16 * stub.lines.length);
+    expect(rowsTop(stub)).toBe(STUB_HEAD);                               // a stub card's one tile under its caption band
   });
   it('leaves a 14 px caption band for the two columns under a step card\'s head band and a collapsed line card\'s lines', () => {
     const mill = nodeOf(g, 'mill');                                        // a step card: head band, captions, then the tiles
@@ -1087,7 +1088,7 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
     const line = nodeOf(closed, `line:${RED}`);                            // a collapsed line card: its lines, then the captions
     expect(rowsTop(line)).toBe(30 + 14 + 16 * line.lines.length);
     const stub = nodeOf(g, 'import:t:copper_ingot@0@mill');                // a stub: no header over its one row
-    expect(rowsTop(stub)).toBe(28 + 16 * stub.lines.length);
+    expect(rowsTop(stub)).toBe(STUB_HEAD);                               // its one tile under its caption band (RUK-740 round 2)
   });
   it('writes every name in at most 14 characters, fitted to its column, and leaves a stub\'s title whole', () => {
     expect(shortName('Redstone')).toBe('Redstone');
@@ -1129,5 +1130,23 @@ describe('flow diagram: inputs and outputs side by side (RUK-740)', () => {
     const ports = elk.children?.find((c) => c.id === 'mill')?.ports;
     expect(ports?.map((p) => p.y)).toEqual(mill.rows.map((_, i) => rowCentre(mill, i) - PORT_SIZE / 2));
     expect(ports?.[0]?.y).toBe(ports?.[1]?.y);                            // the input's port is on its output's line
+  });
+});
+
+describe('stub cards (RUK-740 round 2)', () => {
+  it('captions a stub by its kind, with its row\'s words where they say more', () => {
+    const bought = flowGraph({ ...plan, rawInputs: [{ ...plan.rawInputs[0]!, leafClass: 'direct' }] } as unknown as Plan, 'min');   // an import of mined redstone, the target, nothing left over
+    expect(stubCaption(nodeOf(bought, 'import:t:redstone@0@circuit-lv'))).toBe('Import · mined');
+    expect(stubCaption(nodeOf(bought, 'out'))).toBe('Target');
+    expect(stubCaption(nodeOf(g, 'sink:t:copper_dust@0@saw'))).toBe('Left over');
+    expect(stubCaption(nodeOf(g, 'import:t:copper_ingot@0@mill'))).toBe('Import · bought (made elsewhere)');
+  });
+  it('lays a stub out as a 152 × 58 card with its one port on its tile', () => {
+    const bought = flowGraph(plan, 'min');
+    const stub = nodeOf(bought, 'import:t:redstone@0@circuit-lv');
+    expect([stub.width, stub.height]).toEqual([152, 58]);
+    expect([STUB_WIDTH, STUB_HEIGHT]).toEqual([152, 58]);
+    expect(rowCentre(stub, 0)).toBe(35);                                 // its one tile's centre under the caption band
+    expect(toElk(bought).children?.find((c) => c.id === stub.id)?.ports?.[0]?.y).toBe(35 - PORT_SIZE / 2);
   });
 });

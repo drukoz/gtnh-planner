@@ -2195,11 +2195,11 @@ test('Close while the canvas keeps its height gives the focus to the canvas when
   await page.locator(FLOW_PAN).evaluate((g) => {
     for (const a of g.getAnimations()) a.finish();
   });
-  // the head's top 50 px above the held canvas's bottom: below the height the canvas settles at (checked once the hold has ended)
+  // the head's top 30 px above the held canvas's bottom: inside the 45 px band the hold gives up, below the height the canvas settles at (checked once the hold has ended)
   const area = await canvas.boundingBox();
   const at = await head.boundingBox();
   if (area === null || at === null) throw new Error('no box');
-  const dy = area.y + open - 50 - at.y;
+  const dy = area.y + open - 30 - at.y;
   const from = dy > 0 ? area.y + 6 : area.y + area.height - 6;
   await page.mouse.move(area.x + 6, from);
   await page.mouse.down();
@@ -2207,7 +2207,7 @@ test('Close while the canvas keeps its height gives the focus to the canvas when
   await page.mouse.up();
   const dragged = await head.boundingBox();
   if (dragged === null) throw new Error('no head');
-  expect(dragged.y, 'the premise: the head drawn inside the held canvas').toBeCloseTo(area.y + open - 50, 0);
+  expect(dragged.y, 'the premise: the head drawn inside the held canvas').toBeCloseTo(area.y + open - 30, 0);
   await watchBodyFocus(page);
   await panel.getByRole('button', { name: 'Close the panel' }).focus();
   await page.keyboard.press('Enter');
@@ -2215,7 +2215,7 @@ test('Close while the canvas keeps its height gives the focus to the canvas when
   await expect(canvas).toBeFocused();
   await expect(head).not.toBeFocused();
   expect(await bodyFocusCount(page), 'the focus is never left on the page\'s body').toBe(0);
-  // once the hold has ended, the canvas is too short to show the head: it was in the band the hold gave up
+  // once the hold has ended, the canvas is too short to show the head: it was in the band the hold gives up
   await finishMotion(page);
   await expect.poll(() => canvasHeight(page), { message: 'the hold has ended' }).toBeLessThan(open);
   const settled = await canvas.boundingBox();
