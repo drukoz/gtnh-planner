@@ -671,8 +671,10 @@ export function StepPanel(props: {
   onSelect?(stepId: string): void;
   /** The project links a world base, so the machines a scan found and the step reuses stand in it (default: none). */
   base?: boolean;
+  /** Opens the recipe browser on a good (RUK-740); without it the panel offers no "Browse recipes". */
+  onBrowse?(good: StuffKey): void;
 }): ReactElement {
-  const { step, plan, settings, send, onClose, onSelect } = props;
+  const { step, plan, settings, send, onClose, onSelect, onBrowse } = props;
   const per = props.per ?? 'hour';
   const nameOf = namesOf(plan);
   const patch = settingsSender(send);
@@ -684,6 +686,7 @@ export function StepPanel(props: {
   const warnings = [...new Set([...step.warnings, ...own.filter((w) => !noteCodes.has(w.code)).map((w) => w.text)])];
   const machines = step.count === 1 ? '1 machine' : `${step.count} machines`;
   const shared = sharedMachineText(step, plan);
+  const main = step.mainOutput;
   return (
     <aside className="flow-panel" aria-label={`Step: ${step.machine.name}`} tabIndex={-1}>
       <PanelHead
@@ -715,6 +718,11 @@ export function StepPanel(props: {
         </ul>
       </section>
       <SwapSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
+      {onBrowse !== undefined && main !== undefined && (
+        <div className="row">
+          <button type="button" onClick={() => onBrowse(main)}>Browse recipes</button>
+        </div>
+      )}
       <StopSection step={step} settings={settings} nameOf={nameOf} patch={patch} />
       {notes.length > 0 && (
         <section className="flow-panel-section">
@@ -771,8 +779,10 @@ const TAKEN_FROM: Record<NonNullable<RawInput['from']>['kind'], string> = { proj
  */
 export function RawPanel(props: {
   itemKey: StuffKey; plan: Plan; settings: PlanSettings; per: Per; send: Send; onClose(): void; onSelect?(stepId: string): void;
+  /** Opens the recipe browser on a good (RUK-740); without it the panel offers no "Browse recipes". */
+  onBrowse?(good: StuffKey): void;
 }): ReactElement {
-  const { itemKey, plan, settings, per, send, onClose, onSelect } = props;
+  const { itemKey, plan, settings, per, send, onClose, onSelect, onBrowse } = props;
   const nameOf = namesOf(plan);
   const patch = settingsSender(send);
   const name = nameOf(itemKey);
@@ -845,6 +855,11 @@ export function RawPanel(props: {
             </ul>
           )}
         </section>
+      )}
+      {onBrowse !== undefined && (
+        <div className="row">
+          <button type="button" onClick={() => onBrowse(itemKey)}>Browse recipes</button>
+        </div>
       )}
       {canExpand && (
         <section className="flow-panel-section">

@@ -66,3 +66,17 @@ test('R with nothing under the pointer says to point at a material, and opens no
   await expect(page.getByText('Point at a material first')).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
+
+test("a step panel's Browse recipes opens the popup on its product, and Close gives the focus back to the button", async ({ page }) => {
+  await openWithPlan(page, twoWiremillRecipes());
+  await page.locator('[data-step-id="wire"] .flow-node-head').click();
+  const panel = page.getByRole('complementary', { name: 'Step: Basic Wiremill' });
+  await expect(panel).toBeVisible();
+  const browse = panel.getByRole('button', { name: 'Browse recipes' });
+  await browse.click();
+  const dialog = page.getByRole('dialog', { name: 'Recipes for 1x Copper Wire' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(browse).toBeFocused();
+});
