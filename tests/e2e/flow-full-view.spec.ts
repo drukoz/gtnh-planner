@@ -44,6 +44,19 @@ test('Full view hides the banners, the canvas fills the window, and the choice i
   await expect(page.locator('main.project-page')).not.toHaveClass(/flow-full/);
 });
 
+// RUK-816: the reduced-motion block once gave every property a 1 ms transition, so the canvas's height came late and the page scrolled
+test('under reduced motion Full view gives the canvas its new height at once, and the page fits the window', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openFlow(page);
+  await page.getByRole('button', { name: 'Full view' }).click();
+  await expect(page.locator('main.project-page')).toHaveClass(/flow-full/);
+  // read in the frame after the click, without waiting: nothing is left to glide there
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('svg.flow-canvas')!).height)).toBe(`${900 - 330}px`);
+  expect(await page.evaluate(() => document.getAnimations().filter((a) => a instanceof CSSTransition).length)).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight)).toBe(true);
+});
+
 test('Hide planner gives the canvas the settings column, kept across a reload', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openFlow(page);
