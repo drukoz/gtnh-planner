@@ -40,7 +40,7 @@ import {
 } from '../state/flow-focus.ts';
 import { EASE_IN, EXIT_MS, GHOST_FALLBACK_MS, prefersReducedMotion } from '../state/motion.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
-import { clearRecipeRequest, useRecipeRequest, type RecipeMode } from '../state/recipe-request.ts';
+import { clearRecipeRequest, RecipeMode, useRecipeRequest } from '../state/recipe-request.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { showToast } from '../state/toasts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
@@ -1321,18 +1321,20 @@ function FlowDiagram(props: {
     refocusBox.current = selected === null ? null : selected.kind === 'step' ? selected.id : selected.nodeId;
     setSelected(null);
   };
+  /** A panel's "Browse recipes": the browser opens on the panel's good, at the recipes that make it. */
+  const browse = (good: StuffKey): void => setBrowser({ good, mode: RecipeMode.Recipes });
   let panel: ReactElement | null = null;
   let selectedId: string | null = null;
   if (selected?.kind === 'step') {
     const step = plan.steps.find((s) => s.id === selected.id);
     // Keyed by the step, so its open "more…" pages close when another step is picked; its wrapper stays, and only the panel fades in anew.
     if (step !== undefined) {
-      panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} base={props.base} />;
+      panel = <StepPanel key={step.id} step={step} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} base={props.base} onBrowse={browse} />;
       selectedId = step.id;
     }
   } else if (selected?.kind === 'import' && plan.flows.some((f) => f.from === 'raw' && f.key === selected.key)) {
     // Keyed by the stub picked, as a step's panel is by its step: another import's pick fades in a new panel, at its top.
-    panel = <RawPanel key={selected.nodeId} itemKey={selected.key} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} />;
+    panel = <RawPanel key={selected.nodeId} itemKey={selected.key} plan={plan} settings={settings} per={per} send={send} onClose={close} onSelect={selectStep} onBrowse={browse} />;
     selectedId = selected.nodeId;
   }
   const open = (node: PlacedNode): void => {

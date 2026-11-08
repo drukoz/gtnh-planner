@@ -647,3 +647,28 @@ describe('step panel: recipe card', () => {
     expect(panelHtml({ ...circuit, durationTicks: 0 }, wires)).toContain('<span class="gt-arrow still" aria-hidden="true">');
   });
 });
+
+// RUK-740 task 9b: a panel's "Browse recipes" opens the recipe browser on its good, and a panel given no `onBrowse` offers none.
+describe('Browse recipes', () => {
+  const browseButtons = (tree: ReactNode): Array<ReactElement<Record<string, unknown>>> =>
+    findAll(tree, (e) => e.type === 'button' && childText(e) === 'Browse recipes');
+  it("a step's panel browses the recipes of its main product", () => {
+    const onBrowse = vi.fn();
+    const [button] = browseButtons(StepPanel({ step: wire, plan: wires, settings: S(), send: () => {}, onClose: () => {}, onBrowse }));
+    (button!.props.onClick as () => void)();
+    expect(onBrowse).toHaveBeenCalledWith('t:copper_wire@0');
+  });
+  it('a step with no main product, or a panel given no onBrowse, offers no Browse recipes', () => {
+    const none = { ...wire, mainOutput: undefined };
+    expect(browseButtons(StepPanel({ step: none, plan: wires, settings: S(), send: () => {}, onClose: () => {}, onBrowse: () => {} }))).toHaveLength(0);
+    expect(browseButtons(StepPanel({ step: wire, plan: wires, settings: S(), send: () => {}, onClose: () => {} }))).toHaveLength(0);
+  });
+  it("an import's panel browses the recipes of the good it brings in", () => {
+    const onBrowse = vi.fn();
+    const tree = RawPanel({ itemKey: 't:copper_ingot@0', plan: wires, settings: S(), per: 'min', send: () => {}, onClose: () => {}, onBrowse });
+    const [button] = browseButtons(tree);
+    (button!.props.onClick as () => void)();
+    expect(onBrowse).toHaveBeenCalledWith('t:copper_ingot@0');
+    expect(browseButtons(RawPanel({ itemKey: 't:copper_ingot@0', plan: wires, settings: S(), per: 'min', send: () => {}, onClose: () => {} }))).toHaveLength(0);
+  });
+});
