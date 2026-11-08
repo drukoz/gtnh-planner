@@ -210,10 +210,14 @@ a, button.link { color: var(--ink-link); }
 @keyframes sheen { to { transform: translateX(100%); } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(12px) scale(0.96); } }
 @keyframes toast-out { to { opacity: 0; transform: translateY(12px) scale(0.96); } }
+/* An animation runs for 1 ms, so its animationend still comes (the tips and the key numbers wait for it). A transition's duration is 0 s,
+   not 1 ms: the default transition-property is `all`, so a non-zero duration here gave every element a transition of every property,
+   the Flow canvas's height among them, and Full view's new height then came late (RUK-816). A duration of 0 starts no transition. */
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur-base: 0ms; --dur-slow: 0ms; --dur-exit: 0ms; }
   *, *::before, *::after {
-    animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important;
+    animation-duration: 1ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0s !important; transition-delay: 0s !important;
   }
 }
 

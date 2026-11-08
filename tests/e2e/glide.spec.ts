@@ -227,9 +227,8 @@ test('under reduced motion Fit and the zoom buttons move at once', async ({ page
   expect(await records(page)).toEqual([]);
   // reduced motion is asked first, so the check of what the browser can glide never ran either (notes: the probe never runs for nothing)
   expect(await allRecords(page), 'canGlide()\'s probe').toEqual([]);
-  // the reduced-motion block turns every change into a transition of 1 ms (`transition-duration: 1ms` on everything, whose property is `all`:
-  // a button's hover, the view's attribute too): at once nothing that ends lasts longer, as a pan of 250 ms would, and once those have run,
-  // nothing that ends is left
+  // the reduced-motion block gives every transition a duration of 0 s and every animation 1 ms: at once nothing that ends lasts longer, as a
+  // pan of 250 ms would, and once those have run, nothing that ends is left
   expect((await finiteAnimations(page)).filter((a) => a.ends > 1)).toEqual([]);
   await expect.poll(() => finiteAnimations(page)).toEqual([]);
 });
