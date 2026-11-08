@@ -756,6 +756,8 @@ describe('flow diagram: machine readouts', () => {
     // the power tile under the inputs, with the power's words
     expect(html).toContain('<g class="flow-tile power" aria-hidden="true"><rect class="flow-tile-box" x="6" y="82" width="140" height="34"></rect>');
     expect(html).toContain('<text class="flow-tile-rate" x="40" y="97">120 EU/t</text><text class="flow-tile-name" x="40" y="110">Power</text>');
+    // the foot's band: 100 % busy, so its bar is the high one
+    expect(html).toContain('<g class="flow-busy high" aria-hidden="true">');
     // the words stay the box's
     expect(html).toContain('data-tip="Basic Assembler\nLV · 120 EU/t · 3 shared machines · 100% busy\ntakes Redstone 30/min\nmakes Basic Circuit 30/min"');
   });

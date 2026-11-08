@@ -1,12 +1,13 @@
 // The Flow step cards (Phase 2 spec §7, Task 4; RUK-812): a step card's head shows its title and its tier on a Pixelify chip, its machine's
 // icon, count and owned word stand in the column between its tiles, its power is a tile of its own, and a busy band at its foot is filled to
-// how busy its machines are. These cases ask Chromium what it draws: the wiremill's machine, chip and fill; every chip's text inside its chip,
-// with the web fonts and with them refused (ledger ruling P2-R8: a tier label in the fallback face is wider than in Pixelify), over a step at
+// how busy its machines are. These cases ask Chromium what it draws: the wiremill's machine, chip and fill; every chip's text inside its chip and
+// every count's digits inside the 84 px machine column, with the web fonts and with them refused (ledger ruling P2-R8: a tier label in the fallback face is wider than in Pixelify), over a step at
 // every tier; and in forced colours a fill that still differs from its track, chips that keep an edge and the machine's slot keeping its face
 // (spec §20, ledger ruling P2-R26).
 
 import { test, expect, type Browser } from '@playwright/test';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
+import { MACHINE_COLUMN } from '../../src/client/views/card-model.ts';
 import { circuitLv, everyTier } from './fixtures/plans.ts';
 import { openWithPlan } from './helpers.ts';
 
@@ -25,12 +26,15 @@ test('a step card shows its machine, its tier chip and count, and how busy it is
 /** One chip as Chromium lays it out: its text, how long that text is drawn and the width of its rect. */
 interface Chip { text: string; length: number; width: number }
 
+/** One card count word as Chromium lays it out: its text and how long that text is drawn. */
+interface CountWord { text: string; length: number }
+
 /**
- * Opens the every-tier plan in a browser context of its own and measures every Flow chip once the fonts the page asked for have loaded or
- * failed. With `blockFonts` every font file is refused (the .woff2 files and the .woff fallbacks, as chrome.spec.ts does), so the chips stay
- * in their fallback faces; `loaded` is the faces that did load.
+ * Opens the every-tier plan in a browser context of its own and measures every Flow chip and every card count word once the fonts the page
+ * asked for have loaded or failed. With `blockFonts` every font file is refused (the .woff2 files and the .woff fallbacks, as chrome.spec.ts
+ * does), so the chips stay in their fallback faces; `loaded` is the faces that did load.
  */
-async function measureChips(browser: Browser, blockFonts: boolean): Promise<{ loaded: string[]; chips: Chip[] }> {
+async function measureChips(browser: Browser, blockFonts: boolean): Promise<{ loaded: string[]; chips: Chip[]; counts: CountWord[] }> {
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
@@ -52,7 +56,10 @@ async function measureChips(browser: Browser, blockFonts: boolean): Promise<{ lo
       const text = g.querySelector('text') as SVGTextElement;
       return { text: text.textContent ?? '', length: text.getComputedTextLength(), width: (g.querySelector('rect') as SVGRectElement).width.baseVal.value };
     }));
-    return { loaded: await loaded(), chips };
+    const counts = await page.locator('.flow-card-count').evaluateAll((texts) => texts.map((t) => ({
+      text: t.textContent ?? '', length: (t as SVGTextElement).getComputedTextLength(),
+    })));
+    return { loaded: await loaded(), chips, counts };
   } finally {
     await context.close();
   }
@@ -65,11 +72,14 @@ test('every chip\'s text fits its chip, with the fonts and without them', async 
   expect(without.loaded, 'the faces that loaded with the font files refused').toEqual([]);
   expect(withFonts.loaded.some((family) => family.includes('Pixelify')), 'Pixelify loaded with the font files served').toBe(true);
   expect(withFonts.loaded, 'VT323 loaded with the font files served').toContain('VT323');
-  for (const [faces, { chips }] of [['the fallback faces', without], ['the web fonts', withFonts]] as const) {
-    // every tier label is measured; the counts are card words now, not chips (RUK-812), and the client tests cover them
+  for (const [faces, { chips, counts }] of [['the fallback faces', without], ['the web fonts', withFonts]] as const) {
+    // every tier label is measured; the counts are card words now, not chips, so they are measured against the machine column (RUK-812)
     expect(chips.map((c) => c.text).sort(), faces).toEqual([...TIER_NAMES].sort());
     // 5 px of padding on each side, as CHIP_PADDING
     for (const chip of chips) expect(chip.length, `${chip.text} in ${faces}: ${chip.length} px in a ${chip.width} px chip`).toBeLessThanOrEqual(chip.width - 2 * 5);
+    // every step's count word, and its digits in VT323, are narrower than the 84 px machine column it stands under
+    expect(counts, faces).toHaveLength(TIER_NAMES.length);
+    for (const count of counts) expect(count.length, `${count.text} in ${faces}: ${count.length} px in a ${MACHINE_COLUMN} px column`).toBeLessThan(MACHINE_COLUMN);
   }
 });
 
