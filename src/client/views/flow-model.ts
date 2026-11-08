@@ -11,6 +11,7 @@
 // what a new layout changed of the last, which the diagrams glide (Phase 2 spec §16.3). Base materials sit on the left
 // and the target on the right.
 
+import { cardBodyTop, cardGeometry, tileCentre, type CardShape } from './card-model.ts';
 import type { ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api.js';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import { PSEUDO_IDS, PSEUDO_MACHINES, TIER_NAMES, V } from '../../shared/gt/tiers.ts';
@@ -75,11 +76,13 @@ export interface FlowNode {
  * A step box's machine readout (Phase 2 spec §7): what the head draws in place of `lines[0]`, which stays as its words. The machine's icon
  * (`gregtech:gt.blockmachines@<mteId>`, the crafting table's or the furnace's for a pseudo machine, none by hand); its voltage tier (none by
  * hand or on a pseudo machine, plan ruling pseudo-tier-chip); its machines, "×5" or "×1 shared" for a pool's (none by hand, so `count` is
- * null for a hand step only); its power (none by hand or at 0 EU/t); how busy, between 0 and 1, in the box's words, and from 90 % `high`.
+ * null for a hand step only); its power (none by hand or at 0 EU/t); how busy, between 0 and 1, in the box's words, and from 90 % `high`;
+ * its amperage, "4A", when the machine takes more than 1 A, else null.
  */
 export interface MachineReadout {
   iconKey: StuffKey | null; tier: { name: string; slug: string } | null; count: string | null; power: string | null;
   busy: number; busyText: string; high: boolean;
+  amps: string | null;
 }
 
 /**
@@ -292,6 +295,7 @@ export function machineReadout(step: PlanStep): MachineReadout {
     tier: voltage ? { name: tierText(step.machine.tier), slug: tierSlug(step.machine.tier) } : null,
     count: hand ? null : `×${step.count}${step.pool === undefined ? '' : ' shared'}`,
     power: hand || step.euPerTick === 0 ? null : `${formatNumber(step.euPerTick)} EU/t`,
+    amps: !hand && step.oc !== undefined && step.oc.machineAmps > 1 ? `${step.oc.machineAmps}A` : null,
     busy: Number.isNaN(step.utilization) ? 0 : Math.min(1, Math.max(0, step.utilization)),
     busyText: formatPercent(step.utilization),
     high: step.utilization >= HIGH_BUSY,
@@ -407,6 +411,7 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
  */
 export function rowsTop(node: Pick<FlowNode, 'kind' | 'lines' | 'avoidBadge' | 'machine'>): number {
   const badge = node.avoidBadge === undefined ? 0 : 1;
+  if (rowHasIcon(node)) return cardBodyTop(cardExtraLines(node));   // a card's first tile line (RUK-740 round 2)
   const io = rowHasIcon(node) ? IO_HEAD_HEIGHT : 0;   // the two columns' "Input | Output" header (RUK-741)
   if (node.machine === undefined) return NODE_TITLE_HEIGHT + io + NODE_LINE_HEIGHT * (node.lines.length + badge);
   return STEP_HEAD_HEIGHT + BUSY_BAND + io + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
@@ -431,7 +436,25 @@ export function rowLines(node: Pick<FlowNode, 'kind' | 'rows'>): number {
 
 /** The middle of a box's `i`-th row, from the box's top: where that row's port sits, on its column's line. */
 export function rowCentre(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
+  if (rowHasIcon(node)) return tileCentre(rowsTop(node), rowLine(node, i));   // the middle of the row's tile
   return rowsTop(node) + ROW_HEIGHT * rowLine(node, i) + ROW_HEIGHT / 2;
+}
+
+/** The lines a card draws under its head band: a step's lines but its first (its readout says it), a line's lines, and the avoid badge. */
+export function cardExtraLines(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>): number {
+  const lines = node.machine === undefined ? node.lines.length : Math.max(0, node.lines.length - 1);
+  return lines + (node.avoidBadge === undefined ? 0 : 1);
+}
+
+/** What a step's or a supporting line's card is sized from (card-model.ts): its inputs, its outputs, its power tile and its extra lines. */
+export function cardShape(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoidBadge' | 'machine'>): CardShape {
+  const inputs = node.rows.filter((r) => r.side === 'in').length;
+  const { machine } = node;
+  return {
+    step: node.kind === FlowNodeKind.Step, inputs, outputs: node.rows.length - inputs,
+    power: machine !== undefined && machine.count !== null && machine.power !== null,
+    extraLines: cardExtraLines(node),
+  };
 }
 
 /** Whether a box draws an icon beside each row: steps and collapsed lines; a stub's title already shows its one good. */
@@ -488,6 +511,10 @@ export function clipText(text: string, width: number, charWidth: number): string
  * machine readout, which draws its first line (Phase 2 spec §7.2): its head, chip row and busy band count instead of its title and that line.
  */
 function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
+  if (rowHasIcon(node)) {
+    const card = cardGeometry(cardShape(node));   // a step's or a line's card has a fixed width (RUK-740 round 2)
+    return { ...node, width: card.width, height: card.height };
+  }
   const icon = node.key !== null ? ICON_SPACE : 0;
   const rowIcon = rowHasIcon(node) ? ICON_SPACE : 0;
   const { machine } = node;
