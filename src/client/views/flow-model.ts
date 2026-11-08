@@ -175,6 +175,14 @@ const TICKS_PER_SECOND = 20;
 const LABEL_CHAR_WIDTH = 6.5;
 const LABEL_PADDING = 8;
 const LABEL_HEIGHT = 14;
+/** How far right of its drop, and above its lane, an arrow into the left-over band puts its rate label (RUK-817). */
+const DROP_LABEL_GAP = 3;
+
+/** The width of an edge label box for `text`, as ELK is given it. */
+function labelWidth(text: string): number {
+  return Math.ceil(text.length * LABEL_CHAR_WIDTH) + LABEL_PADDING;
+}
+
 /**
  * An ELK port is a tiny box on the edge of its box, centred on its row, so ELK ends the arrow on that row: on the port's
  * outer face, `PORT_SIZE` outside the box (where FlowView's flange has its outer face too).
@@ -971,7 +979,7 @@ export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGr
     const edge: ElkExtendedEdge = { id: e.id, sources: [e.fromPort], targets: [e.toPort] };
     if (e.label !== undefined) {
       edge.labels = [{
-        id: `${e.id}#label`, text: e.label, width: Math.ceil(e.label.length * LABEL_CHAR_WIDTH) + LABEL_PADDING, height: LABEL_HEIGHT,
+        id: `${e.id}#label`, text: e.label, width: labelWidth(e.label), height: LABEL_HEIGHT,
         layoutOptions: { 'elk.edgeLabels.placement': (arrows.get(e.toPort) ?? 0) > 1 ? 'HEAD' : 'TAIL' },
       }];
     }
@@ -1097,18 +1105,30 @@ function placeLeftOvers(layout: FlowLayout): FlowLayout {
   frame.width = Math.max(prevX + prevW + LEFT_OVER_PAD, leftOverTitleWidth());
   frame.height = LEFT_OVER_TITLE + maxH + LEFT_OVER_PAD;
 
-  // Compute dropX for each sink (avoid crossing boxes)
+  // Compute dropX for each sink: clear of every box, and of every rate label on its way down (RUK-817), so a pipe never
+  // hides the first digits of a label. A sink's own arrow, when it has a label, gets a box just right of its drop, above
+  // its lane, where only drops and lanes run.
+  const labels: Box[] = layout.edges.flatMap((e) => (e.labelBox === undefined ? [] : [e.labelBox]));
   const dropXs = new Map<string, number>();
+  const sinkLabels = new Map<string, Box>();
   for (let k = 0; k < n; k++) {
     const s = sorted[k]!;
     const start = starts.get(s.id)!;
+    const laneY = bottom + LEFT_OVER_GAP + LANE_STEP * k;
     let dropX = start[0] + DROP_GAP + DROP_STEP * (k % 4);
-    for (let iter = 0; iter < rest.length; iter++) {
-      const b = rest.find((bx) => bx.x - 4 <= dropX && dropX <= bx.x + bx.width + 4 && bx.y + bx.height > start[1] && bx.y < bottom);
+    for (let iter = 0; iter < rest.length + labels.length; iter++) {
+      const b = rest.find((bx) => bx.x - 4 <= dropX && dropX <= bx.x + bx.width + 4 && bx.y + bx.height > start[1] && bx.y < bottom)
+        ?? labels.find((l) => l.x - 4 <= dropX && dropX <= l.x + l.width + 4 && l.y + l.height > start[1] && l.y < laneY);
       if (b === undefined) break;
       dropX = b.x + b.width + DROP_GAP;
     }
     dropXs.set(s.id, dropX);
+    const label = layout.edges.find((ed) => ed.to === s.id)?.label;
+    if (label !== undefined) {
+      const box = { x: dropX + DROP_LABEL_GAP, y: laneY - DROP_LABEL_GAP - LABEL_HEIGHT, width: labelWidth(label), height: LABEL_HEIGHT };
+      sinkLabels.set(s.id, box);
+      labels.push(box);
+    }
   }
 
   // Build new nodes (sinks at their new positions)
@@ -1136,7 +1156,9 @@ function placeLeftOvers(layout: FlowLayout): FlowLayout {
       end,
     ];
     const { labelAt: _la, labelBox: _lb, ...rest2 } = e as typeof e & { labelAt?: [number, number]; labelBox?: Box };
-    return { ...rest2, points };
+    const box = sinkLabels.get(s.id);
+    if (box === undefined) return { ...rest2, points };
+    return { ...rest2, points, labelBox: box, labelAt: [box.x + box.width / 2, box.y + box.height / 2] as [number, number] };
   });
 
   return {

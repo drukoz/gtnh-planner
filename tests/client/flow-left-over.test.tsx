@@ -5,7 +5,7 @@ import { FlowLeftOverShape } from '../../src/client/views/FlowView.tsx';
 import {
   flowGraph, toElk, fromElk, rowCentre,
   PORT_SIZE, LEFT_OVER_GAP, LANE_STEP, LEFT_OVER_TITLE, LEFT_OVER_PAD, LEFT_OVER_SPACING,
-  APPROACH, LEFT_OVER_WORDS, TITLE_CHAR_WIDTH, leftOverTitleWidth, FlowNodeKind, type FlowLayout, type FlowNode,
+  APPROACH, LEFT_OVER_WORDS, TITLE_CHAR_WIDTH, leftOverTitleWidth, FlowNodeKind, type Box, type FlowLayout, type FlowNode,
 } from '../../src/client/views/flow-model.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Product, LeafClass } from '../../src/shared/types/pack.ts';
@@ -227,5 +227,47 @@ describe('flow left-over band (RUK-740)', () => {
     expect(html).toContain(`<svg width="280" height="${LEFT_OVER_TITLE}">`);
     expect(html).toContain(`<text class="flow-left-over-title" x="${LEFT_OVER_PAD}" y="19">Left over: not used in this line</text>`);
     expect(renderToStaticMarkup(<svg><FlowLeftOverShape box={box} dim /></svg>)).toContain('class="flow-left-over dim"');
+  });
+});
+
+describe('rate labels at a port shared with a left-over arrow (RUK-817)', () => {
+  // The wiremill's wire goes to the assembler and to the left-over band, so both arrows carry a rate label.
+  const shared = { ...board, flows: [...board.flows, flow('mill', 'sink', WIRE, 0.5 / H)] };
+  const overlaps = (a: Box, b: Box): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+  it('the left-over arrow keeps its label, in a box right of its drop and above its lane', async () => {
+    const layout = await layOut(shared);
+    const edge = layout.edges.find((e) => e.from === 'mill' && e.to.startsWith('sink:'));
+    expect(edge?.label).toBe('0.5/h');
+    const box = edge?.labelBox;
+    expect(box).toBeDefined();
+    if (edge === undefined || box === undefined) return;
+    const [dropX] = edge.points[1] as [number, number];
+    const [, laneY] = edge.points[2] as [number, number];
+    expect(box.x).toBeGreaterThan(dropX);
+    expect(box.y + box.height).toBeLessThan(laneY);
+    expect(edge.labelAt).toEqual([box.x + box.width / 2, box.y + box.height / 2]);
+  });
+
+  it('no arrow runs through another arrow\'s label, and no label sits on a box or on another label', async () => {
+    const layout = await layOut(shared);
+    for (const e of layout.edges) {
+      const box = e.labelBox;
+      if (box === undefined) continue;
+      for (const n of layout.nodes) expect(overlaps(box, n), `${e.id} label on ${n.id}`).toBe(false);
+      for (const o of layout.edges) {
+        if (o === e) continue;
+        if (o.labelBox !== undefined) expect(overlaps(box, o.labelBox), `${e.id} label on ${o.id} label`).toBe(false);
+        for (let i = 1; i < o.points.length; i += 1) {
+          const [ax, ay] = o.points[i - 1] as [number, number];
+          const [bx, by] = o.points[i] as [number, number];
+          const segment = { x: Math.min(ax, bx), y: Math.min(ay, by), width: Math.abs(bx - ax), height: Math.abs(by - ay) };
+          const through = ax === bx
+            ? ax > box.x && ax < box.x + box.width && segment.y < box.y + box.height && box.y < segment.y + segment.height
+            : ay > box.y && ay < box.y + box.height && segment.x < box.x + box.width && box.x < segment.x + segment.width;
+          expect(through, `${o.id} runs through ${e.id} label`).toBe(false);
+        }
+      }
+    }
   });
 });
