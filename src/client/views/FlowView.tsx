@@ -45,11 +45,11 @@ import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { showToast } from '../state/toasts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
-  BUSY_BAND, BUSY_TRACK_HEIGHT, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
+  BUSY_BAND, BUSY_TRACK_HEIGHT, LEFT_OVER_PAD, LEFT_OVER_TITLE, LEFT_OVER_WORDS, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
   NODE_TITLE_HEIGHT, PORT_SIZE, POWER_GAP, READOUT_LEFT, ROW_HEIGHT, SLOT_TOP, STEP_HEAD_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
   TOGGLE_SPACE, DIM_OPACITY, IO_HEAD_HEIGHT, boxTitle, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
   fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowLabel, rowLines, rowRate, rowsTop, toElk, useOnlyPatch,
-  type FlowLayout, type FlowNode, type FlowNodeKind, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
+  type Box, type FlowLayout, type FlowNode, type FlowNodeKind, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
 } from './flow-model.ts';
 import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
 import { pointIn } from './pan-zoom.ts';
@@ -556,6 +556,22 @@ function FlowGroupShape(props: { group: PlacedGroup; dim: boolean }): ReactEleme
         <text className="flow-group-title" x={12} y={22}>{group.title}</text>
       </svg>
       <LineToggle lineKey={group.key} title={group.title} open x={group.width - TOGGLE_SIZE - TOGGLE_MARGIN} y={TOGGLE_MARGIN} />
+    </g>
+  );
+}
+
+/**
+ * The left-over band (RUK-740): a dashed frame under the boxes of the goods a step makes and nothing in the line takes, titled
+ * `LEFT_OVER_WORDS` in its top band. It dims, as an open line's frame does, while a focus lights none of its boxes.
+ */
+export function FlowLeftOverShape(props: { box: Box; dim: boolean }): ReactElement {
+  const { box, dim } = props;
+  return (
+    <g className={dim ? 'flow-left-over dim' : 'flow-left-over'} data-left-over="" transform={`translate(${box.x} ${box.y})`}>
+      <rect className="flow-left-over-box" width={box.width} height={box.height} />
+      <svg width={box.width} height={LEFT_OVER_TITLE}>
+        <text className="flow-left-over-title" x={LEFT_OVER_PAD} y={19}>{LEFT_OVER_WORDS}</text>
+      </svg>
     </g>
   );
 }
@@ -1101,6 +1117,11 @@ function FlowCanvas(props: {
       >
         <FlowDefs />
         <g className="flow-pan" ref={panRef} transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
+          {layout.leftOver !== undefined && (
+            <FlowLeftOverShape
+              box={layout.leftOver} dim={sets !== null && !layout.nodes.some((n) => n.kind === 'sink' && sets.nodes.has(n.id))}
+            />
+          )}
           {layout.groups.map((group) => (
             <FlowGroupShape key={group.id} group={group} dim={sets !== null && !group.nodes.some((id) => sets.nodes.has(id))} />
           ))}

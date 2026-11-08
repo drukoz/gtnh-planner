@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { FlowLeftOverShape } from '../../src/client/views/FlowView.tsx';
 import {
   flowGraph, toElk, fromElk, rowCentre,
   PORT_SIZE, LEFT_OVER_GAP, LANE_STEP, LEFT_OVER_TITLE, LEFT_OVER_PAD, LEFT_OVER_SPACING,
-  APPROACH, type FlowLayout, type FlowNode,
+  APPROACH, LEFT_OVER_WORDS, TITLE_CHAR_WIDTH, leftOverTitleWidth, type FlowLayout, type FlowNode,
 } from '../../src/client/views/flow-model.ts';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import type { Product, LeafClass } from '../../src/shared/types/pack.ts';
@@ -208,5 +210,22 @@ describe('flow left-over band (RUK-740)', () => {
     const a = await layOut(board);
     const b = await layOut(board);
     expect(a).toEqual(b);
+  });
+
+  it('the frame is never narrower than its title (RUK-740 task 7)', async () => {
+    const laid = await layOut(board);
+    expect(leftOverTitleWidth()).toBe(Math.ceil(LEFT_OVER_WORDS.length * TITLE_CHAR_WIDTH) + 2 * LEFT_OVER_PAD);
+    expect(laid.leftOver!.width).toBeGreaterThanOrEqual(leftOverTitleWidth());
+    expect(laid.width).toBeGreaterThanOrEqual(laid.leftOver!.x + laid.leftOver!.width);
+  });
+
+  it('draws the band as a dashed frame with its title, dimmed while a focus lights none of its boxes (RUK-740 task 7)', () => {
+    const box = { x: 0, y: 300, width: 280, height: 90 };
+    const html = renderToStaticMarkup(<svg><FlowLeftOverShape box={box} dim={false} /></svg>);
+    expect(html).toContain('<g class="flow-left-over" data-left-over="" transform="translate(0 300)">');
+    expect(html).toContain('<rect class="flow-left-over-box" width="280" height="90"></rect>');
+    expect(html).toContain(`<svg width="280" height="${LEFT_OVER_TITLE}">`);
+    expect(html).toContain(`<text class="flow-left-over-title" x="${LEFT_OVER_PAD}" y="19">Left over: not used in this line</text>`);
+    expect(renderToStaticMarkup(<svg><FlowLeftOverShape box={box} dim /></svg>)).toContain('class="flow-left-over dim"');
   });
 });
