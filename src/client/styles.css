@@ -1102,6 +1102,19 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-busy-fill { fill: var(--flow-busy); }
 .flow-busy.high .flow-busy-fill { fill: var(--flow-busy-high); }
 .flow-node .flow-busy-text { font-size: 11px; font-variant-numeric: tabular-nums; text-anchor: end; }
+/* The Flow cards (RUK-740 round 2): each good a tile, darker than its card, its rate over its name; the power tile's bolt in the power ink;
+   the machine column's count in VT323 and its owned words muted. */
+.flow-tile-box { fill: var(--slot); stroke: var(--outline); stroke-width: 1; }
+.flow-tile .flow-tile-rate { font-size: 12px; font-weight: 600; fill: var(--text); }
+.flow-tile .flow-tile-name { font-size: 10px; fill: var(--text-muted); }
+.flow-tile.main .flow-tile-rate { font-weight: 700; }
+.flow-tile.issue-orphan-input .flow-tile-rate, .flow-tile.issue-short-input .flow-tile-rate,
+.flow-tile.issue-orphan-input .flow-tile-name, .flow-tile.issue-short-input .flow-tile-name { fill: var(--flow-error); }
+.flow-tile.issue-multi-producer .flow-tile-rate, .flow-tile.issue-bought-and-made .flow-tile-rate { fill: var(--flow-warn); }
+.flow-tile.hl > .flow-tile-box { stroke: var(--accent); stroke-width: 2; }
+.flow-power-bolt { fill: var(--flow-warn); }
+.flow-node .flow-card-count { font-size: 16px; font-weight: 700; fill: var(--text); }
+.flow-node .flow-card-owned { font-size: 10px; fill: var(--text-muted); }
 .flow-stop-owned { stop-color: var(--flow-owned); }
 .flow-stop-new { stop-color: var(--flow-new); }
 /*

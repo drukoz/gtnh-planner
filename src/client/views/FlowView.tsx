@@ -45,11 +45,15 @@ import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { showToast } from '../state/toasts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
+  CARD_CAPTION, CARD_HEAD, CARD_LINE, CARD_MACHINE_ICON, CARD_PAD, CARD_SLOT, TILE_HEIGHT, TILE_ICON, TILE_ICON_INSET, TILE_TEXT, TILE_WIDTH, cardGeometry,
+  type Tile,
+} from './card-model.ts';
+import {
   BUSY_BAND, BUSY_TRACK_HEIGHT, LEFT_OVER_PAD, LEFT_OVER_TITLE, LEFT_OVER_WORDS, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, ICON_SPACE, MACHINE_ICON, MACHINE_SLOT, NODE_LINE_HEIGHT,
   NODE_TITLE_HEIGHT, PORT_SIZE, POWER_GAP, READOUT_LEFT, ROW_HEIGHT, SLOT_TOP, STEP_HEAD_HEIGHT, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
   TOGGLE_SPACE, DIM_OPACITY, IO_HEAD_HEIGHT, boxTitle, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
   fromElk, glidable, layoutChange, lineNodeId, problemId, rowCentre, rowHasIcon, rowLabel, rowLines, rowRate, rowsTop, toElk, useOnlyPatch,
-  FLOW_KIND_CLASS, FlowNodeKind,
+  FLOW_KIND_CLASS, FlowNodeKind, cardShape, rowLine, shortName,
   type Box, type FlowLayout, type FlowNode, type FlowRow, type FocusSets, type LayoutChange, type MachineReadout,
 } from './flow-model.ts';
 import { fadedIn, glideLayout, glidingAt, layoutGlides, restingBox, settle, usePan, type GlideTargets, type PanView } from './glide.ts';
@@ -283,6 +287,166 @@ function MachineReadoutShape(props: { node: PlacedNode; machine: MachineReadout 
   );
 }
 
+/** A card tile's text (RUK-740 round 2): its 12 px semibold rate and its 10 px name, about this wide a character, and their baselines in the tile. */
+const RATE_CHAR_WIDTH = 7;
+const NAME_CHAR_WIDTH = 5.6;
+const TILE_RATE_BASELINE = 15;
+const TILE_NAME_BASELINE = 28;
+/** A card's title baseline and its chips' top in the head band; the room a caption's baseline leaves above the first tile. */
+const CARD_TITLE_BASELINE = 20;
+const CARD_CHIP_TOP = 7;
+const CAPTION_RISE = 4;
+/** The machine column: the count's and the owned words' baselines under the slot. */
+const COUNT_DROP = 18;
+const OWNED_DROP = 32;
+/** The power tile's lightning bolt, in a 24 px square. */
+const BOLT = 'M 14 1 L 4 14 H 11 L 9 23 L 20 9 H 13 Z';
+/** What the machine column says under the count: whether the group has the machines already. */
+const OWNED_WORDS: Record<FlowNode['owned'], string> = { all: 'owned', some: 'some owned', none: 'new' };
+/** How `machineReadout` ends the count of a pool's machines ("×1 shared"). */
+const SHARED_SUFFIX = ' shared';
+
+/**
+ * One good of a card (RUK-740 round 2), a tile in its column: its icon, its rate on top and its name under it (cut to 14 letters), an input's
+ * from the left and an output's mirrored from the right. Like a row, it is a button with its port's flange at the box's edge; hovering it lights
+ * the good, a click or Enter pins it.
+ */
+function CardTileShape(props: { node: PlacedNode; row: FlowRow; index: number; tile: Tile; sets: FocusSets | null }): ReactElement {
+  const { node, row, index, tile, sets } = props;
+  const left = row.side === 'in';
+  const classes = ['flow-row', 'flow-tile', row.side];
+  if (row.main === true) classes.push('main');
+  if (row.issue !== undefined) classes.push(`issue-${row.issue}`);
+  if (sets !== null) classes.push(sets.ports.has(row.port) ? 'hl' : 'dim');
+  const rate = rowRate(row);
+  const y = rowCentre(node, index);
+  const room = TILE_WIDTH - TILE_TEXT - TILE_ICON_INSET;
+  const textX = left ? TILE_TEXT : TILE_WIDTH - TILE_TEXT;
+  const anchor = left ? {} : { textAnchor: 'end' as const };
+  const where = left ? 'comes from' : 'goes';
+  return (
+    <g className={classes.join(' ')} data-port={row.port} data-key={row.key} role="button" tabIndex={0}
+      aria-label={`${left ? 'takes' : 'makes'} ${row.name} ${rate}: show where it ${where}`}>
+      <rect className="flow-tile-box" x={tile.x} y={tile.y} width={TILE_WIDTH} height={TILE_HEIGHT} />
+      <foreignObject
+        x={left ? tile.x + TILE_ICON_INSET : tile.x + TILE_WIDTH - TILE_ICON_INSET - TILE_ICON} y={tile.y + TILE_ICON_INSET}
+        width={TILE_ICON} height={TILE_ICON}
+      >
+        <ItemIcon itemKey={row.key} size={TILE_ICON} name={row.name} tip={false} />
+      </foreignObject>
+      {/* A nested svg clips a text wider than the tile; the full text is in the box's tooltip and accessible name. */}
+      <svg x={tile.x} y={tile.y} width={TILE_WIDTH} height={TILE_HEIGHT}>
+        <text className="flow-tile-rate" x={textX} y={TILE_RATE_BASELINE} {...anchor}>{clipText(rate, room, RATE_CHAR_WIDTH)}</text>
+        <text className="flow-tile-name" x={textX} y={TILE_NAME_BASELINE} {...anchor}>{clipText(shortName(row.name), room, NAME_CHAR_WIDTH)}</text>
+      </svg>
+      <rect className="flow-port" x={(left ? 0 : node.width) - FLANGE_DEPTH / 2} y={y - FLANGE_HEIGHT / 2} width={FLANGE_DEPTH} height={FLANGE_HEIGHT} />
+    </g>
+  );
+}
+
+/** A step card's power tile, under its inputs: a lightning bolt, the power ("16 EU/t") and "Power". It only draws; the box's tip says it. */
+function PowerTileShape(props: { tile: Tile; power: string }): ReactElement {
+  const { tile, power } = props;
+  return (
+    <g className="flow-tile power" aria-hidden="true">
+      <rect className="flow-tile-box" x={tile.x} y={tile.y} width={TILE_WIDTH} height={TILE_HEIGHT} />
+      <path className="flow-power-bolt" d={BOLT} transform={`translate(${tile.x + TILE_ICON_INSET} ${tile.y + TILE_ICON_INSET})`} />
+      <text className="flow-tile-rate" x={tile.x + TILE_TEXT} y={tile.y + TILE_RATE_BASELINE}>{power}</text>
+      <text className="flow-tile-name" x={tile.x + TILE_TEXT} y={tile.y + TILE_NAME_BASELINE}>Power</text>
+    </g>
+  );
+}
+
+/**
+ * A card's head band (RUK-740 round 2): the machine's name (a line's "<name> line"), cut at the chips; at its right the tier chip and, before
+ * it, the amperage chip ("4A"); under the band the step's other lines (a line's lines) and the avoid badge.
+ */
+function CardHeadShape(props: { node: PlacedNode }): ReactElement {
+  const { node } = props;
+  const { machine } = node;
+  const chips: Array<{ part: string; className: string; text: string }> = [];
+  if (machine?.tier != null) chips.push({ part: 'tier', className: `flow-chip tier-${machine.tier.slug}`, text: machine.tier.name });
+  if (machine?.amps != null) chips.push({ part: 'amps', className: 'flow-chip amps', text: machine.amps });
+  let right = node.width - TEXT_LEFT - (node.kind === FlowNodeKind.Line ? TOGGLE_SPACE : 0);
+  const drawn = chips.map((chip) => {
+    const width = chipWidth(chip.text);
+    right -= width;
+    const x = right;
+    right -= CHIP_GAP;
+    return (
+      <g key={chip.part} className={chip.className} transform={`translate(${x} ${CARD_CHIP_TOP})`}>
+        <rect width={width} height={CHIP_HEIGHT} />
+        <text x={width / 2} y={CHIP_BASELINE}><Figs text={chip.text} svg /></text>
+      </g>
+    );
+  });
+  const shown = machine === undefined ? node.lines : node.lines.slice(1);
+  const badge = node.avoidBadge;
+  return (
+    <>
+      <text className="flow-node-title" x={TEXT_LEFT} y={CARD_TITLE_BASELINE}>{clipText(boxTitle(node), right - 2 * TEXT_LEFT, TITLE_CHAR_WIDTH)}</text>
+      <g aria-hidden="true">{drawn}</g>
+      {shown.map((line, i) => (
+        <text key={`${i}:${line}`} className="flow-node-line" x={TEXT_LEFT} y={CARD_HEAD + CARD_LINE * i + 11}>
+          {clipText(line, node.width - 2 * TEXT_LEFT, TEXT_CHAR_WIDTH)}
+        </text>
+      ))}
+      {badge !== undefined && (
+        <g className="flow-avoid-badge" data-avoid-badge="" transform={`translate(${BADGE_LEFT} ${CARD_HEAD + CARD_LINE * shown.length})`}>
+          <rect width={node.width - 2 * BADGE_LEFT} height={CARD_LINE - 2} />
+          <text x={TEXT_LEFT - BADGE_LEFT} y={11}>{badge.text}</text>
+        </g>
+      )}
+    </>
+  );
+}
+
+/**
+ * A step card's machine column (RUK-740 round 2): the machine's 40 px icon in a 44 px slot (a hand step's main output), its count ("×5") under
+ * it, and under that "shared" for a pool's machines, else whether the group owns them ("owned", "some owned", "new"), or "by hand". It only
+ * draws: the box's tip says it all.
+ */
+function CardMachineShape(props: { node: PlacedNode; machine: MachineReadout; column: { x: number; y: number; width: number } }): ReactElement {
+  const { node, machine, column } = props;
+  const icon = machine.iconKey ?? node.key;
+  const cx = column.x + column.width / 2;
+  const slotX = cx - CARD_SLOT / 2;
+  const inset = (CARD_SLOT - CARD_MACHINE_ICON) / 2;
+  // "×1 shared" is too wide for the column: the count goes alone, and "shared" under it
+  const count = machine.count === null ? null : machine.count.replace(SHARED_SUFFIX, '');
+  const shared = machine.count !== null && machine.count.endsWith(SHARED_SUFFIX);
+  return (
+    <g className="flow-machine flow-card-machine" aria-hidden="true">
+      <rect className="flow-machine-slot" x={slotX} y={column.y} width={CARD_SLOT} height={CARD_SLOT} />
+      {icon !== null && (
+        <foreignObject x={slotX + inset} y={column.y + inset} width={CARD_MACHINE_ICON} height={CARD_MACHINE_ICON}>
+          <ItemIcon itemKey={icon} size={CARD_MACHINE_ICON} name={machine.iconKey === null ? node.keyName : node.title} tip={false} />
+        </foreignObject>
+      )}
+      {count !== null && (
+        <text className="flow-card-count" x={cx} y={column.y + CARD_SLOT + COUNT_DROP} textAnchor="middle"><Figs text={count} svg /></text>
+      )}
+      <text className="flow-card-owned" x={cx} y={column.y + CARD_SLOT + OWNED_DROP} textAnchor="middle">
+        {count === null ? HAND_WORDS : shared ? 'shared' : OWNED_WORDS[node.owned]}
+      </text>
+    </g>
+  );
+}
+
+/** A step card's foot band (RUK-740 round 2): its track filled to how busy the machines are (amber from 90 %), the percentage at its right. */
+function CardFootShape(props: { node: PlacedNode; machine: MachineReadout; top: number }): ReactElement {
+  const { node, machine, top } = props;
+  const track = busyTrack(node);
+  const y = top + BUSY_TRACK_TOP;
+  return (
+    <g className={machine.high ? 'flow-busy high' : 'flow-busy'} aria-hidden="true">
+      <rect className="flow-busy-track" x={TEXT_LEFT} y={y} width={track} height={BUSY_TRACK_HEIGHT} />
+      <rect className="flow-busy-fill" x={TEXT_LEFT} y={y} width={track * machine.busy} height={BUSY_TRACK_HEIGHT} />
+      <text className="flow-busy-text" x={node.width - TEXT_LEFT} y={y + BUSY_TRACK_HEIGHT}>{machine.busyText}</text>
+    </g>
+  );
+}
+
 /**
  * One box: `data-node-id` and `data-kind` on a group (and `data-step-id` on a step's only, ruling P17) holding the box,
  * a head with its item icon, title and lines (a button on a step or an import stub, whose click opens its panel), the
@@ -319,6 +483,52 @@ export function FlowNodeShape(props: { node: PlacedNode; selected?: boolean; set
   const described = [node.title, ...node.lines, ...(badge?.warnings ?? [])];
   const tip = tipText([...described, ...node.rows.map((r) => rowWords(node, r))]);
   const opens = node.kind === FlowNodeKind.Step || node.kind === FlowNodeKind.Import;
+  // A step's or a collapsed line's box is a card (RUK-740 round 2, card-model.ts): its head band, the "Input" and "Output" captions, its tiles
+  // in two columns with a step's machine column between them and its power tile under its inputs, and a step's foot band.
+  if (rowHasIcon(node)) {
+    const card = cardGeometry(cardShape(node));
+    const headHeight = card.bodyTop - CARD_CAPTION;
+    const power = card.tiles.find((t) => t.power);
+    const tileOf = (i: number): Tile | undefined => {
+      const row = node.rows[i];
+      const line = rowLine(node, i);
+      return row === undefined ? undefined : card.tiles.find((t) => !t.power && t.side === row.side && t.line === line);
+    };
+    return (
+      <g
+        className={classes.join(' ')}
+        data-node-id={node.id}
+        {...(node.kind === FlowNodeKind.Step ? { 'data-step-id': node.id } : {})}
+        data-kind={FLOW_KIND_CLASS[node.kind]}
+        transform={`translate(${node.x} ${node.y})`}
+        aria-label={tip}
+        data-tip={tip}
+      >
+        <rect className="flow-node-box" width={node.width} height={node.height} />
+        <g className="flow-node-head" {...(opens ? { role: 'button', tabIndex: 0, 'aria-label': described.join(', '), 'aria-pressed': selected } : {})}>
+          <rect className="flow-hit" width={node.width} height={headHeight} />
+          {/* A nested svg clips text that is wider than the box; the full text is in the box's tooltip and accessible name. */}
+          <svg width={node.width} height={headHeight}><CardHeadShape node={node} /></svg>
+        </g>
+        {node.kind === FlowNodeKind.Line && node.key !== null && (
+          <LineToggle lineKey={node.key} title={node.title} open={false} x={node.width - TOGGLE_SIZE - TOGGLE_MARGIN} y={ICON_TOP - 1} />
+        )}
+        {node.rows.length > 0 && (
+          <g className="flow-io" aria-hidden="true">
+            <text className="flow-io-head" x={CARD_PAD} y={card.bodyTop - CAPTION_RISE}>Input</text>
+            <text className="flow-io-head" x={node.width - CARD_PAD} y={card.bodyTop - CAPTION_RISE} textAnchor="end">Output</text>
+          </g>
+        )}
+        {machine !== undefined && card.machine !== null && <CardMachineShape node={node} machine={machine} column={card.machine} />}
+        {machine?.power != null && power !== undefined && <PowerTileShape tile={power} power={machine.power} />}
+        {node.rows.map((row, i) => {
+          const tile = tileOf(i);
+          return tile === undefined ? null : <CardTileShape key={row.port} node={node} row={row} index={i} tile={tile} sets={sets} />;
+        })}
+        {machine !== undefined && card.footTop !== null && <CardFootShape node={node} machine={machine} top={card.footTop} />}
+      </g>
+    );
+  }
   return (
     <g
       className={classes.join(' ')}
