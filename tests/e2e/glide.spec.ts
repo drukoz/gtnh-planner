@@ -699,7 +699,8 @@ async function headHeldAboveMiddle(page: Page, bottom: (canvas: { top: number; m
   if (h === null || c === null) throw new Error('no box');
   const dx = Math.round(middle.across - (h.x + h.width / 2));
   const dy = Math.round(bottom(middle) - (h.y + h.height));
-  const [x, y] = [Math.round(c.x + c.width / 2 - dx / 2), Math.round(dy < 0 ? c.y + c.height - 12 : c.y + 12)];
+  const vp = page.viewportSize();   // a taller canvas can push the drag's start out of the window: keep it in the canvas and in the window
+  const [x, y] = [Math.round(Math.min(Math.max(c.x + c.width / 2 - dx / 2, c.x + 12), c.x + c.width - 12)), Math.round(Math.min(dy < 0 ? c.y + c.height - 12 : c.y + 12, (vp?.height ?? c.y + c.height) - 12))];   // start inside the canvas, whose wider cards can push the mid-drag point out of it
   await page.mouse.move(x, y);
   await page.mouse.down();
   await page.mouse.move(x + dx, y + dy, { steps: 8 });
@@ -1900,7 +1901,7 @@ function cobbleSupplied(): Plan {
 // when it opens on a pick inside the last one (P2-R35), and nothing scrolls, so the line stays in sight where the button was
 test('a panel control that goes while its panel stays leaves the focus on the panel, where the press left it', async ({ page }) => {
   await openWithPlan(page, cobbleSupplied());
-  await dragCanvas(page, 250, 0);   // the layout is wider than the canvas: stand the breaker's head inside it, clear of the settings drawer, where a click can reach it
+  await dragCanvas(page, 500, 0);   // the layout is wider than the canvas, and its cards are 388 px wide: stand the breaker's head inside it, clear of the settings drawer, where a click can reach it
   await page.locator('[data-step-id="breaker"] .flow-node-head').click();
   const panel = page.getByRole('complementary', { name: 'Step: Basic Rock Breaker' });
   await expect.poll(() => page.locator('.flow-side').evaluate((el) => el.getAnimations().length)).toBe(0);   // the panel has slid in
