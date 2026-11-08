@@ -225,7 +225,7 @@ test('check 6d: R with nothing pointed at says to point at a material first, and
   await page.mouse.move(1, 1);
   await page.keyboard.press('Escape');
   await page.keyboard.press('r');
-  await expect(page.getByText('Point at a material first')).toBeVisible();
+  await expect(page.getByText('Hover or click a material first')).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await shot(page, '6d-nothing');
 });
