@@ -17,7 +17,9 @@
 // §11.1), which is never drawn with the diagram it stands for.
 
 import {
-  memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactElement, } from 'react';
+  memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent,
+  type ReactElement,
+} from 'react';
 import { TIER_NAMES } from '../../shared/gt/tiers.ts';
 import { isFluidKey, type StuffKey } from '../../shared/keys.ts';
 import type { PlanIndex } from '../../shared/plan/balance.ts';
@@ -43,7 +45,9 @@ import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { showToast } from '../state/toasts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
 import {
-  CARD_CAPTION, CARD_HEAD, CARD_LINE, CARD_MACHINE_ICON, CARD_PAD, CARD_SLOT, STUB_HEAD, STUB_TILE, TILE_HEIGHT, TILE_ICON, TILE_ICON_INSET, TILE_TEXT, TILE_WIDTH, cardGeometry, type Tile, } from './card-model.ts';
+  CARD_CAPTION, CARD_HEAD, CARD_LINE, CARD_MACHINE_ICON, CARD_PAD, CARD_SLOT, STUB_HEAD, STUB_TILE, TILE_HEIGHT, TILE_ICON, TILE_ICON_INSET, TILE_TEXT, TILE_WIDTH,
+  cardGeometry, type Tile,
+} from './card-model.ts';
 import {
   BUSY_TRACK_HEIGHT, LEFT_OVER_PAD, LEFT_OVER_TITLE, LEFT_OVER_WORDS, BUSY_TRACK_TOP, CHIP_GAP, CHIP_HEIGHT, HAND_WORDS, PORT_SIZE, TEXT_CHAR_WIDTH, TEXT_LEFT, TITLE_CHAR_WIDTH,
   TOGGLE_SPACE, DIM_OPACITY, boxTitle, busyTrack, centreOn, chipWidth, clipText, collapsedLines, edgeTag, findableGoods, flowGraph, flowIssueLines, focusAnchor, focusSets,
