@@ -221,6 +221,11 @@ export const APPROACH = 14;
 /** The words of the band's title. */
 export const LEFT_OVER_WORDS = 'Left over: not used in this line';
 
+/** The narrowest the band's frame may be: its title at `TITLE_CHAR_WIDTH` a character with `LEFT_OVER_PAD` each side. */
+export function leftOverTitleWidth(): number {
+  return textWidth(LEFT_OVER_WORDS, TITLE_CHAR_WIDTH) + 2 * LEFT_OVER_PAD;
+}
+
 const RAW = 'raw';
 const OUT = 'out';
 const SINK = 'sink';
@@ -1084,7 +1089,8 @@ function placeLeftOvers(layout: FlowLayout): FlowLayout {
     if (s.height > maxH) maxH = s.height;
   }
 
-  frame.width = prevX + prevW + LEFT_OVER_PAD;
+  // wide enough for its title too, so a band of one narrow box never cuts "Left over: not used in this line" short
+  frame.width = Math.max(prevX + prevW + LEFT_OVER_PAD, leftOverTitleWidth());
   frame.height = LEFT_OVER_TITLE + maxH + LEFT_OVER_PAD;
 
   // Compute dropX for each sink (avoid crossing boxes)

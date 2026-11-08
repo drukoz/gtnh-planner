@@ -992,6 +992,8 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
      a hand's lit link, the labels' halo, the legend), the keyboard's ring on a box, a port's flange, and the casing the view gives a
      channel dye too dark for the dark one; then the Connections boxes' own colours (no Connections rule reads `--flow-`). */
   --flow-sink-line: var(--flow-raw-line); --flow-group: #cbbbe0; --casing: #1b1b1b; --flow-focus: #1b1b1b;
+  /* the left-over band's frame and title (RUK-740): one grey that keeps 4.5:1 on the canvas in both looks */
+  --flow-left-over: #a8a8a8;
   --flange: var(--slot); --dye-casing: #c6c6c6;
   --conn-box: var(--panel); --conn-face: #e0e0e0; --conn-face-link: #1d3b9a;
   --conn-chest: #f0d870; --conn-chest-line: #6b5500; --conn-interface: #cbbbe0; --conn-interface-line: #5a3a8a;
@@ -1130,6 +1132,10 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
    a mini Minecraft button (a collapsed line's too). */
 .flow-group-box { fill: var(--flow-group); fill-opacity: 0.08; stroke: var(--flow-group); stroke-width: 1.5; stroke-dasharray: 6 3; }
 .flow-group-title { fill: var(--flow-group); font-size: 12.5px; font-weight: 600; }
+/* the left-over band (RUK-740): the goods nothing in the line takes, in one dashed frame under the rest, in a grey of its own */
+.flow-left-over-box { fill: none; stroke: var(--flow-left-over); stroke-width: 1.5; stroke-dasharray: 6 3; }
+.flow-left-over-title { fill: var(--flow-left-over); font-size: 12.5px; font-weight: 600; }
+.flow-left-over { transition: opacity var(--dur-base) var(--ease-out); }
 .flow-line-toggle rect { fill: var(--btn); stroke: var(--outline); stroke-width: 2; }
 .flow-line-toggle text { fill: #ffffff; font-size: 15px; font-weight: 700; }
 .flow-line-toggle:hover rect { fill: var(--btn-hover); }
