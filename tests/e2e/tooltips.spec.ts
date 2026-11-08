@@ -551,6 +551,10 @@ test.describe('on a touch screen', () => {
     const { toggle, settings } = await openDrawer(page);
     const search = settings.getByPlaceholder('Search items and fluids');
     await search.fill('Iron Ingot');
+    // the list has settled before the box is read: the hit is there, and the drawer has finished sliding in (the drawer's slide is a transform on
+    // the panel, so a box read mid-slide is the icon's off the left edge: RUK-820, where the finger lands on nothing, so no long press and no tip)
+    await expect(settings.getByRole('listbox', { name: 'Matches' }).getByRole('option').first()).toContainText('Iron Ingot');
+    await expect(settings).toHaveCSS('transform', 'none');
     const box = await page.locator('[role=option] .item-icon').first().boundingBox();
     if (box === null) throw new Error('the option has no icon');
     const cdp = await page.context().newCDPSession(page);
