@@ -1013,10 +1013,11 @@ button.avoid-chip-remove { width: 24px; height: 24px; min-height: 0; padding: 0;
 .flow-diagram { display: flex; flex-direction: column; gap: 8px; }
 .flow-toolbar button { min-width: 2.2em; }
 .flow-toolbar select.flow-find { max-width: 260px; padding: 2px 26px 2px 8px; }
+/* The canvas is the window's height less its toolbar and legend (--flow-chrome), at least 320 px (RUK-740 round 2). */
 /* The canvas is a dark well with a 32px grid of two layers of 1px lines. Its edge is the same on every side, so a box centred in it
    is centred in its border box too (flow-focus.spec.ts). Its text keeps the system font that flow-model measures. */
 .flow-canvas {
-  display: block; width: 100%; min-height: 240px; cursor: grab; touch-action: none; user-select: none;
+  display: block; width: 100%; min-height: 240px; height: max(320px, calc(100dvh - var(--flow-chrome, 140px))); cursor: grab; touch-action: none; user-select: none;
   background-color: var(--well);
   background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 32px 32px;

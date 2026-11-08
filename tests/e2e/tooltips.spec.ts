@@ -127,44 +127,49 @@ test('an arrow\'s tip has three lines', async ({ page }) => {
 // spec §6.7 (5), §6.2, §6.6: a focus tip is its trigger's, at the element focused, below it, and describes that element while it shows
 // with what it says beyond the element's name (ledger ruling P2-R24): a head is named by the box's title and line, so its description is
 // the box's rows; a row is named by its own words, so its description is the rest of the box; a row shows its box's tip at the row
-test('a step head focused from the keyboard shows its box\'s tip below it, described by it, and tabbing away clears both', async ({ page }) => {
-  await openWithPlan(page, circuitLv());
-  await page.keyboard.press('f');                                                          // Fit: a card's narrow Input tiles sit at its left edge, so fit the box fully into the canvas
-  const tip = page.getByRole('tooltip');
-  const title = tip.locator(':scope > :first-child');
-  const box = page.locator('[data-step-id="wire"]');
-  const head = box.locator('.flow-node-head');
-  await keyboardFocus(page, head);
-  await expect(title).toHaveText('Basic Wiremill');
-  await expect.poll(() => below(tip, head)).toBe(true);
-  const id = await tip.getAttribute('id');
-  expect(id).toBeTruthy();
-  await expect(head).toHaveAttribute('aria-describedby', id!);
-  await expect(head).toHaveAccessibleDescription(/takes Copper Ingot .*makes 1x Copper Wire/);
-  await expect(head).not.toHaveAccessibleDescription(/Basic Wiremill|EU\/t/);
-  await page.keyboard.press('Tab');                                                      // the box's first row
-  const row = box.locator('.flow-row').first();
-  await expect(row).toBeFocused();
-  await expect(title).toHaveText('Basic Wiremill');                                       // the same box's tip, at the row
-  await expect.poll(() => below(tip, row)).toBe(true);
-  await expect(row).toHaveAttribute('aria-describedby', id!);
-  await expect(row).toHaveAccessibleDescription(/Basic Wiremill.*makes 1x Copper Wire/);
-  await expect(row).not.toHaveAccessibleDescription(/takes Copper Ingot/);
-  await expect(head).not.toHaveAttribute('aria-describedby');
-  await page.keyboard.press('Escape');
-  await expect(tip).toHaveCount(0);
-  await expect(row).not.toHaveAttribute('aria-describedby');
-  // the canvas's first stop for the keyboard, and out of the canvas to the toolbar's last control, the Find item field, which has no tip
-  const first = page.locator('svg.flow-canvas [tabindex="0"]').first();
-  const words = await first.evaluate((el) => el.closest('[data-tip]')?.getAttribute('data-tip')?.split('\n')[0] ?? '');
-  expect(words).not.toBe('');
-  await keyboardFocus(page, first);
-  await expect(title).toHaveText(words);
-  await expect(first).toHaveAttribute('aria-describedby', id!);
-  await page.keyboard.press('Shift+Tab');
-  await expect(page.getByRole('combobox', { name: 'Find item' })).toBeFocused();
-  await expect(tip).toHaveCount(0);
-  await expect(first).not.toHaveAttribute('aria-describedby');
+// RUK-810: the canvas is the window's height less its chrome, so in a 720 px window the fitted boxes sit low and a row's tip would flip
+// above it; this one checks the tip below, so the window is tall.
+test.describe('a step head\'s focus tip, in a tall window', () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+    test('a step head focused from the keyboard shows its box\'s tip below it, described by it, and tabbing away clears both', async ({ page }) => {
+      await openWithPlan(page, circuitLv());
+    await page.keyboard.press('f');                                                          // Fit: a card's narrow Input tiles sit at its left edge, so fit the box fully into the canvas
+    const tip = page.getByRole('tooltip');
+    const title = tip.locator(':scope > :first-child');
+    const box = page.locator('[data-step-id="wire"]');
+    const head = box.locator('.flow-node-head');
+    await keyboardFocus(page, head);
+    await expect(title).toHaveText('Basic Wiremill');
+    await expect.poll(() => below(tip, head)).toBe(true);
+    const id = await tip.getAttribute('id');
+    expect(id).toBeTruthy();
+    await expect(head).toHaveAttribute('aria-describedby', id!);
+    await expect(head).toHaveAccessibleDescription(/takes Copper Ingot .*makes 1x Copper Wire/);
+    await expect(head).not.toHaveAccessibleDescription(/Basic Wiremill|EU\/t/);
+    await page.keyboard.press('Tab');                                                      // the box's first row
+    const row = box.locator('.flow-row').first();
+    await expect(row).toBeFocused();
+    await expect(title).toHaveText('Basic Wiremill');                                       // the same box's tip, at the row
+    await expect.poll(() => below(tip, row)).toBe(true);
+    await expect(row).toHaveAttribute('aria-describedby', id!);
+    await expect(row).toHaveAccessibleDescription(/Basic Wiremill.*makes 1x Copper Wire/);
+    await expect(row).not.toHaveAccessibleDescription(/takes Copper Ingot/);
+    await expect(head).not.toHaveAttribute('aria-describedby');
+    await page.keyboard.press('Escape');
+    await expect(tip).toHaveCount(0);
+    await expect(row).not.toHaveAttribute('aria-describedby');
+    // the canvas's first stop for the keyboard, and out of the canvas to the toolbar's last control, the Find item field, which has no tip
+    const first = page.locator('svg.flow-canvas [tabindex="0"]').first();
+    const words = await first.evaluate((el) => el.closest('[data-tip]')?.getAttribute('data-tip')?.split('\n')[0] ?? '');
+    expect(words).not.toBe('');
+    await keyboardFocus(page, first);
+    await expect(title).toHaveText(words);
+    await expect(first).toHaveAttribute('aria-describedby', id!);
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.getByRole('combobox', { name: 'Find item' })).toBeFocused();
+    await expect(tip).toHaveCount(0);
+    await expect(first).not.toHaveAttribute('aria-describedby');
+  });
 });
 
 // spec §6.2 (Task 3b's fix round, M1): an element tip sits at its element, so the element must be in the window too, not only in its svg's

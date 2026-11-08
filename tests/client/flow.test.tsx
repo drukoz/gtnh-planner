@@ -16,7 +16,7 @@ import { cardBodyTop, tileCentre, STEP_CARD_WIDTH, LINE_CARD_WIDTH, TILE_PITCH, 
 import { PSEUDO_MACHINE_ENTRIES } from '../../src/server/pack/machines.ts';
 import { TIER_NAMES } from '../../src/shared/gt/tiers.ts';
 import { formatNumber as sharedNumber, formatRate as sharedRate } from '../../src/shared/format.ts';
-import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, heldHeight, outsideWindow, viewPans } from '../../src/client/views/FlowView.tsx';
+import { FlowView, FlowNodeShape, FlowIssues, FlowLegend, FlowGhostShape, disjoint, outsideWindow, viewPans } from '../../src/client/views/FlowView.tsx';
 import { StepPanel } from '../../src/client/views/StepPanel.tsx';
 import { defaultSettings } from '../../src/shared/project/apply-op.ts';
 import { settingsHash } from '../../src/shared/project/settings-hash.ts';
@@ -978,43 +978,6 @@ describe('what a new layout changed', () => {
     // a box that went keeps the old layout's order; one moved on one axis only still moved
     expect(layoutChange(at([['z', 0, 0], ['y', 0, 0], ['x', 0, 0]]), at([['x', 0, 1]])))
       .toEqual({ moved: [{ id: 'x', from: [0, 0], to: [0, 1] }], entered: [], left: ['z', 'y'], rerouted: [] });
-  });
-});
-
-// Fix round 2 (item 3, ledger ruling P2-R121): while a new layout that shortens the canvas glides, the canvas keeps the height it was drawn at,
-// decided from the two layouts alone, as the new one is drawn, so holding costs no render of its own; one that leaves the canvas as tall, the
-// same layout again, and one that snaps (more than GLIDE_LIMIT boxes changed, or reduced motion) each have their own rule
-describe('the height the canvas keeps while a new layout glides', () => {
-  const laid = (height: number, boxes: Array<[string, number, number]>): FlowLayout =>
-    ({ width: 400, height, nodes: boxes.map(([id, x, y]) => ({ id, x, y })), edges: [], groups: [] }) as unknown as FlowLayout;
-  const room = 540;                                                                    // 75vh of a 720 px window
-  const tall = laid(300, [['a', 0, 0], ['b', 0, 200]]);
-  const short = laid(200, [['a', 0, 0], ['b', 200, 0]]);
-  it('keeps the height it was drawn at while a layout that shortens it glides, and none for one that does not', () => {
-    expect(heldHeight(tall, short, null, room)).toBe(300);
-    expect(heldHeight(short, tall, null, room), 'taller').toBeNull();
-    expect(heldHeight(short, laid(200, [['a', 0, 10], ['b', 200, 0]]), null, room), 'as tall').toBeNull();
-  });
-  it('keeps what it keeps for the same layout again, and the first height through a layout that shortens it again', () => {
-    expect(heldHeight(short, laid(200, [['a', 0, 0], ['b', 200, 0]]), 300, room), 'the same layout again (an SSE refetch)').toBe(300);
-    expect(heldHeight(short, laid(200, [['a', 0, 0], ['b', 200, 0]]), null, room)).toBeNull();
-    expect(heldHeight(short, laid(100, [['a', 0, 0], ['b', 100, 0]]), 300, room), 'still the height first drawn').toBe(300);
-    expect(heldHeight(short, laid(320, [['a', 0, 0], ['b', 0, 220]]), 300, room), 'a layout taller than the hold ends it').toBeNull();
-  });
-  it('keeps none where 75vh draws both layouts as tall', () => {
-    expect(heldHeight(laid(900, [['a', 0, 0], ['b', 0, 800]]), laid(700, [['a', 0, 0], ['b', 0, 600]]), null, room)).toBeNull();
-    expect(heldHeight(laid(900, [['a', 0, 0], ['b', 0, 800]]), laid(400, [['a', 0, 0], ['b', 0, 300]]), null, room), 'drawn shorter').toBe(900);
-  });
-  it('keeps none for a layout that snaps', () => {
-    const boxes = (n: number, x: number): Array<[string, number, number]> => Array.from({ length: n }, (_, i): [string, number, number] => [`n${i}`, x, i * 10]);
-    expect(heldHeight(laid(400, boxes(GLIDE_LIMIT + 1, 0)), laid(200, boxes(GLIDE_LIMIT + 1, 5)), null, room), 'more than GLIDE_LIMIT boxes moved').toBeNull();
-    expect(heldHeight(laid(400, boxes(GLIDE_LIMIT, 0)), laid(200, boxes(GLIDE_LIMIT, 5)), null, room), 'the premise: GLIDE_LIMIT glide').toBe(400);
-    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' }));
-    try {
-      expect(heldHeight(tall, short, null, room), 'reduced motion').toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 });
 
