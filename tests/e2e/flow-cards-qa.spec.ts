@@ -15,9 +15,8 @@ const WIRE = 't:copper_wire@0';
 const RED = 't:redstone@0';
 const RED_NAME = 'Refined Redstone Dust';
 
-/* No reducedMotion: with prefers-reduced-motion Chromium keeps the canvas height from before the --flow-chrome change (Full view
-   canvas stays 760 px and the page scrolls), which is a product bug (filed under RUK-740), not a QA fixture's business. */
-test.use({ viewport: { width: 1440, height: 900 } });
+// reduced motion, so no glide is caught half way (RUK-816 made Full view's height come at once under it)
+test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
 
 /** A picture of the page for the reviewer, when asked for. */
 async function shot(page: Page, name: string): Promise<void> {
