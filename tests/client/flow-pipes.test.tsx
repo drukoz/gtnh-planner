@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { useItemIcon } from '../../src/client/assets/icons.ts';
 import { FlowDefs, FlowEdgeShape, FlowNodeShape, FlowRiderShape } from '../../src/client/views/FlowView.tsx';
-import { machineReadout, rowCentre, type FlowLayout, type FocusSets } from '../../src/client/views/flow-model.ts';
+import { machineReadout, rowCentre, FlowNodeKind, type FlowLayout, type FocusSets } from '../../src/client/views/flow-model.ts';
 import { riderPhase } from '../../src/client/views/pipe-motion.ts';
 import { hashColor, type IconDescriptor, type Rgb } from '../../src/shared/types/assets.ts';
 import type { PlanStep } from '../../src/shared/types/plan.ts';
@@ -164,7 +164,7 @@ describe('flow diagram: pipes (design spec §7)', () => {
 
 describe('flow diagram: flanges (design spec §7 "Connected")', () => {
   const node: FlowLayout['nodes'][number] = {
-    id: 'mill', kind: 'step', key: 't:copper_wire@0', title: 'Wiremill', lines: ['LV · 32 EU/t · 1 machine'], owned: 'none', width: 200, height: 86,
+    id: 'mill', kind: FlowNodeKind.Step, key: 't:copper_wire@0', title: 'Wiremill', lines: ['LV · 32 EU/t · 1 machine'], owned: 'none', width: 200, height: 86,
     rows: [
       { side: 'in', key: 't:copper_ingot@0', port: 'mill|in|t:copper_ingot@0', name: 'Copper Ingot', rate: '1/s' },
       { side: 'out', key: 't:copper_wire@0', port: 'mill|out|t:copper_wire@0', name: 'Copper Wire', rate: '2/s', main: true },
