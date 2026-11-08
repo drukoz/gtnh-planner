@@ -63,7 +63,7 @@ test('R with nothing under the pointer says to point at a material, and opens no
   await page.mouse.move(1, 1);
   await page.keyboard.press('Escape');
   await page.keyboard.press('r');
-  await expect(page.getByText('Point at a material first')).toBeVisible();
+  await expect(page.getByText('Hover or click a material first')).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
@@ -79,4 +79,20 @@ test("a step panel's Browse recipes opens the popup on its product, and Close gi
   await dialog.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(browse).toBeFocused();
+});
+
+test('the toolbar Recipes and Uses buttons open the popup on the clicked material, and say to pick one when none is', async ({ page }) => {
+  await openWithPlan(page, twoWiremillRecipes());
+  await page.locator(`[data-port$="|out|${WIRE}"]`).click();
+  await page.getByRole('button', { name: 'Uses', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Uses of 1x Copper Wire' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Recipes', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Recipes for 1x Copper Wire' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');   // clears the clicked material
+  await page.mouse.move(1, 1);
+  await page.getByRole('button', { name: 'Recipes', exact: true }).click();
+  await expect(page.getByText('Hover or click a material first')).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });
