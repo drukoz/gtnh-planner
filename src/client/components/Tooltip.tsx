@@ -429,6 +429,7 @@ function startHost(id: string, draw: (tip: TipState | null) => void, box: () => 
     if (e.key === 'Escape' && !e.defaultPrevented) {   // a layer above the tip has taken it: not the tip's either (P2-R21b)
       const t = shown;
       if (t === null) return;                           // no tip shows: the key is not the tip's
+      if (t.trigger.closest('[inert]') !== null) { hide(); return; }   // a tip on the page under a modal is no layer above it: it goes, and the key is the modal's
       // quiet until the pointer leaves it or the focus moves; a finger leaves nothing, and its next tap may show the tip again
       if (t.mode !== 'touch') quiet.add(t.trigger);
       if (t.mode === 'pointer') rest.clear();
