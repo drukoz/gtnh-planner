@@ -12,6 +12,12 @@ import {
 } from '../types/plan.ts';
 import type { Note, Project, ProjectOp } from '../types/project.ts';
 
+/**
+ * Ops after which the plan may differ, so the server replans the project and then sends its tabs `event: plan` with the rev it planned
+ * (architecture §11.8): settings and world change the plan; placement changes only Plan 5's finished plan and layout (§11.16).
+ */
+export const REPLAN_OPS: ReadonlySet<ProjectOp['op']> = new Set(['settings', 'world', 'placement', 'clearPlacement']);
+
 export const MAX_NOTE_LENGTH = 4000;
 export const MAX_NAME_LENGTH = 80;
 /** Entries of `PlanSettings.avoid`, and the characters of each. */

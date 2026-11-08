@@ -51,6 +51,81 @@ describe('project store', () => {
     await vi.waitFor(() => expect(store.getSnapshot().error).toBe('op 0: tier must be 0..14'));
     expect(store.getSnapshot().project?.name).toBe('Steel');
   });
+  // RUK-740 round 3: `replanning` from the moment a change that replans is sent until the plan fetched after its plan event answers
+  it('is replanning from a settings change until the plan after its plan event is in', async () => {
+    vi.useFakeTimers();
+    const { store, deps, events } = harness(async () => ({ rev: 1 }));
+    events().snapshot(P0);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().replanning).toBe(false);
+    store.send([{ op: 'settings', patch: { amount: 2 } }]);
+    expect(store.getSnapshot().replanning).toBe(true);
+    await vi.advanceTimersByTimeAsync(150);                                // the post answered with rev 1; no plan event yet
+    expect(store.getSnapshot().replanning).toBe(true);
+    events().plan({ rev: 1 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(deps.fetchPlan).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().replanning).toBe(false);
+  });
+  it('stays replanning through a plan event of an older rev', async () => {
+    vi.useFakeTimers();
+    const { store, events } = harness(async () => ({ rev: 5 }));
+    events().snapshot(P0);
+    store.send([{ op: 'settings', patch: { amount: 2 } }]);
+    await vi.advanceTimersByTimeAsync(150);
+    events().plan({ rev: 4 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().replanning).toBe(true);
+    events().plan({ rev: 5 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().replanning).toBe(false);
+  });
+  it('ends replanning when the plan event came before the post was answered', async () => {
+    vi.useFakeTimers();
+    let answer!: (r: OpsResult) => void;
+    const { store, events } = harness(() => new Promise<OpsResult>((resolve) => { answer = resolve; }));
+    events().snapshot(P0);
+    store.send([{ op: 'settings', patch: { amount: 2 } }]);
+    await vi.advanceTimersByTimeAsync(0);
+    events().plan({ rev: 1 });                                              // a cached plan: its event first
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().replanning).toBe(true);
+    answer({ rev: 1 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().replanning).toBe(false);
+  });
+  it('ends replanning when the post fails, and never starts it for a change that does not replan', async () => {
+    const { store, events } = harness(async () => { throw Object.assign(new Error('refused'), { status: 400 }); });
+    events().snapshot(P0);
+    store.send([{ op: 'mark', row: 'run:a', on: true }]);
+    expect(store.getSnapshot().replanning).toBe(false);
+    store.send([{ op: 'settings', patch: { amount: 2 } }]);
+    expect(store.getSnapshot().replanning).toBe(true);
+    await vi.waitFor(() => expect(store.getSnapshot().replanning).toBe(false));
+  });
+  it('ends replanning when the plan fetch fails, with the error', async () => {
+    vi.useFakeTimers();
+    const { store, deps, events } = harness(async () => ({ rev: 1 }));
+    events().snapshot(P0);
+    await vi.advanceTimersByTimeAsync(150);
+    store.send([{ op: 'settings', patch: { amount: 2 } }]);
+    await vi.advanceTimersByTimeAsync(0);
+    vi.mocked(deps.fetchPlan).mockRejectedValueOnce(new Error('The planner failed: boom'));
+    events().plan({ rev: 1 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().replanning).toBe(false);
+    expect(store.getSnapshot().planError).toBe('The planner failed: boom');
+  });
+  it('ends replanning on the refetch after the stream was down', async () => {
+    vi.useFakeTimers();
+    const { store, events } = harness(async () => ({ rev: 1 }));
+    events().connected(true); events().snapshot(P0);
+    store.send([{ op: 'settings', patch: { amount: 2 } }]);
+    await vi.advanceTimersByTimeAsync(150);
+    events().connected(false); events().connected(true); events().snapshot({ ...P0, rev: 1 });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(store.getSnapshot().replanning).toBe(false);
+  });
   it('fetches the plan once per burst of plan events', async () => {
     vi.useFakeTimers();
     const { deps, events } = harness();
