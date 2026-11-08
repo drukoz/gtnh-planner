@@ -1999,8 +1999,9 @@ details.mat-needed[open]::details-content { block-size: auto; }
 }
 
 /* Full view (RUK-740 round 2): on the Flow tab the banners go and the canvas ends at the window's bottom; the planner can be hidden to give
-   the chart its width. Wide windows only: the head's buttons appear from 1024 px, where the row has room (the block below). */
-@media (min-width: 901px) {
+   the chart its width. From 1024 px only, the same width the head draws its buttons from (the block below), so a window narrowed with
+   Full view on gets its banners and planner back instead of losing them with no button to restore them. */
+@media (min-width: 1024px) {
   .project-page.flow-full .project-banners { display: none; }
   .project-page.flow-full .flow-canvas { --flow-chrome: 330px; }
   /* The panel is the row's tallest part (it sticks and scrolls inside itself), so the window's height less the head, the tabs and the

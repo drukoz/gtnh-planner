@@ -79,3 +79,13 @@ test('below 901 px the head draws neither button', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Full view' })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Hide planner' })).toBeHidden();
 });
+
+test('narrowed below 1024 px with Full view on, the page shows its banners and planner again', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openFlow(page);
+  await page.getByRole('button', { name: 'Full view' }).click();
+  await page.getByRole('button', { name: 'Hide planner' }).click();
+  await page.setViewportSize({ width: 960, height: 900 });
+  await expect(page.locator('.project-banners')).toBeVisible();
+  await expect(page.locator('#project-settings')).toBeVisible();
+});

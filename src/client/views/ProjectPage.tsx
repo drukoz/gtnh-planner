@@ -756,7 +756,7 @@ export function ProjectPage(props: { id: string }): ReactElement {
         {comparable && <CompareToggle open={compare.state.open} onToggle={toggleCompare} ref={compareHeadToggle} />}
         <span className={view.connected ? 'connection live' : 'connection'}>{view.connected ? 'live' : 'reconnecting…'}</span>
         {/* Full view (RUK-740 round 2): on the Flow tab, hides the banners so the chart takes the window; the planner stays, and can be hidden.
-            From 901 px only: the stylesheet does not draw these below, where the settings panel is a drawer. */}
+            From 1024 px only: the stylesheet draws neither these nor Full view itself below, where the head's row has no room for them. */}
         {active.id === 'flow' && (
           <button type="button" className="small full-view-toggle" onClick={() => setFlowFullView(!fullView)}>
             {fullView ? 'Exit full view' : 'Full view'}
