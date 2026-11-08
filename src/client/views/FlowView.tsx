@@ -40,7 +40,7 @@ import {
 } from '../state/flow-focus.ts';
 import { EASE_IN, EXIT_MS, GHOST_FALLBACK_MS, prefersReducedMotion } from '../state/motion.ts';
 import { usePipesPaused } from '../state/pipes-paused.ts';
-import { clearRecipeRequest, RecipeMode, useRecipeRequest } from '../state/recipe-request.ts';
+import { clearRecipeRequest, RecipeMode, requestRecipes, useRecipeRequest } from '../state/recipe-request.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { showToast } from '../state/toasts.ts';
 import { layoutFlow } from '../workers/elk.worker.ts';
@@ -1086,6 +1086,20 @@ function FlowCanvas(props: {
           Fit
         </button>
         <PipesButton paused={pipesPaused} keys={keysOn} />
+        <button
+          type="button" className="small" aria-keyshortcuts={keysOn ? 'R' : undefined}
+          data-tip={keysOn ? 'Recipes for the material under the pointer · R' : 'Recipes for the material you clicked'}
+          onClick={() => requestRecipes(RecipeMode.Recipes)}
+        >
+          Recipes
+        </button>
+        <button
+          type="button" className="small" aria-keyshortcuts={keysOn ? 'U' : undefined}
+          data-tip={keysOn ? 'What uses the material under the pointer · U' : 'What uses the material you clicked'}
+          onClick={() => requestRecipes(RecipeMode.Uses)}
+        >
+          Uses
+        </button>
         <select
           className="flow-find small" aria-label="Find item" value=""
           onChange={(e) => {
@@ -1226,7 +1240,7 @@ function FlowDiagram(props: {
     if (request === null) return;
     clearRecipeRequest();
     const good = focusGood(graph, getFlowFocus());
-    if (good === null) showToast('Point at a material first', { key: 'recipe-browser' });
+    if (good === null) showToast('Hover or click a material first', { key: 'recipe-browser' });
     else setBrowser({ good, mode: request.mode });
   }, [request, graph]);
 
