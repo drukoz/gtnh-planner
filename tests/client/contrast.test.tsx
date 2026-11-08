@@ -156,6 +156,7 @@ const PAIRS: Pair[] = [
   ...ISSUE_FILLS.map(([box, fill]): Pair => [`${box} box row made two ways`, '--flow-warn', fill, AA]),
   ['avoid badge', '#ffaa00', '--screen', AA], ['arrow label on the canvas', '#ffffff', '--well', AA],
   ['open line title on the canvas', '--flow-group', '--well', AA], ['line button', '#ffffff', '--btn', AA],
+  ['left-over band title on the canvas', '--flow-left-over', '--well', AA],
   ['issues on their chat box', '#ffaa00', CHAT_ON_PANEL, AA], ['red issues on their chat box', '#ff5555', CHAT_ON_PANEL, AA],
 
   // the Connections tab (Phase 1 Task 7, design spec §7): the text of each kind of box on its fill and of the face rows on their lighter

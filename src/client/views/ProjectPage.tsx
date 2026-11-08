@@ -40,6 +40,7 @@ import { leaveDeletedProject } from '../state/deleted-notice.ts';
 import { setFlowFocus, showInFlow } from '../state/flow-focus.ts';
 import { useName } from '../state/name.ts';
 import { useProject } from '../state/project-store.ts';
+import { RecipeMode, clearRecipeRequest, requestRecipes } from '../state/recipe-request.ts';
 import { shortcutOf } from '../state/shortcuts.ts';
 import { useSingleKeyShortcuts } from '../state/single-key-shortcuts.ts';
 import { dismissToast, setToastsInert, showToast } from '../state/toasts.ts';
@@ -375,8 +376,8 @@ export function ProjectPage(props: { id: string }): ReactElement {
   useEffect(() => {
     if (deleted !== null) leaveDeletedProject(project?.name ?? null, deleted.by, props.id);
   }, [deleted]);
-  // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it.
-  useEffect(() => () => setFlowFocus(null), [props.id]);
+  // What the flow diagram lights belongs to this project: leaving it (for another project or another page) clears it. The recipe request too.
+  useEffect(() => () => { setFlowFocus(null); clearRecipeRequest(); }, [props.id]);
   // A rename's toast offers Undo through this page's store, which closes with the page: leaving takes the toast away, as its Undo is gone.
   useEffect(() => () => dismissToast(`rename:${props.id}`), [props.id]);
   // The settings column is a drawer below 900 px, and a layer of its own while it is open (ruling R36): opening it moves the focus to
@@ -677,6 +678,14 @@ export function ProjectPage(props: { id: string }): ReactElement {
         e.preventDefault();
         heldShortcut.current = e.key;
         button.click();   // the button's own path: Fit's fit, Pause pipes' setting
+        return;
+      }
+      if (shortcut.kind === 'recipes' || shortcut.kind === 'uses') {
+        // R and U are the Flow tab's: on any other tab they do nothing, and the key is left unprevented (the browser keeps it)
+        if (tabFromHash(location.hash) !== 'flow') return;
+        e.preventDefault();
+        heldShortcut.current = e.key;
+        requestRecipes(shortcut.kind === 'recipes' ? RecipeMode.Recipes : RecipeMode.Uses);   // the Flow view reads the request (RUK-T9)
         return;
       }
       // a key the page acts on is taken, and its repeats while it is held: the `/` is not typed into the search it focuses, nor opens a

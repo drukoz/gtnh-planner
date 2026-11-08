@@ -109,7 +109,7 @@ export interface FlowGraph {
   nodes: FlowNode[]; edges: FlowEdge[];
   /** The supporting lines drawn open, each around its steps and their stubs. */
   groups: FlowGroup[];
-  /** Imports in the first column ("Imports in one column") instead of beside the step that takes them. */
+  /** Imports in the first column, stacked together, instead of beside the step that takes them. */
   importsInOneColumn: boolean;
 }
 
@@ -121,6 +121,8 @@ export interface FlowLayout {
   edges: Array<FlowEdge & { points: Array<[number, number]>; labelAt?: [number, number]; labelBox?: Box }>;
   /** The open supporting lines, around their boxes. */
   groups: Array<FlowGroup & { x: number; y: number; width: number; height: number }>;
+  /** The left-over band's frame (RUK-740), below everything else; absent when nothing is left over. */
+  leftOver?: Box;
 }
 
 /** A rectangle in diagram coordinates. */
@@ -137,11 +139,17 @@ export const DIM_OPACITY = 0.18;
 
 /** Box widths come from their text, between these (fix spec §6.2). */
 export const MIN_NODE_WIDTH = 190;
-export const MAX_NODE_WIDTH = 330;
+export const MAX_NODE_WIDTH = 380;
 /** A box is this tall for its title, plus this much per line of text, plus this much per row. */
 export const NODE_TITLE_HEIGHT = 28;
 export const NODE_LINE_HEIGHT = 16;
 export const ROW_HEIGHT = 18;
+/** A step's or a line's "Input | Output" header above its rows (RUK-741). */
+export const IO_HEAD_HEIGHT = 14;
+/** Between a two-column box's input column and its output column. */
+export const COLUMN_GAP = 12;
+/** The most characters a material's name takes in the diagram; a longer one is cut to `MAX_NAME_CHARS - 1` and "…" (its full name is in the tooltip). */
+export const MAX_NAME_CHARS = 14;
 /** Room below the last row. */
 const ROWS_BOTTOM = 6;
 /** Estimated text widths per character: the 13 px semibold title, and the 11.5 px lines and rows. */
@@ -199,6 +207,24 @@ const HIGH_BUSY = 0.9;
 const GT_MACHINE_BLOCK = 'gregtech:gt.blockmachines';
 /** Room around the boxes of an open supporting line; its title sits in the top band. */
 const GROUP_PADDING = '[top=36,left=12,bottom=12,right=12]';
+/** The left-over band (RUK-740): from the bottom of the rest of the diagram to its first arrow lane; between two lanes. */
+export const LEFT_OVER_GAP = 24;
+export const LANE_STEP = 6;
+/** The band's frame: its title band's height and the room inside its sides and bottom; between two left-over boxes. */
+export const LEFT_OVER_TITLE = 28;
+export const LEFT_OVER_PAD = 12;
+export const LEFT_OVER_SPACING = 28;
+/** An arrow into the band: how far right of its maker it drops (one lane's drop `DROP_STEP` further than the last, over 4), and how far left of its box it comes down. */
+export const DROP_GAP = 10;
+export const DROP_STEP = 5;
+export const APPROACH = 14;
+/** The words of the band's title. */
+export const LEFT_OVER_WORDS = 'Left over: not used in this line';
+
+/** The narrowest the band's frame may be: its title at `TITLE_CHAR_WIDTH` a character with `LEFT_OVER_PAD` each side. */
+export function leftOverTitleWidth(): number {
+  return textWidth(LEFT_OVER_WORDS, TITLE_CHAR_WIDTH) + 2 * LEFT_OVER_PAD;
+}
 
 const RAW = 'raw';
 const OUT = 'out';
@@ -372,15 +398,33 @@ function unavoidableByStep(plan: Plan): Map<string, PlanWarning[]> {
  * which draw its first line, then its other lines and its badge (Phase 2 spec §7.2). The ELK ports, the drawn rows and `fromElk`'s fallback
  * all read it, so they move together.
  */
-export function rowsTop(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>): number {
+export function rowsTop(node: Pick<FlowNode, 'kind' | 'lines' | 'avoidBadge' | 'machine'>): number {
   const badge = node.avoidBadge === undefined ? 0 : 1;
-  if (node.machine === undefined) return NODE_TITLE_HEIGHT + NODE_LINE_HEIGHT * (node.lines.length + badge);
-  return STEP_HEAD_HEIGHT + BUSY_BAND + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
+  const io = rowHasIcon(node) ? IO_HEAD_HEIGHT : 0;   // the two columns' "Input | Output" header (RUK-741)
+  if (node.machine === undefined) return NODE_TITLE_HEIGHT + io + NODE_LINE_HEIGHT * (node.lines.length + badge);
+  return STEP_HEAD_HEIGHT + BUSY_BAND + io + NODE_LINE_HEIGHT * (Math.max(0, node.lines.length - 1) + badge);   // lines[0] is the readout
 }
 
-/** The middle of a box's `i`-th row, from the box's top: where that row's port sits. */
-export function rowCentre(node: Pick<FlowNode, 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
-  return rowsTop(node) + ROW_HEIGHT * i + ROW_HEIGHT / 2;
+/**
+ * The row line of a box's `i`-th row (RUK-741): a step's or collapsed line's inputs count down the left column and its
+ * outputs down the right, on the same lines; a stub's single row is on line `i`.
+ */
+export function rowLine(node: Pick<FlowNode, 'kind' | 'rows'>, i: number): number {
+  const row = node.rows[i];
+  if (row === undefined || !rowHasIcon(node)) return i;
+  return node.rows.slice(0, i).filter((r) => r.side === row.side).length;
+}
+
+/** How many row lines a box's rows fill: the taller of its two columns, or its rows' count for a stub. */
+export function rowLines(node: Pick<FlowNode, 'kind' | 'rows'>): number {
+  if (!rowHasIcon(node)) return node.rows.length;
+  const inputs = node.rows.filter((r) => r.side === 'in').length;
+  return Math.max(inputs, node.rows.length - inputs);
+}
+
+/** The middle of a box's `i`-th row, from the box's top: where that row's port sits, on its column's line. */
+export function rowCentre(node: Pick<FlowNode, 'kind' | 'rows' | 'lines' | 'avoidBadge' | 'machine'>, i: number): number {
+  return rowsTop(node) + ROW_HEIGHT * rowLine(node, i) + ROW_HEIGHT / 2;
 }
 
 /** Whether a box draws an icon beside each row: steps and collapsed lines; a stub's title already shows its one good. */
@@ -398,9 +442,32 @@ export function textWidth(text: string, charWidth: number): number {
   return Math.ceil(text.length * charWidth);
 }
 
-/** The room a row of `node` leaves for the good's name beside its rate; a box sized to its rows leaves each name room. */
+/**
+ * A good's name as a box writes it (RUK-741): at most `MAX_NAME_CHARS` characters, an ellipsis for the rest.
+ */
+export function shortName(name: string): string {
+  return name.length <= MAX_NAME_CHARS ? name : `${name.slice(0, MAX_NAME_CHARS - 1).trimEnd()}…`;
+}
+
+/** A box's title as its box writes it: a step's machine and a collapsed line's are kept whole, a stub's material name is cut to 14. */
+export function boxTitle(node: Pick<FlowNode, 'kind' | 'title'>): string {
+  return node.kind === 'step' || node.kind === 'line' ? node.title : shortName(node.title);
+}
+
+/**
+ * The room a row of `node` leaves for the good's name beside its rate; a box sized to its rows leaves each name room.
+ * A two-column box's rows get one column each: half the room between the edges and the gap.
+ */
 export function rowNameRoom(node: Pick<FlowNode, 'kind' | 'width'>, row: Pick<FlowRow, 'rate' | 'share'>): number {
-  return node.width - 2 * TEXT_LEFT - (rowHasIcon(node) ? ICON_SPACE : 0) - textWidth(` ${rowRate(row)}`, TEXT_CHAR_WIDTH);
+  const rate = textWidth(` ${rowRate(row)}`, TEXT_CHAR_WIDTH);
+  if (!rowHasIcon(node)) return node.width - 2 * TEXT_LEFT - rate;
+  return (node.width - 2 * TEXT_LEFT - COLUMN_GAP) / 2 - ICON_SPACE - rate;
+}
+
+/** What a row writes for its good: a step's or line's material is shortened to 14; a stub's words are kept whole. Both cut to the room. */
+export function rowLabel(node: Pick<FlowNode, 'kind' | 'width'>, row: Pick<FlowRow, 'name' | 'rate' | 'share'>): string {
+  const name = rowHasIcon(node) ? shortName(row.name) : row.name;
+  return clipText(name, rowNameRoom(node, row), TEXT_CHAR_WIDTH);
 }
 
 /** `text` cut to fit `width` at `charWidth` per character, ending in "…" when cut (the full text is in the tooltip). */
@@ -410,7 +477,7 @@ export function clipText(text: string, width: number, charWidth: number): string
 }
 
 /**
- * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–330 px, as tall as its rows need. A step box's head is its
+ * A box sized to its text (fix spec §6.2): as wide as its widest text, within 190–380 px, as tall as its rows need. A step box's head is its
  * machine readout, which draws its first line (Phase 2 spec §7.2): its head, chip row and busy band count instead of its title and that line.
  */
 function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
@@ -419,14 +486,17 @@ function sized(node: Omit<FlowNode, 'width' | 'height'>): FlowNode {
   const { machine } = node;
   const widths = [
     ...(machine === undefined
-      ? [2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(node.title, TITLE_CHAR_WIDTH)]
+      ? [2 * TEXT_LEFT + icon + (node.kind === 'line' ? TOGGLE_SPACE : 0) + textWidth(boxTitle(node), TITLE_CHAR_WIDTH)]
       : readoutWidths(node.title, machine)),
     ...(machine === undefined ? node.lines : node.lines.slice(1)).map((line) => 2 * TEXT_LEFT + textWidth(line, TEXT_CHAR_WIDTH)),
     ...(node.avoidBadge === undefined ? [] : [2 * TEXT_LEFT + textWidth(node.avoidBadge.text, TEXT_CHAR_WIDTH)]),
-    ...node.rows.map((r) => 2 * TEXT_LEFT + rowIcon + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)),
+    // a two-column box is as wide as its widest row's name and rate needs twice, the columns' gap between (RUK-741)
+    ...(rowHasIcon(node)
+      ? [2 * TEXT_LEFT + COLUMN_GAP + 2 * Math.max(0, ...node.rows.map((r) => rowIcon + textWidth(shortName(r.name), TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH)))]
+      : node.rows.map((r) => 2 * TEXT_LEFT + textWidth(r.name, TEXT_CHAR_WIDTH) + textWidth(` ${rowRate(r)}`, TEXT_CHAR_WIDTH))),
   ];
   const width = Math.min(MAX_NODE_WIDTH, Math.max(MIN_NODE_WIDTH, ...widths));
-  const height = rowsTop(node) + ROW_HEIGHT * node.rows.length + (node.rows.length > 0 ? ROWS_BOTTOM : 0);
+  const height = rowsTop(node) + ROW_HEIGHT * rowLines(node) + (node.rows.length > 0 ? ROWS_BOTTOM : 0);
   return { ...node, width, height };
 }
 
@@ -625,8 +695,8 @@ function stepBox(ctx: GraphContext, step: PlanStep, unavoidable: readonly PlanWa
 
 /**
  * The arrows of the plan's flows between the boxes they are drawn in, and the stubs at their ends: an import stub beside
- * each box that takes a bought good, a sink beside each box that leaves a good over, a stub into each input nothing
- * supplies or supplies short (carrying what is missing). Flows between one pair of ports add up (a collapsed line's);
+ * each box that takes a bought good, a sink for each good a box leaves over (laid in the band at the bottom, no group),
+ * a stub into each input nothing supplies or supplies short (carrying what is missing). Flows between one pair of ports add up (a collapsed line's);
  * a flow inside a collapsed line is not drawn. With `importsInOneColumn` no import stub sits in a group.
  */
 function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrows: Map<string, Arrow>; stubs: Map<string, Stub> } {
@@ -663,7 +733,7 @@ function arrowsAndStubs(ctx: GraphContext, importsInOneColumn: boolean): { arrow
     } else if (f.to === SINK) {
       const producer = boxOf(ctx, f.from);
       const id = sinkId(f.key, producer);
-      addStub(id, { kind: 'sink', key: f.key, perSecond: f.perSecond }, groupOf(ctx, f.from));
+      addStub(id, { kind: 'sink', key: f.key, perSecond: f.perSecond }, undefined);
       addArrow(producer, id, f.key, f.perSecond);
     } else {
       const from = boxOf(ctx, f.from);
@@ -813,7 +883,7 @@ function openGroups(ctx: GraphContext, nodes: readonly FlowNode[]): FlowGroup[] 
  *   readout, which its head draws in place of that first line (Phase 2 spec §7);
  * - an import stub `import:<key>@<step>` beside each step that takes a bought good, named by its kind of import;
  * - a stub `missing:<key>@<step>` into each input nothing supplies ("no source in the plan") or supplies short ("short");
- * - a stub `sink:<key>@<step>` for each good a step leaves over;
+ * - a stub `sink:<key>@<step>` for each good a box leaves over, laid in the band at the bottom;
  * - the target `out`, `Plan.target` (else what flows into `out`, for a plan from before that field);
  * - supporting lines (`PlanStep.line`): open, a group `line:<key>` around their steps and those steps' stubs; collapsed
  *   (`collapsedLines`), one box `line:<key>` whose rows are the goods crossing its edge, its own material first;
@@ -862,15 +932,18 @@ export function collapsedLines(plan: Plan, toggled: ReadonlyMap<StuffKey, boolea
  * with `importsInOneColumn`, the target in the last; an open supporting line a compound node holding its boxes
  * (`INCLUDE_CHILDREN`); depth-first cycle breaking; boxes and arrows in id order. An arrow's rate label sits at the end
  * whose port has the other arrows: a centre label would get a layer of its own and push the stub away from its step.
+ * Sink nodes and edges whose `to` is a sink are left out; `placeLeftOvers` positions them after ELK.
  */
 export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGroup[]; importsInOneColumn?: boolean }): ElkNode {
   const arrows = new Map<string, number>();
   for (const e of g.edges) for (const port of [e.fromPort, e.toPort]) arrows.set(port, (arrows.get(port) ?? 0) + 1);
   const groups = g.groups ?? [];
   const groupIds = new Set(groups.map((grp) => grp.id));
+  const sinkIds = new Set(g.nodes.filter((n) => n.kind === 'sink').map((n) => n.id));
   const inside = new Map<string, ElkNode[]>();
   const top: ElkNode[] = [];
   for (const n of g.nodes) {
+    if (n.kind === 'sink') continue;
     const layoutOptions: Record<string, string> = { 'elk.portConstraints': 'FIXED_POS' };
     if (n.kind === 'step' || n.kind === 'line') layoutOptions['elk.alignment'] = 'LEFT';
     if (n.kind === 'import' && g.importsInOneColumn === true) layoutOptions[LAYER_CONSTRAINT] = 'FIRST';
@@ -890,7 +963,7 @@ export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGr
   }
   for (const grp of groups) top.push({ id: grp.id, layoutOptions: { 'elk.padding': GROUP_PADDING }, children: inside.get(grp.id) ?? [] });
   top.sort((a, b) => byString(a.id, b.id));
-  const edges = g.edges.map((e): ElkExtendedEdge => {
+  const edges = g.edges.filter((e) => !sinkIds.has(e.to)).map((e): ElkExtendedEdge => {
     const edge: ElkExtendedEdge = { id: e.id, sources: [e.fromPort], targets: [e.toPort] };
     if (e.label !== undefined) {
       edge.labels = [{
@@ -907,6 +980,7 @@ export function toElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGr
  * The laid-out picture in diagram coordinates: box positions (ELK places a child relative to its parent), each arrow as
  * the start, bend and end points of its first section and its label's box and centre (both relative to the arrow's
  * container), and the open supporting lines' boxes. An arrow ELK did not route runs straight from its row to its row.
+ * After ELK's placement, `placeLeftOvers` positions sink nodes in the left-over band.
  */
 export function fromElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: FlowGroup[] }, laid: ElkNode): FlowLayout {
   const placed = new Map<string, Box>();
@@ -954,7 +1028,121 @@ export function fromElk(g: { nodes: FlowNode[]; edges: FlowEdge[]; groups?: Flow
   const groups = (g.groups ?? []).map((grp) => ({ ...grp, ...(placed.get(grp.id) ?? { x: 0, y: 0, width: 0, height: 0 }) }));
   const width = laid.width ?? Math.max(0, ...nodes.map((n) => n.x + n.width));
   const height = laid.height ?? Math.max(0, ...nodes.map((n) => n.y + n.height));
-  return { width, height, nodes, edges, groups };
+  return placeLeftOvers({ width, height, nodes, edges, groups });
+}
+
+/**
+ * Place sink (left-over) nodes in one band below the rest of the diagram (RUK-740).
+ * Computes the bottom of all non-sink boxes/groups, lays sinks left-to-right in a frame,
+ * and routes each sink's arrow as a 6-point polyline: drop from maker, lane, approach.
+ * Returns `layout` unchanged when there are no sinks.
+ */
+function placeLeftOvers(layout: FlowLayout): FlowLayout {
+  const sinks = layout.nodes.filter((n) => n.kind === 'sink');
+  if (sinks.length === 0) return layout;
+
+  const rest = layout.nodes.filter((n) => n.kind !== 'sink');
+  const bottom = Math.max(
+    0,
+    ...rest.map((n) => n.y + n.height),
+    ...layout.groups.map((g) => g.y + g.height),
+  );
+
+  // Compute start points for each sink
+  const starts = new Map<string, [number, number]>();
+  for (const s of sinks) {
+    const e = layout.edges.find((ed) => ed.to === s.id);
+    const p = e !== undefined ? layout.nodes.find((n) => n.id === e.from) : undefined;
+    if (e === undefined || p === undefined) {
+      starts.set(s.id, [0, bottom]);
+    } else {
+      const i = p.rows.findIndex((r) => r.port === e.fromPort);
+      starts.set(s.id, [p.x + p.width + PORT_SIZE, p.y + (i >= 0 ? rowCentre(p, i) : 0)]);
+    }
+  }
+
+  // Sort sinks by start[0], then start[1], then id
+  const sorted = [...sinks].sort((a, b) => {
+    const sa = starts.get(a.id)!;
+    const sb = starts.get(b.id)!;
+    return sa[0] - sb[0] || sa[1] - sb[1] || byString(a.id, b.id);
+  });
+
+  const n = sorted.length;
+
+  // Compute frame
+  const frameY = bottom + LEFT_OVER_GAP + LANE_STEP * n + 8;
+  const frame = { x: 0, y: frameY, width: 0, height: 0 };
+
+  // Place sinks in one row, left to right
+  const sinkPos = new Map<string, { x: number; y: number }>();
+  let prevX = 0;
+  let prevW = 0;
+  let maxH = 0;
+  for (let k = 0; k < n; k++) {
+    const s = sorted[k]!;
+    const x = k === 0 ? LEFT_OVER_PAD + APPROACH : prevX + prevW + LEFT_OVER_SPACING;
+    const y = frame.y + LEFT_OVER_TITLE;
+    sinkPos.set(s.id, { x, y });
+    prevX = x;
+    prevW = s.width;
+    if (s.height > maxH) maxH = s.height;
+  }
+
+  // wide enough for its title too, so a band of one narrow box never cuts "Left over: not used in this line" short
+  frame.width = Math.max(prevX + prevW + LEFT_OVER_PAD, leftOverTitleWidth());
+  frame.height = LEFT_OVER_TITLE + maxH + LEFT_OVER_PAD;
+
+  // Compute dropX for each sink (avoid crossing boxes)
+  const dropXs = new Map<string, number>();
+  for (let k = 0; k < n; k++) {
+    const s = sorted[k]!;
+    const start = starts.get(s.id)!;
+    let dropX = start[0] + DROP_GAP + DROP_STEP * (k % 4);
+    for (let iter = 0; iter < rest.length; iter++) {
+      const b = rest.find((bx) => bx.x - 4 <= dropX && dropX <= bx.x + bx.width + 4 && bx.y + bx.height > start[1] && bx.y < bottom);
+      if (b === undefined) break;
+      dropX = b.x + b.width + DROP_GAP;
+    }
+    dropXs.set(s.id, dropX);
+  }
+
+  // Build new nodes (sinks at their new positions)
+  const newNodes = layout.nodes.map((n) => {
+    const pos = sinkPos.get(n.id);
+    return pos !== undefined ? { ...n, x: pos.x, y: pos.y } : n;
+  });
+
+  // Build new edges (sinks get 6-point arrows)
+  const newEdges = layout.edges.map((e) => {
+    const k = sorted.findIndex((s) => s.id === e.to);
+    if (k < 0) return e;
+    const s = sorted[k]!;
+    const start = starts.get(s.id)!;
+    const dropX = dropXs.get(s.id)!;
+    const laneY = bottom + LEFT_OVER_GAP + LANE_STEP * k;
+    const newS = newNodes.find((n) => n.id === s.id)!;
+    const end: [number, number] = [newS.x - PORT_SIZE, newS.y + rowCentre(newS, 0)];
+    const points: Array<[number, number]> = [
+      start,
+      [dropX, start[1]],
+      [dropX, laneY],
+      [end[0] - APPROACH, laneY],
+      [end[0] - APPROACH, end[1]],
+      end,
+    ];
+    const { labelAt: _la, labelBox: _lb, ...rest2 } = e as typeof e & { labelAt?: [number, number]; labelBox?: Box };
+    return { ...rest2, points };
+  });
+
+  return {
+    width: Math.max(layout.width, frame.x + frame.width),
+    height: frame.y + frame.height,
+    nodes: newNodes,
+    edges: newEdges,
+    groups: layout.groups,
+    leftOver: frame,
+  };
 }
 
 /**

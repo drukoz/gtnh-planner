@@ -1373,7 +1373,7 @@ const FLOW_RULES = [
   '.flow-canvas', '.flow-node-box', '.flow-node.sink > .flow-node-box', '.flow-node-head[role=\'button\']:hover > .flow-hit',
   '.flow-node-head:focus-visible > .flow-hit, .flow-row:focus-visible > .flow-hit', '.flow-node text', '.flow-node .flow-node-line',
   '.flow-node .flow-avoid-badge rect', '.flow-row:hover > .flow-hit, .flow-row.hl > .flow-hit', '.flow-row-rate', ISSUE_RED, ISSUE_AMBER,
-  ISSUE_RED_RATE, '.flow-port', CASING, '.flow-edge-label', '.flow-group-box', '.flow-group-title', '.flow-line-toggle rect',
+  ISSUE_RED_RATE, '.flow-port', CASING, '.flow-edge-label', '.flow-group-box', '.flow-group-title', '.flow-left-over-box', '.flow-left-over-title', '.flow-line-toggle rect',
   '.flow-line-toggle text', '.flow-edge-tag rect', '.flow-edge-tag text', '.flow-issues', '.flow-infeasible', '.flow-legend', '.swatch',
   '.swatch.free', '.swatch.sink', '.flow-panel', '.flow-panel-section', '.flow-panel-title', WELLS, '.flow-panel .warnings',
   '.swap-option.unusable, .option-choice.unusable', '.port-short .port-rate, .port-warn', '.option-slot', '.option-slot-title',
@@ -1550,6 +1550,11 @@ describe('the Machine GUI Flow diagram', () => {
       ['.flow-line-toggle text', 'fill', '#ffffff'], ['.flow-line-toggle:hover rect', 'fill', 'var(--btn-hover)'],
     ]);
     expect(declared('.flow-group-box', 'stroke-dasharray')).toBeDefined();
+    // the left-over band (RUK-740): a dashed frame and its title in a grey of their own, nothing filled over the boxes it holds
+    expect(declared('.flow-left-over-box', 'stroke')).toBe('var(--flow-left-over)');
+    expect(declared('.flow-left-over-box', 'fill')).toBe('none');
+    expect(declared('.flow-left-over-box', 'stroke-dasharray')).toBeDefined();
+    expect(declared('.flow-left-over-title', 'fill')).toBe('var(--flow-left-over)');
     // the tag stays in the diagram font: edgeTag sizes it at 6.5px per character (flow.test.tsx)
     expect(declared('.flow-edge-tag text', 'font-family')).toBeUndefined();
     expect(declared('.flow-edge-tag text', 'font')).toBeUndefined();
