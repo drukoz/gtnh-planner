@@ -31,8 +31,8 @@ numeric claims are proven by spikes before the milestone that depends on them (S
 
 | spike | proves | branch | runs in parallel with |
 |---|---|---|---|
-| **SP-A** AE2 spacing 1 with Wrench targets | the per-row length, loss and weak-tier change on all 33 benchmark lines in AE2 mode, the feed-rule warnings (R12) it adds or removes, and the tests it breaks | `feat/optimal-layout-<id>`, patch and report under `spikes/ae2-spacing-1/` | M1 |
-| **SP-B** a shorter cable tree than `growTree` | cable cells, loss and time per benchmark row for a rip-up-and-reroute pass over each tier's tree, and whether any row gets longer | `feat/optimal-layout-<id>`, patch and report under `spikes/steiner-reroute/` | M1 |
+| **SP-A** (RUK-2615) AE2 spacing 1 with Wrench targets | the per-row length, loss and weak-tier change on all 33 benchmark lines in AE2 mode, the feed-rule warnings (R12) it adds or removes, and the tests it breaks | `feat/optimal-layout-RUK-2615`, patch and report under `spikes/ae2-spacing-1/` | M1 |
+| **SP-B** (RUK-2616) a shorter cable tree than `growTree` | cable cells, loss and time per benchmark row for a rip-up-and-reroute pass over each tier's tree, and whether any row gets longer | `feat/optimal-layout-RUK-2616`, patch and report under `spikes/steiner-reroute/` | M1 |
 
 A spike that fails is an answer too: the plan then drops that item from M2 and says so.
 

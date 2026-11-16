@@ -71,7 +71,7 @@ layoutLine (layout.ts)
 Each milestone is a parent task under RUK-2571 with its own branch (`feat/optimal-layout-m<N>`, cut from the one
 before), merged into `feat/optimal-layout` when verified. One pull request for the whole program: #18.
 
-### M1 — an honest score and the search loop (today's geometry)
+### M1 — an honest score and the search loop (today's geometry) — RUK-2613, branch `feat/optimal-layout-m1`
 
 What you see: a line whose far machines get too few volts to run is no longer silently `ok`: it says which machines,
 on which tier. The 3D tab says how many wiring and logistics blocks the line takes and how many layouts were tried,
@@ -79,11 +79,11 @@ with today's rule's line beside the chosen one.
 
 | subtask | what | depends on |
 |---|---|---|
-| M1-1 | contract: `InternalResult.machines` (per-machine volts, amps, powered); `score.ts`; shared types `LayoutSearch`, `LayoutCandidate`, `CandidateKind` | — |
-| M1-2 | `machine_unpowered` warning per tier; the S1 benchmark gains `unpowered`, and its ratchet the "only to power a machine" rule | M1-1 |
-| M1-3 | `buildLocal` as a scored candidate loop with the never-worse rule; `Layout.search` filled by `layoutLine` | M1-1 |
-| M1-4 | 3D tab panel "Layout search" from `Layout.search` | M1-1 (types only) |
-| M1-V | verification: QA on the milestone branch (benchmark, the user's view, determinism) | M1-2, M1-3, M1-4 |
+| M1-1 RUK-2614 | contract: `InternalResult.machines` (per-machine volts, amps, powered); `score.ts`; shared types `LayoutSearch`, `LayoutCandidate`, `CandidateKind` | — |
+| M1-2 RUK-2617 | `machine_unpowered` warning per tier; the S1 benchmark gains `unpowered`, and its ratchet the "only to power a machine" rule | M1-1 |
+| M1-3 RUK-2618 | `buildLocal` as a scored candidate loop with the never-worse rule; `Layout.search` filled by `layoutLine` | M1-1 |
+| M1-4 RUK-2619 | 3D tab panel "Layout search" from `Layout.search` | M1-1 (types only) |
+| M1-V RUK-2620 | verification: QA on the milestone branch (benchmark, the user's view, determinism) | M1-2, M1-3, M1-4 |
 
 M1 changes no chosen layout except where a candidate is better by the never-worse rule; with only today's head
 candidates in the loop that is expected to be rare. Its value is the honest report and the frame M2–M4 fill.
@@ -119,8 +119,8 @@ candidates in the loop that is expected to be rare. Its value is the honest repo
 
 ## Spikes running beside M1
 
-- **SP-A** AE2 spacing 1 with Wrench targets (ledger row 8).
-- **SP-B** a rip-up-and-reroute pass over each tier's cable tree (ledger row 5).
+- **SP-A** (RUK-2615) AE2 spacing 1 with Wrench targets (ledger row 8).
+- **SP-B** (RUK-2616) several terminal orders, then a rip-up-and-reroute pass over each tier's cable tree (ledger row 5).
 
 ## Checklist (programs.md) before implementation subtasks
 
