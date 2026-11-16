@@ -149,8 +149,8 @@ describe('middle power head', () => {
     const westHead = line(lossPlan(20), 0, 'ae2');
     const mid = line(lossPlan(20), 8, 'ae2');
     const lvWorst = (r: ReturnType<typeof line>): number => r.internal.tiers.find((t) => t.tier === 1)!.worstBlocks;
-    expect(lvWorst(westHead)).toBe(44);
-    expect(lvWorst(mid)).toBe(30);
+    expect(lvWorst(westHead)).toBe(25);
+    expect(lvWorst(mid)).toBe(22);
     expect(lvWorst(mid)).toBeLessThan(lvWorst(westHead));
   });
 

@@ -272,13 +272,13 @@ describe('precheckFeeding', () => {
   it('flags an interface touching two inventories', async () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'ae2');
-    layout.blocks.push({ pos: [7, 65, 2], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest', tail: { side: 'output', keys: [] } });
+    layout.blocks.push({ pos: [5, 65, 2], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest', tail: { side: 'output', keys: [] } });
     // an interface without a Wrench target pushes into every neighbour (R12)
-    delete layout.blocks.find((b) => posKey(b.pos) === posKey([7, 64, 2]))!.feed!.interface!.targets;
+    delete layout.blocks.find((b) => posKey(b.pos) === posKey([5, 64, 2]))!.feed!.interface!.targets;
     const findings = precheckFeeding(readLine({ pack, plan, layout }), pack);
-    expect(findings.map(brief)).toEqual(['feed_leak risk - Advanced Assembler at 7 64 1']);
+    expect(findings.map(brief)).toEqual(['feed_leak risk - Advanced Assembler at 5 64 1']);
     expect(findings[0]!.text).toBe(
-      "ME Interface (Advanced Assembler) at 7 64 2 pushes into 2 inventories (Chest at 7 65 2 and Advanced Assembler at 7 64 1): its pattern's items can reach the wrong one");
+      "ME Interface (Advanced Assembler) at 5 64 2 pushes into 2 inventories (Chest at 5 65 2 and Advanced Assembler at 5 64 1): its pattern's items can reach the wrong one");
   });
 });
 

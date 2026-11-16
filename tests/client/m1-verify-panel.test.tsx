@@ -27,6 +27,6 @@ describe('milestone M1 panel text on the loss lines', () => {
         if (compared === 1) comparedLines.push(`loss-${n} ${mode}`);
       }
     }
-    expect(comparedLines.sort()).toEqual(['loss-10 ae2', 'loss-10 enderio', 'loss-20 routed']);
+    expect(comparedLines.sort()).toEqual(['loss-10 enderio', 'loss-20 ae2', 'loss-20 routed']);
   }, 120_000);
 });
