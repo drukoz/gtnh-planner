@@ -1,0 +1,61 @@
+diff --git a/src/server/layout/feed-rules.ts b/src/server/layout/feed-rules.ts
+index 7e228dc79..2701e6c6a 100644
+--- a/src/server/layout/feed-rules.ts
++++ b/src/server/layout/feed-rules.ts
+@@ -14,6 +14,7 @@ import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
+ import { fmtInt, joinNames } from '../../shared/layout/format.ts';
+ import { basicInputSlots, ignoredByBlocking, PROGRAMMED_CIRCUIT_ITEM } from '../../shared/gt/feeding.ts';
+ import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
++import { FACES } from '../../shared/types/assets.ts';
+ import type { InterfaceSpec, ItemFilterSpec, RoutedChipSpec } from '../../shared/types/feed.ts';
+ import type { Layout, LayoutBlock } from '../../shared/types/layout.ts';
+ import type { Machine, Pack } from '../../shared/types/pack.ts';
+@@ -349,7 +350,12 @@ export function feedingWarnings(input: FeedRulesInput): PlanWarning[] {
+     pipes: layout.mode !== 'routed' ? [] : live.filter((b) => b.role === 'chip_pipe' && b.feed?.chips !== undefined)
+       .map((b) => ({ block: b, chips: b.feed!.chips!, targets: inventoriesBeside(b, byPos, linked(b)) })),
+     interfaces: layout.mode !== 'ae2' ? [] : live.filter((b) => b.role === 'interface' && b.feed?.interface !== undefined)
+-      .map((b) => ({ block: b, spec: b.feed!.interface!, targets: inventoriesBeside(b, byPos, () => true) })),
++      .map((b) => {
++        const spec = b.feed!.interface!;
++        const sides = spec.targets === undefined ? () => true
++          : (side: number): boolean => spec.targets!.includes(FACES[side]!);
++        return { block: b, spec, targets: inventoriesBeside(b, byPos, sides) };
++      }),
+     inputChests: live.filter((b) => b.tail?.side === 'input'),
+   };
+   const warnings: PlanWarning[] = [];
+diff --git a/src/server/layout/modes/ae2.ts b/src/server/layout/modes/ae2.ts
+index b2471f466..7548bd5eb 100644
+--- a/src/server/layout/modes/ae2.ts
++++ b/src/server/layout/modes/ae2.ts
+@@ -450,7 +450,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
+       lockingCards += 1;
+       blocks.push({
+         pos, block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${unit.name})`, item: parts.me_interface.key,
+-        feed: { interface: { patterns: [pattern], blocking: false, lock: 'until_result' } },
++        feed: { interface: { patterns: [pattern], blocking: false, lock: 'until_result', targets: [FACES[sideToward(pos, behind)]!] } },
+       });
+       continue;
+     }
+@@ -507,7 +507,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
+     }
+     blocks.push({
+       pos, block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${unit.name})`, item: parts.me_interface.key,
+-      ...(kept.length === 0 ? {} : { feed: { interface: { patterns: kept.map(({ feed }) => structuredClone(feed.pattern)), blocking } } }),
++      ...(kept.length === 0 ? {} : { feed: { interface: { patterns: kept.map(({ feed }) => structuredClone(feed.pattern)), blocking, targets: [FACES[sideToward(pos, behind)]!] } } }),
+     });
+   }
+   // each step whose machines move items and get no pattern, once, in unit order (a multiblock that takes no item has no
+diff --git a/src/server/layout/modes/mode.ts b/src/server/layout/modes/mode.ts
+index 3df6c3bf9..bf317c2a3 100644
+--- a/src/server/layout/modes/mode.ts
++++ b/src/server/layout/modes/mode.ts
+@@ -72,7 +72,7 @@ export interface ModeResult {
+  * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not.
+  * EnderIO may share too: each face of a conduit is set on its own, so the N and S machines may share a spine cell.
+  */
+-export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2, enderio: 0 });
++export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 1, enderio: 0 });
+ 
+ /**
+  * The mode's line. Every mode but machine to machine (add-on 15's) also says how to run its hand-run machines and what
