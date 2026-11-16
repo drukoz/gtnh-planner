@@ -71,7 +71,8 @@ describe('AE2 feeding', () => {
       [{ key: 't:x@0', amount: 1, chance: 1 }, { key: 't:y@0', amount: 0.5, chance: 0.5 }, { key: 'fluid:molten.iron', amount: 144, chance: 1 }]);
     const { r } = ae2(pack(), plan);
     expect(interfaces(r).map((b) => [b.label, b.feed, b.config])).toEqual([['ME Interface (Advanced Chemical Reactor)', { interface: {
-      patterns: [{ inputs: [{ key: 't:in@0', amount: 2 }, { key: 't:dust@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true } }, undefined]]);
+      patterns: [{ inputs: [{ key: 't:in@0', amount: 2 }, { key: 't:dust@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true,
+      targets: ['north'] } }, undefined]]);
     expect(r.extraParts).toEqual([{ key: 'appliedenergistics2:item.ItemMultiMaterial@52', amount: 1, why: 'one processing pattern per machine', group: 'logistics' }]);
     expect(r.warnings).toEqual([]);
   });
@@ -414,7 +415,8 @@ describe('AE2 feeding', () => {
       outputs: [['fluid:molten.iron', 144]] }]);
     const layout = await layoutLine(p, plan, emptyScan(), makeProject({ logistics: 'ae2', scanId: null, baseId: null }));
     const texts = layout.buildSteps.filter((s) => s.kind === 'configure').map((s) => s.text);
-    expect(texts).toContain('ME Interface (Basic Macerator): 1 processing pattern; pattern 1× Raw Input → 1× t:out_m@0; blocking mode on');
+    expect(texts).toContain('ME Interface (Basic Macerator): 1 processing pattern; pattern 1× Raw Input → 1× t:out_m@0; blocking mode on; '
+      + 'Wrench: point it at its north side, so it pushes only into the block there');
     expect(texts.filter((t) => t.startsWith('ME Glass Cable - Fluix: '))).toEqual([expect.stringMatching(
       /^ME Glass Cable - Fluix: ME Export Bus on the (north|south) face: put t:out_m@0 in its filter slots$/)]);
     // the laid-out cable keeps the bus's ExportBusSpec, which only its cover words

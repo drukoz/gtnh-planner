@@ -7,6 +7,7 @@ import type { RoutedNet, Ae2Net, EioNet, GtPipeNet, BasicNode, BenchNode, FeedMo
 import type { FeedBlock, FeedConduitFilter } from '../../../../src/server/layout/feeding/contract.ts';
 import { PART_KEYS } from '../../../../src/server/layout/feeding/facts.ts';
 import { OPPOSITE, posKey, rotateFace, type Vec3 } from '../../../../src/shared/layout/geometry.ts';
+import type { Face } from '../../../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../../../src/shared/types/layout.ts';
 import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { busSlots } from '../../../../src/server/layout/parts.ts';
@@ -554,10 +555,10 @@ describe('readLine', () => {
   it('reads the structured patterns of an AE2 line as main lays it', async () => {
     const { pack, plan } = chain2();
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'ae2') });
-    const makeEx = { patterns: [{ inputs: [{ key: 't:a@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true };
+    const makeEx = (target: Face) => ({ patterns: [{ inputs: [{ key: 't:a@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true, targets: [target] });
     expect(ae2Net(m).interfaces.map((i) => [i.id, i.targets, i.spec])).toEqual([
-      ['3,0,2', [{ node: '3,0,1', side: 3 }], makeEx], ['5,0,2', [{ node: '5,0,3', side: 2 }], makeEx],
-      ['7,0,2', [{ node: '7,0,1', side: 3 }], { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: true }],
+      ['3,0,2', [{ node: '3,0,1', side: 3 }], makeEx('north')], ['5,0,2', [{ node: '5,0,3', side: 2 }], makeEx('south')],
+      ['7,0,2', [{ node: '7,0,1', side: 3 }], { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: true, targets: ['north'] }],
     ]);
     expect(m.unknowns).toEqual([]);
   });

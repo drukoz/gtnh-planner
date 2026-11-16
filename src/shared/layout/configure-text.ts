@@ -199,6 +199,9 @@ function interfaceTexts(spec: InterfaceSpec, nameOf: (k: StuffKey) => string): s
   lines.push(`blocking mode ${spec.blocking ? 'on' : 'off'}`);
   if (spec.smartBlocking === true) lines.push('smart blocking on');
   if (spec.lock === 'until_result') lines.push('Locking Card, Lock Crafting: Until crafting result is returned');
+  if (spec.targets !== undefined && spec.targets.length > 0) {
+    lines.push(`Wrench: point it at its ${spec.targets.join(' and ')} side, so it pushes only into the block there`);
+  }
   return lines;
 }
 

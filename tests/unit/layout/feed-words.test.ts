@@ -56,6 +56,12 @@ describe('feeding words', () => {
     expect(feedTexts(undefined, nameOf)).toEqual([]);
   });
 
+  it('tells the builder to point a Wrench-targeted ME Interface at its machine, and says nothing when it has no target', () => {
+    expect(feedTexts({ interface: { patterns: [], blocking: true, targets: ['north'] } }, nameOf)).toEqual([
+      'blocking mode on', 'Wrench: point it at its north side, so it pushes only into the block there']);
+    expect(feedTexts({ interface: { patterns: [], blocking: true } }, nameOf)).toEqual(['blocking mode on']);
+  });
+
   it("lists a block's covers, then its settings, then its chips or patterns", () => {
     expect(configuredLines({ config: { circuit: 2, multiStack: false }, feed: { chips: [{ kind: 'extractor', filter: { mode: 'whitelist', keys: ['t:x@0'] } }] } },
       nameOf)).toEqual(['programmed circuit 2', configTexts({ multiStack: false })[0], 'chips: Item Extractor Chip (whitelist: Ex)']);
