@@ -100,15 +100,15 @@ describe('AE2 mode', () => {
     const network = makeScan({ logistics: [{ kind: 'ae2', taps: [[0, 64, 0]], channelsUsed: 30, channelsMax: 32 }] }).logistics[0]!;
     const r = buildMode('ae2', { ...setup('ae2'), network });
     expect(r.blocks.filter((b) => b.pos[2] === 2).map((b) => [b.pos[0], b.role, b.label])).toEqual([
-      [1, 'interface', 'ME Interface (Basic Macerator)'], [2, 'pipe', 'ME Glass Cable - Fluix'], [3, 'interface', 'ME Interface (Basic Macerator)'],
-      [4, 'pipe', 'ME Glass Cable - Fluix'], [5, 'interface', 'ME Interface (Advanced Assembler)'], [6, 'pipe', 'ME Glass Cable - Fluix']]);
+      [1, 'interface', 'ME Interface (Basic Macerator)'], [2, 'interface', 'ME Interface (Basic Macerator)'],
+      [3, 'interface', 'ME Interface (Advanced Assembler)'], [4, 'pipe', 'ME Glass Cable - Fluix']]);
     expect(r.covers.map((c) => [c.pos, c.cover.face, c.cover.settings])).toEqual([
       [[1, 0, 1], 'south', { mode: 'export', allowInput: true, rate: 0.5, unit: 'items/s' }],
-      [[3, 0, 3], 'north', { mode: 'export', allowInput: true, rate: 0.5, unit: 'items/s' }],
-      [[5, 0, 1], 'south', { mode: 'export', allowInput: true, rate: 1, unit: 'items/s' }]]);
+      [[2, 0, 3], 'north', { mode: 'export', allowInput: true, rate: 0.5, unit: 'items/s' }],
+      [[3, 0, 1], 'south', { mode: 'export', allowInput: true, rate: 1, unit: 'items/s' }]]);
     expect(r.extraParts).toEqual([{ key: 'appliedenergistics2:item.ItemMultiMaterial@52', amount: 3, why: 'one processing pattern per machine', group: 'logistics' }]);
     expect(r.warnings).toEqual([{ code: 'ae2_channels', text: 'The line needs 3 channels; the AE2 network has 2 free' }]);
-    expect([r.logisticsPort, r.hookup]).toEqual([[6, 0, 2], { part: 'me_cable', end: null }]);
+    expect([r.logisticsPort, r.hookup]).toEqual([[4, 0, 2], { part: 'me_cable', end: null }]);
     // the feeding fix (architecture §11 entry 51): the pattern is the interface's structured feed, blocking when nothing it
     // holds is off AE2's ignore list
     const iface = r.blocks.find((b) => b.pos[0] === 1 && b.role === 'interface')!;
@@ -117,8 +117,8 @@ describe('AE2 mode', () => {
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line']);
     expect(r.drafts[0]!.text).toBe("Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus");
     // final review: the interface pushes the pattern's inputs through each machine's output side
-    expect(r.configs.map((c) => [c.pos, c.config])).toEqual([[[1, 0, 1], { inputFromOutputSide: true }], [[3, 0, 3], { inputFromOutputSide: true }],
-      [[5, 0, 1], { inputFromOutputSide: true }]]);
+    expect(r.configs.map((c) => [c.pos, c.config])).toEqual([[[1, 0, 1], { inputFromOutputSide: true }], [[2, 0, 3], { inputFromOutputSide: true }],
+      [[3, 0, 1], { inputFromOutputSide: true }]]);
   });
 
   it('never assumes an AE2 network the scan did not find', () => {
@@ -132,13 +132,13 @@ describe('AE2 mode', () => {
     const r = buildMode('ae2', { ...setup('ae2', mixed()), network });
     // s3 makes only Molten Iron: no pattern could count it, so cable with an export bus on its face toward the machine
     expect(r.blocks.map((b) => [b.pos[0], b.role, b.connections])).toEqual([
-      [1, 'interface', undefined], [2, 'pipe', 16 | 32], [3, 'pipe', 16 | 32], [4, 'pipe', 16 | 32], [5, 'pipe', 16 | 32], [6, 'pipe', 16]]);
+      [1, 'interface', undefined], [2, 'pipe', 16 | 32], [3, 'pipe', 16 | 32], [4, 'pipe', 16]]);
     // the cable carries the bus's filter as add-on 21's ExportBusSpec (its cover says what to set)
-    expect([r.blocks[4]!.config, r.blocks[4]!.feed]).toEqual([undefined, { exportBus: { keys: ['t:in@0'] } }]);
+    expect([r.blocks[2]!.config, r.blocks[2]!.feed]).toEqual([undefined, { exportBus: { keys: ['t:in@0'] } }]);
     expect([r.extraParts[0]!.amount, r.covers.map((c) => [c.pos, c.cover.item]), r.warnings.map((w) => [w.code, w.stepId])]).toEqual([1,
-      [[[1, 0, 1], 'gregtech:gt.metaitem.01@32630'], [[5, 0, 2], 'appliedenergistics2:item.ItemMultiPart@260']], [['ae2_no_pattern', 's3']]]);
+      [[[1, 0, 1], 'gregtech:gt.metaitem.01@32630'], [[3, 0, 2], 'appliedenergistics2:item.ItemMultiPart@260']], [['ae2_no_pattern', 's3']]]);
     // only the machines that take items get input from their output side: the chemical reactor takes only oxygen
-    expect(r.configs.map((c) => c.pos)).toEqual([[1, 0, 1], [5, 0, 1]]);
+    expect(r.configs.map((c) => c.pos)).toEqual([[1, 0, 1], [3, 0, 1]]);
   });
 
   /** s1 makes t:out_s1@0 from Raw Input and s2 makes t:out_s2@0 from it, both on one macerator (an AE2 sharing pool). */

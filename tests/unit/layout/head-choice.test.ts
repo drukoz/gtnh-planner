@@ -24,7 +24,8 @@ const HEADS: Array<{ n: number; mode: LogisticsMode; middle: boolean }> = [
   { n: 10, mode: 'enderio', middle: false },
   { n: 20, mode: 'direct', middle: false },
   { n: 20, mode: 'routed', middle: false },
-  { n: 20, mode: 'ae2', middle: true },
+  // at spacing 1 (M2-2) the 20-machine AE2 line is short enough for the west head
+  { n: 20, mode: 'ae2', middle: false },
   { n: 20, mode: 'enderio', middle: false },
   { n: 40, mode: 'direct', middle: true },
   { n: 40, mode: 'routed', middle: true },
