@@ -47,6 +47,11 @@ export interface StepsInput {
    * path round it are that box's; `size` stays the line's own, and the site pin stays in its middle.
    */
   siteSize?: Vec3;
+  /**
+   * The line's satellite step-down banks (`InternalResult.satellites`), in that order: the tiers each steps between,
+   * the transformers it needs and how many machines it feeds. Absent or empty: no satellite step.
+   */
+  satellites?: ReadonlyArray<{ fromTier: number; toTier: number; count: number; machines: number }>;
 }
 
 type Group = NonNullable<BomLine['group']>;
@@ -301,6 +306,20 @@ function powerSteps(input: StepsInput, sitePin: number | undefined, powerPin: nu
     out.push(draft(`layout:power:stage:${s.toTier}`, 'power', powerPin,
       `Place ${fmtInt(s.count)}× ${input.transformerName(s.toTier)} between the ${from} and ${to} cables, front (input) toward ${from}`));
   }
+  // satellite step-down banks (RUK-2668): one step per tier they step down to, highest first, right after the head stages
+  const byToTier = new Map<number, { fromTier: number; n: number; m: number }>();
+  for (const s of input.satellites ?? []) {
+    const g = byToTier.get(s.toTier) ?? { fromTier: s.fromTier, n: 0, m: 0 };
+    g.n += 1;
+    g.m += s.machines;
+    byToTier.set(s.toTier, g);
+  }
+  for (const toTier of [...byToTier.keys()].sort((a, b) => b - a)) {
+    const g = byToTier.get(toTier)!;
+    const from = tierName(g.fromTier), to = tierName(toTier);
+    out.push(draft(`layout:power:satellites:${toTier}`, 'power', sitePin,
+      `Place ${fmtInt(g.n)}× ${input.transformerName(toTier)} out along the line where the view marks them, one beside each group of far ${to} machines (${fmtInt(g.m)} machines in all): turn each one's front (input) up with a Wrench, into the ${from} cable above it; it feeds the ${to} cable beside it`));
+  }
   // GT joins a cable to the block it is placed against, so two tiers must never touch (spec §3.5)
   const tiers = input.cables.map((c) => c.tier);
   for (const c of input.cables) {
@@ -466,13 +485,15 @@ const PLACED_ROLES: ReadonlySet<BlockRole> = new Set<BlockRole>(['machine', 'cas
 /**
  * Each block with `buildStep` = the id of the step that places it, for the in-game projector: the first rule whose
  * step exists wins — a hookup block its hookup's step; a machine, casing or hatch its `layout:place:<stepId>`; a
- * transformer the stage whose transformer has its label; a cable the wire step whose cable has its label; a fluid pipe
+ * transformer with a `satellite` index its `layout:power:satellites:<toTier>` step (RUK-2668, checked before the stage
+ * rule), any other transformer the stage whose transformer has its label; a cable the wire step whose cable has its
+ * label; a fluid pipe
  * (`<pipe> (<fluid name>)`) its fluid's step; a block whose conduits are all fluid conduits `layout:logistics:fluids`
  * (architecture "EnderIO conduits, granted change requests (add-on 11)"); a pipe, interface, chip pipe or chest the
  * `layout:logistics:line` step. Ghosts and blocks no rule matches get none. The input blocks are not changed.
  */
 export function assignBuildSteps(blocks: readonly LayoutBlock[], steps: readonly BuildStep[],
-  input: Pick<StepsInput, 'cables' | 'stages' | 'transformerName' | 'fluids'>, hookups: readonly Hookup[]): LayoutBlock[] {
+  input: Pick<StepsInput, 'cables' | 'stages' | 'transformerName' | 'fluids' | 'satellites'>, hookups: readonly Hookup[]): LayoutBlock[] {
   const ids = new Set(steps.map((s) => s.id));
   const has = (id: string | undefined): id is string => id !== undefined && ids.has(id);
   const owner = (b: LayoutBlock): string | undefined => {
@@ -484,6 +505,10 @@ export function assignBuildSteps(blocks: readonly LayoutBlock[], steps: readonly
     }
     if (PLACED_ROLES.has(b.role) && b.stepId !== undefined) candidates.push(`layout:place:${b.stepId}`);
     if (b.role === 'transformer') {
+      if (b.satellite !== undefined) {
+        const sat = input.satellites?.[b.satellite];
+        candidates.push(sat === undefined ? undefined : `layout:power:satellites:${sat.toTier}`);
+      }
       const stage = input.stages.find((s) => input.transformerName(s.toTier) === b.label);
       candidates.push(stage === undefined ? undefined : `layout:power:stage:${stage.toTier}`);
     }

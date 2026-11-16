@@ -550,6 +550,7 @@ function worldBlock(b: LocalBlock, f: Frame): LayoutBlock {
     ...(b.tail === undefined ? {} : { tail: { side: b.tail.side, keys: [...b.tail.keys] } }),
     ...(b.hatch === undefined ? {} : { hatch: b.hatch }),
     ...(b.feed === undefined ? {} : { feed: worldFeed(b.feed, r) }),
+    ...(b.satellite === undefined ? {} : { satellite: b.satellite }),
   };
 }
 
