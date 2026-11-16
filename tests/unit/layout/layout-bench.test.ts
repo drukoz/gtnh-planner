@@ -1,5 +1,9 @@
 // The baseline in `tests/fixtures/layout-bench/baseline.json` may only ever be lowered. Regenerate it only when a
 // change makes lines shorter, less lossy or weaker-tier-free, and say in the commit message which rows moved.
+//
+// A line may get longer, lossier or weaker-tiered only to power machines it could not run (RUK-2571 plan, Assumption 4):
+// a row offends when its `routeFailed` or its `unpowered` count rises, and its `total`, `lossEUt` and `weakTiers` only
+// while its `unpowered` count stays at the baseline's (RUK-2617).
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -39,10 +43,14 @@ describe('layout benchmark', () => {
         offenses.push(`${base.name} ${base.mode}: missing`);
         continue;
       }
-      if (row.total > base.total) offenses.push(`${base.name} ${base.mode}: total ${row.total} > ${base.total}`);
-      if (row.lossEUt > base.lossEUt + 0.01) offenses.push(`${base.name} ${base.mode}: lossEUt ${row.lossEUt} > ${base.lossEUt}`);
-      if (row.weakTiers.length > base.weakTiers.length) offenses.push(`${base.name} ${base.mode}: weakTiers ${row.weakTiers.length} > ${base.weakTiers.length}`);
       if (row.routeFailed > base.routeFailed) offenses.push(`${base.name} ${base.mode}: routeFailed ${row.routeFailed} > ${base.routeFailed}`);
+      if (row.unpowered > base.unpowered) offenses.push(`${base.name} ${base.mode}: unpowered ${row.unpowered} > ${base.unpowered}`);
+      // a line may only get longer, lossier or weaker while it powers no more machines than the baseline did
+      if (row.unpowered === base.unpowered) {
+        if (row.total > base.total) offenses.push(`${base.name} ${base.mode}: total ${row.total} > ${base.total}`);
+        if (row.lossEUt > base.lossEUt + 0.01) offenses.push(`${base.name} ${base.mode}: lossEUt ${row.lossEUt} > ${base.lossEUt}`);
+        if (row.weakTiers.length > base.weakTiers.length) offenses.push(`${base.name} ${base.mode}: weakTiers ${row.weakTiers.length} > ${base.weakTiers.length}`);
+      }
     }
     expect(offenses, `lines that got worse:\n${offenses.join('\n')}\n\n${benchTable(rows)}`).toEqual([]);
   }, 60_000);

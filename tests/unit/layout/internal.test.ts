@@ -4,7 +4,7 @@ import { unitsFromPlan, placeUnits, type LocalBlock, type Unit } from '../../../
 import { hookupAllowanceVolts, tierGroups, transformerStages, deliveredVolts } from '../../../src/server/layout/power.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makePlan, IDS } from '../../helpers/layout-fixtures.ts';
-import { tierContacts } from '../../helpers/power-loss.ts';
+import { tierContacts, lossLine } from '../../helpers/power-loss.ts';
 import { V } from '../../../src/shared/gt/tiers.ts';
 import { machineIdOfLegacy } from '../../../src/shared/ids.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
@@ -519,4 +519,21 @@ describe('supply landing cells on the line boundary', () => {
     expect(first.length).toBeGreaterThan(1);
     expect(second).toEqual(first);                                                                   // deterministic
   });
+});
+
+// RUK-2617: a tier whose wiring leaves machines too few volts to run says which machines they are.
+describe('machine_unpowered: the machines a tier\'s wiring cannot run', () => {
+  it('warns which LV machines the 40-machine AE2 line cannot run', async () => {
+    // 53 LV cable blocks to the farthest macerator leave it 1 V, and 30 EU/t at 2 A needs 15 V
+    const { layout } = await lossLine(40, 'ae2');
+    const unpowered = layout.warnings.filter((w) => w.code === 'machine_unpowered');
+    expect(unpowered).toHaveLength(1);
+    expect(unpowered[0]!.text.startsWith('The LV wiring cannot run ')).toBe(true);
+    expect(unpowered[0]!.text).toContain('Basic Macerator');
+  }, 30_000);
+
+  it('raises no machine_unpowered warning when every machine runs', async () => {
+    const { layout } = await lossLine(10, 'direct');
+    expect(layout.warnings.map((w) => w.code)).not.toContain('machine_unpowered');
+  }, 30_000);
 });

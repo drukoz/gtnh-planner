@@ -931,6 +931,19 @@ export function parallelRunParts(cables: InternalResult['cables']): BomLine[] {
 }
 
 /**
+ * A machine fed at its own tier whose wiring leaves it too few volts to run (RUK-2617). A machine above the supply tier
+ * also counts as unpowered (`Layout.loss.unpowered`), but `power_tier_low` already names it, with the right remedy.
+ */
+function starvedByWiring(m: MachinePower): boolean {
+  return !m.powered && m.tier <= m.feedTier;
+}
+
+/** The feed tiers with machines `starvedByWiring`, highest first. */
+function unpoweredFeedTiers(machines: readonly MachinePower[]): number[] {
+  return [...new Set(machines.filter(starvedByWiring).map((m) => m.feedTier))].sort((a, b) => b - a);
+}
+
+/**
  * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
  * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
  * `stages` (no electric unit) nothing is wired.
@@ -976,6 +989,19 @@ export function routeInternal(input: InternalInput): InternalResult {
     const headWarnings = new WarningList();
     const lossWarnings = new WarningList();
     const laid = layPower(input, head, trees, sizing, grid, headWarnings, lossWarnings);
+    // which machines the wiring leaves too few volts to run (RUK-2617): one warning per feed tier with such machines,
+    // highest tier first, after that tier's loss warnings
+    for (const tier of unpoweredFeedTiers(machines)) {
+      const ofTier = machines.filter((m) => m.feedTier === tier);
+      const silent = ofTier.filter(starvedByWiring);
+      const byName = new Map<string, number>();
+      for (const m of silent) byName.set(m.name, (byName.get(m.name) ?? 0) + 1);
+      const names = [...byName.entries()].sort((a, b) => compareText(a[0], b[0])).map(([name, count]) => `${count}× ${name}`).join(', ');
+      const worst = Math.min(...silent.map((m) => m.arrivingVolts));
+      lossWarnings.add({ code: 'machine_unpowered',
+        text: `The ${tierName(tier)} wiring cannot run ${fmtInt(silent.length)} of its ${fmtInt(ofTier.length)} machines: ${names}. The farthest gets `
+          + `${fmtRate(Math.max(0, worst))} of ${fmtInt(V[tier]!)} V, too few for its EU/t. Feed them from a nearer transformer or by hand.` });
+    }
     // the order the plan's tests read: head, then routing, then loss
     for (const w of [...headWarnings.list, ...routeWarnings.list, ...lossWarnings.list]) grid.warnings.add(w);
     sized = sizing.stages;
