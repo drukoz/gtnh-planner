@@ -43,6 +43,19 @@ export interface InternalInput {
   supplyLossVolts?: number;
 }
 
+/** What reaches one electric machine of the line (RUK-351): electric units in `placement.units` order. */
+export interface MachinePower {
+  stepId: string; name: string; tier: number; feedTier: number; euPerTick: number;
+  /** Volts its packets arrive with: the feed tier's volts less everything lost on the way; 0 or less when nothing arrives. */
+  arrivingVolts: number;
+  /** Amps it may draw per tick (gt-mechanics §3.1): floor(2·EU/t ÷ V[tier]) + 1 for a singleblock, 2 for a multiblock's energy hatch. */
+  maxAmps: number;
+  /** Whether its port is wired to its tier's tree. */
+  wired: boolean;
+  /** Whether `arrivingVolts` × `maxAmps` covers its EU/t. */
+  powered: boolean;
+}
+
 export interface InternalResult {
   /** Sorted by x, then y, then z. */
   blocks: LocalBlock[];
@@ -80,6 +93,8 @@ export interface InternalResult {
    * the power inputs of machines below the supply tier. Sorted by x, y, z.
    */
   keepAway: Vec3[];
+  /** Every electric machine, in `placement.units` order; empty without `input.stages`. */
+  machines: MachinePower[];
 }
 
 // ---- Small helpers ----
@@ -931,6 +946,7 @@ export function routeInternal(input: InternalInput): InternalResult {
   const cables: InternalResult['cables'] = [];
   let sized: Stages | null = null;
   let lossEUt = 0;
+  let machines: MachinePower[] = [];
   let tiers: TierLoss[] = [];
   let supply: SupplyLoss | null = null;
   let keepAway: Vec3[] = [];
@@ -946,6 +962,17 @@ export function routeInternal(input: InternalInput): InternalResult {
     const onBorder = supplyCells.filter((c) => onBoundary(c, placement.size));
     const landingCells = uniquePositions(onBorder.length > 0 ? onBorder : head.runs[0]!.cells);
     const sizing = sizePower(input, stages, head, trees, landingCells);
+    // what reaches each electric machine (RUK-351): the feed tier's volts less its own loss inside the line, plus the
+    // hookup's allowance on the supply tier; a machine runs when those volts times the amps it may draw cover its EU/t
+    const supplyLoss = input.supplyLossVolts ?? 0;
+    machines = placement.units.filter((u) => u.electric).map((u, i): MachinePower => {
+      const feedTier = Math.min(u.tier, stages.supplyTier);
+      const totalLoss = (sizing.unitLoss[i] ?? 0) + (feedTier === stages.supplyTier ? supplyLoss : 0);
+      const arrivingVolts = voltsOf(feedTier) - totalLoss;
+      const maxAmps = u.multiblock ? 2 : Math.floor((2 * u.euPerTick) / voltsOf(u.tier)) + 1;
+      return { stepId: u.stepId, name: u.name, tier: u.tier, feedTier, euPerTick: u.euPerTick, arrivingVolts, maxAmps,
+        wired: sizing.unitBlocks[i] !== undefined, powered: arrivingVolts > 0 && arrivingVolts * maxAmps >= u.euPerTick };
+    });
     const headWarnings = new WarningList();
     const lossWarnings = new WarningList();
     const laid = layPower(input, head, trees, sizing, grid, headWarnings, lossWarnings);
@@ -965,5 +992,5 @@ export function routeInternal(input: InternalInput): InternalResult {
   const pipeAt = new Map<string, StuffKey>();
   const fluidPipes = pipeFluids(input, fluids, fluidCells, powerPorts, pipeAt, grid);
   const covers = pumpCovers(input, fluids, pipeAt, grid);
-  return { blocks: grid.finish(), covers, supplyRun, cables, fluidPipes, warnings: grid.warnings.list, stages: sized, lossEUt, tiers, supply, keepAway };
+  return { blocks: grid.finish(), covers, supplyRun, cables, fluidPipes, warnings: grid.warnings.list, stages: sized, lossEUt, tiers, supply, keepAway, machines };
 }

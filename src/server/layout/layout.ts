@@ -899,7 +899,9 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
   const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
   const banksEUt = stages?.lossEUt ?? 0;
-  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt };
+  // the machines whose wiring leaves them too few volts to run (RUK-351); counted only when there are any
+  const unpowered = line.internal.machines.filter((m) => !m.powered).length;
+  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt, ...(unpowered > 0 ? { unpowered } : {}) };
   const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
 
   // stages 10–11 (parts and warnings first: the warning pins come from them)
