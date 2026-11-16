@@ -27,7 +27,7 @@ import type { TierLoss } from '../../shared/types/layout.ts';
 import { handRunSurroundings, placedStepIds, unitSteps, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
 import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
 import { coverRateWarning, lowerLossCable, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
-import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
+import { bankLossEUt, deliveredVolts, emitterLoss, LOSS_WARN_FRACTION, tierGroups, transformerStages, TRANSFORMER_AMPS_IN, TRANSFORMER_AMPS_OUT, type Stage, type Stages } from './power.ts';
 
 // ---- Types ----
 
@@ -1037,8 +1037,6 @@ function unpoweredFeedTiers(machines: readonly MachinePower[]): number[] {
 
 // ---- SP-C satellite banks (spike, RUK-351) ----
 
-/** The transformer amps a satellite bank counts (power.ts `TRANSFORMER_AMPS_OUT` / `_AMPS_IN`, private there). */
-const SAT_AMPS_OUT = 4, SAT_AMPS_IN = 2;
 type Head = { runs: readonly Run[]; banks: readonly Bank[]; headX: number };
 
 /**
@@ -1171,9 +1169,9 @@ function applySatellites(input: InternalInput, head: Head, trees: readonly Tree[
     }
     const fi = sizing.stages.stages.findIndex((st) => st.fromTier === s.fromTier);
     const lossAbove = (fi === -1 ? 0 : sizing.bankLoss[fi]!) + (s.fromTier === supply ? input.supplyLossVolts ?? 0 : 0);
-    const ampsIn = Math.ceil((ampsOut * (voltsOf(s.tier) + 2 ** Math.max(0, s.tier - 1))) / deliveredVolts(voltsOf(s.fromTier), lossAbove));
+    const ampsIn = Math.ceil((ampsOut * (voltsOf(s.tier) + emitterLoss(s.tier))) / deliveredVolts(voltsOf(s.fromTier), lossAbove));
     s.ampsOut = ampsOut; s.ampsIn = ampsIn;
-    s.count = Math.max(1, Math.ceil(ampsOut / SAT_AMPS_OUT), Math.ceil(ampsIn / SAT_AMPS_IN));
+    s.count = Math.max(1, Math.ceil(ampsOut / TRANSFORMER_AMPS_OUT), Math.ceil(ampsIn / TRANSFORMER_AMPS_IN));
     if (s.fromTier !== supply || sizing.supply === null) continue;
     const sRun = head.runs.find((r) => r.tier === supply)!;
     const graph = tierGraph(sRun, treeOf.get(supply));
