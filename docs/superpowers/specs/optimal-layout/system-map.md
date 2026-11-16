@@ -1,7 +1,7 @@
 # Optimal layout (RUK-2571): system map
 
-Status: phase 0 draft, 2026-11-16. Read at `origin/main` `92384723a`. Research subtasks fill in the inventories marked
-"(R1)" to "(R4)"; this file is updated when they land.
+Status: phase 0 complete, 2026-11-16. Read at `origin/main` `92384723a`; §9 holds the findings of R1–R4 (RUK-2581 to
+RUK-2585) and the S1 benchmark (RUK-2580, merged into `feat/optimal-layout` at `1efbca040`).
 
 ## 1. Purpose and users
 
@@ -81,11 +81,49 @@ question; it sets the cost of new shapes.
 - Loss budgets only go down; no standard line gets longer (design goal 1's "never longer than today", like for like).
 - Speed: the user's real line lays out in about a second (design anti-goals); fixture lines in milliseconds.
 
-## 9. Inventories in progress
+## 9. What Phase 0 found
 
-- (R1) every place that assumes the two-rows/spine/head geometry, outside `placeUnits` itself.
-- (R2) every rule the internal wiring enforces, with its test.
-- (R3) per logistics mode: what it lays relative to the placement, which spacing it needs and why, what breaks under
-  packed or bent shapes.
-- (R4) prior art and libraries for joint placement and routing (placement search, Steiner trees, block-game layout optimizers).
-- (S1) the measurement harness: total length, loss and dead tiers for a fixed benchmark of lines in all four modes.
+**R1, the geometry seams (RUK-2581).** Outside `placeUnits`, 40 code locations assume two rows around a straight spine
+(24 small, 16 medium, none large), in three seams: (1) the **mode contract**: all four modes lay their spine as
+`[firstX…tailX] × (y 0, z spineZ)` with the tail furniture at `tailX`, and share `PORT_SPACING` and `tailFluidY`
+(`modes/mode.ts`); (2) the **power head**: `runX`, `planHead`, `bankRows`, `sizePower` (`internal.ts`) model it as
+parallel x columns; (3) **site and hookup**: `chooseSite` and `buildHookups` (`layout.ts:401, 642`) hard-code the
+supply port. Plus `headSplits`/`buildLocal` (the only search today), the build-step words "facing the middle row"
+(`steps.ts:148-274`) and `site.ts:242`'s single power port. `PlacedUnit.row` is read nowhere outside `arrange.ts`.
+**The client and the projector read only `Layout.blocks`/`buildSteps`: new shapes need no change there.** About 16 of
+the 60 layout test files pin coordinates on the spine (R1 Table B).
+
+**R2, the wiring rules (RUK-2582).** 23 rules, each with the test that pins it: tiers never touch (`growTrees` avoid
+sets), one run per fed tier two columns apart (`runX`), banks centred on the spine or beside it for a middle head
+(`bankRows`), lane planes when the head crosses the spine, hand-run units and muffler/vent air untouched, A* with
+vertical cost 2 and turn cost 0.25 and a 200,000-node budget, `sizePower` iterating to a fixed point, parallel runs when
+the amps exceed a cable, `deliveredVolts` floored at 1 V, `cable_loss_high` above 10 %, a middle head only with a 10 %
+loss cut and no more hand work. Per-machine loss and amps exist inside `sizePower` (`Sizing.unitLoss`, `unitAmps`)
+but are not returned, which is why a dead machine cannot be reported today.
+
+**R3, the logistics modes (RUK-2583, RUK-2584).**
+
+| mode | smallest port spacing | a spine along any path | stacking a singleblock at y 1 | ports on a side or top |
+|---|---|---|---|---|
+| direct | 0 (today) | S (fill loop and tail) | the mode lays it; the placer never makes it | wrong `behind` cell, fails silently (no feed check) |
+| routed | 1 (today) | S | the mode lays it; the placer refuses it | interface on the wrong cell; R5a fires |
+| AE2 | 2 today; **1 with a Wrench target per interface** (`InterfaceSpec.targets`, never set) | M | interfaces push into each other without targets | top works; side ports absent from `UnitPorts.items` |
+| EnderIO | 0 (today, the floor: faces keyed by cell and side) | L (tail, chests, open ends, fluid roots) | works today | top works; side ports absent |
+
+Shared blocker for every mode: `UnitPorts.items` has no side ports and `Placement` has no spine path.
+
+**R4, prior art (RUK-2585).** Nothing on the shelf searches placement and routing together on a 3D grid; see the reuse
+ledger. The lessons taken: permutation local search with delta evaluation for placement (QAP); a Steiner tree per tier
+improved by rip-up and reroute; congestion pricing if several trees fight for a corridor.
+
+**S1, the benchmark (RUK-2580).** 33 lines (`loss-10/20/40`, 20 mixed-tier, 10 fluid) × 4 modes, ~0.65 s for all 132,
+slowest row `loss-40 ae2` at 69 ms. Today's totals, the numbers the milestones must beat:
+
+| mode | total blocks | loss EU/t | rows with a weak tier | route failures |
+|---|---|---|---|---|
+| direct | 1,795 | 10,970 | 1 | 2 |
+| routed | 2,203 | 15,021 | 2 | 2 |
+| AE2 | 2,760 | 38,182 | 3 | 2 |
+| EnderIO | 1,742 | 10,970 | 1 | 0 |
+
+`loss-40 ae2`: 5×3×83, 295 blocks, its LV worst path 53 blocks delivering 1 V (RUK-351).
