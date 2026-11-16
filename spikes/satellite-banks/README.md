@@ -30,18 +30,36 @@ Every satellite landed on the 7 known starved rows (1× loss-10 ae2, 2× loss-20
 direct, 4× loss-40 routed, 6× loss-40 ae2, 2× loss-40 enderio); the other 125 rows are byte-identical to the
 baseline. The remaining 156 unpowered machines are all HV machines fed from the MV supply — untouched, out of scope.
 
-| row       | mode     | sat | total     | lossEUt       | unpowered | starved |
-| ----------|----------|----:|----------:|--------------:|----------:|--------:|
-| loss-10   | ae2      |   1 |  78 →  97 |    489 →  298 |      4 → 0 |    4 → 0 |
-| loss-20   | routed   |   2 |  86 → 139 |  1 053 →  636 |      8 → 0 |    8 → 0 |
-| loss-20   | ae2      |   3 | 169 → 194 |  1 908 →  788 |     11 → 0 |   11 → 0 |
-| loss-40   | direct   |   2 |  99 → 139 |  1 470 → 1280 |      7 → 0 |    7 → 0 |
-| loss-40   | routed   |   4 | 181 → 242 |  4 412 → 1454 |     22 → 0 |   22 → 0 |
-| loss-40   | ae2      |   6 | 295 → 354 | 24 988 → 2479 |     31 → 0 |   31 → 0 |
-| loss-40   | enderio  |   2 | 113 → 153 |  1 470 → 1280 |      7 → 0 |    7 → 0 |
+| row       | mode     | sat | total     | cable       | transformers | lossEUt       | starved |
+| ----------|----------|----:|----------:|------------:|-------------:|--------------:|--------:|
+| loss-10   | ae2      |   1 |  78 →  97 |   46 →   65 |        5 → 6 |    489 →  298 |    4 → 0 |
+| loss-20   | routed   |   2 |  86 → 139 |   49 →   92 |        5 → 4 |  1 053 →  636 |    8 → 0 |
+| loss-20   | ae2      |   3 | 169 → 194 |  100 →  131 |        2 → 8 |  1 908 →  788 |   11 → 0 |
+| loss-40   | direct   |   2 |  99 → 139 |   68 →  104 |        2 → 4 |  1 470 → 1280 |    7 → 0 |
+| loss-40   | routed   |   4 | 181 → 242 | 106 →  167 |        2 → 6 |  4 412 → 1454 |   22 → 0 |
+| loss-40   | ae2      |   6 | 295 → 354 | 180 →  245 |        2 → 11 | 24 988 → 2479 |   31 → 0 |
+| loss-40   | enderio  |   2 | 113 → 153 |   68 →  104 |        2 → 4 |  1 470 → 1280 |    7 → 0 |
+
+(`loss-20 routed` lays one *fewer* head-bank transformer — the head's own group shrinks once far ports hang off
+satellites.)
+
+**Sums per mode over the 33 lines (BEFORE → AFTER):**
+
+| mode    | total         | cable          | transformers | lossEUt          | unpowered | routeFailed |
+| --------|--------------:|---------------:|-------------:|-----------------:|----------:|------------:|
+| direct  | 1 795 → 1 835 |   949 →   985  |      61 → 63 |   10 970 → 10 780 |    46 → 39 |      2 → 2 |
+| routed  | 2 203 → 2 317 | 1 128 → 1 232  |      61 → 64 |   15 021 → 11 646 |    69 → 39 |      2 → 2 |
+| ae2     | 2 760 → 2 863 | 1 505 → 1 620  |      58 → 74 |   38 182 → 14 362 |    85 → 39 |      2 → 2 |
+| enderio | 1 742 → 1 782 |   946 →   982  |      61 → 63 |   10 970 → 10 780 |    46 → 39 |      0 → 0 |
+
+No row gained a route failure; no benchmark row gained a hand-placed-transformer warning. (The only
+`transformer_bank` warning the prototype provokes is on the loss-8 ae2 **middle-head candidate** in
+`layout.test.ts:638`, which is why that test fails.) The 125 satellite-free rows match
+`tests/fixtures/layout-bench/baseline.json` on every measured field (total, cable, transformer, lossEUt,
+unpowered, routeFailed, weakTiers).
 
 **Starved by wiring: 7 rows / 90 machines → 0 rows / 0 machines.** The AE2 lines' worst loss collapses (loss-40 ae2:
-24 988 → 2 479 EU/t, −90%); the cost is satellite cable and transformers (+297 blocks over the whole benchmark, +11
+24 988 → 2 479 EU/t, −90%); the cost is satellite cable and transformers (+297 blocks over the whole benchmark, +19
 to +61 on the seven rows).
 
 **Timing** (`runBench()`, full benchmark 3× per pass, seconds): BEFORE 5.9 / 5.6 / 5.7 (median **5.7**), AFTER
