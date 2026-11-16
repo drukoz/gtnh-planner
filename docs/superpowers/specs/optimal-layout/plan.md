@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **phase 2 plan**, 2026-11-16, written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 running**, 2026-11-16. Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -71,7 +71,7 @@ layoutLine (layout.ts)
 Each milestone is a parent task under RUK-2571 with its own branch (`feat/optimal-layout-m<N>`, cut from the one
 before), merged into `feat/optimal-layout` when verified. One pull request for the whole program: #18.
 
-### M1 — an honest score and the search loop (today's geometry) — RUK-2613, branch `feat/optimal-layout-m1`
+### M1 — an honest score and the search loop (today's geometry) — RUK-2613, **done**, branch `feat/optimal-layout-m1`
 
 What you see: a line whose far machines get too few volts to run is no longer silently `ok`: it says which machines,
 on which tier. The 3D tab says how many wiring and logistics blocks the line takes and how many layouts were tried,
@@ -83,20 +83,28 @@ with today's rule's line beside the chosen one.
 | M1-2 RUK-2617 | `machine_unpowered` warning per tier; the S1 benchmark gains `unpowered`, and its ratchet the "only to power a machine" rule | M1-1 |
 | M1-3 RUK-2618 | `buildLocal` as a scored candidate loop with the never-worse rule; `Layout.search` filled by `layoutLine` | M1-1 |
 | M1-4 RUK-2619 | 3D tab panel "Layout search" from `Layout.search` | M1-1 (types only) |
-| M1-V RUK-2620 | verification: QA on the milestone branch (benchmark, the user's view, determinism) | M1-2, M1-3, M1-4 |
+| M1-V RUK-2621 | verification: QA on the milestone branch (benchmark, the user's view, determinism) | M1-2, M1-3, M1-4 |
 
 M1 changes no chosen layout except where a candidate is better by the never-worse rule; with only today's head
 candidates in the loop that is expected to be rare. Its value is the honest report and the frame M2–M4 fill.
 
-### M2 — better wiring on today's placement (every machine powered, shorter trees, AE2 halved)
+### M2 — every machine powered, AE2 at spacing 1 — RUK-2668, branch `feat/optimal-layout-m2`
 
-- **Power every machine** (RUK-351's fix): when a tier has unpowered machines, candidates that feed it from a second
-  transformer bank nearer the far machines (the supply run carries the higher tier, which loses ~4× less per volt), or
-  from a middle head. Prototyped by me before it is specced (lesson RUK-121: measure the claim first).
-- **AE2 spacing 1** with Wrench targets, if SP-A holds: expected about −40 % cable on AE2 lines.
-- **Shorter cable trees**: the rip-up-and-reroute pass on `growTree`, if SP-B shows a gain without making any row longer;
-  a Dreyfus–Wagner oracle in the tests for small tiers.
-- Each item enters the loop as a candidate option, so the never-worse rule still holds.
+Measured on the M1 branch (2026-11-16) before planning it: of the 59 benchmark rows with `unpowered > 0`, only 7 are
+starved by wiring (`loss-10 ae2`, `loss-20 routed/ae2`, `loss-40` in all four modes: 90 LV macerators). The other 52
+are HV machines on an MV supply, which `power_tier_low` already names and no wiring can fix. No head position cures
+the 7 (the best middle head still leaves 7 of 40 starved in direct, 31 in AE2).
+
+| subtask | what | depends on |
+|---|---|---|
+| M2-1 RUK-2670 | every ME Interface gets a Wrench target at its own machine; R12 looks only at target faces; the build text says to wrench it | — |
+| M2-2 RUK-2671 | `PORT_SPACING.ae2` 2 → 1, the 16 geometry tests SP-A listed, baseline lowered (SP-A: AE2 total −24 %, loss −61 %) | M2-1 |
+| SP-C RUK-2669 | spike: satellite step-down banks out along the line, fed by the higher tier (a GT transformer re-sends at its full output voltage) | — |
+| M2-3… | the satellite banks as a search candidate, specced from SP-C's numbers (or dropped, with the reason, if SP-C fails) | SP-C |
+| M2-V | QA verification of the milestone branch | all above |
+
+Dropped from M2: **shorter trees (SP-B)**. Four terminal orders save 25 cable blocks on 9 of 132 rows, every one of
+them lossier, for 1.43× the time; rip-up and reroute adds nothing (reuse ledger row 5).
 
 ### M3 — new shapes (the placement contract, then rows, L, U and stacking)
 
@@ -117,10 +125,11 @@ candidates in the loop that is expected to be rare. Its value is the honest repo
 - Timing on the user's real line (`GTNH_LOCAL=1` tests on their planner): about a second.
 - Design goal 9: the planner's per-machine logistics estimate updated to the new layouts' measured blocks per machine.
 
-## Spikes running beside M1
+## Spikes
 
-- **SP-A** (RUK-2615) AE2 spacing 1 with Wrench targets (ledger row 8).
-- **SP-B** (RUK-2616) several terminal orders, then a rip-up-and-reroute pass over each tier's cable tree (ledger row 5).
+- **SP-A** (RUK-2615) AE2 spacing 1 with Wrench targets: holds; M2-1 and M2-2 (ledger row 8).
+- **SP-B** (RUK-2616) shorter cable trees: does not pay; dropped (ledger row 5).
+- **SP-C** (RUK-2669) satellite step-down banks for long low-tier lines (ledger row 13): running beside M2-1.
 
 ## Checklist (programs.md) before implementation subtasks
 
