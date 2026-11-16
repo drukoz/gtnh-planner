@@ -34,6 +34,13 @@ const cableOf = (internal: InternalResult, tier: number): string | undefined =>
   internal.cables.find((c) => c.tier === tier)?.cable.name;
 
 describe('satellite step-down banks', () => {
+  it('the 10-machine direct line lays no satellite and keeps its blocks', async () => {
+    const on = await lossLine(10, 'direct', { satellites: true });
+    expect(on.internal.satellites).toEqual([]);
+    const off = await lossLine(10, 'direct');
+    expect(JSON.stringify(on.layout.blocks)).toBe(JSON.stringify(off.layout.blocks));
+  }, 60_000);
+
   for (const { n, mode, starved } of ROWS) {
     it(`the ${n}-machine ${mode} line lays satellites that starve no machine`, async () => {
       const { internal } = await lossLine(n, mode, { satellites: true });
@@ -65,6 +72,13 @@ describe('satellite step-down banks', () => {
         const output = at(blocks, s.output);
         expect(output?.role, `bank ${i}: the output cell carries a cable`).toBe('cable');
         expect(output?.label, `bank ${i}: the output cell carries the ${s.toTier}-tier cable`).toBe(cableOf(internal, s.toTier));
+        // the transformer's own input and output are the only cable cells beside it; every other neighbour stays bare
+        OUT_SIDES.forEach((side) => {
+          const neighbour = step(s.cell, side);
+          const b = at(blocks, neighbour);
+          expect(posKey(neighbour) === posKey(s.output) || b === undefined || b.role !== 'cable',
+            `bank ${i}: a foreign cable block on the transformer's face ${side}`).toBe(true);
+        });
       });
     }, 60_000);
 
