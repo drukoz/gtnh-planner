@@ -1,8 +1,9 @@
 // RUK-2621: milestone M1 verification (RUK-2571). The merged M1 tasks promise four things on the standard loss lines:
-// the search never keeps a line worse than today's rule (plan Assumption 4), the line a layout reports is the
-// candidate the search chose, one `machine_unpowered` warning names every machine the layout counts as unpowered
-// (RUK-2617), and laying the same line twice gives the same search, blocks and warnings. These lay real lines through
-// `lossLine`; nothing here touches `src/`.
+// the search never keeps a line worse than today's rule (plan Assumption 4), the laid line matches the candidate the
+// search chose on `unpowered` and the candidate's `lossEUt` is an estimate that never exceeds the laid wiring loss
+// (RUK-2654: the estimate comes from the supply run's best landing cell, so equality is the wrong gate), one
+// `machine_unpowered` warning names every machine the layout counts as unpowered (RUK-2617), and laying the same line
+// twice gives the same search, blocks and warnings. These lay real lines through `lossLine`; nothing here touches `src/`.
 import { describe, it, expect } from 'vitest';
 import { replacesBaseline } from '../../../src/server/layout/score.ts';
 import { lossLine } from '../../helpers/power-loss.ts';
@@ -34,7 +35,9 @@ describe('milestone M1 verification', () => {
         const loss = layout.loss!;
         const wiringEUt = loss.totalEUt - loss.hookupEUt;
         expect(Math.abs((loss.unpowered ?? 0) - chosen.unpowered), `${n} ${mode}: unpowered`).toBeLessThanOrEqual(0.01);
-        expect(Math.abs(wiringEUt - chosen.lossEUt), `${n} ${mode}: lossEUt`).toBeLessThanOrEqual(0.01);
+        // RUK-2654: `chosen.lossEUt` is the search's estimate from the supply run's best landing cell, so the gate is
+        // that the estimate never exceeds the laid line's own wiring loss (the panel-text gate lands with RUK-2655).
+        expect(chosen.lossEUt, `${n} ${mode}: lossEUt estimate above laid loss`).toBeLessThanOrEqual(wiringEUt + 0.01);
       }
     }
   }, 120_000);
