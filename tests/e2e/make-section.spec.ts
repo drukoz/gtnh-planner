@@ -60,7 +60,7 @@ async function clearHandsOn(page: Page, settings: Locator, by: 'keyboard' | 'poi
 /** Picks Basic Circuit as the target in `settings`'s Make search, as a person does. */
 async function pickCircuit(page: Page, settings: Locator): Promise<void> {
   await settings.getByPlaceholder('Search items and fluids').fill('basic circuit');
-  await page.getByRole('option', { name: /Basic Circuit/ }).click();
+  await page.getByRole('listbox', { name: 'Matches' }).getByRole('option', { name: /Basic Circuit/ }).click();
   await expect(settings.locator('.settings-target-name')).toHaveText('Basic Circuit');
 }
 
