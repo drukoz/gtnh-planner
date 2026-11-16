@@ -13,7 +13,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactElement, type Re
 import { DYE_NAMES } from '../../shared/layout/enderio.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { Rgb } from '../../shared/types/assets.ts';
-import type { DyeColor, Layout } from '../../shared/types/layout.ts';
+import { CandidateKind, type DyeColor, type Layout, type LayoutCandidate, type LayoutSearch } from '../../shared/types/layout.ts';
 import type { LogisticsMode } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
@@ -205,6 +205,62 @@ function BlockList(props: { layout: Layout; names: Readonly<Record<string, strin
   );
 }
 
+/**
+ * A layout search candidate in words (RUK-2619): where its power head stands, counting the machines west of a middle
+ * head. A kind this client does not know (a newer server) is 'Other layout'.
+ */
+export function candidateLabel(c: LayoutCandidate): string {
+  if (c.kind === CandidateKind.WestHead) return 'Power head at the west end';
+  if (c.kind === CandidateKind.MiddleHead) return `Power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
+  return 'Other layout';
+}
+
+/**
+ * The layout search panel's lines (RUK-2619): what the laid line takes and loses, how many layouts were tried, today's
+ * rule's line beside it when the search kept another, and how many machines its wiring leaves too few volts to run.
+ */
+export function searchText(search: LayoutSearch): string[] {
+  const c = search.candidates[search.chosen];
+  if (c === undefined) return [];
+  const n = search.candidates.length;
+  const b = search.baseline === search.chosen ? undefined : search.candidates[search.baseline];
+  return [
+    `Wiring and logistics: ${fmtInt(c.total)} blocks; its wiring loses ${fmtInt(c.lossEUt)} EU/t.`,
+    ...(n > 1 ? [`${fmtInt(n)} layouts tried; this one is the best that is never worse than today's rule.`] : ['1 layout tried.']),
+    ...(b === undefined ? [] : [`Today's rule would lay ${fmtInt(b.total)} blocks losing ${fmtInt(b.lossEUt)} EU/t (${candidateLabel(b)}).`]),
+    ...(c.unpowered > 0 ? [`${fmtInt(c.unpowered)} machines get too few volts to run: see the warnings below.`] : []),
+  ];
+}
+
+/** What the layout search laid (RUK-2619): the lines above, and every candidate it scored in a table while there is more than one. */
+function SearchPanel(props: { search: LayoutSearch }): ReactElement {
+  const { search } = props;
+  const headingId = useId();
+  return (
+    <section data-testid="layout-search" aria-labelledby={headingId} className="view3d-box">
+      <h3 id={headingId}>Layout search</h3>
+      {searchText(search).map((line, i) => <p key={`${i}|${line}`} className="small">{line}</p>)}
+      {search.candidates.length > 1 && (
+        <table className="cost-table">
+          <thead>
+            <tr><th scope="col">Layout</th><th scope="col">Blocks</th><th scope="col">Loss EU/t</th><th scope="col">Can't run</th></tr>
+          </thead>
+          <tbody>
+            {search.candidates.map((c, i) => (
+              <tr key={`${i}|${c.kind}|${c.westUnits}|${c.total}`} aria-current={i === search.chosen ? 'true' : undefined}>
+                <td>{`${candidateLabel(c)}${i === search.chosen ? ' (laid)' : ''}`}</td>
+                <td>{fmtInt(c.total)}</td>
+                <td>{fmtInt(c.lossEUt)}</td>
+                <td>{fmtInt(c.unpowered)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 function Warnings(props: { layout: Layout }): ReactElement | null {
   const { warnings } = props.layout;
   if (warnings.length === 0) return null;
@@ -223,7 +279,7 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
  * and a scene can be drawn, no WebGL2, nothing to build, only farms to build, which have no blocks), the canvas with
  * the hover label over it, the layer slider and the Ghosts, Hookups and Show connections toggles (with what the drawn
  * links are while they show), and beside them the clicked block's or link's details (where they show without
- * scrolling), the side list and the layout's warnings below it. Without WebGL2 only the side list and the warnings show.
+ * scrolling), the side list, the layout search's score (while the layout carries one) and the layout's warnings below it. Without WebGL2 only the side list and the warnings show.
  */
 export function View3DShell(props: View3DShellProps): ReactElement {
   const { layout, loading, error, webgl, hover, info, canvas, names } = props;
@@ -258,6 +314,7 @@ export function View3DShell(props: View3DShellProps): ReactElement {
           <div className="view3d-side">
             {info !== null && <BlockInfo info={info} />}
             {blocks && <BlockList layout={layout} names={names} />}
+            {layout.search !== undefined && <SearchPanel search={layout.search} />}
             <Warnings layout={layout} />
           </div>
         </div>

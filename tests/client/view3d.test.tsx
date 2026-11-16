@@ -13,6 +13,9 @@ import { webgl2Available } from '../../src/client/views/View3D.tsx';
 import type { TextureDeps } from '../../src/client/three/load-textures.ts';
 import { layerKey, regionRect, type BlockFaces, type Rect, type Rgb, type TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
+// RUK-2619: the layout search panel
+import { candidateLabel, searchText } from '../../src/client/views/View3D.tsx';
+import { CandidateKind, type LayoutCandidate, type LayoutSearch } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 // the user's requirements of 2026-10-19, item 3 (b): Show connections, remembered in this browser
 import { LINKS_STORAGE_KEY, loadShowLinks, saveShowLinks } from '../../src/client/views/View3D.tsx';
@@ -406,5 +409,50 @@ describe('3D tab: the details box title of a picked link (ruling P2-R15)', () =>
     expect(shell({ info: details })).toContain(
       '<section data-testid="view3d-info" aria-live="polite" class="view3d-box view3d-details"><h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>');
     expect(shell({ info: { title: 'Input Bus (LV)', lines: [] } })).toContain('<h3>Input Bus (LV)</h3>');
+  });
+});
+
+// RUK-2619: the layout search panel — what the laid line takes and loses, how many layouts were tried, and today's
+// rule's line beside it when the search kept another. Hand-made searches, as the server only fills `search` from M1-3.
+describe('layout search panel', () => {
+  const cand = (over: Partial<LayoutCandidate> = {}): LayoutCandidate => ({
+    kind: CandidateKind.WestHead, westUnits: 0, unwired: 0, handTransformers: 0, unpowered: 0, total: 0, lossEUt: 0, volume: 0, ...over,
+  });
+  const laid = (search: LayoutSearch): Layout => ({ ...sampleLayout, search });
+
+  it('shows nothing without a search', () => {
+    expect(shell()).not.toContain('data-testid="layout-search"');
+  });
+
+  it('says the blocks, the loss and that one layout was tried', () => {
+    const html = shell({ layout: laid({ candidates: [cand({ total: 35, lossEUt: 252.4, volume: 45 })], chosen: 0, baseline: 0 }) });
+    expect(html).toContain('data-testid="layout-search"');
+    expect(html).toContain('Wiring and logistics: 35 blocks; its wiring loses 252 EU/t.');
+    expect(html).toContain('1 layout tried.');
+    expect(html).not.toContain('<table');
+  });
+
+  it('shows today\'s line beside the chosen one', () => {
+    const html = shell({ layout: laid({
+      candidates: [cand({ total: 99 }), cand({ kind: CandidateKind.MiddleHead, westUnits: 10, total: 95 }), cand({ kind: CandidateKind.MiddleHead, westUnits: 12, total: 97 })],
+      chosen: 1, baseline: 0,
+    }) });
+    expect(html).toContain('3 layouts tried');
+    expect(html).toContain('Today&#x27;s rule would lay 99 blocks');
+    expect(html).toContain('Power head in the middle, 10 machines west of it (laid)');
+    expect(html).toContain('aria-current="true"');
+    expect(html).toContain('Power head in the middle, 12 machines west of it');
+    expect(html.match(/<td>/g)).toHaveLength(12);                                        // three rows of the four cells each
+    expect(html.indexOf('data-testid="block-list"')).toBeLessThan(html.indexOf('data-testid="layout-search"'));
+  });
+
+  it('names an unknown kind', () => {
+    expect(candidateLabel({ ...cand(), kind: 7 as unknown as CandidateKind })).toBe('Other layout');
+  });
+
+  it('says how many machines cannot run', () => {
+    const html = shell({ layout: laid({ candidates: [cand({ total: 40, lossEUt: 12, unpowered: 4 })], chosen: 0, baseline: 0 }) });
+    expect(html).toContain('4 machines get too few volts to run');
+    expect(searchText({ candidates: [cand({ unpowered: 4 })], chosen: 0, baseline: 0 }).at(-1)).toContain('see the warnings below.');
   });
 });
