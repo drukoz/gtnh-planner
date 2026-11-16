@@ -116,6 +116,8 @@ export interface LayoutBlock {
    * on each block of its unit, the first being `stepId`. Set only for a machine of two or more steps.
    */
   stepIds?: string[];
+  /** On a satellite step-down bank's transformer: its index in the satellites the build steps list (RUK-2668). */
+  satellite?: number;
 }
 
 export interface Hookup {

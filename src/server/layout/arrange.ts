@@ -63,6 +63,8 @@ export interface LocalBlock {
   feed?: FeedSpec;
   /** Every step a shared machine runs, on each of its unit's cells (`Unit.stepIds`, `LayoutBlock.stepIds`). */
   stepIds?: string[];
+  /** On a satellite step-down bank's transformer: its index in `InternalResult.satellites` (RUK-2668). */
+  satellite?: number;
 }
 /** A cover for the block at `pos` (Tasks 6–8). */
 export interface HostCover { pos: Vec3; cover: CoverSpec }
