@@ -273,6 +273,8 @@ describe('precheckFeeding', () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'ae2');
     layout.blocks.push({ pos: [7, 65, 2], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest', tail: { side: 'output', keys: [] } });
+    // an interface without a Wrench target pushes into every neighbour (R12)
+    delete layout.blocks.find((b) => posKey(b.pos) === posKey([7, 64, 2]))!.feed!.interface!.targets;
     const findings = precheckFeeding(readLine({ pack, plan, layout }), pack);
     expect(findings.map(brief)).toEqual(['feed_leak risk - Advanced Assembler at 7 64 1']);
     expect(findings[0]!.text).toBe(
@@ -648,6 +650,8 @@ describe('precheckFeeding, the other branches', () => {
     const { pack, plan } = ebfLine();
     const layout = await layFeed(pack, plan, 'ae2');
     layout.blocks.push({ pos: [3, 65, 4], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest', tail: { side: 'output', keys: [] } });
+    // an interface without a Wrench target pushes into every neighbour (R12)
+    delete layout.blocks.find((b) => posKey(b.pos) === posKey([3, 64, 4]))!.feed!.interface!.targets;
     const m = readLine({ pack, plan, layout });
     const leaks = precheckFeeding(m, pack).filter((f) => f.code === 'feed_leak');
     expect(leaks.map(brief)).toEqual(['feed_leak risk - Electric Blast Furnace at 2 64 3']);

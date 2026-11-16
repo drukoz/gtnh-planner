@@ -113,7 +113,7 @@ describe('AE2 mode', () => {
     // holds is off AE2's ignore list
     const iface = r.blocks.find((b) => b.pos[0] === 1 && b.role === 'interface')!;
     expect([iface.config, iface.feed]).toEqual([undefined, { interface: { patterns: [{ inputs: [{ key: 't:in@0', amount: 1 }],
-      outputs: [{ key: 't:out_s1@0', amount: 1 }] }], blocking: true } }]);
+      outputs: [{ key: 't:out_s1@0', amount: 1 }] }], blocking: true, targets: ['north'] } }]);
     expect(r.drafts.map((d) => d.id)).toEqual(['layout:logistics:line']);
     expect(r.drafts[0]!.text).toBe("Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus");
     // final review: the interface pushes the pattern's inputs through each machine's output side
@@ -156,9 +156,10 @@ describe('AE2 mode', () => {
     expect(ifaces.map((b) => b.label)).toEqual(['ME Interface (Basic Macerator)']);
     expect(ifaces[0]!.feed).toEqual({ interface: { patterns: [
       { inputs: [{ key: 't:in@0', amount: 1 }], outputs: [{ key: 't:out_s1@0', amount: 1 }] },
-      { inputs: [{ key: 't:out_s1@0', amount: 1 }], outputs: [{ key: 't:out_s2@0', amount: 1 }] }], blocking: true } });
+      { inputs: [{ key: 't:out_s1@0', amount: 1 }], outputs: [{ key: 't:out_s2@0', amount: 1 }] }], blocking: true, targets: ['north'] } });
     expect(configuredLines(ifaces[0]!, layoutPack().nameOf)).toEqual(['2 processing patterns', 'pattern 1: 1× Raw Input → 1× t:out_s1@0',
-      'pattern 2: 1× t:out_s1@0 → 1× t:out_s2@0', 'blocking mode on']);
+      'pattern 2: 1× t:out_s1@0 → 1× t:out_s2@0', 'blocking mode on',
+      'Wrench: point it at its north side, so it pushes only into the block there']);
     expect(r.extraParts).toEqual([{ key: 'appliedenergistics2:item.ItemMultiMaterial@52', amount: 2, why: 'one processing pattern per recipe each machine runs',
       group: 'logistics' }]);
     // its conveyor cover pushes out what both steps make, 1 item/s each

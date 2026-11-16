@@ -99,11 +99,12 @@ describe("the user's sand line", () => {
     expect(iface.map((b) => b.feed)).toEqual([{
       interface: {
         patterns: [{ inputs: [{ key: COBBLE, amount: 1 }], outputs: [{ key: GRAVEL, amount: 1 }] }, { inputs: [{ key: GRAVEL, amount: 1 }], outputs: [{ key: SAND, amount: 1 }] }],
-        blocking: true,
+        blocking: true, targets: ['south'],
       },
     }]);
     expect(configureText(layout, 'ME Interface (Basic Forge Hammer)'))
-      .toEqual(['2 processing patterns; pattern 1: 1× Cobblestone → 1× Gravel; pattern 2: 1× Gravel → 1× Sand; blocking mode on']);
+      .toEqual(['2 processing patterns; pattern 1: 1× Cobblestone → 1× Gravel; pattern 2: 1× Gravel → 1× Sand; blocking mode on; '
+        + 'Wrench: point it at its south side, so it pushes only into the block there']);
     expect(layout.buildSteps.find((b) => b.id === 'layout:place:hammer-gravel')?.text).toMatch(/; it runs Gravel and Sand$/);
     expect(layout.buildSteps.find((b) => b.id === 'layout:place:hammer-sand')).toBeUndefined();
   });
