@@ -261,7 +261,10 @@ export function headSplits(units: number): number[] {
   return splits.filter((k, i) => splits.indexOf(k) === i).sort((a, b) => a - b);
 }
 
-/** What a line loses in its own wiring: the banks, its cables, and its supply run from the best landing cell. */
+/**
+ * What a line loses in its own wiring, counted from the best landing cell: an estimate for ranking, never more than what
+ * `Layout.loss` reports once the hookup lands.
+ */
 function lineLoss(line: Omit<LocalLine, 'score'>): number {
   let run = supplyRunLoss(line.internal.supply, null).lossEUt;
   for (let i = 0; i < line.internal.supplyRun.length; i++) run = Math.min(run, supplyRunLoss(line.internal.supply, i).lossEUt);

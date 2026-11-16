@@ -455,4 +455,19 @@ describe('layout search panel', () => {
     expect(html).toContain('4 machines get too few volts to run');
     expect(searchText({ candidates: [cand({ unpowered: 4 })], chosen: 0, baseline: 0 }).at(-1)).toContain('see the warnings below.');
   });
+
+  it('reports the laid line\'s loss when the hookup lands elsewhere', () => {
+    const html = shell({ layout: { ...laid({ candidates: [cand({ total: 35, lossEUt: 457 })], chosen: 0, baseline: 0 }), loss: { tiers: [], hookupEUt: 30, banksEUt: 0, totalEUt: 503 } } });
+    expect(html).toContain('its wiring loses 473 EU/t.');
+    expect(html).toContain('(457 EU/t for this one)');
+  });
+
+  it('says nothing more when the estimate is the laid loss', () => {
+    const html = shell({ layout: { ...laid({ candidates: [cand({ total: 35, lossEUt: 457 })], chosen: 0, baseline: 0 }), loss: { tiers: [], hookupEUt: 30, banksEUt: 0, totalEUt: 487 } } });
+    expect(html).toContain('its wiring loses 457 EU/t.');
+    expect(html).not.toContain('The search compared layouts');
+    const lines = searchText({ candidates: [cand({ lossEUt: 457 })], chosen: 0, baseline: 0 }, { tiers: [], hookupEUt: 30, banksEUt: 0, totalEUt: 503 });
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('473');
+  });
 });
