@@ -13,7 +13,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactElement, type Re
 import { DYE_NAMES } from '../../shared/layout/enderio.ts';
 import { fmtInt } from '../../shared/layout/format.ts';
 import type { Rgb } from '../../shared/types/assets.ts';
-import { CandidateKind, type DyeColor, type Layout, type LayoutCandidate, type LayoutSearch } from '../../shared/types/layout.ts';
+import { CandidateKind, type DyeColor, type Layout, type LayoutCandidate, type LayoutLoss, type LayoutSearch } from '../../shared/types/layout.ts';
 import type { LogisticsMode } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
@@ -218,14 +218,21 @@ export function candidateLabel(c: LayoutCandidate): string {
 /**
  * The layout search panel's lines (RUK-2619): what the laid line takes and loses, how many layouts were tried, today's
  * rule's line beside it when the search kept another, and how many machines its wiring leaves too few volts to run.
+ * The headline loss is the laid line's own wiring (`loss.totalEUt − loss.hookupEUt`), the candidate's estimate when the
+ * layout has no loss; when the two differ a line says the search ranked with each hookup landing where its own wiring
+ * loses least.
  */
-export function searchText(search: LayoutSearch): string[] {
+export function searchText(search: LayoutSearch, loss?: LayoutLoss): string[] {
   const c = search.candidates[search.chosen];
   if (c === undefined) return [];
   const n = search.candidates.length;
   const b = search.baseline === search.chosen ? undefined : search.candidates[search.baseline];
+  const laid = loss === undefined ? c.lossEUt : loss.totalEUt - loss.hookupEUt;
   return [
-    `Wiring and logistics: ${fmtInt(c.total)} blocks; its wiring loses ${fmtInt(c.lossEUt)} EU/t.`,
+    `Wiring and logistics: ${fmtInt(c.total)} blocks; its wiring loses ${fmtInt(laid)} EU/t.`,
+    ...(fmtInt(laid) !== fmtInt(c.lossEUt)
+      ? [`The search compared layouts with each one's power hookup landing where its own wiring loses least (${fmtInt(c.lossEUt)} EU/t for this one); the hookup lands where it and the line lose least together.`]
+      : []),
     ...(n > 1 ? [`${fmtInt(n)} layouts tried; this one is the best that is never worse than today's rule.`] : ['1 layout tried.']),
     ...(b === undefined ? [] : [`Today's rule would lay ${fmtInt(b.total)} blocks losing ${fmtInt(b.lossEUt)} EU/t (${candidateLabel(b)}).`]),
     ...(c.unpowered > 0 ? [`${fmtInt(c.unpowered)} machines get too few volts to run: see the warnings below.`] : []),
@@ -233,13 +240,13 @@ export function searchText(search: LayoutSearch): string[] {
 }
 
 /** What the layout search laid (RUK-2619): the lines above, and every candidate it scored in a table while there is more than one. */
-function SearchPanel(props: { search: LayoutSearch }): ReactElement {
-  const { search } = props;
+function SearchPanel(props: { search: LayoutSearch; loss?: LayoutLoss }): ReactElement {
+  const { search, loss } = props;
   const headingId = useId();
   return (
     <section data-testid="layout-search" aria-labelledby={headingId} className="view3d-box">
       <h3 id={headingId}>Layout search</h3>
-      {searchText(search).map((line, i) => <p key={`${i}|${line}`} className="small">{line}</p>)}
+      {searchText(search, loss).map((line, i) => <p key={`${i}|${line}`} className="small">{line}</p>)}
       {search.candidates.length > 1 && (
         <table className="cost-table">
           <thead>
@@ -314,7 +321,7 @@ export function View3DShell(props: View3DShellProps): ReactElement {
           <div className="view3d-side">
             {info !== null && <BlockInfo info={info} />}
             {blocks && <BlockList layout={layout} names={names} />}
-            {layout.search !== undefined && <SearchPanel search={layout.search} />}
+            {layout.search !== undefined && <SearchPanel search={layout.search} loss={layout.loss} />}
             <Warnings layout={layout} />
           </div>
         </div>

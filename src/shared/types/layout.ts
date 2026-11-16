@@ -186,13 +186,18 @@ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
 /**
  * How good a laid line is, compared field by field in this order, lower first (RUK-2571 plan, Assumption 3): the
  * connections left to make by hand, the transformers its banks have no room for, the machines its wiring leaves too few
- * volts to run, its cable, pipe, interface and chip-pipe blocks, the EU/t its own wiring loses, and its bounding volume.
+ * volts to run, its cable, pipe, interface and chip-pipe blocks, the EU/t its own wiring loses, with the supply run
+ * counted from its best landing cell (the search runs before the site is known, so the laid line's `Layout.loss` can be
+ * higher), and its bounding volume.
  */
 export interface LineScore {
   unwired: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
 }
 
-/** One line the layout search laid and scored: its kind, how many units stood west of a middle power head (0 for the west end), and its score. */
+/**
+ * One line the layout search laid and scored: its kind, how many units stood west of a middle power head (0 for the west
+ * end), and its score, whose `lossEUt` is the search's estimate; the laid line's `Layout.loss` can be higher.
+ */
 export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUnits: number }
 
 /**
