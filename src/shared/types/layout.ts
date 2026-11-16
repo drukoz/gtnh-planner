@@ -172,7 +172,39 @@ export interface LayoutLoss {
   banksEUt: number;
   /** EU/t the power need counts: the banks' emitter loss, the line's own cables, the supply run and the power hookup. */
   totalEUt: number;
+  /** Machines whose wiring leaves them too few volts to run (RUK-351); absent when every machine can run. */
+  unpowered?: number;
 }
+
+/**
+ * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
+ * takes the next number.
+ */
+export const CandidateKind = { WestHead: 0, MiddleHead: 1 } as const;
+export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
+
+/**
+ * How good a laid line is, compared field by field in this order, lower first (RUK-2571 plan, Assumption 3): the
+ * connections left to make by hand, the transformers its banks have no room for, the machines its wiring leaves too few
+ * volts to run, its cable, pipe, interface and chip-pipe blocks, the EU/t its own wiring loses, with the supply run
+ * counted from its best landing cell (the search runs before the site is known, so the laid line's `Layout.loss` can be
+ * higher), and its bounding volume.
+ */
+export interface LineScore {
+  unwired: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
+}
+
+/**
+ * One line the layout search laid and scored: its kind, how many units stood west of a middle power head (0 for the west
+ * end), and its score, whose `lossEUt` is the search's estimate; the laid line's `Layout.loss` can be higher.
+ */
+export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUnits: number }
+
+/**
+ * How the layout chose its line (RUK-2571): every candidate laid, in the order tried; `chosen` the index of the one laid
+ * out; `baseline` the index of the line today's rule picks, which the chosen line is never worse than.
+ */
+export interface LayoutSearch { candidates: LayoutCandidate[]; chosen: number; baseline: number }
 
 export interface Layout {
   dim: number; origin: [number, number, number]; size: [number, number, number]; rotation: 0 | 90 | 180 | 270; mode: LogisticsMode;
@@ -188,6 +220,8 @@ export interface Layout {
   // optional addition
   /** The areas kept for the plan's new farm machines (add-on 17), one per machine, by step id. */
   reserved?: ReservedArea[];
+  /** The candidates the layout search laid and which it kept (RUK-2571); absent when there was no line to lay. */
+  search?: LayoutSearch;
 }
 
 /**

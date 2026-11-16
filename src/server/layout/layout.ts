@@ -16,9 +16,10 @@ import {
 } from '../../shared/layout/geometry.ts';
 import { FACES } from '../../shared/types/assets.ts';
 import type { FeedSpec } from '../../shared/types/feed.ts';
+import { CandidateKind } from '../../shared/types/layout.ts';
 import type {
-  ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutLoss, LayoutPowerContext, LayoutStatus, LayoutTap, Pin, ReservedArea,
-  TierLoss,
+  ConduitFace, ConduitSpec, CoverSpec, Hookup, Layout, LayoutBlock, LayoutCandidate, LayoutLoss, LayoutPowerContext, LayoutSearch, LayoutStatus, LayoutTap,
+  LineScore, Pin, ReservedArea, TierLoss,
 } from '../../shared/types/layout.ts';
 import type { Pack } from '../../shared/types/pack.ts';
 import type { BomLine, LogisticsMode, Plan, PlanContext, PlanWarning, PowerSummary } from '../../shared/types/plan.ts';
@@ -42,6 +43,7 @@ import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } fr
 import type { PathBounds } from './path.ts';
 import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
 import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
+import { compareScore, replacesBaseline, scoreLine } from './score.ts';
 import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
 
@@ -231,6 +233,8 @@ interface LocalLine {
   size: Vec3;
   /** Mode, then routing warnings. */
   warnings: PlanWarning[];
+  /** How good this line is as the search ranks it (RUK-2571, Assumption 3): hand work, unpowered machines, length, loss, volume. */
+  score: LineScore;
 }
 
 /** What `buildLocal` lays a line from. */
@@ -257,8 +261,11 @@ export function headSplits(units: number): number[] {
   return splits.filter((k, i) => splits.indexOf(k) === i).sort((a, b) => a - b);
 }
 
-/** What a line loses in its own wiring: the banks, its cables, and its supply run from the best landing cell. */
-function lineLoss(line: LocalLine): number {
+/**
+ * What a line loses in its own wiring, counted from the best landing cell: an estimate for ranking, never more than what
+ * `Layout.loss` reports once the hookup lands.
+ */
+function lineLoss(line: Omit<LocalLine, 'score'>): number {
   let run = supplyRunLoss(line.internal.supply, null).lossEUt;
   for (let i = 0; i < line.internal.supplyRun.length; i++) run = Math.min(run, supplyRunLoss(line.internal.supply, i).lossEUt);
   return (line.stages?.lossEUt ?? 0) + line.internal.lossEUt + run;
@@ -268,42 +275,63 @@ function lineLoss(line: LocalLine): number {
  * What a line leaves to finish by hand inside its own grid (RUK-121): the connections it could not lay (`route_failed`)
  * and the transformers its banks have no room for (`transformer_bank`).
  */
-function handWork(line: LocalLine): { unwired: number; transformers: number } {
+function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transformers: number } {
   const needed = line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0;
   const placed = line.internal.blocks.filter((b) => b.role === 'transformer').length;
   return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
 }
 
 /**
- * The line in its own grid, its power head where the line loses least (RUK-121). The line is laid with the head at its
- * west end and, given the stages, again with each of `headSplits` of its units west of a head in the middle. A middle
- * head that leaves more to finish by hand (`handWork`) than the west-end line is never kept. Of the others, the one with
- * the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 − `MIDDLE_HEAD_MIN_CUT`) of the
- * west-end line's, which must lose something; otherwise the line is the west-end one, exactly the line laid before RUK-121.
+ * The line in its own grid, its power head where the line loses least (RUK-121), and the search that chose it (RUK-2571).
+ * The line is laid with the head at its west end and, given the stages, again with each of `headSplits` of its units west
+ * of a head in the middle: every line laid becomes a scored candidate, the west head first. Today's rule picks the
+ * baseline — a middle head that leaves more to finish by hand (`handWork`) than the west-end line is never kept; of the
+ * others the one with the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 −
+ * `MIDDLE_HEAD_MIN_CUT`) of the west-end line's, which must lose something; otherwise it is the west-end line, exactly
+ * the line laid before RUK-121. The chosen line is that baseline, and only a candidate that `replacesBaseline`s it (the
+ * best such, earliest on a tie) takes its place.
  */
-function buildLocal(input: LocalInput): LocalLine {
+function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch } {
   const west = buildLocalAt(input, 0);
-  if (input.stages === null) return west;
-  // a line that loses nothing of its own (lossless cable such as ULV Red Alloy, no banks) keeps the west head: a middle
-  // head cannot cut that, and would only make the line taller and longer
-  const westLoss = lineLoss(west);
-  if (westLoss <= 0) return west;
-  // a middle head's bank has room on one side of the spine only: a middle head that leaves more to finish by hand than
-  // the west head (a transformer, a connection) is never kept, whatever it saves
-  const westHand = handWork(west);
-  let middle: LocalLine | null = null;
-  let middleLoss = Infinity;
-  for (const westUnits of headSplits(input.units.filter((u) => u.manual === undefined).length)) {
-    const line = buildLocalAt(input, westUnits);
-    const hand = handWork(line);
-    if (hand.unwired > westHand.unwired || hand.transformers > westHand.transformers) continue;
-    const loss = lineLoss(line);
-    if (loss < middleLoss) {
-      middle = line;
-      middleLoss = loss;
+  // every line laid, in the order laid: the west head first, then one per middle-head split, each tagged with its kind
+  const lines: LocalLine[] = [west];
+  const kinds: Array<Pick<LayoutCandidate, 'kind' | 'westUnits'>> = [{ kind: CandidateKind.WestHead, westUnits: 0 }];
+  // today's rule (RUK-121), unchanged, picks the baseline: index 0 (the west head) unless a middle head wins it
+  let baseline = 0;
+  if (input.stages !== null) {
+    // a line that loses nothing of its own (lossless cable such as ULV Red Alloy, no banks) keeps the west head: a middle
+    // head cannot cut that, and would only make the line taller and longer
+    const westLoss = lineLoss(west);
+    if (westLoss > 0) {
+      // a middle head's bank has room on one side of the spine only: a middle head that leaves more to finish by hand than
+      // the west head (a transformer, a connection) is never kept, whatever it saves
+      const westHand = handWork(west);
+      let middleLoss = Infinity;
+      let middleIndex = 0;
+      for (const westUnits of headSplits(input.units.filter((u) => u.manual === undefined).length)) {
+        const line = buildLocalAt(input, westUnits);
+        const index = lines.length;
+        lines.push(line);
+        kinds.push({ kind: CandidateKind.MiddleHead, westUnits });
+        const hand = handWork(line);
+        if (hand.unwired > westHand.unwired || hand.transformers > westHand.transformers) continue;
+        const loss = lineLoss(line);
+        if (loss < middleLoss) {
+          middleLoss = loss;
+          middleIndex = index;
+        }
+      }
+      if (middleLoss <= (1 - MIDDLE_HEAD_MIN_CUT) * westLoss) baseline = middleIndex;
     }
   }
-  return middle !== null && middleLoss <= (1 - MIDDLE_HEAD_MIN_CUT) * westLoss ? middle : west;
+  const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+  // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
+  let chosen = baseline;
+  for (let i = 0; i < candidates.length; i++) {
+    if (!replacesBaseline(candidates[i]!, candidates[baseline]!)) continue;
+    if (compareScore(candidates[i]!, candidates[chosen]!) < 0) chosen = i;
+  }
+  return { line: lines[chosen]!, search: { candidates, chosen, baseline } };
 }
 
 /**
@@ -332,9 +360,16 @@ function buildLocalAt(input: LocalInput, westUnits: number): LocalLine {
   // stops a machine whose muffler has no air in front: MTEHatchMuffler.polluteEnvironment; a steam machine waits while
   // its vent is blocked: MTEBasicMachineBronze.allowToCheckRecipe)
   const top = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
-  return {
+  const line: Omit<LocalLine, 'score'> = {
     placement, mode: modeResult, internal, stages: internal.stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
     warnings: [...modeResult.warnings, ...internal.warnings],
+  };
+  return {
+    ...line,
+    score: scoreLine({
+      blocks: line.blocks, warnings: line.warnings, machines: line.internal.machines,
+      handTransformers: handWork(line).transformers, lossEUt: lineLoss(line), size: line.size,
+    }),
   };
 }
 
@@ -858,7 +893,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   }
 
   // stage 5; from here on the stages are the ones sized for the volts every machine gets
-  const line = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet });
+  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet });
   deps.localLine?.({ placement: line.placement, internal: line.internal });
   const { stages } = line;
   // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
@@ -899,7 +934,9 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
   const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
   const banksEUt = stages?.lossEUt ?? 0;
-  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt };
+  // the machines whose wiring leaves them too few volts to run (RUK-351); counted only when there are any
+  const unpowered = line.internal.machines.filter((m) => !m.powered).length;
+  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt, ...(unpowered > 0 ? { unpowered } : {}) };
   const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
 
   // stages 10–11 (parts and warnings first: the warning pins come from them)
@@ -966,6 +1003,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     hookups, pins, buildSteps, bom, warnings, status: finish.status,
     power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
     loss,
+    search,
     ...(replaced.length === 0 ? {} : { replaced }),
     ...(reserved.length === 0 ? {} : { reserved }),
   };

@@ -1,5 +1,6 @@
 // The layout benchmark (RUK-2580): a fixed set of lines laid out in all four logistics modes, measured by what they
-// cost — total placed blocks, the loss their wiring counts, and the tiers whose farthest machine is under-volted.
+// cost — total placed blocks, the loss their wiring counts, the tiers whose farthest machine is under-volted, and the
+// machines that wiring cannot run (RUK-2617).
 // Program RUK-2571 ("optimal layout") changes how lines are laid out; this is the stick every change is measured
 // against, so `tests/fixtures/layout-bench/baseline.json` holds today's numbers and
 // `tests/unit/layout/layout-bench.test.ts` fails if any line gets longer, lossier or weaker.
@@ -50,6 +51,8 @@ export interface LengthReport {
   weakTiers: number[];
   /** How many `route_failed` warnings the layout reports. */
   routeFailed: number;
+  /** Machines whose wiring leaves them too few volts to run, read off `Layout.loss.unpowered` (0 when the line reports none). */
+  unpowered: number;
 }
 
 /** What `lengthOf` measures: a `LengthReport` before the benchmark knows which line it measured. */
@@ -60,8 +63,8 @@ const countRole = (blocks: readonly LayoutBlock[], role: LayoutBlock['role']): n
 /**
  * Measure one laid-out line: its footprint, the blocks it laid (`cable`, `pipe`, `iface` and `chip` are its own,
  * `hookup` every hookup's), `total` = those four + `hookup`, the loss the power need counts, one entry per loss tier,
- * the tiers whose farthest machine reaches under half the tier's volts, and the `route_failed` count.
- * Transformers and chests are reported but never counted in `total`.
+ * the tiers whose farthest machine reaches under half the tier's volts, the `route_failed` count and the number of
+ * machines its wiring leaves too few volts to run. Transformers and chests are reported but never counted in `total`.
  */
 export function lengthOf(layout: Layout): LengthMeasure {
   const own = layout.blocks.filter((b) => b.hookup === undefined && b.role !== 'ghost');
@@ -83,6 +86,7 @@ export function lengthOf(layout: Layout): LengthMeasure {
     tiers,
     weakTiers: tiers.filter((t) => t.worstVolts * 2 < 8 * 4 ** t.tier).map((t) => t.tier).sort((a, b) => a - b),
     routeFailed: layout.warnings.filter((w) => w.code === 'route_failed').length,
+    unpowered: layout.loss?.unpowered ?? 0,
   };
 }
 
@@ -130,18 +134,19 @@ const sum = (rows: readonly LengthReport[], of: (r: LengthReport) => number): nu
 
 /**
  * A markdown table of the benchmark: one row per line × mode (footprint, the block counts, the loss rounded, the weak
- * tiers and the route failures), then one summary row per mode summing `total`, summing the loss, counting the rows
- * with any weak tier and summing `routeFailed`.
+ * tiers, the route failures and the machines the wiring cannot run), then one summary row per mode summing `total`,
+ * summing the loss, counting the rows with any weak tier and summing `routeFailed` and `unpowered`.
  */
 export function benchTable(rows: readonly LengthReport[]): string {
-  const head = '| line | mode | size | total | cable | pipe | iface | chip | trans | chest | hook | loss EU/t | weak tiers | route failed |';
-  const rule = '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|';
+  const head = '| line | mode | size | total | cable | pipe | iface | chip | trans | chest | hook | loss EU/t | weak tiers | route failed | unpowered |';
+  const rule = '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|';
   const cells = rows.map((r) => `| ${r.name} | ${r.mode} | ${sizeText(r.size)} | ${r.total} | ${r.cable} | ${r.pipe} | ${r.iface} | ${r.chip}`
-    + ` | ${r.transformer} | ${r.chest} | ${r.hookup} | ${Math.round(r.lossEUt)} | ${r.weakTiers.length === 0 ? '-' : r.weakTiers.join(',')} | ${r.routeFailed} |`);
+    + ` | ${r.transformer} | ${r.chest} | ${r.hookup} | ${Math.round(r.lossEUt)} | ${r.weakTiers.length === 0 ? '-' : r.weakTiers.join(',')} | ${r.routeFailed}`
+    + ` | ${r.unpowered} |`);
   const summary = MODES.map((mode) => {
     const of = rows.filter((r) => r.mode === mode);
     return `| **all** | **${mode}** |  | ${sum(of, (r) => r.total)} |  |  |  |  |  |  |  | ${Math.round(sum(of, (r) => r.lossEUt))}`
-      + ` | ${of.filter((r) => r.weakTiers.length > 0).length} | ${sum(of, (r) => r.routeFailed)} |`;
+      + ` | ${of.filter((r) => r.weakTiers.length > 0).length} | ${sum(of, (r) => r.routeFailed)} | ${sum(of, (r) => r.unpowered)} |`;
   });
   return [head, rule, ...cells, ...summary].join('\n');
 }
