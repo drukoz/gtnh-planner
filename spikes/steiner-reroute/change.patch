@@ -1,0 +1,247 @@
+diff --git a/src/server/layout/internal.ts b/src/server/layout/internal.ts
+index b32154881..5646be067 100644
+--- a/src/server/layout/internal.ts
++++ b/src/server/layout/internal.ts
+@@ -25,7 +25,7 @@ import type { Machine, Pack } from '../../shared/types/pack.ts';
+ import type { Plan, PlanWarning, BomLine } from '../../shared/types/plan.ts';
+ import type { TierLoss } from '../../shared/types/layout.ts';
+ import { handRunSurroundings, placedStepIds, unitSteps, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
+-import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
++import { growTree, growTreeBest, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
+ import { coverRateWarning, lowerLossCable, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
+ import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
+ 
+@@ -380,7 +380,8 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly
+         return !DIRS.some((_, side) => avoid.has(posKey(step(p, side))));
+       },
+     };
+-    const tree = ports.length === 0 ? { cells: [], links: [], unreached: [] } : growTree(run.cells, ports.map((p) => p.pos), opts);
++    // RUK-2616 spike: the shorter tree of several terminal orders and a branch reroute, in place of `growTree`'s greedy
++    const tree = ports.length === 0 ? { cells: [], links: [], unreached: [] } : growTreeBest(run.cells, ports.map((p) => p.pos), opts);
+     for (const c of tree.cells) grid.take(c);
+     const unreached = new Set(tree.unreached.map(posKey));
+     for (const { pos, unit } of ports) if (unreached.has(posKey(pos))) unwired(unit);
+diff --git a/src/server/layout/path.ts b/src/server/layout/path.ts
+index 74ea2f702..b745f2582 100644
+--- a/src/server/layout/path.ts
++++ b/src/server/layout/path.ts
+@@ -207,15 +207,45 @@ function trace(goalState: number, parent: readonly number[], cells: readonly Vec
+  * is already in the tree is skipped, one that is not passable or cannot be reached is `unreached`.
+  */
+ export function growTree(roots: readonly Vec3[], terminals: readonly Vec3[], opts: PathOptions): TreeResult {
++  return joinTerminals(roots, orderBy(roots, terminals, 'nearest'), opts);
++}
++
++/**
++ * The fixed orders `growTreeBest` grows a tier's tree in (RUK-2616): today's `growTree` order (nearest to a root
++ * first), the same order reversed, and two axis scans; every order breaks ties by `posKey`.
++ */
++export type TreeOrder = 'nearest' | 'farthest' | 'xz' | 'zx';
++
++/** The orders of `growTreeBest`, in the order it tries them: the earliest wins a tie. */
++export const TREE_ORDERS: readonly TreeOrder[] = ['nearest', 'farthest', 'xz', 'zx'];
++
++/** `terminals` in the fixed order `order` takes, ties by `posKey`. */
++function orderBy(roots: readonly Vec3[], terminals: readonly Vec3[], order: TreeOrder): Vec3[] {
++  const rootDistance = (t: Vec3): number => roots.reduce((best, r) => Math.min(best, manhattan(t, r)), Infinity);
++  const keyed = terminals.map((t) => ({ t, d: rootDistance(t), key: posKey(t) }));
++  const byKey = (a: { key: string }, b: { key: string }): number => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
++  const axes = order === 'xz' ? [0, 2, 1] : [2, 0, 1];
++  const along = (a: { t: Vec3 }, b: { t: Vec3 }): number => {
++    for (const i of axes) if (a.t[i] !== b.t[i]) return a.t[i]! - b.t[i]!;
++    return 0;
++  };
++  return keyed
++    .sort((a, b) => (order === 'nearest' ? a.d - b.d : order === 'farthest' ? b.d - a.d : along(a, b)) || byKey(a, b))
++    .map(({ t }) => t);
++}
++
++/**
++ * Joins `ordered` terminals to a tree that starts as `roots`, each by the cheapest path to any cell already in the
++ * tree, so later terminals branch off earlier runs — `growTree` is this with `orderBy(…, 'nearest')`. One that is
++ * already in the tree is skipped, one that is not passable or cannot be reached is `unreached`.
++ */
++function joinTerminals(roots: readonly Vec3[], ordered: readonly Vec3[], opts: PathOptions): TreeResult {
+   const tree = new Set(roots.map(posKey));
+   const treeCells: Vec3[] = roots.map((r) => [...r]);
+   const result: TreeResult = { cells: [], links: [], unreached: [] };
+-  const rootDistance = (t: Vec3) => roots.reduce((best, r) => Math.min(best, manhattan(t, r)), Infinity);
+-  const ordered = terminals
+-    .map((t) => ({ t, d: rootDistance(t), key: posKey(t) }))
+-    .sort((a, b) => a.d - b.d || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+   const passable = (p: Vec3) => opts.passable(p) && !tree.has(posKey(p));
+-  for (const { t, key } of ordered) {
++  for (const t of ordered) {
++    const key = posKey(t);
+     if (tree.has(key)) continue;
+     if (!opts.passable(t)) {
+       result.unreached.push([...t]);
+@@ -241,6 +271,168 @@ export function growTree(roots: readonly Vec3[], terminals: readonly Vec3[], opt
+   return result;
+ }
+ 
++/**
++ * RUK-2616 spike: how `growTreeBest` picks its tree. `orders` is variant A (the four orders of `TREE_ORDERS`),
++ * `reroute` is variant B (variant A plus the branch rip-up and reroute in `rerouteBranches`), and `baseline` is
++ * today's `growTree` exactly, so the spike measures all three from one build.
++ */
++export type TreeBestMode = 'baseline' | 'orders' | 'reroute';
++
++/** The mode of `growTreeBest`: the spike's benchmark sets `GTNH_SP_B_MODE`, unset asks for the full variant B. */
++const SP_B_MODE: TreeBestMode = process.env.GTNH_SP_B_MODE === 'baseline' ? 'baseline'
++  : process.env.GTNH_SP_B_MODE === 'orders' ? 'orders' : 'reroute';
++
++/**
++ * RUK-2616 spike: a tier's cable tree, shorter than the one `growTree` grows. Grows it once per order in
++ * `TREE_ORDERS` and, in `reroute` mode, rips up and reroutes every terminal's branch of the grown tree, then keeps
++ * the tree with the fewest unreached terminals, then the fewest new cells, then the earliest order.
++ */
++export function growTreeBest(roots: readonly Vec3[], terminals: readonly Vec3[], opts: PathOptions, mode: TreeBestMode = SP_B_MODE): TreeResult {
++  if (mode === 'baseline') return growTree(roots, terminals, opts);
++  let best: TreeResult | null = null;
++  for (const order of TREE_ORDERS) {
++    const ordered = orderBy(roots, terminals, order);
++    const result = joinTerminals(roots, ordered, opts);
++    if (mode === 'reroute') rerouteBranches(roots, ordered, opts, result);
++    if (best === null || result.unreached.length < best.unreached.length
++      || (result.unreached.length === best.unreached.length && result.cells.length < best.cells.length)) best = result;
++  }
++  return best!;
++}
++
++/** RUK-2616 variant B: the tree as the rip-up-and-reroute pass edits it. */
++interface Rerouted {
++  at: Map<string, Vec3>;                                   // the live cells by key
++  order: string[];                                         // every cell key: the roots first, then in the order added
++  ever: Set<string>;                                       // every key `order` holds, live or ripped up
++  adjacent: Map<string, string[]>;                         // the live links as tree-neighbours per live cell
++  links: Array<{ a: Vec3; b: Vec3; alive: boolean }>;      // every link, in the order added
++  rootKeys: ReadonlySet<string>;
++  terminalKeys: ReadonlySet<string>;
++}
++
++/**
++ * RUK-2616 variant B: for every terminal in `ordered` (the order the tree was grown in) rips up the branch it hangs
++ * on — see `branchOf` — and reroutes the terminal to the nearest cell still in the tree, with the same `opts`. The
++ * new branch is kept only when it has fewer cells and every cell of the tree is still linked to a root; else the
++ * branch is restored. The pass repeats until a pass changes nothing, at most 3; `result` is rewritten in place.
++ */
++function rerouteBranches(roots: readonly Vec3[], ordered: readonly Vec3[], opts: PathOptions, result: TreeResult): void {
++  if (result.cells.length === 0) return;
++  const tree: Rerouted = {
++    at: new Map([...roots, ...result.cells].map((c) => [posKey(c), c] as [string, Vec3])),
++    order: [...roots, ...result.cells].map(posKey),
++    ever: new Set([...roots, ...result.cells].map(posKey)),
++    adjacent: new Map(),
++    links: result.links.map(([a, b]) => ({ a, b, alive: true })),
++    rootKeys: new Set(roots.map(posKey)),
++    terminalKeys: new Set(ordered.map(posKey)),
++  };
++  const link = (a: string, b: string): void => {
++    tree.adjacent.set(a, [...(tree.adjacent.get(a) ?? []), b]);
++    tree.adjacent.set(b, [...(tree.adjacent.get(b) ?? []), a]);
++  };
++  for (const { a, b } of tree.links) link(posKey(a), posKey(b));
++
++  for (let pass = 0; pass < 3; pass++) {
++    let changed = false;
++    for (const t of ordered) {
++      const start = posKey(t);
++      if (!tree.at.has(start)) continue;                                                // unreached: no branch to reroute
++      const branch = branchOf(tree, start);
++      if (branch.length === 0) continue;
++      const cells = branch.map((k) => [k, tree.at.get(k)!] as [string, Vec3]);
++      const neighbours = new Map<string, string[]>();                                   // the branch's live neighbourhood, as it stands
++      for (const k of branch) neighbours.set(k, [...(tree.adjacent.get(k) ?? [])]);
++      const rim = new Map<string, string[]>();                                          // each neighbour's list before the rip-up
++      for (const k of branch) for (const n of neighbours.get(k)!) if (!branch.includes(n)) rim.set(n, [...(tree.adjacent.get(n) ?? [])]);
++      const cut = tree.links.filter((l) => l.alive && (branch.includes(posKey(l.a)) || branch.includes(posKey(l.b))));
++      for (const [k] of cells) {
++        tree.at.delete(k);
++        tree.adjacent.delete(k);
++      }
++      for (const [k] of cells) for (const n of neighbours.get(k)!) tree.adjacent.set(n, (tree.adjacent.get(n) ?? []).filter((x) => x !== k));
++      for (const l of cut) l.alive = false;
++
++      const found = findPath([t], tree.order.filter((k) => tree.at.has(k)).map((k) => tree.at.get(k)!),
++        { ...opts, passable: (p: Vec3) => opts.passable(p) && !tree.at.has(posKey(p)) });
++      const fresh = found.found ? found.path.slice(0, -1) : [];                         // the last cell is the tree cell it joins
++      if (found.found && fresh.length < branch.length && reachesEveryRoot(tree, roots)) {
++        for (const c of fresh) {
++          const key = posKey(c);
++          tree.at.set(key, c);
++          if (!tree.ever.has(key)) {
++            tree.order.push(key);
++            tree.ever.add(key);
++          }
++        }
++        for (let i = 0; i + 1 < found.path.length; i++) {
++          const a = found.path[i]!, b = found.path[i + 1]!;
++          tree.links.push({ a, b, alive: true });
++          link(posKey(a), posKey(b));
++        }
++        changed = true;
++      } else {
++        for (const [k, c] of cells) {
++          tree.at.set(k, c);
++          tree.adjacent.set(k, neighbours.get(k)!);
++        }
++        for (const [n, list] of rim) tree.adjacent.set(n, list);
++        for (const l of cut) l.alive = true;
++      }
++    }
++    if (!changed) break;
++  }
++
++  result.cells = tree.order.filter((k) => tree.at.has(k) && !tree.rootKeys.has(k)).map((k) => tree.at.get(k)!);
++  result.links = tree.links.filter((l) => l.alive).map((l): [Vec3, Vec3] => [l.a, l.b]);
++}
++
++/**
++ * The branch terminal `start` hangs on: its own cell, then the cells along neighbours of exactly two tree
++ * neighbours, up to the first cell with three or more, a root or another terminal (the stop cell is not part of it).
++ * Empty when `start` is a root, or has two neighbours of its own — a port another terminal's run passes through has
++ * no branch of its own, and ripping it up would cut that run off.
++ */
++function branchOf(tree: Rerouted, start: string): string[] {
++  if (tree.rootKeys.has(start) || (tree.adjacent.get(start) ?? []).length >= 2) return [];
++  const forward = (key: string, prev: string): string[] => {
++    const here = tree.at.get(key)!;
++    return (tree.adjacent.get(key) ?? [])
++      .filter((k) => k !== prev)
++      .sort((a, b) => sideToward(here, tree.at.get(a)!) - sideToward(here, tree.at.get(b)!));
++  };
++  const branch = [start];
++  let prev = start, cur = start;
++  for (;;) {
++    const nexts = forward(cur, prev);
++    if (nexts.length !== 1) return branch;                                              // a junction (two on) or a dead end stops the walk
++    const next = nexts[0]!;
++    if (tree.rootKeys.has(next) || tree.terminalKeys.has(next)) return branch;
++    branch.push(next);
++    prev = cur;
++    cur = next;
++  }
++}
++
++/** True when every live cell of `tree` is linked to a root. */
++function reachesEveryRoot(tree: Rerouted, roots: readonly Vec3[]): boolean {
++  const seen = new Set<string>();
++  const queue: string[] = [];
++  for (const r of roots) {
++    const k = posKey(r);
++    if (tree.at.has(k) && !seen.has(k)) {
++      seen.add(k);
++      queue.push(k);
++    }
++  }
++  for (let i = 0; i < queue.length; i++) for (const n of tree.adjacent.get(queue[i]!) ?? []) if (!seen.has(n)) {
++    seen.add(n);
++    queue.push(n);
++  }
++  return seen.size === tree.at.size;
++}
++
+ /** A guide from `from` to `to` that moves along x first, then z, then y; both ends included. */
+ export function straightPath(from: Vec3, to: Vec3): Vec3[] {
+   const at: Vec3 = [...from];
