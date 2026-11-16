@@ -54,6 +54,8 @@ export interface LayoutDeps {
   readArea?: (dim: number, bbox: BBox) => Promise<Voxels>;
   /** The A* budget of each hookup search (default `MAX_PATH_NODES`). */
   maxPathNodes?: number;
+  /** Lay satellite step-down banks (RUK-2668). */
+  satellites?: boolean;
   /**
    * Tests only: called once with the line's own placement and internal route as `buildLocal` chose them (RUK-121), so a
    * test reads the line the layout was built from instead of laying it again by hand.
@@ -241,6 +243,7 @@ interface LocalLine {
 interface LocalInput {
   pack: Pack; plan: Plan; parts: Parts; mode: LogisticsMode; units: readonly Unit[]; stages: Stages | null;
   network: LogisticsNetwork | null;
+  satellites?: boolean;
 }
 
 /**
@@ -353,6 +356,7 @@ function buildLocalAt(input: LocalInput, westUnits: number): LocalLine {
     pack, parts, placement, occupied: [...placement.blocks, ...modeResult.blocks], stages,
     fluids: modeResult.ownsFluids === true ? [] : fluidNets(pack, plan, placement), tailFluidY: modeResult.tailFluidY, groupTier: plan.tier,
     supplyLossVolts: stages === null ? 0 : hookupAllowanceVolts(stages.supplyTier),
+    satellites: input.satellites === true,
   });
   const blocks = attachCovers([...placement.blocks, ...modeResult.blocks, ...internal.blocks], [...modeResult.covers, ...internal.covers], modeResult.configs);
   // the line is as tall as its highest block or reserved air cell (a muffler facing up from a multiblock's top, a steam
@@ -893,7 +897,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   }
 
   // stage 5; from here on the stages are the ones sized for the volts every machine gets
-  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet });
+  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites === true });
   deps.localLine?.({ placement: line.placement, internal: line.internal });
   const { stages } = line;
   // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
