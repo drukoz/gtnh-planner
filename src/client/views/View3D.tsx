@@ -11,7 +11,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { DYE_NAMES } from '../../shared/layout/enderio.ts';
-import { fmtInt } from '../../shared/layout/format.ts';
+import { fmtInt, joinNames } from '../../shared/layout/format.ts';
 import type { Rgb } from '../../shared/types/assets.ts';
 import { CandidateKind, type DyeColor, type Layout, type LayoutCandidate, type LayoutLoss, type LayoutSearch } from '../../shared/types/layout.ts';
 import type { LogisticsMode } from '../../shared/types/plan.ts';
@@ -227,6 +227,13 @@ export function candidateLabel(c: LayoutCandidate): string {
   return 'Other layout';
 }
 
+/** Why the line lays no rain roof (RUK-2877, M3-21): every biome around its site is one GregTech never rains on (`Layout.dryBiomes`); `null` otherwise. */
+export function rainText(layout: Layout): string | null {
+  const biomes = layout.dryBiomes;
+  if (biomes === undefined || biomes.length === 0) return null;
+  return `No rain roof: it never rains in ${joinNames(biomes)}, where this line stands.`;
+}
+
 /**
  * The layout search panel's lines (RUK-2619): what the laid line takes and loses, how many layouts were tried, today's
  * rule's line beside it when the search kept another, and how many machines its wiring leaves too few volts to run.
@@ -306,6 +313,7 @@ export function View3DShell(props: View3DShellProps): ReactElement {
   const blocks = layout !== null && layout.blocks.length > 0;
   const warned = layout !== null && layout.warnings.length > 0;
   const farmsOnly = layout !== null && layout.status !== 'empty' && !blocks && (layout.reserved?.length ?? 0) > 0;
+  const rain = layout !== null ? rainText(layout) : null;
   return (
     <div className="view3d" data-testid="view3d">
       {error !== null && <p className="error">{error}</p>}
@@ -326,6 +334,7 @@ export function View3DShell(props: View3DShellProps): ReactElement {
                 onShowLinks={props.onShowLinks} height={layout.size[1]} roof={layout.blocks.some((b) => b.role === 'roof')}
                 {...(props.onFocus === undefined ? {} : { focus: props.focus === true, onFocus: props.onFocus })} />
               <p className="muted small">Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>
+              {rain !== null && <p data-testid="view3d-rain" className="muted small">{rain}</p>}
               {props.showLinks && props.linksNote != null && (
                 <p data-testid="view3d-links" className="muted small">{props.linksNote}</p>
               )}

@@ -14,7 +14,7 @@ import type { TextureDeps } from '../../src/client/three/load-textures.ts';
 import { layerKey, regionRect, type BlockFaces, type Rect, type Rgb, type TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 // RUK-2619: the layout search panel
-import { candidateLabel, searchText } from '../../src/client/views/View3D.tsx';
+import { candidateLabel, searchText, rainText } from '../../src/client/views/View3D.tsx';
 import { CandidateKind, type LayoutCandidate, type LayoutSearch } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 // the user's requirements of 2026-10-19, item 3 (b): Show connections, remembered in this browser
@@ -45,6 +45,20 @@ describe('3D tab', () => {
     const html = shell({ layout: roofed, showLinks: true, linksNote: '3 connections drawn' });
     expect(html).toContain('<label class="check"><input type="checkbox" checked=""/>Roof</label>');
     expect(html.match(/<label class="check">/g)).toHaveLength(5);   // the layer slider, Ghosts, Hookups, Roof, Show connections
+  });
+
+  it('says why a line lays no rain roof (RUK-2877, M3-21)', () => {
+    expect(rainText(sampleLayout)).toBeNull();
+    expect(rainText({ ...sampleLayout, dryBiomes: [] })).toBeNull();
+    expect(rainText({ ...sampleLayout, dryBiomes: ['Desert'] })).toBe('No rain roof: it never rains in Desert, where this line stands.');
+    expect(rainText({ ...sampleLayout, dryBiomes: ['Desert', 'Hell'] })).toBe('No rain roof: it never rains in Desert and Hell, where this line stands.');
+  });
+
+  it('shows the no-rain-roof line only where the site is dry (RUK-2877, M3-21)', () => {
+    const dry = shell({ layout: { ...sampleLayout, dryBiomes: ['Desert'] } });
+    expect(dry).toContain('data-testid="view3d-rain"');
+    expect(dry).toContain('No rain roof: it never rains in Desert, where this line stands.');
+    expect(shell()).not.toContain('view3d-rain');
   });
 
   it('explains itself without WebGL2, while loading and when there is nothing to build', () => {
