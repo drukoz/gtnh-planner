@@ -166,3 +166,35 @@ line search: lay it after the line is chosen, one slab at `H`. Lowest lays the s
 2 more re-pins (21 vs 19), so **Flat is the rule to promote**; keep Lowest's per-column drop for tall lines where a low
 exposure sits under a high machine. A promotion re-pins the 19 tests above (block lists, bench totals, the 3D view). The
 next step (a later RUK) folds `roofCells` into the line's final measure and the roof build step, behind the site's own cover.
+
+## CTO addendum: the promotion (`promote.patch`, for M3-13)
+
+**A correction to "the roof changes no chosen line".** `roof.patch` laid the roof as `casing` blocks, but `scoreLine`
+counts only `LENGTH_ROLES` (`cable`, `pipe`, `interface`, `chip_pipe`), so the search never saw the roof: only the
+benchmark's `total` did. Counted in the score for real, the roof changes the chosen line on 11 of 132 rows.
+
+**The overhang.** Flat covers an outward side from the column beside it. On a machine (or head transformer) at the
+box's west, north or south edge that column is outside the box: about 10 % of all roof cells over the benchmark's
+candidates (x < 0: 406, z < 0: 322, z ≥ L: 113, inside: 8280). So the line's box grows by one cell on each side where
+the roof overhangs, and a `shift` carries local cells into the grown box.
+
+What `promote.patch` does (on top of `k1-fallback.patch`):
+- `BlockRole` gains `'roof'`; `PART_DEFS.roof` is `Glass` (`minecraft:glass@0`): any block that blocks movement covers
+  a face (gt-mechanics §3.4a), and glass keeps the line in view. The 3D colour and map colour get a `roof` entry.
+- `buildLocalAt` lays `roofCells(..., RoofRule.Flat)` as `roof` blocks, one above the tallest block, and the line is one
+  taller. `LocalLine.shift` is `[1 or 0, 0, 1 or 0]` (overhang west, north) and `size` includes the overhang on all sides.
+- `Frame.shift`: `worldPos` adds it, `worldBoxOf` spans the grown box. The site request's power and logistics ports and
+  the farm areas move by it. Hookups keep out of the placement's own box only (`cornersBox`); the overhang's blocks are
+  obstacles like every other line block. `LayoutDeps.localLine` also gets `shift`.
+- `LENGTH_ROLES` gains `'roof'`, so the roof counts in the search's `total` and in the finished check.
+- The bench's `LengthReport` gets `roof`, counted in `total`. BOM: `roof` → "rain roof", group `one-off`.
+- Every roof block belongs to the `layout:roof` build step. The roof step names the height under the roof.
+- The 3D links treat a roof block as see-through (`solidColumns`, `arcsThroughBlocks`).
+
+Measured at `ba25edeff` + `k1-fallback.patch` + `promote.patch` (`baseline-promote.json`):
+- Per mode, total / roof / loss: direct 1765 → 2098 / 331 / 10146 → 10176; routed 2141 → 2509 / 366 / 10991 → 10837;
+  ae2 2015 → 2385 / 367 / 10734 → 10537; enderio 1710 → 2075 / 363 / 10146 → 10176.
+- 121 rows: `total` grows by exactly the row's roof and `lossEUt` is unchanged. 11 rows choose another line:
+  `mixed-05` (direct, ae2, enderio), `mixed-14` (direct, enderio), `mixed-17` (routed, ae2), `mixed-19` (routed, ae2),
+  `fluid-03` (direct, enderio). No row gains an unpowered or unreachable machine, a failed route or a weak tier.
+- Whole suite: 10 tests fail, all pins (listed in RUK M3-13's spec). `npx tsc -b` clean.

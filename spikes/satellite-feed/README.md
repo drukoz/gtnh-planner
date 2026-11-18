@@ -210,3 +210,29 @@ but no mode chooses a packed line: direct/EnderIO `Packed` (tot 84) loses to `St
 and AE2 `Packed`/`PackedOpen` lose on `unreachable` (12 and 1). K1's bench gain comes from the AE2 `Stacked` candidate
 (index 5), whose three satellites starve without K1 (`satFail true`, 17 unpowered) and survive with it. So K1 is a
 general fix for satellite supply starvation, not yet a packed-line win; the packed gap is now `handTransformers`/reach.
+
+## CTO addendum: K1 as a fallback (`k1-fallback.patch`, for M3-12)
+
+K1 as measured above lays the rim on every phase-2 route, so trees detour even where the satellites would have
+survived. On `lossLine(60, 'routed' | 'ae2', { satellites: true })` that made the WestHead candidate longer.
+`k1-fallback.patch` routes phase 2 as today first, and lays the rim (a `satRim` flag on `routePower` and `growTrees`)
+only when that route starves a satellite (`satFail`). A candidate whose satellites survive today is routed exactly as
+today.
+
+Measured at `ba25edeff` with the patch (no env flag):
+- `runBench()`: the same 2 rows as K1, `loss-40 routed` 235/2052 → 177/1300 and `loss-40 ae2` 232/2052 → 174/1300,
+  both `[5,5,25]`, 0 unpowered, 0 unreachable, no weak tier (`baseline-k1.json`). No other row moves.
+- Whole suite (`npx vitest run`): 4467 passed, 0 failed, 0 re-pins. `npx tsc -b` clean.
+- `lossLine(n, mode, { satellites: true })`, chosen line, satellites, unpowered machines:
+
+| n | direct | routed | ae2 | enderio |
+|---|---|---|---|---|
+| 40 | Stacked 97, 1 sat, 0 | Stacked 177, 3 sats, 0 | Stacked 174, 3 sats, 0 | Stacked 106, 1 sat, 0 |
+| 60 | WestHead 180, 6 sats, 0 | MiddleHead 368, 7 sats, 0 | MiddleHead 365, 7 sats, 0 | WestHead 199, 6 sats, 0 |
+| 80 | WestHead 245, 9 sats, 0 | MiddleHead 491, 11 sats, 0 | MiddleHead 488, 11 sats, 0 | WestHead 269, 9 sats, 0 |
+
+  Without the patch, 80 routed and 80 ae2 lay **no** satellite and starve 50 and 38 machines (`Stacked` 260 blocks,
+  `PackedOpen` 143). 60 routed/ae2 keep WestHead (354/351 blocks, 5092 EU/t); with the patch the finished check keeps
+  MiddleHead (368/365, 2667 EU/t).
+- On every chosen line above, no cable of a tier other than the satellite's `fromTier` stands on the 6 cells beside
+  a satellite's `input` (its own `cell` excepted).
