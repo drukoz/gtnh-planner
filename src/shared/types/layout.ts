@@ -206,7 +206,11 @@ export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUn
  * How the layout chose its line (RUK-2571): every candidate laid, in the order tried; `chosen` the index of the one laid
  * out; `baseline` the index of the line today's rule picks, which the chosen line is never worse than.
  */
-export interface LayoutSearch { candidates: LayoutCandidate[]; chosen: number; baseline: number }
+export interface LayoutSearch {
+  candidates: LayoutCandidate[]; chosen: number; baseline: number;
+  /** The candidate the search ranked best whose finished layout, with its hookups, was worse than the baseline's, so the baseline was laid instead (RUK-2877); absent when the chosen line was kept. */
+  rejected?: number;
+}
 
 export interface Layout {
   dim: number; origin: [number, number, number]; size: [number, number, number]; rotation: 0 | 90 | 180 | 270; mode: LogisticsMode;

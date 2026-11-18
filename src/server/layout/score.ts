@@ -4,7 +4,7 @@
 // Pure: it reads what a laid line reports (`scoreLine`'s input), lays nothing and imports nothing from `layout.ts`.
 
 import type { PlanWarning } from '../../shared/types/plan.ts';
-import type { LineScore } from '../../shared/types/layout.ts';
+import type { Layout, LineScore } from '../../shared/types/layout.ts';
 import type { Vec3 } from '../../shared/layout/geometry.ts';
 import type { LocalBlock } from './arrange.ts';
 import type { MachinePower } from './internal.ts';
@@ -47,4 +47,30 @@ export function replacesBaseline(candidate: LineScore, baseline: LineScore): boo
   if (candidate.unwired > baseline.unwired || candidate.handTransformers > baseline.handTransformers) return false;
   return candidate.unpowered < baseline.unpowered
     || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt);
+}
+
+/** What the benchmark measures of a finished layout (lengthOf): its connections left by hand, unpowered machines, length with its hookups, and loss. */
+export interface FinalMeasure { unwired: number; unpowered: number; total: number; lossEUt: number }
+
+/**
+ * Measure a finished layout the way the S1 benchmark does (`lengthOf`): the `route_failed` warnings, the machines its
+ * wiring leaves too few volts to run, the length as its own `LENGTH_ROLES` blocks plus every hookup block, ghosts
+ * excluded, and the EU/t `Layout.loss` counts.
+ */
+export function finalMeasure(layout: Pick<Layout, 'blocks' | 'warnings' | 'loss'>): FinalMeasure {
+  const own = layout.blocks.filter((b) => b.hookup === undefined && b.role !== 'ghost');
+  return {
+    unwired: layout.warnings.filter((w) => w.code === 'route_failed').length,
+    unpowered: layout.loss?.unpowered ?? 0,
+    total: own.filter((b) => LENGTH_ROLES.has(b.role)).length
+      + layout.blocks.filter((b) => b.hookup !== undefined && b.role !== 'ghost').length,
+    lossEUt: layout.loss?.totalEUt ?? 0,
+  };
+}
+
+/** True when a finished candidate may replace the finished baseline: no more unwired, and fewer unpowered, or as many and no longer and no lossier. */
+export function finalReplaces(candidate: FinalMeasure, baseline: FinalMeasure): boolean {
+  return candidate.unwired <= baseline.unwired
+    && (candidate.unpowered < baseline.unpowered
+      || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt));
 }
