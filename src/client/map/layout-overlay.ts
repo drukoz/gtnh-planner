@@ -35,10 +35,11 @@ export type Shape =
 export type Drag = { from: { x: number; z: number }; to: { x: number; z: number } };
 
 /**
- * A column of the line takes the colour of the first of these roles it holds. No layout places a `cover` block (a
- * cover is data on its host block), so it only stands last in case one ever does.
+ * A column of the line takes the colour of the first of these roles it holds, so a roofed column shows what is under
+ * the roof. A `roof` (RUK-2877) is drawn over the line, so it colours a column only where nothing stands under it;
+ * no layout places a `cover` block (a cover is data on its host block), so it only stands last in case one ever does.
  */
-const ROLE_PRIORITY: readonly BlockRole[] = ['machine', 'hatch', 'casing', 'transformer', 'chest', 'interface', 'chip_pipe', 'pipe', 'cable', 'cover'];
+const ROLE_PRIORITY: readonly BlockRole[] = ['machine', 'hatch', 'casing', 'transformer', 'chest', 'interface', 'chip_pipe', 'pipe', 'cable', 'cover', 'roof'];
 const OUTLINE_COLOR = '#ffffff';
 const OUTLINE_WIDTH = 2;
 const ARROW_COLOR = '#ffffff';

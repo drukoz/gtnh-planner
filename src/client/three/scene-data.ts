@@ -1,6 +1,6 @@
 // The 3D view's scene as plain data (Plan 5 Task 14; spec §3.8, architecture §11.14, web-stack §8): the blocks of a
 // layout as instances of five shapes, the face textures they share as tile sources for one array texture, which
-// instances the layer slider and the ghost and hookup toggles show, the side list of blocks to place, and the texts
+// instances the layer slider, the ghost, hookup and roof toggles show, the side list of blocks to place, and the texts
 // for hover and click. An EnderIO conduit bundle (architecture "EnderIO conduits, granted change requests (add-on
 // 11)") draws every connection of its conduits as EnderIO draws it (the user's requirements of 2026-10-19, item 3
 // (a)): an arm toward each linked neighbour, the conduits that go one way side by side where EnderIO puts each kind,
@@ -111,6 +111,8 @@ export interface SceneInstance {
   /** Index into `SceneData.tiles` per world side, in ForgeDirection order (down, up, north, south, west, east). */
   tiles: [number, number, number, number, number, number];
   ghost: boolean;
+  /** A block of the rain roof (RUK-2877): drawn faint, never picked, hidden by the Roof switch. */
+  roof?: true;
   /** Shift from the cell centre, in blocks: conduits of one bundle side by side, the centre of a bundle's connector box. */
   offset?: Vec3;
   // optional additions (the user's requirements of 2026-10-19, item 3 (a))
@@ -299,7 +301,8 @@ export function buildScene(
     const ghost = b.role === 'ghost';
     const add = (shape: ShapeKind, side: number, sides: SceneInstance['tiles'], offset?: Vec3, more?: { conduit?: number; size?: Vec3 }): void => {
       const shifted = offset !== undefined && offset.some((v) => v !== 0);
-      instances.push({ block, shape, pos: [...pos], side, tiles: sides, ghost, ...(shifted ? { offset: [...offset] } : {}),
+      instances.push({ block, shape, pos: [...pos], side, tiles: sides, ghost, ...(b.role === 'roof' ? { roof: true } : {}),
+        ...(shifted ? { offset: [...offset] } : {}),
         ...(more?.conduit === undefined ? {} : { conduit: more.conduit }), ...(more?.size === undefined ? {} : { size: [...more.size] }) });
     };
     const found = faces.get(blockKey(b.block));
@@ -363,11 +366,13 @@ export function buildScene(
 }
 
 /**
- * Whether the viewer draws `inst`: not a ghost while ghosts are off, not a block of a hookup while hookups are off,
- * and not above the layer slider (`maxLayer` shows layers 0 … k; `null` shows all).
+ * Whether the viewer draws `inst`: not a ghost while ghosts are off, not a block of the rain roof while the roof is off
+ * (RUK-2877), not a block of a hookup while hookups are off, and not above the layer slider (`maxLayer` shows layers
+ * 0 … k; `null` shows all).
  */
-export function visible(inst: SceneInstance, maxLayer: number | null, show: { ghosts: boolean; hookups: boolean }, layout: Layout): boolean {
+export function visible(inst: SceneInstance, maxLayer: number | null, show: { ghosts: boolean; hookups: boolean; roof: boolean }, layout: Layout): boolean {
   if (inst.ghost && !show.ghosts) return false;
+  if (inst.roof === true && !show.roof) return false;
   if (!show.hookups && layout.blocks[inst.block]?.hookup !== undefined) return false;
   return maxLayer === null || inst.pos[1] <= maxLayer;
 }
