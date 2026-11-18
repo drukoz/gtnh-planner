@@ -221,19 +221,18 @@ function steamPlaceText(u: PlacedUnit, n: number, front: string): string {
 }
 
 /**
- * The roof step (gt-mechanics §3.4: GT machines left in the rain can catch fire or explode). The line's height `h`
- * counts the cells a roof must leave open (layout.ts): the block a Muffler Hatch faces and the block above each venting
- * steam machine (`PlacedUnit.outputSide` up), where GT vents its steam after every run and waits while it is blocked
- * (`MTEBasicMachineBronze.allowToCheckRecipe`); so with either the step names that height and says to keep them open.
+ * The roof step (gt-mechanics §3.4a; RUK-2877, design goal 7): the roof blocks the layout laid (`roof`, role `roof`,
+ * one layer one block above the line's space of height `h`) by count and the laid block's label. The roof leaves open
+ * the block a Muffler Hatch faces and the block above each venting steam machine (`PlacedUnit.outputSide` up), where GT
+ * vents its steam after every run and waits while it is blocked (`MTEBasicMachineBronze.allowToCheckRecipe`), so with
+ * either the step says to keep them open.
  */
-function roofText(units: readonly PlacedUnit[], h: number): string {
-  const muffler = units.some(hasMuffler);
-  const vent = units.some((u) => u.outputSide === OUTPUT_UP);
-  if (!muffler && !vent) return 'Roof the line: GT machines left in the rain can catch fire or explode';
-  const why = [...(muffler ? ['a Muffler Hatch needs the block it faces kept empty'] : []),
-    ...(vent ? ['each steam machine vents its steam through its top: keep the block above it open and roof above it'] : [])];
-  return `Roof the line over its ${fmtInt(h)}-high space: GT machines left in the rain can catch fire or explode, `
-    + `${why.length === 1 ? `and ${why[0]!}` : `${why[0]!}, and ${why[1]!}`}`;
+function roofText(roof: readonly LayoutBlock[], units: readonly PlacedUnit[], h: number): string {
+  const keep = [...(units.some(hasMuffler) ? ['keep the block each Muffler Hatch faces empty'] : []),
+    ...(units.some((u) => u.outputSide === OUTPUT_UP) ? ['keep the block above each steam machine open: it vents its steam through its top'] : [])];
+  return `Roof the line last, once everything under it is placed and set: lay ${fmtInt(roof.length)}× ${roof[0]!.label} in one layer one `
+    + `block above its ${fmtInt(h)}-high space, where the view marks them, to keep the rain off its machines, transformers and energy `
+    + `hatches (GT machines left in the rain can catch fire or explode)${keep.length === 0 ? '' : `; ${keep.join(', and ')}`}`;
 }
 
 /**
@@ -476,8 +475,8 @@ function reuseSteps(finds: readonly ReuseFind[], pins: readonly Pin[]): Draft[] 
  * Spec §3.10: the layout's build steps in building order, linked to the pins (no pins, no pin numbers). The clear step
  * names the box the site search found clear (`siteSize`, the line's own `size` without farms) and, with farms, where
  * that box reaches: from the line at its pin to the farm areas at theirs (`spotWhere`), as the site pin stays in the
- * middle of the line's own box; the roof names the line's own height. Each area kept for a new farm gets its build step
- * after the line's place steps (add-on 17). A layout with nothing of the line's own to place (`empty`: every other
+ * middle of the line's own box. Each area kept for a new farm gets its build step after the line's place steps (add-on
+ * 17). The rain roof's step, when the line lays roof blocks, is the last of the line's own steps (RUK-2877). A layout with nothing of the line's own to place (`empty`: every other
  * machine owned) only asks to build its farms and to hook up the owned machines.
  */
 export function layoutSteps(input: StepsInput): BuildStep[] {
@@ -493,7 +492,6 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
       ? `; dig ${fmtInt(input.site.dig)} and fill ${fmtInt(input.site.fill)} blocks to level it` : '';
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${spotWhere(sitePin, input.farms ?? [])} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
-    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, input.size[1] - (input.blocks.some((b) => b.role === 'roof') ? 1 : 0))));
     steps.push(...placeSteps(input.units, sitePin, input.rotation, input.packed === true, fluidsThroughOutputSide(input.blocks), input.stepName ?? ((id) => id)));
   }
   steps.push(...farmSteps(input.farms ?? []));
@@ -513,6 +511,10 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
     steps.push(...conduitSteps(input, sitePin, logisticsPin));
     // settings on blocks the line does not place (e.g. the EnderIO extract face)
     for (const d of input.drafts) if (d.kind === 'configure') steps.push(draft(d.id, d.kind, kindPin(d.pin), d.text));
+    // the rain roof goes on last (RUK-2877, design goal 7), so every machine stays in reach while the line is built; a
+    // line with nothing rain can hurt lays no roof and gets no roof step
+    const roof = input.blocks.filter((b) => b.role === 'roof');
+    if (roof.length > 0) steps.push(draft('layout:roof', 'place', sitePin, roofText(roof, input.units, input.size[1] - 1)));
   }
   steps.push(...reuseSteps(input.reuse, pins));
   if (placing) {
