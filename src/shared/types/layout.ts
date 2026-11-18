@@ -211,7 +211,10 @@ export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUn
  */
 export interface LayoutSearch {
   candidates: LayoutCandidate[]; chosen: number; baseline: number;
-  /** The candidate the search ranked best whose finished layout, with its hookups, was worse than the baseline's, so the baseline was laid instead (RUK-2877); absent when the chosen line was kept. */
+  /**
+   * The candidate the search ranked best when its finished layout, with its hookups, lost: to the baseline's, or to the
+   * runner-up's, which was laid instead (RUK-2877); absent when the search's best was laid.
+   */
   rejected?: number;
 }
 

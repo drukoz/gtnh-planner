@@ -43,7 +43,7 @@ import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } fr
 import type { PathBounds } from './path.ts';
 import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
 import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
-import { compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine } from './score.ts';
+import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine, type FinalMeasure } from './score.ts';
 import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
 
@@ -62,7 +62,7 @@ export interface LayoutDeps {
   packing?: boolean;
   /**
    * Tests only: called once, with the line of the layout returned — its placement and internal route as `buildLocal`
-   * chose them (RUK-121), the baseline's when the search's chosen line was rejected for its finished layout (RUK-2877) —
+   * chose them (RUK-121), the kept finalist's or the baseline's once the finished layouts are judged (RUK-2877) —
    * so a test reads the line the layout was built from instead of laying it again by hand.
    */
   localLine?: (line: { placement: Placement; internal: InternalResult }) => void;
@@ -300,15 +300,17 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
  * others the one with the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 −
  * `MIDDLE_HEAD_MIN_CUT`) of the west-end line's, which must lose something; otherwise it is the west-end line, exactly
  * the line laid before RUK-121. The chosen line is that baseline, and only a candidate that `replacesBaseline`s it (the
- * best such, earliest on a tie) takes its place. `layoutLine` then finishes the chosen line and, when it is not the
- * baseline, the baseline too, and keeps the chosen line only when its finished layout `finalReplaces`s the finished
- * baseline's (RUK-2877): the search scores the line without its hookup, which can turn a winner into a loser.
+ * best such, earliest on a tie) takes its place. `finalists` are the `FINALISTS` best candidates that replace the
+ * baseline, best first (earliest on a tie), so the chosen line is the first of them, or the baseline when there are
+ * none. `layoutLine` then finishes the baseline and every finalist, and keeps the best finished finalist that
+ * `finalReplaces`s the finished baseline (`compareFinal`), else the baseline (RUK-2877): the search scores a line
+ * without its hookup, which can turn a winner into a loser and the runner-up into the best.
  * With `stacking` (RUK-2877) every head candidate is also laid with single-block machines stacked two high, as an
  * extra candidate; today's rule's baseline is always one of the unstacked lines.
  * When `packs` (RUK-2877) the line is laid again packed three machines to a cable cell with the head at the west end, as
  * one last candidate added after all the others; the baseline is never that packed line.
  */
-function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLine; search: LayoutSearch } {
+function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSearch; finalists: number[] } {
   const west = buildLocalAt(input, 0);
   // every line laid, in the order laid: the west head first, then one per middle-head split, each tagged with its kind
   const lines: LocalLine[] = [west];
@@ -356,14 +358,19 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
     kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
   }
   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
-  // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
-  let chosen = baseline;
-  for (let i = 0; i < candidates.length; i++) {
-    if (!replacesBaseline(candidates[i]!, candidates[baseline]!)) continue;
-    if (compareScore(candidates[i]!, candidates[chosen]!) < 0) chosen = i;
-  }
-  return { line: lines[chosen]!, baselineLine: lines[baseline]!, search: { candidates, chosen, baseline } };
+  // only a candidate that replaces the baseline (Assumption 4) may take its place: the FINALISTS best such, earliest on a
+  // tie, and the chosen line is the first of them, or the baseline when there are none
+  const finalists = candidates.map((_, i) => i).filter((i) => replacesBaseline(candidates[i]!, candidates[baseline]!))
+    .sort((a, b) => compareScore(candidates[a]!, candidates[b]!) || a - b).slice(0, FINALISTS);
+  return { lines, search: { candidates, chosen: finalists[0] ?? baseline, baseline }, finalists };
 }
+
+/**
+ * How many of the search's best candidates `layoutLine` finishes and judges with their hookups (RUK-2877). One kept the
+ * packed AE2 column on mixed-05 although the stacked runner-up is a block shorter once both are hooked up; two finds
+ * it, and more changes no benchmark row (spike RUK-3016 follow-up, `spikes/reach-ae2-promote/`).
+ */
+const FINALISTS = 2;
 
 /**
  * How `buildLocal` lays a packed candidate (RUK-2877), false when it lays none: in direct, EnderIO and AE2 (routed is
@@ -1065,17 +1072,23 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       ...(reserved.length === 0 ? {} : { reserved }),
     };
   };
-  const { line: chosenLine, baselineLine, search } = buildLocal({
+  const { lines, search, finalists } = buildLocal({
     pack, plan, parts, mode, units, stages: provisional, network: logisticsNet,
     satellites: deps.satellites !== false, stacking: deps.stacking !== false, packing: deps.packing !== false,
   });
-  const chosen = await finishLine(chosenLine, search);
-  // the search scores the line without its hookup, so a winner there can lose once the hookup is laid (RUK-2877):
-  // a line that is not today's rule's baseline is kept only when its finished layout replaces the finished baseline's
-  let kept = chosen, keptLine = chosenLine;
-  if (search.chosen !== search.baseline) {
-    const baseline = await finishLine(baselineLine, { ...search, chosen: search.baseline, rejected: search.chosen });
-    if (!finalReplaces(finalMeasure(chosen, chosenLine.score.unreachable), finalMeasure(baseline, baselineLine.score.unreachable))) { kept = baseline; keptLine = baselineLine; }
+  // the search scores a line without its hookup, so a winner there can lose once the hookup is laid (RUK-2877): the
+  // baseline and every finalist are finished, and the best finished finalist that replaces the finished baseline is
+  // kept; the search record then names the kept line `chosen` and, when that is not the search's best, the best `rejected`
+  const baselineLine = lines[search.baseline]!;
+  let keptLine = baselineLine;
+  let kept = await finishLine(baselineLine, finalists.length === 0 ? search : { ...search, chosen: search.baseline, rejected: finalists[0]! });
+  const finishedBaseline = finalMeasure(kept, baselineLine.score.unreachable);
+  let best: FinalMeasure | null = null;
+  for (const i of finalists) {
+    const layout = await finishLine(lines[i]!, { ...search, chosen: i, ...(i === finalists[0] ? {} : { rejected: finalists[0]! }) });
+    const measure = finalMeasure(layout, lines[i]!.score.unreachable);
+    if (!finalReplaces(measure, finishedBaseline) || (best !== null && compareFinal(measure, best) >= 0)) continue;
+    best = measure; kept = layout; keptLine = lines[i]!;
   }
   deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal });
   return kept;
