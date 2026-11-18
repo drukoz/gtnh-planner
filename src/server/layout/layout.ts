@@ -30,7 +30,7 @@ import { emptyContext } from '../planner/plan.ts';
 import { contextFromScan } from '../world/context.ts';
 import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
 import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
-import { addedBlocks, attachCovers, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
+import { addedBlocks, attachCovers, packedLine, placePacked, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
 import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
 import { feedingWarnings } from './feed-rules.ts';
 import {
@@ -58,6 +58,8 @@ export interface LayoutDeps {
   satellites?: boolean;
   /** Lay a stacked twin of every head candidate (RUK-2877); default true, false lays the line as before stacking (tests that pin it). */
   stacking?: boolean;
+  /** Lay a packed candidate (RUK-2877, `placePacked`) in direct and EnderIO; default true, false lays the line as before packing (tests that pin it). */
+  packing?: boolean;
   /**
    * Tests only: called once, with the line of the layout returned — its placement and internal route as `buildLocal`
    * chose them (RUK-121), the baseline's when the search's chosen line was rejected for its finished layout (RUK-2877) —
@@ -248,6 +250,7 @@ interface LocalInput {
   network: LogisticsNetwork | null;
   satellites?: boolean;
   stacking: boolean;
+  packing: boolean;
 }
 
 /**
@@ -302,6 +305,8 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
  * baseline's (RUK-2877): the search scores the line without its hookup, which can turn a winner into a loser.
  * With `stacking` (RUK-2877) every head candidate is also laid with single-block machines stacked two high, as an
  * extra candidate; today's rule's baseline is always one of the unstacked lines.
+ * When `packs` (RUK-2877) the line is laid again packed three machines to a cable cell with the head at the west end, as
+ * one last candidate added after all the others; the baseline is never that packed line.
  */
 function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLine; search: LayoutSearch } {
   const west = buildLocalAt(input, 0);
@@ -344,6 +349,11 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
       kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
     }
   }
+  // the line packed three machines to a cable cell (RUK-2877), with the head at the west end; the baseline stays one of the lines above
+  if (packs(input)) {
+    lines.push(buildLocalAt(input, 0, false, true));
+    kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
+  }
   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
   // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
   let chosen = baseline;
@@ -355,6 +365,17 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
 }
 
 /**
+ * Whether `buildLocal` lays a packed candidate (RUK-2877): in direct and EnderIO only (a packed column's B and T share
+ * one item port, which routed and AE2 do not allow: `PORT_SPACING`), when every unit can be packed (`packedLine`) and
+ * every electric unit is fed at the same tier (`min(tier, supply)`): a second tier's lane could not get past the first's.
+ */
+function packs(input: LocalInput): boolean {
+  if (!input.packing || (input.mode !== 'direct' && input.mode !== 'enderio') || !packedLine(input.units)) return false;
+  const supply = input.stages?.supplyTier;
+  return new Set(input.units.filter((u) => u.electric).map((u) => (supply === undefined ? -1 : Math.min(u.tier, supply)))).size <= 1;
+}
+
+/**
  * Stages 3–5 in the line's own grid. Machines fed at different tiers stand apart (their cables never touch), the lowest
  * feed tier next to the power head, whose last run is that tier's (`placeUnits` with the supply tier): a tier's tree
  * then never has to get past a higher tier's machines and tree to reach its own. The supply run is sized for packets
@@ -362,12 +383,15 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
  * cells its multiblocks need kept empty as well as its blocks.
  * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
  * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
+ * `packed` lays the whole line packed three machines to a cable cell (`placePacked`, RUK-2877), ignoring `westUnits` and `stack`.
  */
-function buildLocalAt(input: LocalInput, westUnits: number, stack = false): LocalLine {
+function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed = false): LocalLine {
   const { pack, plan, parts, mode, units, stages, network } = input;
-  const placement = placeUnits(units, {
-    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
-  });
+  const placement = packed
+    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }) })
+    : placeUnits(units, {
+        headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+      });
   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
   // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
   const internal = routeInternal({
@@ -1035,7 +1059,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   };
   const { line: chosenLine, baselineLine, search } = buildLocal({
     pack, plan, parts, mode, units, stages: provisional, network: logisticsNet,
-    satellites: deps.satellites !== false, stacking: deps.stacking !== false,
+    satellites: deps.satellites !== false, stacking: deps.stacking !== false, packing: deps.packing !== false,
   });
   const chosen = await finishLine(chosenLine, search);
   // the search scores the line without its hookup, so a winner there can lose once the hookup is laid (RUK-2877):
