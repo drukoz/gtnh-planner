@@ -61,7 +61,7 @@ import {
   stepItemOutputs, unitItemRate, type ItemPort, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
 
-const DOWN = 0, NORTH = 2, SOUTH = 3, EAST = 5;
+const DOWN = 0, EAST = 5;
 const TICKS_PER_SECOND = 20;
 const INPUT_CHEST = 'Chest (input)', OUTPUT_CHEST = 'Chest (output)', YOUR_TANK = 'your tank';
 
