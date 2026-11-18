@@ -89,10 +89,61 @@ length the search ranks by (`SPR_ROOF=1` Flat, `=2` Lowest; unset = no roof). Ru
   unreachable machine, in Flat or Lowest. The roof cost falls on every candidate in a line's search in proportion to its
   machine count, so the ranking is untouched — the roof is a cost added to the winner, not a reason to pick a winner.
 
+## Re-pins a promotion needs (step 6)
+
+The whole suite with the probe applied: `SPR_ROOF=1 npx vitest run --maxWorkers=2` fails **19 tests in 6 files**;
+`SPR_ROOF=2` fails **21** — the same 19 plus 2. With the flag unset the suite passes (4461 tests, 277 files).
+
+| file | failing tests (flag on) | why |
+|---|---|---|
+| `head-choice.test.ts` | 12 — lays the 10- and 20-machine {direct, routed, ae2, enderio} line with the west head, the 40-machine … line with the middle head | the pinned head placement re-reads the line with roof casings in the grid |
+| `layout-bench.test.ts` | 2 — measures the 10-machine direct loss line; no benchmark line gets longer, lossier or weaker than the baseline | the baseline's `total` has no roof; the roof is the whole 20 % delta |
+| `layout-search.test.ts` | 1 — the layout search keeps the runner-up when it is shorter once hooked up | the ranked lengths gain roof cells, so the runner-up's margin moves |
+| `layout.test.ts` | 1 — layoutLine lays out a two-step line next to the base, wired from the tap through a transformer | the pinned block list gains the roof casings |
+| `packed.test.ts` | 1 — lays a packed line with two products up its tail column | the pinned layout includes the roof |
+| `scene-links.test.ts` | 2 — draws each of many links … as an arc of its own …, clear of every block; draws no link through a solid block of the line, in every mode and at every turn | the 3D view must draw links clear of the new roof blocks |
+| `read.test.ts` (`SPR_ROOF=2` only) | 2 — readLine reads an ME Export Bus; reads ME Export Bus cards and facing, and a bus that feeds nothing | Lowest drops a cover to `y+1` beside a packed bus, changing the cell the reader reads next to it |
+
+`runBench()` (the bench file, 6 tests) runs in **4.25 s flag off** and **5.21 s with `SPR_ROOF=1`** (+1 s, ~23 %; the 2
+bench re-pins fail inside the flag-on run).
+
+## What the laid roof does to each goal
+
+- **Goal 1, the score** — the roof counts in `total` (+1564 casings, +20 %) and changes no chosen line: the cost falls
+  on every candidate in proportion to its machines, so the ranking is untouched.
+- **Goal 2, shared cable** — the roof adds no cable: it is casings only, and no roof cell lands on an existing block,
+  so no cable count moves (tiers never touch: a roof cell never touches a run).
+- **Goal 3, reach** — a cover at `H` is never the block beside a machine face: the unreachable set is unchanged in all
+  132 rows (the 6 pre-existing ae2 machines stay exactly the 6).
+- **Goal 4, machine reuse** — untouched: sharing is decided at placement; the roof lands in air cells above the line.
+- **Goal 5, cleanrooms** — untouched: roof cells land at `H` above the line, never inside a shell, and cover the room's
+  machines by the same rule as every other exposed one.
+- **Goal 6, wall sharing** — untouched: the roof only adds new air cells and claims no block, so it creates no shared-wall
+  demand, and every reserved cell (muffler front, vent, `-` hollow) stays air — asserted, no roof cell in a reserved cell.
+- **Goal 7, rain** — this spike is its measurement: Flat covers every rain exposure at ~14 % of Box, reserved cells stay
+  clear, and the roof counts in the score — the goal's "covers … and counts those blocks" now has numbers.
+- **Goal 8, existing projects** — no re-layout: the roof changes no chosen line, so existing projects keep their layouts;
+  only the build list grows.
+- **Goal 9, the machine estimate** — the estimate has no roof term; the roof scales with rain-exposed machines
+  (~1.3 cells per checked block), so a promotion adds a roof line to the BOM, not a per-machine constant.
+- **Goal 10, what the user sees** — the 3D view must learn the roof: the 2 `scene-links` re-pins are exactly the view
+  drawing links clear of the new blocks; the build steps' words stay out of scope.
+
+Anti-goals:
+
+- **A machine left open to rain** (a layout unbuildable as drawn) — the roof is what fixes it: today's flag-off line
+  leaves every checked block's top and outward side open; with the roof, none stays exposed.
+- **A machine the player cannot reach** — the roof adds none, in any row, under any rule.
+- **Feeding that overfills or deadlocks** — untouched: roof cells are new air cells, never a reserved or feed cell.
+- **A different layout per run, or a much longer layout** — the rules are deterministic (sorted cells, no state), and
+  the bench costs +1 s (+23 %) with the roof scored.
+- **Any test line longer than today's** — no row's chosen size moves; the roof grows the total, not the line.
+
 ## Verdict
 
 A Flat (or Lowest) roof costs ~14 % of Box's blocks, covers every rain exposure, never lands on a block, a reserved cell,
 or a machine's builder side, and does not change which line the search picks. The roof belongs in the length, not in the
-line search: lay it after the line is chosen, one slab at `H`. Lowest buys nothing over Flat on this benchmark, so Flat
-is the rule to promote; keep Lowest's per-column drop for tall lines where a low exposure sits under a high machine.
-The next step (a later RUK) folds `roofCells` into `roof.ts` and the final measure, behind the site's own cover.
+line search: lay it after the line is chosen, one slab at `H`. Lowest buys nothing over Flat on this benchmark and costs
+2 more re-pins (21 vs 19), so **Flat is the rule to promote**; keep Lowest's per-column drop for tall lines where a low
+exposure sits under a high machine. A promotion re-pins the 19 tests above (block lists, bench totals, the 3D view). The
+next step (a later RUK) folds `roofCells` into `roof.ts` and the final measure, behind the site's own cover.
