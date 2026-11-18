@@ -47,7 +47,7 @@ import type { Pack } from '../../../shared/types/pack.ts';
 import type { BomLine, Plan, PlanFlow, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import { machineByMteId } from '../../pack/lookup.ts';
-import { handRunSurroundings, type HatchKind, type HostConfig, type LocalBlock, type PlacedUnit, type Placement } from '../arrange.ts';
+import { handRunSurroundings, tailColumn, type HatchKind, type HostConfig, type LocalBlock, type PlacedUnit, type Placement } from '../arrange.ts';
 import { enderioStock } from '../bench.ts';
 import {
   assignChannels, fluidFilterFor, itemFilterFor, limitedFilterFor, pickFluidConduit, speedUpgradesFor, type ChannelEnd, type ChannelLink,
@@ -552,19 +552,19 @@ interface ItemLine {
 }
 
 /**
- * The Item Conduit spine `[firstX … tailX] × (y 0, z spineZ)`, one more cell above the tail cell per further output chest
- * and up the spine's column to any bus above it (`itemRisers`), every face toward a machine or tail chest set, the faces
- * toward other machines, hatches and chests disabled, the tail chests, and the hookup's end face when an EnderIO item
- * network can stock the input chest.
+ * The Item Conduit spine along `placement.spine` (today `[firstX … tailX] × (y 0, z spineZ)`), one more cell up the tail
+ * column per further output chest, and up the spine's column to any bus above it (`itemRisers`), every face toward a
+ * machine or tail chest set, the faces toward other machines, hatches and chests disabled, the tail chests, and the
+ * hookup's end face when an EnderIO item network can stock the input chest.
  */
 function itemLine(input: ModeInput): ItemLine {
   const { pack, plan, parts, placement, network } = input;
-  const { firstX, tailX, spineZ } = placement;
+  const { tail } = placement;
   const placed = placedStepIds(placement);
   const items = plan.flows.filter((f) => !isFluidKey(f.key));
 
-  // the face plan: every item port; the input chest north of the tail cell; output chest j south of tail cell j. What a
-  // bench hands back (an empty container) goes to an output chest as a placed machine's strays do
+  // the face plan: every item port; the input chest off the tail cell's input side; output chest j off tail column cell
+  // j's output side. What a bench hands back (an empty container) goes to an output chest as a placed machine's strays do
   const { faces: machine, configs } = machineFaces(plan, items, placement);
   const edge = crossing(plan, items, placed);
   const { entering, leaving } = edge;
@@ -573,13 +573,13 @@ function itemLine(input: ModeInput): ItemLine {
   const inputKeys = distinctKeys(entering.map((f) => f.key));
   const inputRate = sumRate(entering);
   const outputSlices = slices(distinctKeys([...leaving.map((f) => f.key), ...strays.map((s) => s.key)]), ITEM_FILTER_SLOTS.big);
-  const inputChest: Vec3 | null = inputKeys.length > 0 ? [tailX, 0, spineZ - 1] : null;
+  const inputChest: Vec3 | null = inputKeys.length > 0 ? step(tail.cell, tail.inputSide) : null;
   const tailFaces: FacePlan[] = [];
   if (inputChest !== null) {
-    tailFaces.push({ pos: [tailX, 0, spineZ], side: NORTH, target: INPUT_CHEST, stepId: null, extract: { keys: inputKeys, rate: inputRate }, insert: null });
+    tailFaces.push({ pos: [...tail.cell], side: tail.inputSide, target: INPUT_CHEST, stepId: null, extract: { keys: inputKeys, rate: inputRate }, insert: null });
   }
   outputSlices.forEach((keys, j) => {
-    tailFaces.push({ pos: [tailX, j, spineZ], side: SOUTH, target: OUTPUT_CHEST, stepId: null, extract: null,
+    tailFaces.push({ pos: tailColumn(tail, j), side: tail.outputSide, target: OUTPUT_CHEST, stepId: null, extract: null,
       insert: { keys, rate: sumRate(leaving.filter((f) => keys.includes(f.key))) } });
   });
   const plans = [...machine, ...tailFaces].sort(compareFaces);
@@ -589,16 +589,13 @@ function itemLine(input: ModeInput): ItemLine {
   const channels = planChannels(plans, items, placed, strays);
   const { configured, warnings } = itemSettings(input, plans, channels);
 
-  // the conduit cells: the spine along x, then the cells above the tail cell, each joined to the one below
-  const cells: Vec3[] = [];
+  // the conduit cells: the spine (`placement.spine`, in lay order), then the tail column above the tail cell, each joined to the one before
+  const cells: Vec3[] = placement.spine.map((p): Vec3 => [...p]);
   const runs: Array<[Vec3, Vec3]> = [];
-  for (let x = firstX; x <= tailX; x++) {
-    cells.push([x, 0, spineZ]);
-    if (x > firstX) runs.push([[x - 1, 0, spineZ], [x, 0, spineZ]]);
-  }
+  for (let i = 1; i < cells.length; i++) runs.push([cells[i - 1]!, cells[i]!]);
   for (let j = 1; j < outputSlices.length; j++) {
-    cells.push([tailX, j, spineZ]);
-    runs.push([[tailX, j - 1, spineZ], [tailX, j, spineZ]]);
+    cells.push(tailColumn(tail, j));
+    runs.push([tailColumn(tail, j - 1), tailColumn(tail, j)]);
   }
   // up the spine's column to a bus GT takes only higher up
   const risers = itemRisers(placement);
@@ -611,7 +608,7 @@ function itemLine(input: ModeInput): ItemLine {
     chests.push({ pos, block: { ...parts.chest.block }, role: 'chest', label, item: parts.chest.key, tail });
   };
   if (inputChest !== null) layChest([...inputChest], INPUT_CHEST, { side: 'input', keys: [...inputKeys] });
-  outputSlices.forEach((keys, j) => layChest([tailX, j, spineZ + 1], OUTPUT_CHEST, { side: 'output', keys: [...keys] }));
+  outputSlices.forEach((keys, j) => layChest(step(tailColumn(tail, j), tail.outputSide), OUTPUT_CHEST, { side: 'output', keys: [...keys] }));
 
   // every side of a cell: its configured face, a link, Disabled toward any other machine, hatch or chest, or nothing (a
   // GT hatch is an inventory too: a fluid hatch's container slots would take items)
