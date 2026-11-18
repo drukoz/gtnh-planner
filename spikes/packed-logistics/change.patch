@@ -1,0 +1,323 @@
+diff --git a/src/server/layout/arrange.ts b/src/server/layout/arrange.ts
+index a8aa14183..08bb15ac9 100644
+--- a/src/server/layout/arrange.ts
++++ b/src/server/layout/arrange.ts
+@@ -157,6 +157,11 @@ export interface PlacedUnit extends Unit {
+   mainFacing?: number;
+   /** A singleblock's output side where it does not face the spine: up (1) for a venting steam singleblock (`Unit.vent`). */
+   outputSide?: number;
++  /**
++   * SPIKE (RUK-2879): the side from `ports.power` into the machine when it is not `facing`: a packed line hangs three
++   * machines off one cable lane, so its power cell lies north, south or below the machine, not behind its output side.
++   */
++  powerSide?: number;
+   ports: UnitPorts;
+ }
+ 
+@@ -176,6 +181,18 @@ export interface Placement {
+    * by hand, between it and the spine (`Unit.manual`).
+    */
+   reserved: Vec3[];
++  /**
++   * SPIKE (RUK-2900, spike SP-F): a packed line's logistics cells in lane order: the north lane `[x, 1, 0]` west→east,
++   * the tail cell `[tailX, 1, 1]`, then the south lane `[x, 1, 2]` east→west. A mode lays its pipe or conduit spine
++   * along these cells, linking each to the next; every machine's item port is one of them.
++   */
++  spine?: Vec3[];
++  /**
++   * SPIKE (RUK-2900, spike SP-F): a packed line's tail: the join cell both lanes end on, the side its input chest
++   * hangs off (down, pulled from through that face) and the side its output chests stand off (east, the column rising
++   * one cell per further output chest).
++   */
++  tail?: { cell: Vec3; inputSide: number; outputSide: number };
+ }
+ 
+ // ---- Small helpers ----
+@@ -1220,6 +1237,76 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
+   return { units: placed, size, spineZ, headX, firstX: split === 0 ? headWidth : 0, tailX, blocks, reserved };
+ }
+ 
++/** SPIKE (RUK-2879): whether a line can be laid packed: every unit a 1×1×1 singleblock, no multiblock, none run by
++ * hand, none venting, no workbench, and no unit takes or makes a fluid. */
++export function packedLine(units: readonly Unit[]): boolean {
++  return units.length > 0 && units.every((u) => !u.multiblock && u.manual === undefined && u.vent !== true && u.bench === undefined
++    && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0 && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1);
++}
++
++/** SPIKE (RUK-2879, spike SP-E): the three cells of a packed column and their faces. */
++const PACKED_SLOTS: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
++  { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
++  { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
++  { cell: [0, 1, 1], facing: SOUTH, mainFacing: NORTH, powerSide: UP, items: [0, 1, 2] },
++];
++
++/**
++ * SPIKE (RUK-2879, spike SP-E): a packed line. One cable lane at `[x, 0, 1]` carries one cable cell per column, and
++ * three machines hang off every cell: A at `[x, 0, 0]` (front north, output up), B at `[x, 0, 2]` (front south, output
++ * up) and T at `[x, 1, 1]` (front north, output south), each with its power port on the lane cell and `powerSide` the
++ * side from that cell into it. The units fill A, B, T in each column in `placeUnits`' order (`lowestFeedFirst`); a unit
++ * fed at another tier starts a new column with one empty column between, so two tiers' lanes never touch. The first
++ * column is `firstX` on the head's own feed tier, `firstX + 1` on any other. The logistics lanes `[x, 1, 0]` and
++ * `[x, 1, 2]` run `firstX … tailX`, join at `[tailX, 1, 1]` and end at the tail cell `[tailX, 1, 2]` — the south lane's
++ * end cell, on the box's face, because a hookup goes round the box's columns and the input chest below the join cell at
++ * `z 1` would stand out of its reach (spike SP-F, RUK-2900). Laid as `spine` in lane order with `tail` saying where the
++ * tail chests hang; `spineZ` is 1 and the box is `[tailX + 2, 2, 3]` (the output chests stand at `tailX + 1`; the
++ * line's height counts the rising tail column from its laid blocks).
++ * `portSpacing` and `westUnits` are taken for `placeUnits`' signature and unused: a packed line is one row of columns
++ * after the head.
++ */
++export function placePacked(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number; westUnits?: number }): Placement {
++  const { headWidth } = opts;
++  const feedTier = (u: Unit): number | null => (opts.supplyTier === undefined || !u.electric ? null : Math.min(u.tier, opts.supplyTier));
++  const ordered = lowestFeedFirst(units, feedTier);
++  const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
++  const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
++  const firstX = headWidth;
++  const placed: PlacedUnit[] = [];
++  const blocks: LocalBlock[] = [];
++  let colX = -1, slot = 3, lastX = -1, prevTier: number | null | undefined;
++  for (const u of ordered) {
++    const tier = feedTier(u);
++    if (slot >= 3) {
++      colX = lastX < 0 ? (tier === headTier ? firstX : firstX + 1) : lastX + (tier === prevTier ? 1 : 2);
++      slot = 0;
++    }
++    const s = PACKED_SLOTS[slot]!;
++    const cell: Vec3 = [colX + s.cell[0], s.cell[1], s.cell[2]];
++    const machine = u.cells.find((c) => c.role === 'machine') ?? u.cells[0]!;
++    blocks.push({ pos: [...cell], block: { ...machine.block }, role: 'machine', facing: s.facing, mainFacing: s.mainFacing,
++      stepId: u.stepId, ...(u.stepIds === undefined ? {} : { stepIds: [...u.stepIds] }), label: machine.label,
++      ...(machine.item === undefined ? {} : { item: machine.item }) });
++    placed.push({ ...u, row: 'N', at: [...cell], facing: s.facing, mainFacing: s.mainFacing, powerSide: s.powerSide,
++      ports: {
++        power: u.electric ? [colX, 0, 1] : null, items: [[colX + s.items[0], s.items[1], s.items[2]]],
++        fluidIn: [], fluidOut: [], fluidInSides: [], fluidOutSides: [],
++        itemFaces: u.io.itemOut ? [{ pos: [...cell], side: s.facing }] : [], fluidFaces: [],
++      } });
++    lastX = colX; prevTier = tier; slot += 1;
++  }
++  const tailX = lastX + 1;
++  // the lanes and their join, in lane order: the north lane west→east, the tail cell, the south lane east→west
++  const spine: Vec3[] = [];
++  for (let x = firstX; x <= tailX; x++) spine.push([x, 1, 0]);
++  spine.push([tailX, 1, 1]);
++  for (let x = tailX; x >= firstX; x--) spine.push([x, 1, 2]);
++  blocks.sort((a, b) => comparePos(a.pos, b.pos));
++  return { units: placed, size: [tailX + 2, 2, 3], spineZ: 1, headX: 0, firstX, tailX, blocks, reserved: [],
++    spine, tail: { cell: [tailX, 1, 2], inputSide: DOWN, outputSide: EAST } };
++}
++
+ /**
+  * The cells face to face with a unit run by hand (`Unit.manual`) that are none of its own, sorted by x, y, z: nothing
+  * of the line takes them (the power trees and fluid pipes keep off them, and so does the EnderIO fluid conduit), so
+diff --git a/src/server/layout/internal.ts b/src/server/layout/internal.ts
+index e15029d4c..d29a907f9 100644
+--- a/src/server/layout/internal.ts
++++ b/src/server/layout/internal.ts
+@@ -332,7 +332,7 @@ function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run
+ 
+ /** The cell a unit's power reaches it through: the machine (singleblock) or its energy hatch, behind the power port. */
+ function powerCell(u: PlacedUnit): Vec3 | null {
+-  return u.ports.power === null ? null : step(u.ports.power, u.facing);
++  return u.ports.power === null ? null : step(u.ports.power, u.powerSide ?? u.facing);
+ }
+ 
+ /** `power_tier_low`, one per unit tier above the supply tier (highest first), naming the machines of that tier. */
+@@ -859,7 +859,7 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
+     if (chosen === undefined || tree === undefined) continue;
+     for (const c of tree.cells) grid.lay(c, chosen.cable, 'cable', chosen.cable.name);
+     grid.links.push(...tree.links);
+-    for (const { pos, unit } of tree.ports) if (!tree.unreached.has(posKey(pos))) grid.links.push([pos, step(pos, unit.facing)]);   // into the machine or energy hatch
++    for (const { pos, unit } of tree.ports) if (!tree.unreached.has(posKey(pos))) grid.links.push([pos, step(pos, unit.powerSide ?? unit.facing)]);   // into the machine or energy hatch
+     cells.set(run.tier, run.cells.length + tree.cells.length);
+   }
+ 
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index b2de8f9e1..0628ccc50 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -30,7 +30,7 @@ import { emptyContext } from '../planner/plan.ts';
+ import { contextFromScan } from '../world/context.ts';
+ import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
+ import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
+-import { addedBlocks, attachCovers, placeUnits, replacedCasings, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
++import { addedBlocks, attachCovers, packedLine, placePacked, placeUnits, replacedCasings, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
+ import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
+ import { feedingWarnings } from './feed-rules.ts';
+ import {
+@@ -348,9 +348,17 @@ function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch
+  */
+ function buildLocalAt(input: LocalInput, westUnits: number): LocalLine {
+   const { pack, plan, parts, mode, units, stages, network } = input;
+-  const placement = placeUnits(units, {
+-    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits,
+-  });
++  // SPIKE (RUK-2879, RUK-2900): a packed line of plain 1×1×1 singleblocks with no fluids, all fed at one tier, is laid
++  // packed: one cable lane feeding three machines per column, the mode's item lanes laid on the placement's spine.
++  const oneFeedTier = stages === null
++    || new Set(units.filter((u) => u.electric).map((u) => Math.min(u.tier, stages.supplyTier))).size <= 1;
++  const packed = process.env.SPIKE_PACKED === '1' && westUnits === 0 && packedLine(units) && oneFeedTier
++    && (mode === 'direct' || mode === 'enderio');
++  const placement = packed
++    ? placePacked(units, { headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }) })
++    : placeUnits(units, {
++      headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits,
++    });
+   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
+   // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
+   const internal = routeInternal({
+diff --git a/src/server/layout/modes/direct.ts b/src/server/layout/modes/direct.ts
+index 1b53ad67d..d5c6ef067 100644
+--- a/src/server/layout/modes/direct.ts
++++ b/src/server/layout/modes/direct.ts
+@@ -93,7 +93,8 @@ function networkHookup(input: ModeInput, rawNames: string): { hookup: ModeHookup
+ 
+ /**
+  * The shared spine pipe `[firstX … tailX] × (y 0, z spineZ)`, up the spine's column to any bus above it (`itemRisers`),
+- * with its covers, input filters, tail chests and hookup.
++ * with its covers, input filters, tail chests and hookup. A packed line (spike SP-F, RUK-2900) lays it along
++ * `placement.spine`'s lane cells and hangs its tail chests off `placement.tail`.
+  * Nothing when no placed unit moves items; only `no_pipe` when the pack has no GT item pipe.
+  */
+ export function directMode(input: ModeInput): ModeResult {
+@@ -121,14 +122,23 @@ export function directMode(input: ModeInput): ModeResult {
+   };
+ 
+   const spine = new Set<string>();
+-  for (let x = firstX; x <= tailX; x++) {
+-    const cell: Vec3 = [x, 0, spineZ];
+-    layPipe(cell);
+-    spine.add(posKey(cell));
+-    if (x > firstX) links.push([[x - 1, 0, spineZ], cell]);
++  if (placement.spine !== undefined) {
++    // SPIKE (RUK-2900): a packed line lays its pipe along the placement's lane cells, each joined to the next
++    for (let i = 0; i < placement.spine.length; i++) {
++      layPipe(placement.spine[i]!);
++      spine.add(posKey(placement.spine[i]!));
++      if (i > 0) links.push([placement.spine[i - 1]!, placement.spine[i]!]);
++    }
++  } else {
++    for (let x = firstX; x <= tailX; x++) {
++      const cell: Vec3 = [x, 0, spineZ];
++      layPipe(cell);
++      spine.add(posKey(cell));
++      if (x > firstX) links.push([[x - 1, 0, spineZ], cell]);
++    }
+   }
+-  // the pipe climbs the spine's column to a bus GT takes only higher up
+-  const risers = itemRisers(placement);
++  // the pipe climbs the spine's column to a bus GT takes only higher up (a packed line's ports are lane cells: no risers)
++  const risers = placement.spine === undefined ? itemRisers(placement) : { cells: [], ports: [], links: [] };
+   for (const cell of [...risers.cells, ...risers.ports]) {
+     layPipe(cell);
+     spine.add(posKey(cell));
+@@ -156,29 +166,33 @@ export function directMode(input: ModeInput): ModeResult {
+     }
+   }
+ 
+-  // the tail: the input chest north of the tail pipe, output chest i south of tail pipe cell i (one item per filter)
+-  const tail: Vec3 = [tailX, 0, spineZ];
++  // the tail: the input chest off the tail pipe's input face (north of the tail pipe; below the join cell of a packed
++  // line), output chest i off tail pipe cell i's output face (south of it; east of the rising tail column of a packed
++  // line), one item per filter
++  const tailSpec = placement.tail;
++  const tail: Vec3 = tailSpec === undefined ? [tailX, 0, spineZ] : [...tailSpec.cell];
+   const raw = rawItemInputs(plan, placed);
+   let inputChest: Vec3 | null = null;
+   if (raw.length > 0) {
+-    inputChest = [tailX, 0, spineZ - 1];
++    inputChest = tailSpec === undefined ? [tailX, 0, spineZ - 1] : step(tail, tailSpec.inputSide);
+     layChest(inputChest, 'Chest (input)', { side: 'input', keys: [...raw] });
+     links.push([tail, inputChest]);
+-    const { cover, warning } = conveyorCover(input, { pos: tail, side: NORTH }, 'import', false, rawItemRate(plan, placed), 'the input chest');
++    const { cover, warning } = conveyorCover(input, { pos: tail, side: tailSpec?.inputSide ?? NORTH }, 'import', false, rawItemRate(plan, placed), 'the input chest');
+     covers.push(cover);
+     if (warning !== null) warnings.push(warning);
+   }
+   const outputs = finalItemOutputs(plan, placed);
+   outputs.forEach((key, i) => {
+-    const cell: Vec3 = [tailX, i, spineZ];
+-    const chest: Vec3 = [tailX, i, spineZ + 1];
++    const cell: Vec3 = tailSpec === undefined ? [tailX, i, spineZ] : [tailSpec.cell[0], tailSpec.cell[1] + i, tailSpec.cell[2]];
+     if (i > 0) {
+       layPipe(cell);
+-      links.push([[tailX, i - 1, spineZ], cell]);
++      links.push([[cell[0], cell[1] - 1, cell[2]], cell]);
+     }
++    const chest: Vec3 = tailSpec === undefined ? [tailX, i, spineZ + 1] : step(cell, tailSpec.outputSide);
+     layChest(chest, 'Chest (output)', { side: 'output', keys: [key] });
+     links.push([cell, chest]);
+-    covers.push({ pos: cell, cover: { face: FACES[SOUTH]!, item: parts.item_filter_cover.key, settings: { mode: 'whitelist' }, filter: [key] } });
++    covers.push({ pos: cell, cover: { face: FACES[tailSpec?.outputSide ?? SOUTH]!, item: parts.item_filter_cover.key,
++      settings: { mode: 'whitelist' }, filter: [key] } });
+   });
+ 
+   const hooked = inputChest === null ? null : networkHookup(input, nameList(plan, pack, raw));
+diff --git a/src/server/layout/modes/enderio.ts b/src/server/layout/modes/enderio.ts
+index 50bbf62a1..a7343f96a 100644
+--- a/src/server/layout/modes/enderio.ts
++++ b/src/server/layout/modes/enderio.ts
+@@ -573,13 +573,19 @@ function itemLine(input: ModeInput): ItemLine {
+   const inputKeys = distinctKeys(entering.map((f) => f.key));
+   const inputRate = sumRate(entering);
+   const outputSlices = slices(distinctKeys([...leaving.map((f) => f.key), ...strays.map((s) => s.key)]), ITEM_FILTER_SLOTS.big);
+-  const inputChest: Vec3 | null = inputKeys.length > 0 ? [tailX, 0, spineZ - 1] : null;
++  // SPIKE (RUK-2900, spike SP-F): a packed line hangs the input chest below its join cell and each output chest east
++  // of its rising tail column; today's tail chests stand north and south of the tail cell.
++  const tailSpec = placement.tail;
++  const tailCell = (j: number): Vec3 => tailSpec === undefined ? [tailX, j, spineZ] : [tailSpec.cell[0], tailSpec.cell[1] + j, tailSpec.cell[2]];
++  const inputChest: Vec3 | null = inputKeys.length === 0 ? null
++    : tailSpec === undefined ? [tailX, 0, spineZ - 1] : step(tailSpec.cell, tailSpec.inputSide);
+   const tailFaces: FacePlan[] = [];
+   if (inputChest !== null) {
+-    tailFaces.push({ pos: [tailX, 0, spineZ], side: NORTH, target: INPUT_CHEST, stepId: null, extract: { keys: inputKeys, rate: inputRate }, insert: null });
++    tailFaces.push({ pos: tailSpec === undefined ? [tailX, 0, spineZ] : [...tailSpec.cell], side: tailSpec?.inputSide ?? NORTH,
++      target: INPUT_CHEST, stepId: null, extract: { keys: inputKeys, rate: inputRate }, insert: null });
+   }
+   outputSlices.forEach((keys, j) => {
+-    tailFaces.push({ pos: [tailX, j, spineZ], side: SOUTH, target: OUTPUT_CHEST, stepId: null, extract: null,
++    tailFaces.push({ pos: tailCell(j), side: tailSpec?.outputSide ?? SOUTH, target: OUTPUT_CHEST, stepId: null, extract: null,
+       insert: { keys, rate: sumRate(leaving.filter((f) => keys.includes(f.key))) } });
+   });
+   const plans = [...machine, ...tailFaces].sort(compareFaces);
+@@ -589,19 +595,20 @@ function itemLine(input: ModeInput): ItemLine {
+   const channels = planChannels(plans, items, placed, strays);
+   const { configured, warnings } = itemSettings(input, plans, channels);
+ 
+-  // the conduit cells: the spine along x, then the cells above the tail cell, each joined to the one below
+-  const cells: Vec3[] = [];
++  // the conduit cells: the spine along x (a packed line's lane cells in `placement.spine` order), then the cells above
++  // the tail cell, each joined to the one below
++  const cells: Vec3[] = placement.spine !== undefined
++    ? placement.spine.map((p): Vec3 => [...p])
++    : Array.from({ length: tailX - firstX + 1 }, (_, i): Vec3 => [firstX + i, 0, spineZ]);
+   const runs: Array<[Vec3, Vec3]> = [];
+-  for (let x = firstX; x <= tailX; x++) {
+-    cells.push([x, 0, spineZ]);
+-    if (x > firstX) runs.push([[x - 1, 0, spineZ], [x, 0, spineZ]]);
+-  }
++  for (let i = 1; i < cells.length; i++) runs.push([cells[i - 1]!, cells[i]!]);
+   for (let j = 1; j < outputSlices.length; j++) {
+-    cells.push([tailX, j, spineZ]);
+-    runs.push([[tailX, j - 1, spineZ], [tailX, j, spineZ]]);
++    const cell = tailCell(j);
++    cells.push(cell);
++    runs.push([[cell[0], cell[1] - 1, cell[2]], cell]);
+   }
+-  // up the spine's column to a bus GT takes only higher up
+-  const risers = itemRisers(placement);
++  // up the spine's column to a bus GT takes only higher up (a packed line's ports are lane cells: no risers)
++  const risers = placement.spine === undefined ? itemRisers(placement) : { cells: [], ports: [], links: [] };
+   cells.push(...risers.cells, ...risers.ports);
+   runs.push(...risers.links);
+   const bits = linkBits(runs);
+@@ -611,7 +618,8 @@ function itemLine(input: ModeInput): ItemLine {
+     chests.push({ pos, block: { ...parts.chest.block }, role: 'chest', label, item: parts.chest.key, tail });
+   };
+   if (inputChest !== null) layChest([...inputChest], INPUT_CHEST, { side: 'input', keys: [...inputKeys] });
+-  outputSlices.forEach((keys, j) => layChest([tailX, j, spineZ + 1], OUTPUT_CHEST, { side: 'output', keys: [...keys] }));
++  outputSlices.forEach((keys, j) => layChest(tailSpec === undefined ? [tailX, j, spineZ + 1] : step(tailCell(j), tailSpec.outputSide),
++    OUTPUT_CHEST, { side: 'output', keys: [...keys] }));
+ 
+   // every side of a cell: its configured face, a link, Disabled toward any other machine, hatch or chest, or nothing (a
+   // GT hatch is an inventory too: a fluid hatch's container slots would take items)
