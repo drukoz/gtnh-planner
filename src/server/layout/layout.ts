@@ -308,7 +308,8 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
  * With `stacking` (RUK-2877) every head candidate is also laid with single-block machines stacked two high, as an
  * extra candidate; today's rule's baseline is always one of the unstacked lines.
  * When `packs` (RUK-2877) the line is laid again packed three machines to a cable cell with the head at the west end, as
- * one last candidate added after all the others; the baseline is never that packed line.
+ * one last candidate added after all the others, and in AE2 once more laid open (`PackedOpen`, spike SP-I) after it;
+ * the baseline is never a packed line.
  */
 function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSearch; finalists: number[] } {
   const west = buildLocalAt(input, 0);
@@ -357,6 +358,12 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
     lines.push(buildLocalAt(input, 0, false, packing));
     kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
   }
+  // AE2's packed line again, laid open (spike SP-I, RUK-3016): the closed column above walls its middle machines in
+  // on long lines but is the shorter one on short lines, so both are candidates and the score keeps the better
+  if (packing === 'own') {
+    lines.push(buildLocalAt(input, 0, false, 'open'));
+    kinds.push({ kind: CandidateKind.PackedOpen, westUnits: 0 });
+  }
   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
   // only a candidate that replaces the baseline (Assumption 4) may take its place: the FINALISTS best such, earliest on a
   // tie, and the chosen line is the first of them, or the baseline when there are none
@@ -397,12 +404,13 @@ function packs(input: LocalInput): boolean | 'own' {
  * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
  * `packed` lays the whole line packed three machines to a cable cell (`placePacked`, RUK-2877), ignoring `westUnits` and
  * `stack`; `'own'` gives every machine its own item port, the AE2 column with one ME Interface per machine
- * (`placePacked` with `ownPorts`, spike SP-G).
+ * (`placePacked` with `ownPorts`, spike SP-G); `'open'` lays that column with its interfaces on the box's outer faces
+ * (`placePacked` with `open`, spike SP-I).
  */
-function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed: boolean | 'own' = false): LocalLine {
+function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed: boolean | 'own' | 'open' = false): LocalLine {
   const { pack, plan, parts, mode, units, stages, network } = input;
   const placement = packed !== false
-    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : {}) })
+    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : packed === 'open' ? { ownPorts: true, open: true } : {}) })
     : placeUnits(units, {
         headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
       });
