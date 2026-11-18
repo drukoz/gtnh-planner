@@ -157,3 +157,17 @@ describe('one transformer per satellite (RUK-2677)', () => {
     expect(starvedByWiring(internal)).toBe(0);   // `transformer_bank` is allowed here: the groups are M2-3's
   }, 60_000);
 });
+
+// RUK-2679: satellites on by default, so the build steps tell the player to place them and every satellite transformer
+// points at its satellite step.
+describe('satellite build steps (RUK-2679)', () => {
+  it('the 40-machine ae2 line lays a satellite step every satellite transformer points at', async () => {
+    const { layout } = await lossLine(40, 'ae2', { satellites: true });
+    expect(layout.buildSteps.some((s) => s.id === 'layout:power:satellites:1'), 'the satellite build step').toBe(true);
+    const satBlocks = layout.blocks.filter((b) => b.satellite !== undefined);
+    expect(satBlocks.length, 'satellite transformers laid').toBeGreaterThan(0);
+    satBlocks.forEach((b) => {
+      expect(b.buildStep, `satellite transformer at ${posKey(b.pos)}`).toBe('layout:power:satellites:1');
+    });
+  }, 60_000);
+});

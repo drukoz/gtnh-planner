@@ -318,7 +318,7 @@ function powerSteps(input: StepsInput, sitePin: number | undefined, powerPin: nu
     const g = byToTier.get(toTier)!;
     const from = tierName(g.fromTier), to = tierName(toTier);
     out.push(draft(`layout:power:satellites:${toTier}`, 'power', sitePin,
-      `Place ${fmtInt(g.n)}× ${input.transformerName(toTier)} out along the line where the view marks them, one beside each group of far ${to} machines (${fmtInt(g.m)} machines in all): turn each one's front (input) up with a Wrench, into the ${from} cable above it; it feeds the ${to} cable beside it`));
+      `Place ${fmtInt(g.n)}× ${input.transformerName(toTier)} out along the line where the view marks them, one beside each group of far ${to} machines (${fmtInt(g.m)} machines in all): turn each one's front (input) up with a Wrench, into the ${from} cable above it; it feeds the ${to} cable beside it. Leave it in full mode; a screwdriver toggles half mode, which halves its amps`));
   }
   // GT joins a cable to the block it is placed against, so two tiers must never touch (spec §3.5)
   const tiers = input.cables.map((c) => c.tier);

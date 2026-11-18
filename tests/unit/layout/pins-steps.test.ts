@@ -215,7 +215,8 @@ describe('layout steps', () => {
     expect(sat.kind).toBe('power');
     expect(sat.pin).toBe(1);
     expect(sat.text).toBe('Place 2× Low Voltage Transformer out along the line where the view marks them, one beside each group of far LV machines '
-      + '(9 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it');
+      + '(9 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it'
+      + '. Leave it in full mode; a screwdriver toggles half mode, which halves its amps');
     // no satellites, empty or absent: the step ids are the same as today
     expect(layoutSteps(base({ ...parts, satellites: [] })).map((s) => s.id)).toEqual(today);
     expect(layoutSteps(base(parts)).map((s) => s.id)).toEqual(today);

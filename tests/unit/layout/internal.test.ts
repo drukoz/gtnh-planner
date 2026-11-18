@@ -534,6 +534,12 @@ describe('machine_unpowered: the machines a tier\'s wiring cannot run', () => {
     expect(unpowered[0]!.text).toContain('Basic Macerator');
   }, 30_000);
 
+  it('runs every LV machine the 40-machine AE2 line lays with satellites', async () => {
+    // satellites step down beside the far machines (RUK-2679): the same line with them on warns of no starved machine
+    const { layout } = await lossLine(40, 'ae2', { satellites: true });
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(0);
+  }, 30_000);
+
   it('raises no machine_unpowered warning when every machine runs', async () => {
     const { layout } = await lossLine(10, 'direct');
     expect(layout.warnings.map((w) => w.code)).not.toContain('machine_unpowered');

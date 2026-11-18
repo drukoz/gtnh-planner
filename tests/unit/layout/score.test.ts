@@ -42,6 +42,13 @@ describe('per-machine power report', () => {
     expect(layout.loss?.unpowered, 'the layout counts them').toBe(dark.length);
   }, 30_000);
 
+  it("powers every macerator of the 40-machine AE2 loss line once satellites are laid", async () => {
+    // satellites on (the default) reach the far macerators, so none is left unpowered (RUK-2679)
+    const { layout, internal } = await lossLine(40, 'ae2', { satellites: true });
+    expect(internal.machines.filter((m) => !m.powered).length, 'no unpowered macerator').toBe(0);
+    expect('unpowered' in (layout.loss ?? {}), 'the layout counts none unpowered').toBe(false);
+  }, 30_000);
+
   it('leaves loss.unpowered out when every machine runs', async () => {
     const { layout } = await lossLine(10, 'direct');
     expect('unpowered' in (layout.loss ?? {}), 'no unpowered machine to count').toBe(false);
