@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-11, M3-P1 … M3-P4, SP-F … SP-K, SP-R and R-rain merged; M3-12, M3-13 and SP-L running**, 2026-11-18 (revision 13). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-13, M3-P1 … M3-P4, SP-F … SP-L, SP-R and R-rain merged; M3-14, M3-15, M3-16 and R-cover running**, 2026-11-18 (revision 14). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -185,7 +185,12 @@ The packed shape follows Assumption 7.
 | M3-12 RUK-3030 | K1 as a fallback (`k1-fallback.patch`), 3 tests, baseline = `baseline-k1.json` (2 rows) | — |
 | M3-13 RUK-3032 | the roof laid as glass (`BlockRole` `'roof'`, `PART_DEFS.roof`), its overhang (`LocalLine.shift`, `Frame.shift`), in `LENGTH_ROLES`, the bench, the parts and the `layout:roof` step (`promote.patch`), 10 re-pins, baseline = `baseline-promote.json` | M3-12 |
 | SP-L RUK-3031 | spike: with satellites, AE2 `PackedOpen` on `loss-40` (130 blocks) loses to `Stacked` (186) only because its satellite shuts 1 machine in; measure a satellite cell rule that keeps every machine reachable | M3-12, M3-13 patches |
-| next in M3 | the roof step's words and order (how many glass blocks, after the machines), and the 3D view drawing the roof faint with a show switch (M3-14, M3-15); SP-L's rule if it says promote; then site cover and dimensions that never rain | M3-13 |
+| SP-L result | promote: the satellite's own transformer shut the packed macerator at `15,0,1` in. As a plain rule, with each accepted satellite added to the base (`spikes/satellite-reach/promote.patch`), only `loss-40` AE2 moves (200 → 148 blocks, 1300 → 1170 EU/t; it packs open); every 40/60/80-machine line in all four modes reaches every machine; 1 re-pin | — |
+| M3-14 RUK-3034 | the roof step goes last (before `layout:test`) and names its laid blocks (`lay 16× Glass in one layer …`); no roof blocks, no roof step (`spikes/rain-roof/step.patch`, 11 re-pins in `step-repins.diff`) | M3-13 |
+| M3-15 RUK-3035 | the 3D view draws the roof faint (`SceneInstance.roof`), never picks it, a Roof switch when the line has one; the map's `ROLE_PRIORITY` gets `'roof'` (since M3-13 every roofed map column had no fill) | M3-13 |
+| M3-16 RUK-3033 | SP-L promoted (`promote.patch`, `baseline-promote.json`), 1 re-pin, 9 new tests | M3-12 |
+| R-cover RUK-3036 | research: what our scan and layout know about a site's dimension, biome and the blocks above it (gt-mechanics §3.4a's three gates), before any rule drops the roof | — |
+| next in M3 | the roof's no-rain cases from R-cover; then M3-V | R-cover |
 | M3-V | QA verification of the milestone branch | all above |
 
 Deferred from M3, with the reason: **L and U shapes** and a single row. Nothing has measured them, they need the
