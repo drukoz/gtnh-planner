@@ -202,3 +202,11 @@ SPK=1 npx vitest run tests/unit/layout/layout-bench.test.ts
 # candidate, recorded in this README's tables.
 git checkout -- src/
 ```
+
+## CTO note on the goal question (review)
+
+The spike asked whether `loss-40` can keep a **packed** line with satellites on. Under K1 the packed satellite is kept,
+but no mode chooses a packed line: direct/EnderIO `Packed` (tot 84) loses to `Stacked` on `handTransformers` (2 vs 0),
+and AE2 `Packed`/`PackedOpen` lose on `unreachable` (12 and 1). K1's bench gain comes from the AE2 `Stacked` candidate
+(index 5), whose three satellites starve without K1 (`satFail true`, 17 unpowered) and survive with it. So K1 is a
+general fix for satellite supply starvation, not yet a packed-line win; the packed gap is now `handTransformers`/reach.
