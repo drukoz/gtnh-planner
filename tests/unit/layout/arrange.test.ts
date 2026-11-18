@@ -181,6 +181,49 @@ describe('placement', () => {
     expect(p.reserved).toEqual([[3, 1, 4], [3, 2, 4], [3, 4, 4]]);
     expect(compactness(p)).toBeCloseTo(42 / 10, 5);
   });
+
+  it('stacks a single-block machine on the one before it only with stack on', () => {
+    // RUK-2877: a stackable machine standing right after a stackable one of the same feed tier in the same row stands on
+    // it, in its column. A row tie goes north, so the fifth machine is the one that stacks the south row. With stack
+    // off every machine keeps a column of its own and the placement is exactly today's
+    const { units } = unitsFromPlan(layoutPack(), makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 5 }]));
+    const on = placeUnits(units, { headWidth: 1, portSpacing: 0, stack: true });
+    expect(on.units.map((u) => [u.row, u.at[0], u.at[1], u.at[2]]))
+      .toEqual([['N', 1, 0, 1], ['S', 1, 0, 3], ['N', 1, 1, 1], ['N', 2, 0, 1], ['S', 1, 1, 3]]);
+    const stacked = on.units.filter((u) => u.at[1] === 1);
+    expect(stacked).toHaveLength(2);
+    for (const u of stacked) {
+      expect(on.units.some((b) => b.at[1] === 0 && b.row === u.row && b.at[0] === u.at[0]), 'its lower machine').toBe(true);
+    }
+    expect(on.size[1]).toBe(2);
+    const off = placeUnits(units, { headWidth: 1, portSpacing: 0, stack: false });
+    const today = placeUnits(units, { headWidth: 1, portSpacing: 0 });
+    expect(off.units.every((u) => u.at[1] === 0)).toBe(true);
+    expect(off.units.map((u) => [u.row, u.at])).toEqual(today.units.map((u) => [u.row, u.at]));
+  });
+
+  it('never stacks a machine with fluids or a multiblock', () => {
+    // a fluid machine's top carries its fluid port (its `unitPorts`), and a multiblock is no floor: neither is ever
+    // under a stacked machine, and neither ever stands on one (RUK-2877)
+    const { units } = unitsFromPlan(layoutPack(), makePlan([
+      { id: 'w', mteId: IDS.MACERATOR, count: 1, inputs: [['fluid:water', 100]] },
+      { id: 'm', mteId: IDS.MACERATOR, count: 3 },
+    ]));
+    expect(units[0]!.io.fluidIn.length).toBeGreaterThan(0);
+    const p = placeUnits(units, { headWidth: 1, portSpacing: 0, stack: true });
+    // the machine behind the fluid one keeps its own column, and the fourth stacks the plain machine of the south row
+    expect(p.units.map((u) => [u.stepId, u.at[0], u.at[1], u.at[2]]))
+      .toEqual([['w', 1, 0, 1], ['m', 1, 0, 3], ['m', 2, 0, 1], ['m', 1, 1, 3]]);
+    const w = p.units.find((u) => u.stepId === 'w')!;
+    expect(w.at[1]).toBe(0);
+    expect(p.units.some((u) => u.at[1] === 1 && u.row === w.row && u.at[0] === w.at[0]), 'nothing on the fluid machine').toBe(false);
+    const multi = placeUnits(unitsFromPlan(layoutPack(), makePlan([ebfStep, { id: 'm', mteId: IDS.MACERATOR, count: 2 }])).units,
+      { headWidth: 1, portSpacing: 0, stack: true });
+    const ebf = multi.units.find((u) => u.multiblock)!;
+    expect(ebf.at[1]).toBe(0);
+    // nothing stands on the EBF's cells (its five columns of the row it faces the spine from)
+    expect(multi.units.some((u) => u.at[1] === 1 && u.row === ebf.row && Math.abs(u.at[0] - ebf.at[0]) < ebf.size[0]), 'nothing on the EBF').toBe(false);
+  });
 });
 
 // Final review C2 and the GT facings.

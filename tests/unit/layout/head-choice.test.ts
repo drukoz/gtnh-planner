@@ -36,7 +36,8 @@ const HEADS: Array<{ n: number; mode: LogisticsMode; middle: boolean }> = [
 describe('power head choice', () => {
   for (const { n, mode, middle } of HEADS) {
     it(`lays the ${n}-machine ${mode} line with the ${middle ? 'middle' : 'west'} head`, async () => {
-      const { layout, placement } = await lossLine(n, mode);
+      // stacked twins (RUK-2877) may win the search on other rows; this test pins today's head rule, so it lays the line as before stacking
+      const { layout, placement } = await lossLine(n, mode, { stacking: false });
       expect(placement.headX > 0, `${n} ${mode}: headX`).toBe(middle);
       const [min, size] = [layout.origin, layout.size];
       // the line's own blocks (the convention of layout.test.ts C1): hookup runs and the ghosts they mark at the

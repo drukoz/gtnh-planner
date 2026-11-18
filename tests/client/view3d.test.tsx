@@ -446,6 +446,11 @@ describe('layout search panel', () => {
     expect(html.indexOf('data-testid="block-list"')).toBeLessThan(html.indexOf('data-testid="layout-search"'));
   });
 
+  it('names the stacked layouts (RUK-2877)', () => {
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 0 })).toBe('Machines stacked two high, power head at the west end');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 12 })).toBe('Machines stacked two high, power head in the middle, 12 machines west of it');
+  });
+
   it('names an unknown kind', () => {
     expect(candidateLabel({ ...cand(), kind: 7 as unknown as CandidateKind })).toBe('Other layout');
   });
