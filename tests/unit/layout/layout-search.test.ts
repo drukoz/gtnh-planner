@@ -3,7 +3,8 @@
 // `replacesBaseline`s it — so the chosen line is never worse than today's. `layoutLine` reports every candidate's score
 // in `Layout.search`. These tests lay the 12 standard lines and check the search is honest: the west head is laid first,
 // the chosen line is the baseline unless a candidate truly replaces it, the chosen candidate's score matches what the
-// layout reports, the search is deterministic, and one candidate is laid per head split.
+// layout reports, the search is deterministic, one candidate is laid per head split, and the line laid is the one the
+// search reports as chosen (RUK-2877: a candidate rejected for its finished layout leaves the baseline's line laid).
 import { describe, it, expect } from 'vitest';
 import { CandidateKind } from '../../../src/shared/types/layout.ts';
 import { headSplits } from '../../../src/server/layout/layout.ts';
@@ -57,6 +58,17 @@ describe('the layout search', () => {
     expect(candidates.length).toBe(1 + headSplits(40).length);
     for (let i = 1; i < candidates.length; i++) {
       expect(candidates[i]!.kind, `candidate ${i}: kind`).toBe(CandidateKind.MiddleHead);
+    }
+  }, 60_000);
+
+  it('lays the line the search reports as chosen', async () => {
+    for (const n of COUNTS) {
+      for (const mode of MODES) {
+        const { layout, placement } = await lossLine(n, mode);
+        const { candidates, chosen, baseline, rejected } = layout.search!;
+        expect(rejected === undefined || chosen === baseline, `${n} ${mode}: a rejected candidate leaves the baseline chosen`).toBe(true);
+        expect(placement.headX === 0, `${n} ${mode}: the head of the line laid`).toBe(candidates[chosen]!.westUnits === 0);
+      }
     }
   }, 60_000);
 });

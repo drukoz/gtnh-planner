@@ -43,7 +43,7 @@ import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } fr
 import type { PathBounds } from './path.ts';
 import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
 import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
-import { compareScore, replacesBaseline, scoreLine } from './score.ts';
+import { compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine } from './score.ts';
 import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
 
@@ -57,8 +57,9 @@ export interface LayoutDeps {
   /** Lay satellite step-down banks (RUK-2668); default true, false keeps a long line's far machines on the head (tests of the starved-line warnings). */
   satellites?: boolean;
   /**
-   * Tests only: called once with the line's own placement and internal route as `buildLocal` chose them (RUK-121), so a
-   * test reads the line the layout was built from instead of laying it again by hand.
+   * Tests only: called once, with the line of the layout returned — its placement and internal route as `buildLocal`
+   * chose them (RUK-121), the baseline's when the search's chosen line was rejected for its finished layout (RUK-2877) —
+   * so a test reads the line the layout was built from instead of laying it again by hand.
    */
   localLine?: (line: { placement: Placement; internal: InternalResult }) => void;
 }
@@ -293,9 +294,11 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
  * others the one with the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 −
  * `MIDDLE_HEAD_MIN_CUT`) of the west-end line's, which must lose something; otherwise it is the west-end line, exactly
  * the line laid before RUK-121. The chosen line is that baseline, and only a candidate that `replacesBaseline`s it (the
- * best such, earliest on a tie) takes its place.
+ * best such, earliest on a tie) takes its place. `layoutLine` then finishes the chosen line and, when it is not the
+ * baseline, the baseline too, and keeps the chosen line only when its finished layout `finalReplaces`s the finished
+ * baseline's (RUK-2877): the search scores the line without its hookup, which can turn a winner into a loser.
  */
-function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch } {
+function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLine; search: LayoutSearch } {
   const west = buildLocalAt(input, 0);
   // every line laid, in the order laid: the west head first, then one per middle-head split, each tagged with its kind
   const lines: LocalLine[] = [west];
@@ -335,7 +338,7 @@ function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch 
     if (!replacesBaseline(candidates[i]!, candidates[baseline]!)) continue;
     if (compareScore(candidates[i]!, candidates[chosen]!) < 0) chosen = i;
   }
-  return { line: lines[chosen]!, search: { candidates, chosen, baseline } };
+  return { line: lines[chosen]!, baselineLine: lines[baseline]!, search: { candidates, chosen, baseline } };
 }
 
 /**
@@ -899,120 +902,132 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   }
 
   // stage 5; from here on the stages are the ones sized for the volts every machine gets
-  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites !== false });
-  deps.localLine?.({ placement: line.placement, internal: line.internal });
-  const { stages } = line;
-  // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
-  const areas = farmAreas(plan, line.size);
-  const extent = farmExtent(line.size, areas);
-  const replaced = replacedCasings(units);
-  const supplyWarnings: PlanWarning[] = stages === null || powerNet === null || supply === null || !supply.other ? [] : [{ code: 'power_tap_tier',
-    text: `The ${tierName(powerNet.voltageTier)} network has no ${tierName(powerNet.voltageTier)} cable to tap: the line is fed at `
-      + `${tierName(supplyTier)} from a cable behind one of its transformers` }];
+  /** Stages 6–11 of one candidate line: its site, hookups, loss, pins, parts and build steps, as a finished layout. */
+  const finishLine = async (line: LocalLine, search: LayoutSearch): Promise<Layout> => {
+    const { stages } = line;
+    // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
+    const areas = farmAreas(plan, line.size);
+    const extent = farmExtent(line.size, areas);
+    const replaced = replacedCasings(units);
+    const supplyWarnings: PlanWarning[] = stages === null || powerNet === null || supply === null || !supply.other ? [] : [{ code: 'power_tap_tier',
+      text: `The ${tierName(powerNet.voltageTier)} network has no ${tierName(powerNet.voltageTier)} cable to tap: the line is fed at `
+        + `${tierName(supplyTier)} from a cable behind one of its transformers` }];
 
-  // stages 6–7: the site is found for the line and its farms' areas together, which turn with it as one box
-  const chosen = base === null ? null
-    : await chooseSite({ scan, project, base, line, size: extent, powerTaps: supply?.taps ?? null, logisticsNet, deps });
-  const frame = frameAt(chosen?.site ?? null, extent);
-  const vox = chosen?.vox ?? null;
-  const siteWarnings = chosen?.warnings ?? worldWarnings;
-  const worldSize = rotatedSize(extent, frame.rotation);
-  // the line's own box and size in the world: its site pin, its roof and its blocks' step ids go by them
-  const lineBox = worldBoxOf(line.size, frame);
-  const lineSize = rotatedSize(line.size, frame.rotation);
-  const lineBlocks = line.blocks.map((b) => worldBlock(b, frame));
-  const kept = areas.map((a) => reservedArea(a, (p) => worldPos(p, frame)));
+    // stages 6–7: the site is found for the line and its farms' areas together, which turn with it as one box
+    const chosen = base === null ? null
+      : await chooseSite({ scan, project, base, line, size: extent, powerTaps: supply?.taps ?? null, logisticsNet, deps });
+    const frame = frameAt(chosen?.site ?? null, extent);
+    const vox = chosen?.vox ?? null;
+    const siteWarnings = chosen?.warnings ?? worldWarnings;
+    const worldSize = rotatedSize(extent, frame.rotation);
+    // the line's own box and size in the world: its site pin, its roof and its blocks' step ids go by them
+    const lineBox = worldBoxOf(line.size, frame);
+    const lineSize = rotatedSize(line.size, frame.rotation);
+    const lineBlocks = line.blocks.map((b) => worldBlock(b, frame));
+    const kept = areas.map((a) => reservedArea(a, (p) => worldPos(p, frame)));
 
-  // stage 8
-  const hooked = base === null ? null : buildHookups({
-    pack, parts, scan, dim, line, frame, vox, lineBlocks, supplyTier, powerNet, powerTaps: supply?.taps ?? [], logisticsNet, maxNodes: deps.maxPathNodes,
-    areas: kept.map(areaBounds),
-  });
-  const blocks = [...lineBlocks, ...(hooked?.blocks ?? [])].sort(compareBlocks);
-  const idle = ae2IdleEUt(blocks, parts);
-  const need = withIdleDraw(plan.power, idle);
-  // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
-  const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
-  // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
-  const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
-  // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
-  // highest tier, so the list stays tier descending
-  const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
-  const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
-  const banksEUt = stages?.lossEUt ?? 0;
-  // the machines whose wiring leaves them too few volts to run (RUK-351); counted only when there are any
-  const unpowered = line.internal.machines.filter((m) => !m.powered).length;
-  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt, ...(unpowered > 0 ? { unpowered } : {}) };
-  const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
-
-  // stages 10–11 (parts and warnings first: the warning pins come from them)
-  // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
-  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...parallelRunParts(line.internal.cables),
-    ...(hooked?.power == null ? [] : parallelHookupParts(hooked.power.build)), ...addedBlocks(units), ...(fit?.optional ?? [])]);
-  // without a base the warning that says to pick one comes first (Review Focus 1)
-  // the static feeding rules read the line as laid out (architecture §11 entry 51)
-  const warnings = dedupeWarnings([
-    ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
-    ...(base === null ? [] : siteWarnings), ...supplyWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
-    ...feedingWarnings({ pack, plan, layout: { mode, blocks } }),
-  ]);
-
-  // stage 9
-  let finish: Finish;
-  if (base === null || chosen === null || hooked === null) {
-    finish = { status: 'no-world', pins: null, reuse: [], site: null, power: null, supplyTier: null, logistics: null };
-  } else {
-    const centre: Vec3 = [lineBox.min[0] + Math.floor(lineSize[0] / 2), frame.origin[1], lineBox.min[2] + Math.floor(lineSize[2] / 2)];
-    const reuse = findReuse(pack, plan, scan, base, centre, mode);
-    const placed = warnings.flatMap((w) => {
-      if (SITE_PINNED.has(w.code)) return [{ code: w.code, text: w.text, pos: centre }];
-      const at = w.code === 'no_path' ? hooked.noPathAt.get(w.text) ?? centre : null;
-      return at === null ? [] : [{ code: w.code, text: w.text, pos: at }];
+    // stage 8
+    const hooked = base === null ? null : buildHookups({
+      pack, parts, scan, dim, line, frame, vox, lineBlocks, supplyTier, powerNet, powerTaps: supply?.taps ?? [], logisticsNet, maxNodes: deps.maxPathNodes,
+      areas: kept.map(areaBounds),
     });
-    const { power, logistics } = hooked;
-    finish = {
-      status: 'ok', reuse, site: { dig: chosen.site.dig, fill: chosen.site.fill },
-      pins: {
-        dim, site: { center: centre, text: siteText(lineSize) },
-        power: power === null || stages === null ? null : { pos: [...power.tap.pos], text: powerText(power.tap, stages.supplyAmps) },
-        logistics: logistics === null ? null : { pos: [...logistics.tap.pos], text: logisticsText(logistics.network.kind) },
-        reuse, farms: farmPins(kept), warnings: placed,
-      },
-      power: power === null || stages === null ? null : {
-        cable: power.build.cable?.name ?? 'cable', blocks: power.build.blocks.length, amps: stages.supplyAmps, tier: supplyTier,
-        arrivingVolts: power.build.arrivingVolts, ...(power.build.blocked === null ? {} : { upgrade: { cable: power.build.blocked.cable } }),
-      },
-      supplyTier: stages === null ? null : supplyTier,
-      logistics: logistics === null || line.mode.hookup === null ? null
-        : { kindName: networkName(logistics.network.kind), part: parts[line.mode.hookup.part].name, blocks: logistics.build.blocks.length },
+    const blocks = [...lineBlocks, ...(hooked?.blocks ?? [])].sort(compareBlocks);
+    const idle = ae2IdleEUt(blocks, parts);
+    const need = withIdleDraw(plan.power, idle);
+    // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
+    const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
+    // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
+    const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
+    // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
+    // highest tier, so the list stays tier descending
+    const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
+    const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
+    const banksEUt = stages?.lossEUt ?? 0;
+    // the machines whose wiring leaves them too few volts to run (RUK-351); counted only when there are any
+    const unpowered = line.internal.machines.filter((m) => !m.powered).length;
+    const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt, ...(unpowered > 0 ? { unpowered } : {}) };
+    const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
+
+    // stages 10–11 (parts and warnings first: the warning pins come from them)
+    // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
+    const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...parallelRunParts(line.internal.cables),
+      ...(hooked?.power == null ? [] : parallelHookupParts(hooked.power.build)), ...addedBlocks(units), ...(fit?.optional ?? [])]);
+    // without a base the warning that says to pick one comes first (Review Focus 1)
+    // the static feeding rules read the line as laid out (architecture §11 entry 51)
+    const warnings = dedupeWarnings([
+      ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
+      ...(base === null ? [] : siteWarnings), ...supplyWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
+      ...feedingWarnings({ pack, plan, layout: { mode, blocks } }),
+    ]);
+
+    // stage 9
+    let finish: Finish;
+    if (base === null || chosen === null || hooked === null) {
+      finish = { status: 'no-world', pins: null, reuse: [], site: null, power: null, supplyTier: null, logistics: null };
+    } else {
+      const centre: Vec3 = [lineBox.min[0] + Math.floor(lineSize[0] / 2), frame.origin[1], lineBox.min[2] + Math.floor(lineSize[2] / 2)];
+      const reuse = findReuse(pack, plan, scan, base, centre, mode);
+      const placed = warnings.flatMap((w) => {
+        if (SITE_PINNED.has(w.code)) return [{ code: w.code, text: w.text, pos: centre }];
+        const at = w.code === 'no_path' ? hooked.noPathAt.get(w.text) ?? centre : null;
+        return at === null ? [] : [{ code: w.code, text: w.text, pos: at }];
+      });
+      const { power, logistics } = hooked;
+      finish = {
+        status: 'ok', reuse, site: { dig: chosen.site.dig, fill: chosen.site.fill },
+        pins: {
+          dim, site: { center: centre, text: siteText(lineSize) },
+          power: power === null || stages === null ? null : { pos: [...power.tap.pos], text: powerText(power.tap, stages.supplyAmps) },
+          logistics: logistics === null ? null : { pos: [...logistics.tap.pos], text: logisticsText(logistics.network.kind) },
+          reuse, farms: farmPins(kept), warnings: placed,
+        },
+        power: power === null || stages === null ? null : {
+          cable: power.build.cable?.name ?? 'cable', blocks: power.build.blocks.length, amps: stages.supplyAmps, tier: supplyTier,
+          arrivingVolts: power.build.arrivingVolts, ...(power.build.blocked === null ? {} : { upgrade: { cable: power.build.blocked.cable } }),
+        },
+        supplyTier: stages === null ? null : supplyTier,
+        logistics: logistics === null || line.mode.hookup === null ? null
+          : { kindName: networkName(logistics.network.kind), part: parts[line.mode.hookup.part].name, blocks: logistics.build.blocks.length },
+      };
+    }
+    const pins = finish.pins === null ? [] : makePins(finish.pins);
+    const reserved = pinnedAreas(kept, pins);
+
+    // stage 10: steps, then each block's owning step (ruling R7); the line's blocks are named from its own min corner, so
+    // their step ids stay when farms come and go
+    const stepsInput: StepsInput = {
+      status: finish.status, pins, size: lineSize, ...(areas.length === 0 ? {} : { siteSize: worldSize }), site: finish.site,
+      units: line.placement.units, stages: stages?.stages ?? [], transformerName,
+      cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
+      satellites: line.internal.satellites.map((s, i) => ({ fromTier: s.fromTier, toTier: s.toTier, count: s.count, machines: s.machines.length,
+        transformer: line.internal.blocks.find((b) => b.satellite === i)?.label ?? transformerName(s.toTier), hiAmp: s.hiAmp })),
+      power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
+      fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
+      logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...lineBox.min], rotation: frame.rotation, nameOf, stepName,
+      ...farmStepsInput(plan, areas, reserved),
     };
+    const buildSteps = layoutSteps(stepsInput);
+    const hookups = hooked?.hookups ?? [];
+
+    return {
+      dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: assignBuildSteps(blocks, buildSteps, stepsInput, hookups),
+      hookups, pins, buildSteps, bom, warnings, status: finish.status,
+      power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
+      loss,
+      search,
+      ...(replaced.length === 0 ? {} : { replaced }),
+      ...(reserved.length === 0 ? {} : { reserved }),
+    };
+  };
+  const { line: chosenLine, baselineLine, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites !== false });
+  const chosen = await finishLine(chosenLine, search);
+  // the search scores the line without its hookup, so a winner there can lose once the hookup is laid (RUK-2877):
+  // a line that is not today's rule's baseline is kept only when its finished layout replaces the finished baseline's
+  let kept = chosen, keptLine = chosenLine;
+  if (search.chosen !== search.baseline) {
+    const baseline = await finishLine(baselineLine, { ...search, chosen: search.baseline, rejected: search.chosen });
+    if (!finalReplaces(finalMeasure(chosen), finalMeasure(baseline))) { kept = baseline; keptLine = baselineLine; }
   }
-  const pins = finish.pins === null ? [] : makePins(finish.pins);
-  const reserved = pinnedAreas(kept, pins);
-
-  // stage 10: steps, then each block's owning step (ruling R7); the line's blocks are named from its own min corner, so
-  // their step ids stay when farms come and go
-  const stepsInput: StepsInput = {
-    status: finish.status, pins, size: lineSize, ...(areas.length === 0 ? {} : { siteSize: worldSize }), site: finish.site,
-    units: line.placement.units, stages: stages?.stages ?? [], transformerName,
-    cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
-    satellites: line.internal.satellites.map((s, i) => ({ fromTier: s.fromTier, toTier: s.toTier, count: s.count, machines: s.machines.length,
-      transformer: line.internal.blocks.find((b) => b.satellite === i)?.label ?? transformerName(s.toTier), hiAmp: s.hiAmp })),
-    power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
-    fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
-    logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...lineBox.min], rotation: frame.rotation, nameOf, stepName,
-    ...farmStepsInput(plan, areas, reserved),
-  };
-  const buildSteps = layoutSteps(stepsInput);
-  const hookups = hooked?.hookups ?? [];
-
-  return {
-    dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: assignBuildSteps(blocks, buildSteps, stepsInput, hookups),
-    hookups, pins, buildSteps, bom, warnings, status: finish.status,
-    power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
-    loss,
-    search,
-    ...(replaced.length === 0 ? {} : { replaced }),
-    ...(reserved.length === 0 ? {} : { reserved }),
-  };
+  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal });
+  return kept;
 }
