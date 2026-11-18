@@ -1,0 +1,95 @@
+diff --git a/src/server/layout/arrange.ts b/src/server/layout/arrange.ts
+index a8aa14183..c9289b216 100644
+--- a/src/server/layout/arrange.ts
++++ b/src/server/layout/arrange.ts
+@@ -1055,7 +1055,18 @@ function flipSide(side: number): number {
+   return side === WEST ? EAST : side === EAST ? WEST : side;
+ }
+ 
+-interface PlacedSlot { u: Unit; row: Row; x: number }
++/** A slot a unit was placed in: its row, its column along the row and the block layer it stands on. */
++interface PlacedSlot { u: Unit; row: Row; x: number; y: 0 | 1 }
++
++/**
++ * SP-D (RUK-2878, spike): a unit that may stand on top of another one in the same column. A 1×1×1 singleblock with no
++ * fluids (its top is free: `unitPorts` puts a fluid port there), nothing run by hand, vented, benched or multiblock.
++ */
++function stackable(u: Unit): boolean {
++  return !u.multiblock && u.manual === undefined && u.vent !== true && u.bench === undefined
++    && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0
++    && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1;
++}
+ 
+ /**
+  * One side of the power head: `ordered` units placed in local columns from 0 outward (local 0 touches the head), in the
+@@ -1064,6 +1075,8 @@ interface PlacedSlot { u: Unit; row: Row; x: number }
+  * to the shorter row (N on a tie), one column apart from a multiblock neighbour, and moves on until its item ports are
+  * `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell; 2: not even neighbouring) and every
+  * cell it keeps beside its columns (a side port, a muffler's air) is free.
++ * SP-D (RUK-2878, spike): a stackable unit (`stackable`) standing right after a stackable unit of the same feed tier in
++ * the same row goes on top of it at y 1, in its column, and takes no column of its own.
+  */
+ function placeSide(ordered: readonly Unit[], opts: {
+   portSpacing: 0 | 1 | 2; feedTier: (u: Unit) => number | null; headTier: number | null; supplyTier?: number;
+@@ -1071,6 +1084,9 @@ function placeSide(ordered: readonly Unit[], opts: {
+   const { portSpacing, feedTier, headTier, supplyTier } = opts;
+   const cursor: Record<Row, number> = { N: 0, S: 0 };
+   const previous: Record<Row, Unit | null> = { N: null, S: null };
++  // SP-D (RUK-2878, spike): the last slot of each row, and the columns of a row that already carry a machine on top.
++  const lastSlot: Record<Row, PlacedSlot | null> = { N: null, S: null };
++  const topped = new Set<string>();
+   /** The feed tier the next unit of a row stands beside: the head's run, the previous unit's, or none (a steam unit). */
+   const besideTier: Record<Row, number | null> = { N: headTier, S: headTier };
+   const claimed = new Set<number>();
+@@ -1092,6 +1108,17 @@ function placeSide(ordered: readonly Unit[], opts: {
+   const slots: PlacedSlot[] = [];
+   for (const u of ordered) {
+     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
++    // SP-D (RUK-2878, spike): a stackable unit stands on the row's last one when that one is on the floor, still free,
++    // stackable itself and fed at the same tier. Its item port is at y 1, a different cell from the lower one's, so it
++    // takes no `portSpacing` test, and the row's cursor, kept cells and reach stay where the lower one left them.
++    const below = lastSlot[row];
++    const under = below === null ? '' : `${row}:${below.x}`;
++    if (below !== null && below.y === 0 && !topped.has(under) && stackable(u) && stackable(below.u) && feedTier(u) === feedTier(below.u)) {
++      topped.add(under);
++      lastSlot[row] = { u, row, x: below.x, y: 1 };
++      slots.push({ u, row, x: below.x, y: 1 });
++      continue;
++    }
+     const before = previous[row];
+     const tier = feedTier(u);
+     const otherTier = tier !== null && besideTier[row] !== null && tier !== besideTier[row];
+@@ -1107,7 +1134,8 @@ function placeSide(ordered: readonly Unit[], opts: {
+     reach[row] = own.reduce((r, p) => Math.max(r, p[0] + 1), cursor[row]);
+     previous[row] = u;
+     besideTier[row] = tier;
+-    slots.push({ u, row, x });
++    slots.push({ u, row, x, y: 0 });
++    lastSlot[row] = { u, row, x, y: 0 };
+   }
+   return { slots, reach };
+ }
+@@ -1170,9 +1198,10 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
+     fluidFaces: p.fluidFaces.map((f) => ({ pos: pos(f.pos), side: flip(f.side) })),
+   });
+   const emit = (sideSlots: readonly PlacedSlot[], mapX: (x: number) => number, flip: (s: number) => number): void => {
+-    for (const { u, row, x } of sideSlots) {
++    for (const { u, row, x, y } of sideSlots) {
+       const toSpine = towardSpine(row);
+-      const pos = (p: Vec3): Vec3 => [mapX(p[0]), p[1], p[2]];
++      // a stacked slot's cells land one block layer above the row's floor
++      const pos = (p: Vec3): Vec3 => [mapX(p[0]), p[1] + y, p[2]];
+       // a singleblock's output side faces the spine (its covers and inputs go there), its front toward the head (GT keeps
+       // the two apart; on the west side the head lies east); a venting steam unit's output side faces up; a bench has
+       // only its front, turned away from the spine, so its back, its output face, meets the spine
+@@ -1215,7 +1244,9 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
+   blocks.sort((a, b) => comparePos(a.pos, b.pos));
+   reserved.sort(comparePos);
+   // the box holds every cell kept empty too (a steam vent above a singleblock), so the site checks it is clear
+-  const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1));
++  // SP-D (RUK-2878, spike): and every cell of a machine stacked on another one (`emit` shifts a stacked slot's cells up)
++  const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1),
++    blocks.reduce((h, b) => Math.max(h, b.pos[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1)));
+   const size: Vec3 = [tailX + 1, height, dN + dS + 3];
+   return { units: placed, size, spineZ, headX, firstX: split === 0 ? headWidth : 0, tailX, blocks, reserved };
+ }
