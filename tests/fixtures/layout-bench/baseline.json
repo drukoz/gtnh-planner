@@ -310,28 +310,28 @@
     "mode": "routed",
     "size": [
       5,
-      4,
-      44
+      5,
+      25
     ],
-    "total": 235,
-    "cable": 158,
+    "total": 177,
+    "cable": 119,
     "pipe": 2,
     "iface": 0,
     "chip": 42,
-    "transformer": 10,
+    "transformer": 6,
     "chest": 2,
-    "hookup": 33,
-    "lossEUt": 2052,
+    "hookup": 14,
+    "lossEUt": 1300,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 48,
-        "worstVolts": 80
+        "worstBlocks": 31,
+        "worstVolts": 97
       },
       {
         "tier": 1,
-        "worstBlocks": 15,
-        "worstVolts": 17
+        "worstBlocks": 14,
+        "worstVolts": 18
       }
     ],
     "weakTiers": [],
@@ -344,28 +344,28 @@
     "mode": "ae2",
     "size": [
       5,
-      4,
-      44
+      5,
+      25
     ],
-    "total": 232,
-    "cable": 158,
+    "total": 174,
+    "cable": 119,
     "pipe": 1,
     "iface": 40,
     "chip": 0,
-    "transformer": 10,
+    "transformer": 6,
     "chest": 0,
-    "hookup": 33,
-    "lossEUt": 2052,
+    "hookup": 14,
+    "lossEUt": 1300,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 48,
-        "worstVolts": 80
+        "worstBlocks": 31,
+        "worstVolts": 97
       },
       {
         "tier": 1,
-        "worstBlocks": 15,
-        "worstVolts": 17
+        "worstBlocks": 14,
+        "worstVolts": 18
       }
     ],
     "weakTiers": [],

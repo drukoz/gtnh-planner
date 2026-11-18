@@ -361,7 +361,7 @@ function warnUnderVoltage(units: readonly PlacedUnit[], supply: number, warnings
  * whose tier has no run) get `route_failed`.
  */
 function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, keepOff: ReadonlySet<string>,
-  grid: Grid, warnings: WarningList, satellites: readonly Satellite[] = [], satStatus: { fail: boolean } = { fail: false }): Tree[] {
+  grid: Grid, warnings: WarningList, satellites: readonly Satellite[] = [], satStatus: { fail: boolean } = { fail: false }, satRim = false): Tree[] {
   const { placement } = input;
   const [w, h, l] = placement.size;
   const supply = stages.supplyTier;
@@ -426,6 +426,18 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
     // Fix 4: the satellite transformer is one tier's block; no other tier's cable may touch it (its own tree and its
     // supply input are grown separately), so every satellite's cell joins the cells this tier's cables must not touch
     for (const s of satellites) avoid.add(posKey(s.cell));
+    // RUK-3027 (SP-K1): a satellite's supply input keeps its plane. A tree of any tier other than the satellite's supply
+    // tier may not stand on the input cell or on one of its six neighbours (the satellite's own cell excepted), so the
+    // supply feed grown from that tier's run can always reach the input
+    const satFeed = new Set<string>();
+    if (satRim) for (const s of satellites) {
+      if (s.fromTier === run.tier) continue;
+      satFeed.add(posKey(s.input));
+      for (let side = 0; side < 6; side++) {
+        const n = step(s.input, side);
+        if (posKey(n) !== posKey(s.cell)) satFeed.add(posKey(n));
+      }
+    }
     const opts: PathOptions = {
       bounds,
       // a z leg running along the lanes (y >= 2) walls the lane above off from the taller trees to come, so price it
@@ -434,6 +446,7 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
       ...(crossing ? { laneWallCost: 4, laneFloorY: 2 + 2 * lane, midPlaneCost: 16 } : {}),
       passable: (p) => {
         const key = posKey(p);
+        if (satFeed.has(key)) return false;
         const tier = portTier.get(key);
         if (grid.isTaken(p) || keepOff.has(key) || bankCells.has(key) || (tier !== undefined && tier !== run.tier)) return false;
         const sends = onBank.get(key);
@@ -1244,7 +1257,7 @@ interface PowerPhase {
   laid: { cells: Map<number, number>; lossEUt: number; tiers: TierLoss[] }; satFail: boolean;
 }
 
-function routePower(input: InternalInput, stages: Stages, fluidCells: ReadonlySet<string>, satellites: readonly Satellite[]): PowerPhase {
+function routePower(input: InternalInput, stages: Stages, fluidCells: ReadonlySet<string>, satellites: readonly Satellite[], satRim = false): PowerPhase {
   const { placement } = input;
   const grid = new Grid(input);
   for (const s of satellites) { grid.take(s.cell); grid.take(s.input); }
@@ -1252,7 +1265,7 @@ function routePower(input: InternalInput, stages: Stages, fluidCells: ReadonlySe
   const routeWarnings = new WarningList();
   warnUnderVoltage(placement.units.filter((u) => u.electric), stages.supplyTier, routeWarnings);
   const satStatus = { fail: false };
-  const trees = growTrees(input, stages, head, fluidCells, grid, routeWarnings, satellites, satStatus);
+  const trees = growTrees(input, stages, head, fluidCells, grid, routeWarnings, satellites, satStatus, satRim);
   // the cells a power hookup may land on: the supply tier's run (`planHead` lists it first) and tree, kept to the line's
   // outer boundary; the run unfiltered when its tree shares no boundary cell, so a line always has at least one landing cell
   const supplyTree = trees.find((t) => t.tier === stages.supplyTier);
@@ -1340,7 +1353,9 @@ export function routeInternal(input: InternalInput): InternalResult {
       ? planSatellites(input, stages, phase.head, phase.trees, phase.sizing, phase.grid, powerPorts)
       : [];
     if (satellites.length > 0) {
-      const phase2 = routePower(input, phase2Stages(placement.units.filter((u) => u.electric), satellites, stages), fluidCells, satellites);
+      const stages2 = phase2Stages(placement.units.filter((u) => u.electric), satellites, stages);
+      let phase2 = routePower(input, stages2, fluidCells, satellites);
+      if (phase2.satFail) phase2 = routePower(input, stages2, fluidCells, satellites, true);
       if (!phase2.satFail) {
         phase = phase2;
         satelliteBanks = satellites.map((s): SatelliteBank => ({
