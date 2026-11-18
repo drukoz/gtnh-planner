@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { unitsFromPlan, placeUnits, stepDepths, stepIo, overlaps, compactness, replacedCasings, attachCovers, tailColumn, type LocalBlock } from '../../../src/server/layout/arrange.ts';
+import { unitsFromPlan, placeUnits, packedLine, placePacked, stepDepths, stepIo, overlaps, compactness, replacedCasings, attachCovers, tailColumn, type LocalBlock } from '../../../src/server/layout/arrange.ts';
+import { step, OPPOSITE } from '../../../src/shared/layout/geometry.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { kitSpec } from '../../helpers/build-fixtures.ts';
@@ -300,5 +301,41 @@ describe('placement contract (RUK-2877)', () => {
     expect(p.tail).toEqual({ cell: [p.tailX, 0, p.spineZ], inputSide: 2, outputSide: 3 });
     for (const u of p.units) expect(u.powerSide).toBe(u.facing);
     expect(tailColumn(p.tail, 2)).toEqual([p.tailX, 2, p.spineZ]);
+  });
+});
+
+describe('packed placement (RUK-2877)', () => {
+  it('places three machines per cable cell', () => {
+    const units = unitsFromPlan(layoutPack(), makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 6 }])).units;
+    expect(packedLine(units)).toBe(true);
+    const p = placePacked(units, { headWidth: 1 });
+    expect(p.units.map((u) => [u.at, u.facing, u.mainFacing, u.powerSide])).toEqual([
+      [[1, 0, 0], 1, 2, 2], [[1, 0, 2], 1, 3, 3], [[1, 1, 1], 3, 2, 1],
+      [[2, 0, 0], 1, 2, 2], [[2, 0, 2], 1, 3, 3], [[2, 1, 1], 3, 2, 1]]);
+    for (const u of p.units) {
+      expect(u.ports.power).toEqual([u.at[0], 0, 1]);
+      expect(step(u.ports.power!, u.powerSide)).toEqual(u.at);
+      expect(step(u.ports.items[0]!, OPPOSITE[u.facing]!)).toEqual(u.at);
+    }
+    expect([p.firstX, p.tailX, p.spineZ]).toEqual([1, 3, 1]);
+    expect(p.size).toEqual([5, 2, 3]);
+    expect(p.spine).toEqual([[1, 1, 0], [2, 1, 0], [3, 1, 0], [3, 1, 1], [3, 1, 2], [2, 1, 2], [1, 1, 2]]);
+    expect(p.tail).toEqual({ cell: [3, 1, 2], inputSide: 0, outputSide: 5 });
+    const spine = new Set(p.spine.map((c) => c.join(',')));
+    for (const u of p.units) expect(spine.has(u.ports.items[0]!.join(',')), 'item port on the spine').toBe(true);
+    expect(p.units.some((u) => spine.has(u.at.join(','))), 'no machine on the spine').toBe(false);
+  });
+
+  it('starts a new column after three units', () => {
+    const units = unitsFromPlan(layoutPack(), makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 7 }])).units;
+    const p = placePacked(units, { headWidth: 1 });
+    expect(p.units[6]!.at).toEqual([3, 0, 0]);
+    expect(p.tailX).toBe(4);
+    expect(p.spine.length).toBe(2 * (4 - 1 + 1) + 1);
+  });
+
+  it('packs only plain single-block machines with no fluids', () => {
+    expect(packedLine(unitsFromPlan(layoutPack(), makePlan([ebfStep])).units)).toBe(false);
+    expect(packedLine(unitsFromPlan(layoutPack(), makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 6 }])).units)).toBe(true);
   });
 });

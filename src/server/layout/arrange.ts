@@ -1280,6 +1280,75 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     tail: { cell: [tailX, 0, spineZ], inputSide: NORTH, outputSide: SOUTH } };
 }
 
+/** Whether a line can be laid packed (RUK-2877, `placePacked`): every unit a 1×1×1 singleblock, none run by hand,
+ * none venting, no workbench, and no unit takes or makes a fluid. */
+export function packedLine(units: readonly Unit[]): boolean {
+  return units.length > 0 && units.every((u) => !u.multiblock && u.manual === undefined && u.vent !== true && u.bench === undefined
+    && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0 && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1);
+}
+
+/** The three slots of a packed column and their faces (`placePacked`). */
+const PACKED_SLOTS: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
+  { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
+  { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
+  { cell: [0, 1, 1], facing: SOUTH, mainFacing: NORTH, powerSide: UP, items: [0, 1, 2] },
+];
+
+/**
+ * A packed line (RUK-2877, plan Assumption 7; spikes SP-E and SP-F). One cable lane at `[x, 0, 1]` carries one cable
+ * cell per column, and three machines hang off every cell: A at `[x, 0, 0]` (front north, output up), B at `[x, 0, 2]`
+ * (front south, output up) and T at `[x, 1, 1]` (front north, output south), each with its power port on the lane
+ * cell and `powerSide` the side from that cell into it. The units fill A, B, T in each column in feed-tier order
+ * (`lowestFeedFirst`); a unit fed at another tier starts a new column with one empty column between, so two tiers'
+ * lanes never touch. The first column is `firstX` (= `headWidth`) on the head's own feed tier, `firstX + 1` on any
+ * other. The item lanes `[x, 1, 0]` and `[x, 1, 2]` run `firstX … tailX`, join at `[tailX, 1, 1]` and end at the
+ * tail cell `[tailX, 1, 2]`, on the box's south face, because a hookup goes round the box's columns (`hookups.ts`)
+ * and could not reach a chest under the join cell. `spine` lists the lanes in lay order (north lane west→east, the
+ * join, south lane east→west); the input chest hangs below the tail cell and output chest i east of tail column cell
+ * i. `spineZ` is 1; the box is `[tailX + 2, 2, 3]` (the output chests stand at `tailX + 1`; `buildLocalAt` counts the
+ * rising tail column's height from the laid blocks).
+ */
+export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number }): Placement {
+  const { headWidth } = opts;
+  const feedTier = (u: Unit): number | null => (opts.supplyTier === undefined || !u.electric ? null : Math.min(u.tier, opts.supplyTier));
+  const ordered = lowestFeedFirst(units, feedTier);
+  const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
+  const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
+  const firstX = headWidth;
+  const placed: PlacedUnit[] = [];
+  const blocks: LocalBlock[] = [];
+  let colX = -1, slot = 3, lastX = -1, prevTier: number | null | undefined;
+  for (const u of ordered) {
+    const tier = feedTier(u);
+    if (slot >= 3) {
+      colX = lastX < 0 ? (tier === headTier ? firstX : firstX + 1) : lastX + (tier === prevTier ? 1 : 2);
+      slot = 0;
+    }
+    const s = PACKED_SLOTS[slot]!;
+    const cell: Vec3 = [colX + s.cell[0], s.cell[1], s.cell[2]];
+    const machine = u.cells.find((c) => c.role === 'machine') ?? u.cells[0]!;
+    blocks.push({ pos: [...cell], block: { ...machine.block }, role: 'machine', facing: s.facing, mainFacing: s.mainFacing,
+      stepId: u.stepId, ...(u.stepIds === undefined ? {} : { stepIds: [...u.stepIds] }), label: machine.label,
+      ...(machine.item === undefined ? {} : { item: machine.item }) });
+    placed.push({ ...u, row: 'N', at: [...cell], facing: s.facing, mainFacing: s.mainFacing, powerSide: s.powerSide,
+      ports: {
+        power: u.electric ? [colX, 0, 1] : null, items: [[colX + s.items[0], s.items[1], s.items[2]]],
+        fluidIn: [], fluidOut: [], fluidInSides: [], fluidOutSides: [],
+        itemFaces: u.io.itemOut ? [{ pos: [...cell], side: s.facing }] : [], fluidFaces: [],
+      } });
+    lastX = colX; prevTier = tier; slot += 1;
+  }
+  const tailX = lastX + 1;
+  // the lanes and their join, in lay order: the north lane west→east, the join, the south lane east→west
+  const spine: Vec3[] = [];
+  for (let x = firstX; x <= tailX; x++) spine.push([x, 1, 0]);
+  spine.push([tailX, 1, 1]);
+  for (let x = tailX; x >= firstX; x--) spine.push([x, 1, 2]);
+  blocks.sort((a, b) => comparePos(a.pos, b.pos));
+  return { units: placed, size: [tailX + 2, 2, 3], spineZ: 1, headX: 0, firstX, tailX, blocks, reserved: [],
+    spine, tail: { cell: [tailX, 1, 2], inputSide: DOWN, outputSide: EAST } };
+}
+
 /**
  * The cells face to face with a unit run by hand (`Unit.manual`) that are none of its own, sorted by x, y, z: nothing
  * of the line takes them (the power trees and fluid pipes keep off them, and so does the EnderIO fluid conduit), so
