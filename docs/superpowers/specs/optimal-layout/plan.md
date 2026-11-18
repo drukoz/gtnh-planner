@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-10, M3-P1 … M3-P4, SP-F … SP-J and R-rain merged; SP-K, SP-R and M3-11 running**, 2026-11-18 (revision 12). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-11, M3-P1 … M3-P4, SP-F … SP-K, SP-R and R-rain merged; M3-12, M3-13 and SP-L running**, 2026-11-18 (revision 13). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -55,6 +55,14 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
    SP-I finds a column that keeps every machine reachable. (Added 2026-11-18, revision 10.) SP-I's open column (A's and
    B's interfaces on the box's outer faces, 5 wide) wins `loss-10` and `loss-20` back (AE2 2 086 → 2 073) as a second
    AE2 packed candidate (M3-10); `loss-40` waits on satellites beside a packed box (SP-J). (Revision 11.)
+9. **The rain roof is glass, laid by the Flat rule, and counts like cable.** Each face GT's rain reaches on a block with
+   an EU buffer (gt-mechanics §3.4a) gets one block in the column that covers it, one above the line's tallest block:
+   the machine's own column for its top, the neighbour column for a side. Glass, because any block that blocks movement
+   shelters a face and glass keeps the line in view. Where a cover stands beside an outward face at the box's edge, the
+   line's box grows one column on that side (`LocalLine.shift`). Roof blocks count in `total` like cable, so the search
+   prefers shapes that shelter themselves: 11 of 132 benchmark rows choose another line, none gets worse on power,
+   reach or tiers, and the benchmark's totals grow by the roof (about 20 %). The user may prefer another block, a full
+   slab (Box), or no roof where the site is covered; those are later choices. (Added 2026-11-18, revision 13.)
 
 ## Target architecture
 
@@ -173,7 +181,11 @@ The packed shape follows Assumption 7.
 | SP-K RUK-3027 | spike: a free path for the satellite's supply feed on a packed box. K1 keeps other tiers off the input's rim; K2 adds two planes on packed boxes; K3 plans the satellite away from the phase-1 tier-1 tree. Every candidate's score fields on `loss-40`, whole-bench diff, whole-suite re-pins | SP-J |
 | SP-R RUK-3026 | spike: the rain roof on the benchmark (`rain.ts`, pure): exposures per row, roof cells under three rules (`RoofRule` Box / Flat / Lowest, one above the exposed block so faces stay open for reach), reach with the roof, and the search's choice with the roof in `total` | R-rain |
 | M3-11 RUK-3028 | a `machine_unreachable` warning naming the shut-in machines, pinned at the first (today: 2 controllers each on `mixed-02`, `mixed-03`, `mixed-18` AE2). No row moves | M3-8 |
-| later in M3 | the roof promoted from SP-R into the score, the build list and the roof step, then site cover and dimensions that never rain (design goal 1's roof rule); SP-K's variant if it says promote | SP-R, SP-K |
+| SP-K / SP-R / M3-11 results | SP-K: K1 (the input's rim) promotes, as a fallback only when today's route starves a satellite (`spikes/satellite-feed/k1-fallback.patch`): `loss-40` routed/AE2 235/232 → 177/174, 80-machine routed/AE2 power all machines. SP-R: Flat promotes, but its probe never counted the roof in the score (role `casing`); counted for real, 11 rows change (`spikes/rain-roof/promote.patch`, Assumption 9). M3-11 merged | — |
+| M3-12 RUK-3030 | K1 as a fallback (`k1-fallback.patch`), 3 tests, baseline = `baseline-k1.json` (2 rows) | — |
+| M3-13 RUK-3032 | the roof laid as glass (`BlockRole` `'roof'`, `PART_DEFS.roof`), its overhang (`LocalLine.shift`, `Frame.shift`), in `LENGTH_ROLES`, the bench, the parts and the `layout:roof` step (`promote.patch`), 10 re-pins, baseline = `baseline-promote.json` | M3-12 |
+| SP-L RUK-3031 | spike: with satellites, AE2 `PackedOpen` on `loss-40` (130 blocks) loses to `Stacked` (186) only because its satellite shuts 1 machine in; measure a satellite cell rule that keeps every machine reachable | M3-12, M3-13 patches |
+| next in M3 | the roof step's words and order (how many glass blocks, after the machines), and the 3D view drawing the roof faint with a show switch (M3-14, M3-15); SP-L's rule if it says promote; then site cover and dimensions that never rain | M3-13 |
 | M3-V | QA verification of the milestone branch | all above |
 
 Deferred from M3, with the reason: **L and U shapes** and a single row. Nothing has measured them, they need the
