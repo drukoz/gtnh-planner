@@ -78,55 +78,74 @@ index 6e427fbe1..4f765e32b 100644
  
  /**
 diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
-index cd99d95f5..3bc1f0b25 100644
+index 3acad701c..608e31d03 100644
 --- a/src/server/layout/layout.ts
 +++ b/src/server/layout/layout.ts
-@@ -30,7 +30,7 @@ import { emptyContext } from '../planner/plan.ts';
- import { contextFromScan } from '../world/context.ts';
- import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
- import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
--import { addedBlocks, attachCovers, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
-+import { addedBlocks, attachCovers, packedLine, placePacked, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
- import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
- import { feedingWarnings } from './feed-rules.ts';
- import {
-@@ -344,6 +344,15 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
-       kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
+@@ -58,7 +58,7 @@ export interface LayoutDeps {
+   satellites?: boolean;
+   /** Lay a stacked twin of every head candidate (RUK-2877); default true, false lays the line as before stacking (tests that pin it). */
+   stacking?: boolean;
+-  /** Lay a packed candidate (RUK-2877, `placePacked`) in direct and EnderIO; default true, false lays the line as before packing (tests that pin it). */
++  /** Lay a packed candidate (RUK-2877, `placePacked`) in direct, EnderIO and AE2 (with its own ports, spike SP-G); default true, false lays the line as before packing (tests that pin it). */
+   packing?: boolean;
+   /**
+    * Tests only: called once, with the line of the layout returned — its placement and internal route as `buildLocal`
+@@ -350,8 +350,9 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
      }
    }
-+  if (process.env.PROBE_PACKED !== '0' && (input.mode === 'direct' || input.mode === 'enderio' || input.mode === 'ae2') && packedLine(input.units)) {
-+    const sup = input.stages?.supplyTier;
-+    const tiers = new Set(input.units.filter((u) => u.electric).map((u) => (sup === undefined ? -1 : Math.min(u.tier, sup))));
-+    if (tiers.size <= 1) {
-+      // AE2 gives every machine its own ME Interface cell (`placePacked` with `ownPorts`, spike SP-G)
-+      lines.push(buildLocalAt(input, 0, false, input.mode === 'ae2' ? 'own' : true));
-+      kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
-+    }
-+  }
+   // the line packed three machines to a cable cell (RUK-2877), with the head at the west end; the baseline stays one of the lines above
+-  if (packs(input)) {
+-    lines.push(buildLocalAt(input, 0, false, true));
++  const packing = packs(input);
++  if (packing !== false) {
++    lines.push(buildLocalAt(input, 0, false, packing));
+     kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
+   }
    const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
-   // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
-   let chosen = baseline;
-@@ -362,12 +371,16 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+@@ -365,14 +366,18 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+ }
+ 
+ /**
+- * Whether `buildLocal` lays a packed candidate (RUK-2877): in direct and EnderIO only (a packed column's B and T share
+- * one item port, which routed and AE2 do not allow: `PORT_SPACING`), when every unit can be packed (`packedLine`) and
+- * every electric unit is fed at the same tier (`min(tier, supply)`): a second tier's lane could not get past the first's.
++ * How `buildLocal` lays a packed candidate (RUK-2877), false when it lays none: in direct, EnderIO and AE2 (routed is
++ * out; a packed column's B and T share one item port, which `PORT_SPACING` forbids there), when every unit can be
++ * packed (`packedLine`) and every electric unit is fed at the same tier (`min(tier, supply)`): a second tier's lane
++ * could not get past the first's.
++ * AE2 packs with `'own'` (spike SP-G): `PORT_SPACING.ae2` is 1, so AE2 may not share the B/T item port and the packed
++ * column gives every machine its own ME Interface cell above it (`placePacked` with `ownPorts`).
+  */
+-function packs(input: LocalInput): boolean {
+-  if (!input.packing || (input.mode !== 'direct' && input.mode !== 'enderio') || !packedLine(input.units)) return false;
++function packs(input: LocalInput): boolean | 'own' {
++  if (!input.packing || (input.mode !== 'direct' && input.mode !== 'enderio' && input.mode !== 'ae2') || !packedLine(input.units)) return false;
+   const supply = input.stages?.supplyTier;
+-  return new Set(input.units.filter((u) => u.electric).map((u) => (supply === undefined ? -1 : Math.min(u.tier, supply)))).size <= 1;
++  if (new Set(input.units.filter((u) => u.electric).map((u) => (supply === undefined ? -1 : Math.min(u.tier, supply)))).size > 1) return false;
++  return input.mode === 'ae2' ? 'own' : true;
+ }
+ 
+ /**
+@@ -383,12 +388,14 @@ function packs(input: LocalInput): boolean {
   * cells its multiblocks need kept empty as well as its blocks.
   * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
   * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
-+ * `packed` lays the packed line (`placePacked`, RUK-2877); `'own'` gives every machine its own item port, the AE2 column
-+ * with one ME Interface per machine (`placePacked` with `ownPorts`, spike SP-G).
+- * `packed` lays the whole line packed three machines to a cable cell (`placePacked`, RUK-2877), ignoring `westUnits` and `stack`.
++ * `packed` lays the whole line packed three machines to a cable cell (`placePacked`, RUK-2877), ignoring `westUnits` and
++ * `stack`; `'own'` gives every machine its own item port, the AE2 column with one ME Interface per machine
++ * (`placePacked` with `ownPorts`, spike SP-G).
   */
--function buildLocalAt(input: LocalInput, westUnits: number, stack = false): LocalLine {
+-function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed = false): LocalLine {
 +function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed: boolean | 'own' = false): LocalLine {
    const { pack, plan, parts, mode, units, stages, network } = input;
--  const placement = placeUnits(units, {
--    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
--  });
+-  const placement = packed
+-    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }) })
 +  const placement = packed !== false
 +    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : {}) })
-+    : placeUnits(units, {
-+      headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
-+    });
-   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
-   // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
-   const internal = routeInternal({
+     : placeUnits(units, {
+         headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+       });
 diff --git a/src/server/layout/modes/ae2.ts b/src/server/layout/modes/ae2.ts
 index 7548bd5eb..066e122ba 100644
 --- a/src/server/layout/modes/ae2.ts
@@ -218,37 +237,3 @@ index 7548bd5eb..066e122ba 100644
      hookup: hooked ? { part: 'me_cable', end: null } : null,
      extraParts, drafts, warnings, tailFluidY: 1,
    };
-diff --git a/src/shared/types/layout.ts b/src/shared/types/layout.ts
-index 3e50bc441..c832ae1af 100644
---- a/src/shared/types/layout.ts
-+++ b/src/shared/types/layout.ts
-@@ -182,7 +182,7 @@ export interface LayoutLoss {
-  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
-  * takes the next number.
-  */
--export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2 } as const;
-+export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3 } as const;
- export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
- 
- /**
-diff --git a/tests/unit/layout/layout.test.ts b/tests/unit/layout/layout.test.ts
-index 775f691c2..7fe07a717 100644
---- a/tests/unit/layout/layout.test.ts
-+++ b/tests/unit/layout/layout.test.ts
-@@ -393,9 +393,14 @@ describe('layoutLine: mixed-tier lines', () => {
-     const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not wire')).map((w) => w.text);
-     for (const m of placed) {
-       if (m.role !== 'machine' || m.mainFacing === undefined) continue;
--      const port = at.get(key(step(m.pos, OPPOSITE[m.facing!]!)));
-       const feed = Math.min(stepTier.get(m.stepId!)!, supply);
--      if (port?.role !== 'cable' || tierOf(layout, port) !== feed || ((port.connections ?? 0) & (1 << m.facing!)) === 0) {
-+      // GT takes energy through any face but the front (gt-mechanics §…: isInputFacing): a cable of the feed tier on such a face, linked into the machine
-+      const fed = [0, 1, 2, 3, 4, 5].some((side) => {
-+        if (side === m.mainFacing) return false;
-+        const port = at.get(key(step(m.pos, side)));
-+        return port?.role === 'cable' && tierOf(layout, port) === feed && ((port.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0;
-+      });
-+      if (!fed) {
-         out.push(`${m.label} at ${key(m.pos)} has no ${tierName(feed)} cable at its power input`);
-       }
-     }

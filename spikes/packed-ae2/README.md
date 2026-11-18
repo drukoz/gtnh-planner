@@ -9,20 +9,23 @@ the lanes above them — one shared port cell `[x, 1, 2]` per column. **AE2 may 
 so every machine needs its own interface. This spike lays that column: interfaces at `[x, 1, 0]` (A), `[x, 1, 2]` (B)
 and `[x, 2, 1]` (T), each wrenched **down** into its own machine, ME glass cable on the rest of those three lanes, the
 lanes joined at `[tailX, 1, 1]`, and the line's ME port at the south lane's tail cell `[tailX, 1, 2]` — on the box's
-face. The prototype is `change.patch` next to this file; it **includes SP-C's probe lines** (`CandidateKind.Packed`,
-the `PROBE_PACKED` gate, the packed candidate in the search) and applies to a clean tree on its own. `src/` in the
-committed tree is untouched.
+face. SP-C's probe is committed on `feat/optimal-layout-m3` (RUK-2974: `CandidateKind.Packed`, the `packing`
+`LayoutDeps` flag and the `packs()` gate, no `PROBE_PACKED` env switch); this spike sits on top of that tip
+(`2c177bd80`). The prototype is `change.patch` next to this file — three `src/` files. `src/` and `tests/` in the
+committed tree are untouched.
 
 ## Verdict
 
 **Promote.** The packed candidate wins 4 of the 7 qualifying bench rows in `ae2` and loses none: over those 7 rows the
 laid line goes **558 → 547 blocks (−2.0%)** and **4,365 → 4,273 EU/t**, and over the 4 rows it wins **154 → 143
 (−7.1%)** and **1,415 → 1,323 EU/t (−6.5%)**. Every one of those rows, and every non-qualifying row, lays with **zero
-overlaps, zero tier contacts, zero interface-target offenders and zero ME interfaces off the network**. On the
-40-machine wiring line (`lossLine(40, 'ae2')`, the line the committed wiring checks measure) the win is large: **150 →
-75 blocks (−50%)**, cable **87 → 20**, loss **1,687 → 958 EU/t (−43%)**, **10 unpowered machines → 0**, box **5×3×27 →
-3×3×19**, with the same 40 interfaces. One committed test fails, and it fails because the line it pins got better (see
-"The failing test").
+overlaps, zero tier contacts and zero ME interfaces off the network**; every **packed** row lays with **zero
+interface-target offenders** (the 11 committed rows that carry interface-target entries at baseline keep exactly those
+entries, unchanged, see "What was measured"). On the 40-machine wiring line (`lossLine(40, 'ae2')`, the line the
+committed wiring checks measure) the win is large: **150 → 75 blocks (−50%)**, cable **87 → 20**, loss **1,687 → 958
+EU/t (−43%)**, **10 unpowered machines → 0**, box **5×3×27 → 3×3×19**, with the same 40 interfaces. Two committed
+tests fail,
+and both pin the pre-AE2 shape the spike widens (see "The failing tests").
 
 Three conditions come with it:
 
@@ -33,29 +36,34 @@ Three conditions come with it:
 2. **The Wrench targets do the work.** A full-block ME Interface pushes into every neighbour unless wrenched, and A's
    and B's interfaces touch T's machine. Every interface gets `feed.interface.targets = [down]`, exactly its own
    machine: the harness checks every interface has one target, that it points into a machine, and that no machine has
-   two interfaces aimed at it. 0 offenders on every row.
-3. **`layout-bench.test.ts`'s weak-tier pin must be re-pinned** with the change: the 40-machine AE2 line is no longer
-   weak-wired (see below).
+   two interfaces aimed at it. 0 offenders on every packed row.
+3. **Two committed pins must be re-pinned** with the change: `layout-bench.test.ts`'s weak-tier pin (the 40-machine
+   AE2 line is no longer weak-wired) and `packed.test.ts`'s gate pin (packed candidates in direct and EnderIO only),
+   which this spike deliberately widens to AE2 (see "The failing tests").
 
 ## What was measured
 
 A temporary harness (`tests/unit/layout/tmp-spike-g.test.ts`, not committed) lays all 33 `benchLines()` in `ae2`
-through `layoutLine` twice — 66 rows — with `PROBE_PACKED=0` (BEFORE: the committed search) and `PROBE_PACKED=1`
-(AFTER: the same search plus the packed candidate), and reports `lengthOf(layout)` per row (`total` = cable + pipe +
-interface + chip + hookup blocks; chest and transformer are reported alongside, never counted). A row qualifies when
-`packedLine(placement.units)` holds and all its electric units share one feed tier (`Math.min(u.tier,
-stages.supplyTier)`): 7 of the 33.
+through `layoutLine` twice — 66 rows — with the committed `LayoutDeps.packing` flag `false` (BEFORE: the committed
+search) and `true` (AFTER: the same search plus the packed AE2 candidate); no env switch. It reports
+`lengthOf(layout)` per row (`total` = cable + pipe + interface + chip + hookup blocks; chest and transformer are
+reported alongside, never counted). A row qualifies when the search lays a packed candidate for it — `packs()`:
+`packedLine`, one feed tier (`Math.min(u.tier, stages.supplyTier)`) — 7 of the 33.
 
 `lossEUt`, `unpowered` and the layout's `mode` come from `lengthOf`; the chosen candidate and `search.rejected` from
 `Layout.search`; the offenders from the laid layout:
 
 - **overlaps** — `overlaps(layout.blocks)`: no cell holds two of the line's blocks. **0** on every row.
-- **tier contacts** — `tierContacts(...)` (`tests/helpers/power-loss.ts`), copied into the harness to read each
-  machine at `u.powerSide` instead of `u.facing`, because a packed machine is fed from the side its lane runs on.
-  **0** on every row.
+- **tier contacts** — `tierContacts(...)` (`tests/helpers/power-loss.ts`), which reads each machine at `u.powerSide`
+  (landed with RUK-2974), because a packed machine is fed from the side its lane runs on. **0** on every row.
 - **interface targets** — every interface block has exactly one Wrench target, that target points face-to-face into a
-  `role: 'machine'` cell, and every machine has exactly one interface aimed at it. **0** offenders on every row, on
-  the packed rows and on the rows the search left alone.
+  `role: 'machine'` cell, and every machine has exactly one interface aimed at it. **0** offenders on **every packed
+  row** — the spec's per-machine check, scoped to the packed lines. The check also ran on all 66 rows: 11 rows the
+  search left on the committed path carry interface-target entries **at baseline** — `fluid-00` (3), `fluid-02` (3),
+  `fluid-05` (9), `fluid-07` (4), `fluid-08` (6), `mixed-01` (3), `mixed-02` (6), `mixed-03` (6), `mixed-07` (3),
+  `mixed-15` (3), `mixed-18` (6) — e.g. `interface at 31,64,21 targets north into 31,64,20 (hatch), not a machine`,
+  `machine Basic Fluid Extractor at 29,64,19 has 0 interfaces aimed at it`. They are pre-existing committed-mode
+  artifacts (fluid rows fed by bus-only cells), **identical BEFORE → AFTER**: the packing gate does not touch them.
 - **ME grid** — cable and interface are grid nodes and adjacent grid nodes share a network (AE2 rv3-beta-1073-GTNH's
   grid helper joins adjacent grid tiles; a GT machine is not one), so every interface must reach the line's port cell.
   **0** offenders on every row, packed and not.
@@ -121,7 +129,7 @@ most:
 
 `loss-40` BEFORE warns `machine_unpowered` (10 machines the LV run could not feed) and its tier-1 run is flagged weak;
 AFTER carries `cable_amps`, `cable_loss_high` and `transformer_bank` only, powers all 40 machines, and its tier-1 run
-arrives at 16 V over 16 blocks — no longer weak (that is the failing test). Zero offenders on both rows.
+arrives at 16 V over 16 blocks — no longer weak (that is the first failing test). Zero offenders on both rows.
 
 ## The laid column, cell by cell
 
@@ -181,19 +189,28 @@ The 40-machine `lossLine(40, 'ae2')` AFTER, head and tail (local cells; `origin 
 
 109 laid blocks: 40 machines, 40 interfaces (the 40 channels), 20 GT cables, 6 ME glass, 3 transformers.
 
-## The failing test
+## The failing tests
 
 `npx vitest run tests/unit/layout/layout.test.ts tests/unit/layout/layout-bench.test.ts` with the patch applied: **35
-pass, 1 fails.** With `PROBE_PACKED=0` the same run is 36/36.
+pass, 1 fails**; adding `tests/unit/layout/packed.test.ts` (new on this tip): **38 pass, 2 fail.** Both failures pin
+the pre-AE2 shape the spike widens; the rest of the suite is green.
 
 - `tests/unit/layout/layout-bench.test.ts > layout benchmark > flags the 40-machine AE2 line's LV wiring as weak` —
   `expect(lengthOf(layout).weakTiers).toEqual([1])` gets `[]`. It measures `lossLine(40, 'ae2')`, which the packed
   candidate now wins (150 → 75 blocks), and the packed line's tier-1 run arrives at 16 V over 16 blocks: the weak test
   is `worstVolts × 2 < 8 × 4^tier`, and 32 is not below 32. The test pins a defect the packed line fixes, so promotion
   re-pins it (the honest assertion is now "the 40-machine AE2 line is wired without a weak tier and without
-  `machine_unpowered`"). `tests/unit/layout/layout.test.ts` passes in full — including the probe patch's own change
-  there, which reads a machine's power port on any face but the front, as GT allows, because a packed machine is fed
-  from the side its lane runs on (`PlacedUnit.powerSide`).
+  `machine_unpowered`").
+- `tests/unit/layout/packed.test.ts > the packed line as a search candidate > lays one packed candidate, last, in
+  direct and enderio only` — `ae2: no packed candidate: expected 1 to be 0`. The test pins the committed gate
+  (`packs()`: direct and EnderIO only, RUK-2974); this spike widens that gate to AE2, which is exactly what it
+  measures. Promotion re-pins it to "direct, EnderIO and AE2" and gives the AE2 mode its packed expectations (the
+  other two tests in the file pass unchanged).
+
+`tests/unit/layout/layout.test.ts` passes in full (its `isInputFacing` power-port reading, which a packed line needs,
+landed with RUK-2974). The rest of `layout-bench.test.ts` — including the baseline comparison, which may only be
+lowered — passes: no AE2 row exceeds its pinned baseline (four rows go shorter, 29 are equal), the 26 non-qualifying
+AE2 rows are byte-identical, and the patch leaves `direct`, `routed` and `enderio` untouched.
 
 ## What the spike found
 
@@ -229,9 +246,9 @@ pass, 1 fails.** With `PROBE_PACKED=0` the same run is 36/36.
 ```bash
 npm ci
 npx tsc -b
-git apply spikes/packed-ae2/change.patch   # SP-C's probe + SP-G's packed AE2 column
+git apply spikes/packed-ae2/change.patch   # the packed AE2 column, on the RUK-2974 tip (2c177bd80)
 npx vitest run tests/unit/layout/tmp-spike-g.test.ts    # the temporary harness, /tmp/spike-g*.json
-npx vitest run tests/unit/layout/layout.test.ts tests/unit/layout/layout-bench.test.ts
+npx vitest run tests/unit/layout/layout.test.ts tests/unit/layout/layout-bench.test.ts tests/unit/layout/packed.test.ts
 git checkout -- src/                                    # drop the prototype
 ```
 
@@ -241,15 +258,16 @@ offender checks and the per-row dumps above, and writes `/tmp/spike-g.json` (33 
 
 ## The patch
 
-`change.patch` (SP-C's probe + SP-G's packed AE2 column, one diff on a clean tree):
+`change.patch` (SP-G's packed AE2 column, one diff of three `src/` files on a clean checkout of the RUK-2974 tip):
 
-- `src/shared/types/layout.ts` — `CandidateKind.Packed = 3` (SP-C).
 - `src/server/layout/arrange.ts` — `PACKED_SLOTS_AE2` (T facing up, own interface cell `[x, 2, 1]`), `placePacked`'s
   `ownPorts` option, and `Placement.packed` telling the mode.
-- `src/server/layout/layout.ts` — the packed candidate in `buildLocal` for `direct`, `enderio` **and `ae2`** (SP-C's
-  gate, `PROBE_PACKED !== '0'`, `packedLine`, one feed tier) and `buildLocalAt`'s `packed: boolean | 'own'` (`'own'` =
-  AE2).
+- `src/server/layout/layout.ts` — `packs()` (committed by RUK-2974 for direct and EnderIO) widened to **AE2**, where
+  it returns `'own'`, and `buildLocalAt`'s `packed: boolean | 'own'` (`'own'` = `placePacked` with `ownPorts`). No
+  env gate.
 - `src/server/layout/modes/ae2.ts` — `PACKED_LANES`, the three lanes with their join, the riser skip, the port on the
   box's face, and the draft text ("on the lanes above the machines").
-- `tests/unit/layout/layout.test.ts` — SP-C's probe change: a machine is fed by a cable of its feed tier on any face
-  but the front, linked into it (`isInputFacing`, packed machines feed from their lane's side).
+
+Nothing else: `CandidateKind.Packed = 3` (`src/shared/types/layout.ts`), the `isInputFacing` power-port reading in
+`tests/unit/layout/layout.test.ts` and the `tierContacts` `powerSide` fix (`tests/helpers/power-loss.ts`) are
+committed on this tip (RUK-2974), so the patch carries no `tests/` and no types diff.
