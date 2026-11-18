@@ -527,7 +527,7 @@ describe('supply landing cells on the line boundary', () => {
 describe('machine_unpowered: the machines a tier\'s wiring cannot run', () => {
   it('warns which LV machines the 40-machine AE2 line cannot run', async () => {
     // 53 LV cable blocks to the farthest macerator leave it 1 V, and 30 EU/t at 2 A needs 15 V
-    const { layout } = await lossLine(40, 'ae2');
+    const { layout } = await lossLine(40, 'ae2', { packing: false });
     const unpowered = layout.warnings.filter((w) => w.code === 'machine_unpowered');
     expect(unpowered).toHaveLength(1);
     expect(unpowered[0]!.text.startsWith('The LV wiring cannot run ')).toBe(true);

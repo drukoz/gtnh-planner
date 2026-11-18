@@ -15,7 +15,7 @@ describe('the packed line as a search candidate', () => {
       const { layout } = await lossLine(10, mode);
       const kinds = layout.search!.candidates.map((c) => c.kind);
       const packed = kinds.filter((k) => k === CandidateKind.Packed);
-      if (mode === 'direct' || mode === 'enderio') {
+      if (mode !== 'routed') {
         expect(packed.length, `${mode}: one packed candidate`).toBe(1);
         expect(kinds.at(-1), `${mode}: packed laid last`).toBe(CandidateKind.Packed);
       } else {
@@ -48,5 +48,19 @@ describe('the packed line as a search candidate', () => {
     expect(layout.size).toEqual([7, 3, 3]);
     expect(overlaps(layout.blocks)).toEqual([]);
     expect(lengthOf(layout).total).toBe(26);
+  }, 60_000);
+
+  it('lays the 40-machine AE2 line packed, each ME Interface wrenched down into its own machine', async () => {
+    const { layout } = await lossLine(40, 'ae2');
+    expect(layout.search!.candidates[layout.search!.chosen]!.kind).toBe(CandidateKind.Packed);
+    const own = layout.blocks.filter((b) => b.hookup === undefined);
+    const at = new Map(own.map((b) => [b.pos.join(','), b]));
+    const interfaces = own.filter((b) => b.role === 'interface');
+    expect(interfaces).toHaveLength(40);
+    for (const iface of interfaces) {
+      expect(iface.feed?.interface?.targets, `interface at ${iface.pos.join(' ')} wrenched down`).toEqual(['down']);
+      const below = at.get(`${iface.pos[0]},${iface.pos[1] - 1},${iface.pos[2]}`);
+      expect(below?.role, `the block below the interface at ${iface.pos.join(' ')}`).toBe('machine');
+    }
   }, 60_000);
 });

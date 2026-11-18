@@ -58,7 +58,7 @@ export interface LayoutDeps {
   satellites?: boolean;
   /** Lay a stacked twin of every head candidate (RUK-2877); default true, false lays the line as before stacking (tests that pin it). */
   stacking?: boolean;
-  /** Lay a packed candidate (RUK-2877, `placePacked`) in direct and EnderIO; default true, false lays the line as before packing (tests that pin it). */
+  /** Lay a packed candidate (RUK-2877, `placePacked`) in direct, EnderIO and AE2 (with its own ports, spike SP-G); default true, false lays the line as before packing (tests that pin it). */
   packing?: boolean;
   /**
    * Tests only: called once, with the line of the layout returned — its placement and internal route as `buildLocal`
@@ -350,8 +350,9 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
     }
   }
   // the line packed three machines to a cable cell (RUK-2877), with the head at the west end; the baseline stays one of the lines above
-  if (packs(input)) {
-    lines.push(buildLocalAt(input, 0, false, true));
+  const packing = packs(input);
+  if (packing !== false) {
+    lines.push(buildLocalAt(input, 0, false, packing));
     kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
   }
   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
@@ -365,14 +366,18 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
 }
 
 /**
- * Whether `buildLocal` lays a packed candidate (RUK-2877): in direct and EnderIO only (a packed column's B and T share
- * one item port, which routed and AE2 do not allow: `PORT_SPACING`), when every unit can be packed (`packedLine`) and
- * every electric unit is fed at the same tier (`min(tier, supply)`): a second tier's lane could not get past the first's.
+ * How `buildLocal` lays a packed candidate (RUK-2877), false when it lays none: in direct, EnderIO and AE2 (routed is
+ * out; a packed column's B and T share one item port, which `PORT_SPACING` forbids there), when every unit can be
+ * packed (`packedLine`) and every electric unit is fed at the same tier (`min(tier, supply)`): a second tier's lane
+ * could not get past the first's.
+ * AE2 packs with `'own'` (spike SP-G): `PORT_SPACING.ae2` is 1, so AE2 may not share the B/T item port and the packed
+ * column gives every machine its own ME Interface cell above it (`placePacked` with `ownPorts`).
  */
-function packs(input: LocalInput): boolean {
-  if (!input.packing || (input.mode !== 'direct' && input.mode !== 'enderio') || !packedLine(input.units)) return false;
+function packs(input: LocalInput): boolean | 'own' {
+  if (!input.packing || (input.mode !== 'direct' && input.mode !== 'enderio' && input.mode !== 'ae2') || !packedLine(input.units)) return false;
   const supply = input.stages?.supplyTier;
-  return new Set(input.units.filter((u) => u.electric).map((u) => (supply === undefined ? -1 : Math.min(u.tier, supply)))).size <= 1;
+  if (new Set(input.units.filter((u) => u.electric).map((u) => (supply === undefined ? -1 : Math.min(u.tier, supply)))).size > 1) return false;
+  return input.mode === 'ae2' ? 'own' : true;
 }
 
 /**
@@ -383,12 +388,14 @@ function packs(input: LocalInput): boolean {
  * cells its multiblocks need kept empty as well as its blocks.
  * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
  * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
- * `packed` lays the whole line packed three machines to a cable cell (`placePacked`, RUK-2877), ignoring `westUnits` and `stack`.
+ * `packed` lays the whole line packed three machines to a cable cell (`placePacked`, RUK-2877), ignoring `westUnits` and
+ * `stack`; `'own'` gives every machine its own item port, the AE2 column with one ME Interface per machine
+ * (`placePacked` with `ownPorts`, spike SP-G).
  */
-function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed = false): LocalLine {
+function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed: boolean | 'own' = false): LocalLine {
   const { pack, plan, parts, mode, units, stages, network } = input;
-  const placement = packed
-    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }) })
+  const placement = packed !== false
+    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : {}) })
     : placeUnits(units, {
         headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
       });

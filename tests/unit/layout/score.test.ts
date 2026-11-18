@@ -46,7 +46,7 @@ describe('per-machine power report', () => {
   }, 30_000);
 
   it("reports the far macerators of the 40-machine AE2 loss line as unpowered", async () => {
-    const { layout, internal } = await lossLine(40, 'ae2');
+    const { layout, internal } = await lossLine(40, 'ae2', { packing: false });
     const dark = internal.machines.filter((m) => !m.powered);
     expect(dark.length, 'at least one unpowered macerator').toBeGreaterThan(0);
     expect(Math.min(...dark.map((m) => m.arrivingVolts)), 'the farthest gets under the 15 V it needs').toBeLessThan(15);

@@ -189,6 +189,12 @@ export interface Placement {
   spine: Vec3[];
   /** Where the spine ends and the tail chests hang (`LineTail`). */
   tail: LineTail;
+  /**
+   * The packed line is laid for AE2 (`placePacked` with `ownPorts`, spike SP-G): every machine has its own item port — an
+   * ME Interface cell above it (`PORT_SPACING.ae2` is 1, so AE2 may not share one) — on the lanes `[x, 1, 0]`, `[x, 1, 2]`
+   * and `[x, 2, 1]`. The `ae2` mode then lays its ME network on those lanes, joined at the tail column, and lays no risers.
+   */
+  packed?: true;
 }
 
 /**
@@ -1287,11 +1293,24 @@ export function packedLine(units: readonly Unit[]): boolean {
     && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0 && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1);
 }
 
-/** The three slots of a packed column and their faces (`placePacked`). */
+/** The three slots of a packed column and their faces (`placePacked`): B and T share the item port `[x, 1, 2]`. */
 const PACKED_SLOTS: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
   { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
   { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
   { cell: [0, 1, 1], facing: SOUTH, mainFacing: NORTH, powerSide: UP, items: [0, 1, 2] },
+];
+
+/**
+ * The three slots of a packed column laid for AE2 (`placePacked` with `ownPorts`, spike SP-G): AE2 may not share an item
+ * port (`PORT_SPACING.ae2` is 1), so each machine has its own cell above it, and the Wrench points that interface down
+ * into its machine — a full-block ME Interface pushes into every neighbour unless wrenched (machine-feeding §…:
+ * `feed.interface.targets`). T's output side moves from south to up, so it pushes into its own interface and not into
+ * B's; A's and B's interfaces touch T, and their Wrench targets keep them from pushing into it.
+ */
+const PACKED_SLOTS_AE2: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
+  { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
+  { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
+  { cell: [0, 1, 1], facing: UP, mainFacing: NORTH, powerSide: UP, items: [0, 2, 1] },
 ];
 
 /**
@@ -1307,9 +1326,13 @@ const PACKED_SLOTS: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: numb
  * join, south lane east→west); the input chest hangs below the tail cell and output chest i east of tail column cell
  * i. `spineZ` is 1; the box is `[tailX + 2, 2, 3]` (the output chests stand at `tailX + 1`; `buildLocalAt` counts the
  * rising tail column's height from the laid blocks).
+ * `ownPorts` (spike SP-G) lays the column for AE2 (`PACKED_SLOTS_AE2`): T's output side is up and every machine's item
+ * port is its own cell above it, `[x, 1, 0]`, `[x, 1, 2]` and `[x, 2, 1]`, so T's interface stands one cell higher and
+ * the box is one cell taller (`[x, 2, 1]` is a laid block, so `buildLocalAt` counts it); `packed` tells the mode.
  */
-export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number }): Placement {
+export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number; ownPorts?: boolean }): Placement {
   const { headWidth } = opts;
+  const slots = opts.ownPorts === true ? PACKED_SLOTS_AE2 : PACKED_SLOTS;
   const feedTier = (u: Unit): number | null => (opts.supplyTier === undefined || !u.electric ? null : Math.min(u.tier, opts.supplyTier));
   const ordered = lowestFeedFirst(units, feedTier);
   const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
@@ -1324,7 +1347,7 @@ export function placePacked(units: readonly Unit[], opts: { headWidth: number; s
       colX = lastX < 0 ? (tier === headTier ? firstX : firstX + 1) : lastX + (tier === prevTier ? 1 : 2);
       slot = 0;
     }
-    const s = PACKED_SLOTS[slot]!;
+    const s = slots[slot]!;
     const cell: Vec3 = [colX + s.cell[0], s.cell[1], s.cell[2]];
     const machine = u.cells.find((c) => c.role === 'machine') ?? u.cells[0]!;
     blocks.push({ pos: [...cell], block: { ...machine.block }, role: 'machine', facing: s.facing, mainFacing: s.mainFacing,
@@ -1346,7 +1369,8 @@ export function placePacked(units: readonly Unit[], opts: { headWidth: number; s
   for (let x = tailX; x >= firstX; x--) spine.push([x, 1, 2]);
   blocks.sort((a, b) => comparePos(a.pos, b.pos));
   return { units: placed, size: [tailX + 2, 2, 3], spineZ: 1, headX: 0, firstX, tailX, blocks, reserved: [],
-    spine, tail: { cell: [tailX, 1, 2], inputSide: DOWN, outputSide: EAST } };
+    spine, tail: { cell: [tailX, 1, 2], inputSide: DOWN, outputSide: EAST },
+    ...(opts.ownPorts === true ? { packed: true as const } : {}) };
 }
 
 /**
