@@ -39,7 +39,7 @@ import {
 } from './hookups.ts';
 import { fluidNets, headWidthFor, parallelRunParts, routeInternal, supplyRunLoss, type InternalResult } from './internal.ts';
 import { buildMode, PORT_SPACING, type ModeResult } from './modes/mode.ts';
-import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } from './parts.ts';
+import { ae2IdleEUt, COVER_RATES, pickHiAmpTransformer, pickTransformer, resolveParts, type Parts } from './parts.ts';
 import type { PathBounds } from './path.ts';
 import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
 import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
@@ -1132,7 +1132,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     // their step ids stay when farms come and go
     const stepsInput: StepsInput = {
       status: finish.status, pins, size: lineSize, ...(areas.length === 0 ? {} : { siteSize: worldSize }), site: finish.site,
-      units: line.placement.units, stages: stages?.stages ?? [], transformerName,
+      units: line.placement.units, transformerName,
+      stages: (stages?.stages ?? []).map((s) => ({ ...s, transformer: (s.hiAmp === true ? pickHiAmpTransformer(pack, s.toTier)?.name : undefined) ?? transformerName(s.toTier) })),
       cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
       satellites: line.internal.satellites.map((s, i) => ({ fromTier: s.fromTier, toTier: s.toTier, count: s.count, machines: s.machines.length,
         transformer: line.internal.blocks.find((b) => b.satellite === i)?.label ?? transformerName(s.toTier), hiAmp: s.hiAmp })),
