@@ -194,15 +194,15 @@ describe('satellite build steps (RUK-2679)', () => {
 // RUK-3027 (K1, `k1-fallback.patch`): when phase 2 starves a satellite, the line is routed again with that satellite's
 // supply input and its six neighbours kept free for the supply tier's feed. A candidate whose satellites survive today's
 // route is laid exactly as today, so the packed AE2 line keeps its satellites and the 80-machine lines power every machine.
-// The 40-machine AE2 total counts its 26-block rain roof (RUK-3032): 174 + 26 = 200.
+// The 40-machine AE2 line packs open since a satellite may not shut a machine in (RUK-3031, SP-L): 148 blocks, its 30-block roof included.
 describe('a satellite keeps its supply input free (RUK-3027 K1)', () => {
-  it('keeps every satellite of the 40-machine AE2 line, which stacks', async () => {
+  it('keeps the satellite of the 40-machine AE2 line, which packs open', async () => {
     const { layout, internal } = await lossLine(40, 'ae2', { satellites: true });
     const chosen = layout.search!.candidates[layout.search!.chosen]!;
-    expect(chosen.kind, 'the chosen candidate is the stacked line').toBe(CandidateKind.Stacked);
-    expect(internal.satellites, 'satellites kept').toHaveLength(3);
+    expect(chosen.kind, 'the chosen candidate is the open packed line').toBe(CandidateKind.PackedOpen);
+    expect(internal.satellites, 'satellites kept').toHaveLength(1);
     expect(internal.machines.filter((m) => m.powered === false).length, 'unpowered machines').toBe(0);
-    expect(lengthOf(layout).total, 'the 40-machine AE2 line total').toBe(200);
+    expect(lengthOf(layout).total, 'the 40-machine AE2 line total').toBe(148);
   }, 120_000);
 
   for (const mode of ['routed', 'ae2'] as const) {
@@ -227,6 +227,29 @@ describe('a satellite keeps its supply input free (RUK-3027 K1)', () => {
             expect(tierOf.get(b.label), `${n} ${mode} satellite ${String(i)} side ${side}`).toBe(s.fromTier);
           }
         });
+      }, 120_000);
+    }
+  }
+});
+
+// RUK-3031 (SP-L, promoted): a satellite's transformer is a full block, so `planSatellites` refuses a cell whose
+// transformer and input cable shut a machine in. The 40-machine AE2 line's packed column gets its bank two cells down
+// the spine at 15,1,3, and no satellite line reports a `machine_unreachable` machine anywhere.
+describe('a satellite never shuts a machine in (RUK-3031 SP-L)', () => {
+  it('moves the satellite of the 40-machine AE2 line off the shut-in cell', async () => {
+    const { layout, internal } = await lossLine(40, 'ae2', { satellites: true });
+    const chosen = layout.search!.candidates[layout.search!.chosen]!;
+    expect(chosen.kind, 'the chosen candidate is the open packed line').toBe(CandidateKind.PackedOpen);
+    expect(lengthOf(layout).unreachable, 'unreachable machines').toBe(0);
+    expect(internal.satellites.map((s) => s.cell), 'the satellite cell').toEqual([[15, 1, 3]]);
+  }, 120_000);
+
+  for (const n of [40, 80]) {
+    for (const mode of ['direct', 'routed', 'ae2', 'enderio'] as const) {
+      it(`leaves no machine unreachable on the ${n}-machine ${mode} line`, async () => {
+        const { layout } = await lossLine(n, mode, { satellites: true });
+        expect(lengthOf(layout).unreachable, `${n} ${mode}: unreachable machines`).toBe(0);
+        expect(layout.warnings.some((w) => w.code === 'machine_unreachable'), `${n} ${mode}: machine_unreachable warning`).toBe(false);
       }, 120_000);
     }
   }
