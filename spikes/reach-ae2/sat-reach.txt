@@ -1,0 +1,6 @@
+# 40-machine AE2 line with satellites, reach variant 0
+kept=west total=199 lossEUt=1527
+bench: total=232 lossEUt=2052 weak=[] unpowered=0 size=5x4x44
+satelliteBlocks=5 satelliteSteps=[layout:power:satellites:1]
+transformerBlocks=10 depsSatellites=undefined
+satelliteCells=20 65 0; 20 65 5; 20 65 11; 20 65 17; 20 65 25
