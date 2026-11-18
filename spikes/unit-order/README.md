@@ -97,6 +97,22 @@ Failures 2–4 are the frozen expectations of a spike's new candidate kind / the
 1 and 5–6 are the two things a follow-up must resolve before merge: the **guardrail regressions** (`mixed-14`,
 `fluid-09`, `fluid-02`) and the **large-line performance budget**.
 
+## Design goals (checked on the laid blocks, best variant O3 B=8)
+
+- **Every machine reachable (`unreachable`)** — no changed row gains a shut-in machine in any variant. Two rows
+  *improve*: `mixed-02 ae2` 2→1 and `mixed-18 ae2` 2→1 (2→0 at B=32). `m3-verify` promise 4 (unreachable ⇔
+  `machine_unreachable`) passes on every row except the frozen "2 machines" text of the improved `mixed-02 ae2`.
+- **No rain exposure under the roof** — `m3-verify` promise 5 (the roof covers every block GT rains on; a dry
+  biome lays none) passes with `o3.patch` applied. On changed rows the `roof` column drops or holds
+  (`mixed-01` 5→3, `mixed-02` 16→13, `mixed-07` 8→7); it grows only on the two regressed `fluid-09` rows
+  (9→10, 10→11), where the chosen line itself got 2 blocks longer — more line, more roof, still full cover.
+- **No new warning code** — across all 105 changed rows in the five `compare-*.md` files, `codes Δ` adds no code
+  anywhere; its single non-empty entry is `-machine_unreachable` on `mixed-18 ae2` at B=32, a code *removed* by
+  the reachability win. The only warning-related test failures are a changed *count* inside frozen text
+  (`mixed-02 ae2` now warns "1 machine" where `AE2_TEXT` says "2 machines"), not a new code.
+- **No machine front on its output side** — `m3-verify` promise 3 (front ≠ output side on >100 GT singleblocks,
+  no cable-tier contacts, no starved machines) passes with `o3.patch` applied.
+
 ## Recommendation
 
 Do not merge as-is — this is a spike. Adopting reorder candidates needs, at minimum, (a) eliminating the
