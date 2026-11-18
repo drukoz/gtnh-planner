@@ -1,0 +1,180 @@
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index 0275c120d..4623ab65c 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -1074,7 +1074,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+   let kept = chosen, keptLine = chosenLine;
+   if (search.chosen !== search.baseline) {
+     const baseline = await finishLine(baselineLine, { ...search, chosen: search.baseline, rejected: search.chosen });
+-    if (!finalReplaces(finalMeasure(chosen), finalMeasure(baseline))) { kept = baseline; keptLine = baselineLine; }
++    if (!finalReplaces(finalMeasure(chosen, chosenLine.score.unreachable), finalMeasure(baseline, baselineLine.score.unreachable))) { kept = baseline; keptLine = baselineLine; }
+   }
+   deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal });
+   return kept;
+diff --git a/src/server/layout/reach.ts b/src/server/layout/reach.ts
+new file mode 100644
+index 000000000..847135950
+--- /dev/null
++++ b/src/server/layout/reach.ts
+@@ -0,0 +1,54 @@
++// Reach (RUK-2571 design goal 3, RUK-2877): every machine of a line keeps a face a builder can work from outside the
++// line. A face counts when the cell beside it is air that connects to the outside of the line's box, or a thin block
++// (a cable, a pipe or conduit, a chip pipe: `THIN_ROLES`) whose own cell touches such air, as a builder clicks past it.
++// Full blocks (machines, casings, hatches, transformers, ME Interfaces, chests) close a face. The ground under the
++// line's floor (local y < 0) is solid. Pure.
++
++import type { Vec3 } from '../../shared/layout/geometry.ts';
++
++/** The roles of the thin blocks a builder can click past (GT cables and pipes, EnderIO conduits, ME glass cable, routed pipes). */
++export const THIN_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'chip_pipe']);
++
++const SIDES: readonly Vec3[] = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
++
++/**
++ * The machine blocks (role `machine`: a singleblock, or a multiblock's controller) of a line laid in its local grid
++ * that no builder can reach, in block order: none of its six neighbours is outside air, nor a thin block touching
++ * outside air. Outside air is every cell of the line's box grown by one on each side (not below the floor, y 0) that
++ * holds no block and is joined to the grown box's edge through such cells.
++ */
++export function unreachableMachines(blocks: ReadonlyArray<{ pos: Vec3; role: string }>): Vec3[] {
++  if (blocks.length === 0) return [];
++  const key = (p: Vec3): string => `${p[0]},${p[1]},${p[2]}`;
++  const solid = new Map<string, string>();
++  const lo: Vec3 = [Infinity, 0, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
++  for (const b of blocks) {
++    solid.set(key(b.pos), b.role);
++    for (let i = 0; i < 3; i++) { lo[i] = Math.min(lo[i]!, b.pos[i]!); hi[i] = Math.max(hi[i]!, b.pos[i]!); }
++  }
++  lo[0] -= 1; lo[2] -= 1; lo[1] = Math.max(0, lo[1] - 1);
++  hi[0] += 1; hi[1] += 1; hi[2] += 1;
++  const inBox = (p: Vec3): boolean => p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1] && p[2] >= lo[2] && p[2] <= hi[2];
++  const open = (p: Vec3): boolean => inBox(p) && !solid.has(key(p));
++  const outside = new Set<string>();
++  const queue: Vec3[] = [];
++  for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
++    const p: Vec3 = [x, y, z];
++    const edge = x === lo[0] || x === hi[0] || y === hi[1] || z === lo[2] || z === hi[2];
++    if (edge && open(p) && !outside.has(key(p))) { outside.add(key(p)); queue.push(p); }
++  }
++  while (queue.length > 0) {
++    const p = queue.pop()!;
++    for (const d of SIDES) {
++      const n: Vec3 = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
++      if (open(n) && !outside.has(key(n))) { outside.add(key(n)); queue.push(n); }
++    }
++  }
++  const touchesOutside = (p: Vec3): boolean => SIDES.some((d) => outside.has(key([p[0] + d[0], p[1] + d[1], p[2] + d[2]])));
++  return blocks.filter((b) => b.role === 'machine' && !SIDES.some((d) => {
++    const n: Vec3 = [b.pos[0] + d[0], b.pos[1] + d[1], b.pos[2] + d[2]];
++    if (outside.has(key(n))) return true;
++    const role = solid.get(key(n));
++    return role !== undefined && THIN_ROLES.has(role) && touchesOutside(n);
++  })).map((b) => [...b.pos] as Vec3);
++}
+diff --git a/src/server/layout/score.ts b/src/server/layout/score.ts
+index 1071825db..a38b68b90 100644
+--- a/src/server/layout/score.ts
++++ b/src/server/layout/score.ts
+@@ -8,13 +8,14 @@ import type { Layout, LineScore } from '../../shared/types/layout.ts';
+ import type { Vec3 } from '../../shared/layout/geometry.ts';
+ import type { LocalBlock } from './arrange.ts';
+ import type { MachinePower } from './internal.ts';
++import { unreachableMachines } from './reach.ts';
+ 
+ /** The roles whose blocks count in a line's length (the S1 benchmark's `total`; EnderIO conduits are `pipe`). */
+ export const LENGTH_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'interface', 'chip_pipe']);
+ 
+ /**
+  * Score a laid line (RUK-2571, plan Assumption 3): the connections left to make by hand (the `route_failed` warnings),
+- * the transformers its banks have no room for, the machines its wiring leaves too few volts to run, its blocks whose
++ * the machines no builder can reach (`unreachableMachines`, design goal 3: RUK-2877), the transformers its banks have no room for, the machines its wiring leaves too few volts to run, its blocks whose
+  * role is in `LENGTH_ROLES`, the EU/t its own wiring loses, and its bounding volume.
+  */
+ export function scoreLine(line: {
+@@ -23,6 +24,7 @@ export function scoreLine(line: {
+ }): LineScore {
+   return {
+     unwired: line.warnings.filter((w) => w.code === 'route_failed').length,
++    unreachable: unreachableMachines(line.blocks).length,
+     handTransformers: line.handTransformers,
+     unpowered: line.machines.filter((m) => !m.powered).length,
+     total: line.blocks.filter((b) => LENGTH_ROLES.has(b.role)).length,
+@@ -33,51 +35,52 @@ export function scoreLine(line: {
+ 
+ /**
+  * Compare two scores as the search ranks candidates (Assumption 3): the first field that differs decides, lower first;
+- * 0 when all are equal. Buildable comes first, and a bank short of room makes a line unbuildable whatever its count, so
++ * 0 when all are equal. Buildable comes first: no connection left by hand, every machine reachable (RUK-2877), and a bank short of room makes a line unbuildable whatever its count, so
+  * `handTransformers` ranks once as "any at all", then again after `unpowered` (RUK-2976): placing two more transformers
+  * by hand is easier than feeding a starved machine.
+  */
+ export function compareScore(a: LineScore, b: LineScore): number {
+-  return a.unwired - b.unwired || Number(a.handTransformers > 0) - Number(b.handTransformers > 0) || a.unpowered - b.unpowered
++  return a.unwired - b.unwired || a.unreachable - b.unreachable || Number(a.handTransformers > 0) - Number(b.handTransformers > 0) || a.unpowered - b.unpowered
+     || a.handTransformers - b.handTransformers || a.total - b.total || a.lossEUt - b.lossEUt || a.volume - b.volume;
+ }
+ 
+ /**
+  * True when `candidate` may replace today's line (plan Assumption 4): it scores better, leaves no more connections
+- * unwired, leaves its banks short of room only where today's are too, leaves no more transformers for its banks unless
+- * it powers more machines (RUK-2976), and either powers more machines or is both no longer and no lossier.
+- * A line therefore gets longer or lossier only to power a machine that today gets nothing usable.
++ * unwired and no more machines out of reach (RUK-2877), leaves its banks short of room only where today's are too, leaves no more transformers for its banks unless
++ * it powers more machines (RUK-2976), and either powers more machines, reaches more, or is both no longer and no lossier.
++ * A line therefore gets longer or lossier only to power a machine that today gets nothing usable, or to reach one.
+  */
+ export function replacesBaseline(candidate: LineScore, baseline: LineScore): boolean {
+   if (compareScore(candidate, baseline) >= 0) return false;
+-  if (candidate.unwired > baseline.unwired || (candidate.handTransformers > 0 && baseline.handTransformers === 0)) return false;
++  if (candidate.unwired > baseline.unwired || candidate.unreachable > baseline.unreachable || (candidate.handTransformers > 0 && baseline.handTransformers === 0)) return false;
+   if (candidate.unpowered === baseline.unpowered && candidate.handTransformers > baseline.handTransformers) return false;
+-  return candidate.unpowered < baseline.unpowered
++  return candidate.unpowered < baseline.unpowered || candidate.unreachable < baseline.unreachable
+     || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt);
+ }
+ 
+-/** What the benchmark measures of a finished layout (lengthOf): its connections left by hand, unpowered machines, length with its hookups, and loss. */
+-export interface FinalMeasure { unwired: number; unpowered: number; total: number; lossEUt: number }
++/** What the benchmark measures of a finished layout (lengthOf): its connections left by hand, unpowered machines, length with its hookups, and loss; and its machines out of reach, from its local line's score. */
++export interface FinalMeasure { unwired: number; unpowered: number; unreachable: number; total: number; lossEUt: number }
+ 
+ /**
+  * Measure a finished layout the way the S1 benchmark does (`lengthOf`): the `route_failed` warnings, the machines its
+  * wiring leaves too few volts to run, the length as its own `LENGTH_ROLES` blocks plus every hookup block, ghosts
+  * excluded, and the EU/t `Layout.loss` counts.
+  */
+-export function finalMeasure(layout: Pick<Layout, 'blocks' | 'warnings' | 'loss'>): FinalMeasure {
++export function finalMeasure(layout: Pick<Layout, 'blocks' | 'warnings' | 'loss'>, unreachable: number): FinalMeasure {
+   const own = layout.blocks.filter((b) => b.hookup === undefined && b.role !== 'ghost');
+   return {
+     unwired: layout.warnings.filter((w) => w.code === 'route_failed').length,
+     unpowered: layout.loss?.unpowered ?? 0,
++    unreachable,
+     total: own.filter((b) => LENGTH_ROLES.has(b.role)).length
+       + layout.blocks.filter((b) => b.hookup !== undefined && b.role !== 'ghost').length,
+     lossEUt: layout.loss?.totalEUt ?? 0,
+   };
+ }
+ 
+-/** True when a finished candidate may replace the finished baseline: no more unwired, and fewer unpowered, or as many and no longer and no lossier. */
++/** True when a finished candidate may replace the finished baseline: no more unwired, no more out of reach, and fewer unpowered, fewer out of reach, or as many of both and no longer and no lossier. */
+ export function finalReplaces(candidate: FinalMeasure, baseline: FinalMeasure): boolean {
+-  return candidate.unwired <= baseline.unwired
+-    && (candidate.unpowered < baseline.unpowered
++  return candidate.unwired <= baseline.unwired && candidate.unreachable <= baseline.unreachable
++    && (candidate.unpowered < baseline.unpowered || candidate.unreachable < baseline.unreachable
+       || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt));
+ }
+diff --git a/src/shared/types/layout.ts b/src/shared/types/layout.ts
+index 68ed6eee4..089222918 100644
+--- a/src/shared/types/layout.ts
++++ b/src/shared/types/layout.ts
+@@ -193,7 +193,7 @@ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
+  * higher), and its bounding volume.
+  */
+ export interface LineScore {
+-  unwired: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
++  unwired: number; unreachable: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
+ }
+ 
+ /**
