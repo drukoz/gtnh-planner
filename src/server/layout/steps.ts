@@ -49,9 +49,10 @@ export interface StepsInput {
   siteSize?: Vec3;
   /**
    * The line's satellite step-down banks (`InternalResult.satellites`), in that order: the tiers each steps between,
-   * the transformers it needs and how many machines it feeds. Absent or empty: no satellite step.
+   * the transformers it needs, how many machines it feeds, the name of the transformer it lays (its block's label) and
+   * whether that is a Hi-Amp Transformer. Absent or empty: no satellite step.
    */
-  satellites?: ReadonlyArray<{ fromTier: number; toTier: number; count: number; machines: number }>;
+  satellites?: ReadonlyArray<{ fromTier: number; toTier: number; count: number; machines: number; transformer: string; hiAmp: boolean }>;
 }
 
 type Group = NonNullable<BomLine['group']>;
@@ -307,9 +308,9 @@ function powerSteps(input: StepsInput, sitePin: number | undefined, powerPin: nu
       `Place ${fmtInt(s.count)}× ${input.transformerName(s.toTier)} between the ${from} and ${to} cables, front (input) toward ${from}`));
   }
   // satellite step-down banks (RUK-2668): one step per tier they step down to, highest first, right after the head stages
-  const byToTier = new Map<number, { fromTier: number; n: number; m: number }>();
+  const byToTier = new Map<number, { fromTier: number; n: number; m: number; transformer: string; hiAmp: boolean }>();
   for (const s of input.satellites ?? []) {
-    const g = byToTier.get(s.toTier) ?? { fromTier: s.fromTier, n: 0, m: 0 };
+    const g = byToTier.get(s.toTier) ?? { fromTier: s.fromTier, n: 0, m: 0, transformer: s.transformer, hiAmp: s.hiAmp };
     g.n += 1;
     g.m += s.machines;
     byToTier.set(s.toTier, g);
@@ -318,7 +319,7 @@ function powerSteps(input: StepsInput, sitePin: number | undefined, powerPin: nu
     const g = byToTier.get(toTier)!;
     const from = tierName(g.fromTier), to = tierName(toTier);
     out.push(draft(`layout:power:satellites:${toTier}`, 'power', sitePin,
-      `Place ${fmtInt(g.n)}× ${input.transformerName(toTier)} out along the line where the view marks them, one beside each group of far ${to} machines (${fmtInt(g.m)} machines in all): turn each one's front (input) up with a Wrench, into the ${from} cable above it; it feeds the ${to} cable beside it. Leave it in full mode; a screwdriver toggles half mode, which halves its amps`));
+      `Place ${fmtInt(g.n)}× ${g.transformer} out along the line where the view marks them, one beside each group of far ${to} machines (${fmtInt(g.m)} machines in all): turn each one's front (input) up with a Wrench, into the ${from} cable above it; it feeds the ${to} cable beside it${g.hiAmp ? '. Leave it in full mode; a screwdriver toggles half mode, which halves its amps' : ''}`));
   }
   // GT joins a cable to the block it is placed against, so two tiers must never touch (spec §3.5)
   const tiers = input.cables.map((c) => c.tier);

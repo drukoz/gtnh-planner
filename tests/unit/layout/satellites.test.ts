@@ -169,5 +169,10 @@ describe('satellite build steps (RUK-2679)', () => {
     satBlocks.forEach((b) => {
       expect(b.buildStep, `satellite transformer at ${posKey(b.pos)}`).toBe('layout:power:satellites:1');
     });
+    // the step names the transformer the satellites lay (GT++'s Hi-Amp Transformer here), not the head bank's
+    const text = layout.buildSteps.find((s) => s.id === 'layout:power:satellites:1')!.text;
+    expect(text).toContain(`× ${satBlocks[0]!.label} out along the line`);
+    expect(satBlocks[0]!.label).toContain('Hi-Amp');
+    expect(text).toContain('Leave it in full mode');
   }, 60_000);
 });

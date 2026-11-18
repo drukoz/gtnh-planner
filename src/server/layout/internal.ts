@@ -121,6 +121,8 @@ export interface SatelliteBank {
   ampsOut: number;
   /** Amps the bank takes at fromTier. */
   ampsIn: number;
+  /** The transformer laid is GT++'s Hi-Amp Transformer (RUK-2677), not the plain one; `count` counts Hi-Amp Transformers. */
+  hiAmp: boolean;
 }
 
 // ---- Small helpers ----
@@ -1322,7 +1324,7 @@ export function routeInternal(input: InternalInput): InternalResult {
         phase = phase2;
         satelliteBanks = satellites.map((s): SatelliteBank => ({
           fromTier: s.fromTier, toTier: s.tier, cell: [...s.cell], input: [...s.input], output: [...s.output],
-          machines: [...s.machineIdx].sort((a, b) => a - b), count: s.count, ampsOut: s.ampsOut, ampsIn: s.ampsIn,
+          machines: [...s.machineIdx].sort((a, b) => a - b), count: s.count, ampsOut: s.ampsOut, ampsIn: s.ampsIn, hiAmp: s.hiAmp,
         }));
       }
     }
