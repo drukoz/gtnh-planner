@@ -193,7 +193,7 @@ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
  * higher), and its bounding volume.
  */
 export interface LineScore {
-  unwired: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
+  unwired: number; unreachable: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
 }
 
 /**

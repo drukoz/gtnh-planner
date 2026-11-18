@@ -8,13 +8,14 @@ import type { Layout, LineScore } from '../../shared/types/layout.ts';
 import type { Vec3 } from '../../shared/layout/geometry.ts';
 import type { LocalBlock } from './arrange.ts';
 import type { MachinePower } from './internal.ts';
+import { unreachableMachines } from './reach.ts';
 
 /** The roles whose blocks count in a line's length (the S1 benchmark's `total`; EnderIO conduits are `pipe`). */
 export const LENGTH_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'interface', 'chip_pipe']);
 
 /**
  * Score a laid line (RUK-2571, plan Assumption 3): the connections left to make by hand (the `route_failed` warnings),
- * the transformers its banks have no room for, the machines its wiring leaves too few volts to run, its blocks whose
+ * the machines no builder can reach (`unreachableMachines`, design goal 3: RUK-2877), the transformers its banks have no room for, the machines its wiring leaves too few volts to run, its blocks whose
  * role is in `LENGTH_ROLES`, the EU/t its own wiring loses, and its bounding volume.
  */
 export function scoreLine(line: {
@@ -23,6 +24,7 @@ export function scoreLine(line: {
 }): LineScore {
   return {
     unwired: line.warnings.filter((w) => w.code === 'route_failed').length,
+    unreachable: unreachableMachines(line.blocks).length,
     handTransformers: line.handTransformers,
     unpowered: line.machines.filter((m) => !m.powered).length,
     total: line.blocks.filter((b) => LENGTH_ROLES.has(b.role)).length,
@@ -33,51 +35,52 @@ export function scoreLine(line: {
 
 /**
  * Compare two scores as the search ranks candidates (Assumption 3): the first field that differs decides, lower first;
- * 0 when all are equal. Buildable comes first, and a bank short of room makes a line unbuildable whatever its count, so
+ * 0 when all are equal. Buildable comes first: no connection left by hand, every machine reachable (RUK-2877), and a bank short of room makes a line unbuildable whatever its count, so
  * `handTransformers` ranks once as "any at all", then again after `unpowered` (RUK-2976): placing two more transformers
  * by hand is easier than feeding a starved machine.
  */
 export function compareScore(a: LineScore, b: LineScore): number {
-  return a.unwired - b.unwired || Number(a.handTransformers > 0) - Number(b.handTransformers > 0) || a.unpowered - b.unpowered
+  return a.unwired - b.unwired || a.unreachable - b.unreachable || Number(a.handTransformers > 0) - Number(b.handTransformers > 0) || a.unpowered - b.unpowered
     || a.handTransformers - b.handTransformers || a.total - b.total || a.lossEUt - b.lossEUt || a.volume - b.volume;
 }
 
 /**
  * True when `candidate` may replace today's line (plan Assumption 4): it scores better, leaves no more connections
- * unwired, leaves its banks short of room only where today's are too, leaves no more transformers for its banks unless
- * it powers more machines (RUK-2976), and either powers more machines or is both no longer and no lossier.
- * A line therefore gets longer or lossier only to power a machine that today gets nothing usable.
+ * unwired and no more machines out of reach (RUK-2877), leaves its banks short of room only where today's are too, leaves no more transformers for its banks unless
+ * it powers more machines (RUK-2976), and either powers more machines, reaches more, or is both no longer and no lossier.
+ * A line therefore gets longer or lossier only to power a machine that today gets nothing usable, or to reach one.
  */
 export function replacesBaseline(candidate: LineScore, baseline: LineScore): boolean {
   if (compareScore(candidate, baseline) >= 0) return false;
-  if (candidate.unwired > baseline.unwired || (candidate.handTransformers > 0 && baseline.handTransformers === 0)) return false;
+  if (candidate.unwired > baseline.unwired || candidate.unreachable > baseline.unreachable || (candidate.handTransformers > 0 && baseline.handTransformers === 0)) return false;
   if (candidate.unpowered === baseline.unpowered && candidate.handTransformers > baseline.handTransformers) return false;
-  return candidate.unpowered < baseline.unpowered
+  return candidate.unpowered < baseline.unpowered || candidate.unreachable < baseline.unreachable
     || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt);
 }
 
-/** What the benchmark measures of a finished layout (lengthOf): its connections left by hand, unpowered machines, length with its hookups, and loss. */
-export interface FinalMeasure { unwired: number; unpowered: number; total: number; lossEUt: number }
+/** What the benchmark measures of a finished layout (lengthOf): its connections left by hand, unpowered machines, length with its hookups, and loss; and its machines out of reach, from its local line's score. */
+export interface FinalMeasure { unwired: number; unpowered: number; unreachable: number; total: number; lossEUt: number }
 
 /**
  * Measure a finished layout the way the S1 benchmark does (`lengthOf`): the `route_failed` warnings, the machines its
  * wiring leaves too few volts to run, the length as its own `LENGTH_ROLES` blocks plus every hookup block, ghosts
  * excluded, and the EU/t `Layout.loss` counts.
  */
-export function finalMeasure(layout: Pick<Layout, 'blocks' | 'warnings' | 'loss'>): FinalMeasure {
+export function finalMeasure(layout: Pick<Layout, 'blocks' | 'warnings' | 'loss'>, unreachable: number): FinalMeasure {
   const own = layout.blocks.filter((b) => b.hookup === undefined && b.role !== 'ghost');
   return {
     unwired: layout.warnings.filter((w) => w.code === 'route_failed').length,
     unpowered: layout.loss?.unpowered ?? 0,
+    unreachable,
     total: own.filter((b) => LENGTH_ROLES.has(b.role)).length
       + layout.blocks.filter((b) => b.hookup !== undefined && b.role !== 'ghost').length,
     lossEUt: layout.loss?.totalEUt ?? 0,
   };
 }
 
-/** True when a finished candidate may replace the finished baseline: no more unwired, and fewer unpowered, or as many and no longer and no lossier. */
+/** True when a finished candidate may replace the finished baseline: no more unwired, no more out of reach, and fewer unpowered, fewer out of reach, or as many of both and no longer and no lossier. */
 export function finalReplaces(candidate: FinalMeasure, baseline: FinalMeasure): boolean {
-  return candidate.unwired <= baseline.unwired
-    && (candidate.unpowered < baseline.unpowered
+  return candidate.unwired <= baseline.unwired && candidate.unreachable <= baseline.unreachable
+    && (candidate.unpowered < baseline.unpowered || candidate.unreachable < baseline.unreachable
       || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt));
 }

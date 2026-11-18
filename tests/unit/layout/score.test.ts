@@ -25,7 +25,7 @@ const score = (over: Partial<LineScore> = {}): LineScore => ({
 });
 
 const measure = (over: Partial<FinalMeasure> = {}): FinalMeasure => ({
-  unwired: 0, unpowered: 0, total: 20, lossEUt: 100, ...over,
+  unwired: 0, unpowered: 0, unreachable: 0, total: 20, lossEUt: 100, ...over,
 });
 
 /** A laid block, in the world: `hookup` set when a hookup's run laid it. */
@@ -74,7 +74,7 @@ describe('line score', () => {
       warnings, machines: [machine(true), machine(false)],
       handTransformers: 0, lossEUt: 42, size: [2, 3, 4],
     });
-    expect(got).toEqual({ unwired: 1, handTransformers: 0, unpowered: 1, total: 3, lossEUt: 42, volume: 24 });
+    expect(got).toEqual({ unwired: 1, unreachable: 0, handTransformers: 0, unpowered: 1, total: 3, lossEUt: 42, volume: 24 });
   });
 
   it('compares scores field by field', () => {
@@ -126,5 +126,26 @@ describe('the score order (RUK-2976)', () => {
     expect(replacesBaseline(s({ handTransformers: 4, unpowered: 7 }), s({ handTransformers: 2, unpowered: 16 }))).toBe(true);
     expect(replacesBaseline(s({ handTransformers: 1, unpowered: 0 }), s({ handTransformers: 0, unpowered: 3 }))).toBe(false);
     expect(replacesBaseline(s({ handTransformers: 4, unpowered: 7, total: 10 }), s({ handTransformers: 2, unpowered: 7 }))).toBe(false);
+  });
+});
+
+describe('reach in the score (RUK-2877)', () => {
+  it('ranks a line that shuts a machine in after one that reaches, even when it starves and hand-builds fewer', () => {
+    expect(compareScore(score({ unreachable: 1, unpowered: 0, handTransformers: 0 }), score({ unreachable: 0, unpowered: 5, handTransformers: 3 })),
+      '1 unreachable ranks after 0').toBeGreaterThan(0);
+  });
+
+  it('refuses a candidate that shuts in more machines than the baseline, even when better on everything else', () => {
+    const base = score({ unreachable: 0 });
+    expect(replacesBaseline(score({ unreachable: 1, total: 18, lossEUt: 90 }), base), 'one more unreachable, shorter and less lossy').toBe(false);
+  });
+
+  it('lets a candidate that shuts in fewer machines replace the baseline even when longer and lossier', () => {
+    expect(replacesBaseline(score({ unreachable: 0, total: 30, lossEUt: 200 }), score({ unreachable: 2 })), 'one fewer unreachable, longer and lossier').toBe(true);
+  });
+
+  it('gives the finished baseline the same two answers', () => {
+    expect(finalReplaces(measure({ unreachable: 1, total: 18, lossEUt: 90 }), measure()), 'one more unreachable, shorter and less lossy').toBe(false);
+    expect(finalReplaces(measure({ unreachable: 0, total: 30, lossEUt: 200 }), measure({ unreachable: 2 })), 'one fewer unreachable, longer and lossier').toBe(true);
   });
 });
