@@ -194,6 +194,7 @@ describe('satellite build steps (RUK-2679)', () => {
 // RUK-3027 (K1, `k1-fallback.patch`): when phase 2 starves a satellite, the line is routed again with that satellite's
 // supply input and its six neighbours kept free for the supply tier's feed. A candidate whose satellites survive today's
 // route is laid exactly as today, so the packed AE2 line keeps its satellites and the 80-machine lines power every machine.
+// The 40-machine AE2 total counts its 26-block rain roof (RUK-3032): 174 + 26 = 200.
 describe('a satellite keeps its supply input free (RUK-3027 K1)', () => {
   it('keeps every satellite of the 40-machine AE2 line, which stacks', async () => {
     const { layout, internal } = await lossLine(40, 'ae2', { satellites: true });
@@ -201,7 +202,7 @@ describe('a satellite keeps its supply input free (RUK-3027 K1)', () => {
     expect(chosen.kind, 'the chosen candidate is the stacked line').toBe(CandidateKind.Stacked);
     expect(internal.satellites, 'satellites kept').toHaveLength(3);
     expect(internal.machines.filter((m) => m.powered === false).length, 'unpowered machines').toBe(0);
-    expect(lengthOf(layout).total, 'the 40-machine AE2 line total').toBe(174);
+    expect(lengthOf(layout).total, 'the 40-machine AE2 line total').toBe(200);
   }, 120_000);
 
   for (const mode of ['routed', 'ae2'] as const) {

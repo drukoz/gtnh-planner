@@ -170,7 +170,7 @@ export interface SpotLike { cell: Vec3; side: number; face: string | null; at?: 
  * of a line's own) inside a block the 3D view draws whole, one line per link: its edge, how many, and which blocks.
  */
 export function arcsThroughBlocks(layout: Layout, links: ReadonlyArray<{ span: { edge: string }; path: Vec3[] }>): string[] {
-  const solid = new Map(layout.blocks.filter((b) => b.role !== 'ghost' && !THIN.has(b.role))
+  const solid = new Map(layout.blocks.filter((b) => b.role !== 'ghost' && b.role !== 'roof' && !THIN.has(b.role))
     .map((b) => [posKey([b.pos[0] - layout.origin[0], b.pos[1] - layout.origin[1], b.pos[2] - layout.origin[2]]), b.label]));
   return links.flatMap((l) => {
     const hits = new Set<string>();

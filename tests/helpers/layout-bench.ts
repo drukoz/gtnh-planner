@@ -41,6 +41,8 @@ export interface LengthReport {
   transformer: number;
   /** The line's own chests: reported, not counted in `total`. */
   chest: number;
+  /** The rain roof's blocks over the line (RUK-2877, design goal 7): counted in `total`. */
+  roof: number;
   /** Every block belonging to a hookup (its power run and its logistics runs), ghosts excluded. */
   hookup: number;
   /** EU/t the power need counts, read off `Layout.loss.totalEUt` (0 when the layout reports no loss). */
@@ -76,14 +78,16 @@ export function lengthOf(layout: Layout): LengthMeasure {
   const pipe = countRole(own, 'pipe');
   const iface = countRole(own, 'interface');
   const chip = countRole(own, 'chip_pipe');
+  const roof = countRole(own, 'roof');
   const tiers = (layout.loss?.tiers ?? []).map((t) => ({ tier: t.tier, worstBlocks: t.worstBlocks, worstVolts: t.worstVolts }));
   return {
     mode: layout.mode,
     size: layout.size,
-    total: cable + pipe + iface + chip + hookup,
+    total: cable + pipe + iface + chip + roof + hookup,
     cable, pipe, iface, chip,
     transformer: countRole(own, 'transformer'),
     chest: countRole(own, 'chest'),
+    roof,
     hookup,
     lossEUt: layout.loss?.totalEUt ?? 0,
     tiers,

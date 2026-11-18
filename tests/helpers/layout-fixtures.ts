@@ -163,6 +163,7 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
   ['gregtech:gt.metaitem.01@32611', 'Electric Pump (MV)'],
   ['gregtech:gt.metaitem.01@32270', 'Filtered Conveyor Cover (Export)'],
   ['minecraft:chest@0', 'Chest'],
+  ['minecraft:glass@0', 'Glass'],
   ['EnderIO:itemItemConduit@0', 'Item Conduit'],
   ['EnderIO:itemBasicFilterUpgrade@0', 'Basic Item Filter'],
   ['EnderIO:itemBasicFilterUpgrade@1', 'Advanced Item Filter'],

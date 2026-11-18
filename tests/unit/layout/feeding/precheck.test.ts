@@ -260,8 +260,8 @@ describe('precheckFeeding', () => {
     expect(push.map(brief)).toEqual(['feed_pool_starve certain - Basic Macerator at 1 64 1']);
     expect(push[0]!.text).toBe('Basic Macerator at 1 64 1 runs 2 recipes in Project Red: it reruns its last recipe while that recipe\'s output waits, so Why can starve');
     const ae2 = await run('ae2');
-    expect(ae2.map(brief)).toEqual(['feed_pool_starve risk - Basic Macerator at 1 64 0']);
-    expect(ae2[0]!.text).toBe("Basic Macerator at 1 64 0 runs 2 recipes and ME Interface (Basic Macerator) at 1 65 0 has blocking mode off: it mixes the recipes' sets");
+    expect(ae2.map(brief)).toEqual(['feed_pool_starve risk - Basic Macerator at 1 64 1']);
+    expect(ae2[0]!.text).toBe("Basic Macerator at 1 64 1 runs 2 recipes and ME Interface (Basic Macerator) at 1 65 1 has blocking mode off: it mixes the recipes' sets");
     // blocking mode on pushes one recipe's set at a time into an empty machine: nothing to say
     expect(await run('ae2', true)).toEqual([]);
     // an interface that holds no pattern is never pushed into, so it mixes nothing (main lays one on a multiblock's second input
