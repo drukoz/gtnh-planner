@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **phase 2 plan**, 2026-11-16, written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: SP-D and SP-E measured, M3-1, M3-2 and SP-F started**, 2026-11-18. Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -35,6 +35,9 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
    I will ask you about in the PR, with the numbers.)
 5. RUK-351 is folded into this program: M1 reports unpowered machines honestly, M2 powers them.
 6. AE2 lines get port spacing 1 with Wrench targets on every interface (RUK-119; proven first by spike SP-A).
+7. The packed shape (design goal 2) is SP-E's 3-wide, 2-high column: machines A and B beside the cable lane, T on top
+   of it, logistics at y 1 above A and B. The design's 5-wide `logistics | machine | cable | machine | logistics` leaves
+   the machine on top with no face onto the logistics. (Added 2026-11-18, M3.)
 
 ## Target architecture
 
@@ -71,7 +74,7 @@ layoutLine (layout.ts)
 Each milestone is a parent task under RUK-2571 with its own branch (`feat/optimal-layout-m<N>`, cut from the one
 before), merged into `feat/optimal-layout` when verified. One pull request for the whole program: #18.
 
-### M1 — an honest score and the search loop (today's geometry)
+### M1 — an honest score and the search loop (today's geometry) — RUK-2613, **done**, branch `feat/optimal-layout-m1`
 
 What you see: a line whose far machines get too few volts to run is no longer silently `ok`: it says which machines,
 on which tier. The 3D tab says how many wiring and logistics blocks the line takes and how many layouts were tried,
@@ -79,37 +82,67 @@ with today's rule's line beside the chosen one.
 
 | subtask | what | depends on |
 |---|---|---|
-| M1-1 | contract: `InternalResult.machines` (per-machine volts, amps, powered); `score.ts`; shared types `LayoutSearch`, `LayoutCandidate`, `CandidateKind` | — |
-| M1-2 | `machine_unpowered` warning per tier; the S1 benchmark gains `unpowered`, and its ratchet the "only to power a machine" rule | M1-1 |
-| M1-3 | `buildLocal` as a scored candidate loop with the never-worse rule; `Layout.search` filled by `layoutLine` | M1-1 |
-| M1-4 | 3D tab panel "Layout search" from `Layout.search` | M1-1 (types only) |
-| M1-V | verification: QA on the milestone branch (benchmark, the user's view, determinism) | M1-2, M1-3, M1-4 |
+| M1-1 RUK-2614 | contract: `InternalResult.machines` (per-machine volts, amps, powered); `score.ts`; shared types `LayoutSearch`, `LayoutCandidate`, `CandidateKind` | — |
+| M1-2 RUK-2617 | `machine_unpowered` warning per tier; the S1 benchmark gains `unpowered`, and its ratchet the "only to power a machine" rule | M1-1 |
+| M1-3 RUK-2618 | `buildLocal` as a scored candidate loop with the never-worse rule; `Layout.search` filled by `layoutLine` | M1-1 |
+| M1-4 RUK-2619 | 3D tab panel "Layout search" from `Layout.search` | M1-1 (types only) |
+| M1-V RUK-2621 | verification: QA on the milestone branch (benchmark, the user's view, determinism) | M1-2, M1-3, M1-4 |
 
 M1 changes no chosen layout except where a candidate is better by the never-worse rule; with only today's head
 candidates in the loop that is expected to be rare. Its value is the honest report and the frame M2–M4 fill.
 
-### M2 — better wiring on today's placement (every machine powered, shorter trees, AE2 halved)
+### M2 — every machine powered, AE2 at spacing 1 — RUK-2668, **done**, branch `feat/optimal-layout-m2`
 
-- **Power every machine** (RUK-351's fix): when a tier has unpowered machines, candidates that feed it from a second
-  transformer bank nearer the far machines (the supply run carries the higher tier, which loses ~4× less per volt), or
-  from a middle head. Prototyped by me before it is specced (lesson RUK-121: measure the claim first).
-- **AE2 spacing 1** with Wrench targets, if SP-A holds: expected about −40 % cable on AE2 lines.
-- **Shorter cable trees**: the rip-up-and-reroute pass on `growTree`, if SP-B shows a gain without making any row longer;
-  a Dreyfus–Wagner oracle in the tests for small tiers.
-- Each item enters the loop as a candidate option, so the never-worse rule still holds.
+Measured on the M1 branch (2026-11-16) before planning it: of the 59 benchmark rows with `unpowered > 0`, only 7 are
+starved by wiring (`loss-10 ae2`, `loss-20 routed/ae2`, `loss-40` in all four modes: 90 LV macerators). The other 52
+are HV machines on an MV supply, which `power_tier_low` already names and no wiring can fix. No head position cures
+the 7 (the best middle head still leaves 7 of 40 starved in direct, 31 in AE2).
 
-### M3 — new shapes (the placement contract, then rows, L, U and stacking)
+| subtask | what | depends on |
+|---|---|---|
+| M2-1 RUK-2670 | every ME Interface gets a Wrench target at its own machine; R12 looks only at target faces; the build text says to wrench it | — |
+| M2-2 RUK-2671 | `PORT_SPACING.ae2` 2 → 1, the 16 geometry tests SP-A listed, baseline lowered (SP-A: AE2 total −24 %, loss −61 %) | M2-1 |
+| SP-C RUK-2669 | spike: satellite step-down banks out along the line, fed by the higher tier (a GT transformer re-sends at its full output voltage) | — |
+| M2-3… | the satellite banks as a search candidate, specced from SP-C's numbers (or dropped, with the reason, if SP-C fails) | SP-C |
+| M2-V | QA verification of the milestone branch | all above |
 
-1. **Contract, no behaviour change**: `Placement` gains the spine path, tail cells, head runs, service cells and power
-   port (R1's 40 locations: 24 S, 16 M; the client and projector untouched). Direct and routed lay along the path (S each,
-   R3a), AE2 (M, R3b), EnderIO (L: tail, chests, open ends, fluid roots). The benchmark must give **identical** rows.
-2. **Shapes as candidates**: a single row, an L, a U, single-block machines stacked two high (direct, routed and EnderIO
-   already lay a port at y 1, R3; AE2 needs the Wrench targets of M2), each laid and scored in the loop.
-3. **Shared cable runs** (design goal 2): one cable block feeds up to three machines (left, right, on top); tiers still
-   never touch.
-4. **Reach and rain** (goals 3 and 7): every machine has a face onto an air cell open to the outside; exposed machines
-   get a roof or covers when the site is open to the sky, counted in the score.
-5. Build-step words relative to each unit's own facing, not "the middle row" (`steps.ts`, R1 addendum).
+Dropped from M2: **shorter trees (SP-B)**. Four terminal orders save 25 cable blocks on 9 of 132 rows, every one of
+them lossier, for 1.43× the time; rip-up and reroute adds nothing (reuse ledger row 5).
+
+### M3 — new shapes (stacking, the packed shape, then the placement contract) — RUK-2877, branch `feat/optimal-layout-m3`
+
+M2's result: 0 machines starved by wiring (90 before), AE2 total −21 %, loss over 132 rows 75 143 → 45 936 EU/t.
+
+**What the spikes measured** (RUK-121 rule: no spec before the numbers):
+- **SP-D** RUK-2878, stacking single-block machines two high (`spikes/stacking/`). Forced on every line it saves 349
+  blocks and 98 footprint columns but starves 20 machines on `loss-40` routed/AE2. **As a scored candidate** (CTO probe,
+  addendum in the README) it improves 52 of 132 rows and makes none worse, **but only once the finished layout judges
+  the finalists**: the in-line score cannot see the hookup, and 14 rows got worse without that check (`mixed-17 direct`:
+  hookup 17 → 21). Per mode: direct 1 813 → 1 806 blocks, routed 2 293 → 2 245, AE2 2 187 → 2 138, EnderIO
+  1 760 → 1 755; loss −1.9 % (direct, EnderIO) and −3.3 % (routed, AE2); no warning code added; `runBench` 0.65 → 1.1 s.
+- **SP-E** RUK-2879, the packed shape: one cable lane, a machine on each side and one on top (`spikes/shared-cable/`).
+  On the 20 lines of plain single-block machines, direct cable −63 % and loss −14 %, cable + logistics (counted, not
+  laid) −44 %. Three limits: lines with two feed tiers cannot be wired (the far tier has no way past the near tier's
+  lane); one lane of 24 columns starves its far end (`loss-60`: 15 machines), which the score already rejects; and two
+  machines share one item port, which only direct and EnderIO allow (`PORT_SPACING` 0). Routed and AE2 need a cell per
+  port, so a different column.
+
+The packed shape follows Assumption 7.
+
+| subtask | what | depends on |
+|---|---|---|
+| M3-1 RUK-2899 | the finished layout judges the finalists: when the search keeps another line, `layoutLine` finishes the baseline too and keeps the chosen line only if it is no worse with its hookups (`finalReplaces`). Changes no row today | — |
+| M3-2 RUK-2901 | stacking as a candidate: a stacked twin of every head candidate (`CandidateKind.Stacked = 2`); baseline lowered on 52 rows | M3-1 |
+| SP-F RUK-2900 | spike: the packed shape with its pipes, conduits, tail chests and hookups laid for real in direct and EnderIO, one-feed-tier lines; writes down the `Placement` fields the modes need (`spine` cells, `tail` cell and sides) | — |
+| M3-3… | the placement contract, specced from SP-F's patch: `Placement.spine`/`tail`/`powerSide` filled identically by `placeUnits` (identical rows), then each mode lays along them | SP-F |
+| M3-P | the packed shape as a candidate in direct and EnderIO | M3-1, M3-3… |
+| SP-G | spike: a packed column for routed and AE2 with a cell per port (T's port on top) | SP-F |
+| later in M3 | build-step words from each unit's own facing (`steps.ts`); reach and rain cover counted in the score (goals 3, 7) | the shapes they describe |
+| M3-V | QA verification of the milestone branch | all above |
+
+Deferred from M3, with the reason: **L and U shapes** and a single row. Nothing has measured them, they need the
+power-head and hookup seams of the contract (R1: `planHead`, `bankRows`, `chooseSite`), and the two measured shapes
+already take the cable where it pays. A spike for them comes after the packed shape lands, if you still want them.
 
 ### M4 — search the orders, and calibrate
 
@@ -117,10 +150,11 @@ candidates in the loop that is expected to be rare. Its value is the honest repo
 - Timing on the user's real line (`GTNH_LOCAL=1` tests on their planner): about a second.
 - Design goal 9: the planner's per-machine logistics estimate updated to the new layouts' measured blocks per machine.
 
-## Spikes running beside M1
+## Spikes
 
-- **SP-A** AE2 spacing 1 with Wrench targets (ledger row 8).
-- **SP-B** a rip-up-and-reroute pass over each tier's cable tree (ledger row 5).
+- **SP-A** (RUK-2615) AE2 spacing 1 with Wrench targets: holds; M2-1 and M2-2 (ledger row 8).
+- **SP-B** (RUK-2616) shorter cable trees: does not pay; dropped (ledger row 5).
+- **SP-C** (RUK-2669) satellite step-down banks for long low-tier lines (ledger row 13): running beside M2-1.
 
 ## Checklist (programs.md) before implementation subtasks
 
