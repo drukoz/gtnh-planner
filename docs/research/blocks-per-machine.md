@@ -6,7 +6,9 @@ logistics estimate in the build model (add-on 19, `plan/19-logistics-cost`, whic
 has no such estimate today) can read its numbers from here. This is a measurement: nothing under `src/` or `tests/`
 changed.
 
-- M4 rows: `spikes/blocks-per-machine/rows-m4.txt`, laid at `b84f2e686` (this branch).
+- M4 rows: `spikes/blocks-per-machine/rows-m4.txt`, laid at `b84f2e686` (this branch, before the unit-order search).
+- M4 rows with the unit-order search (RUK-3068): `spikes/blocks-per-machine/rows-m4-reorder.txt`, laid at `cd493333b`
+  by the M4 verification (RUK-3072). See "After the unit-order search" below.
 - M2 rows: `spikes/blocks-per-machine/rows-m2.txt`, laid at `dab26f5f7` (M2 merged into the program branch).
 - The test that produced both: `spikes/blocks-per-machine/measure.test.ts.txt`.
 
@@ -23,7 +25,8 @@ RUK-2877, M3), so its roof column is 0 by definition, and its search knows no ki
 (`spikes/blocks-per-machine/rows-m2.txt` uses the numbers 0 and 1 only).
 
 `CandidateKind` (`src/shared/types/layout.ts:185`) numbers the line the layout search chose: `WestHead` 0,
-`MiddleHead` 1, `Stacked` 2, `Packed` 3, `PackedOpen` 4. The rows files give the numbers; the tables give the names.
+`MiddleHead` 1, `Stacked` 2, `Packed` 3, `PackedOpen` 4, `Reordered` 5 (RUK-3068; only `rows-m4-reorder.txt` has it).
+The rows files give the numbers; the tables give the names.
 
 ## Table 1 — per mode, M2 against M4
 
@@ -123,6 +126,84 @@ cell divided by the row's `machines`.
 | fluid (10 lines) | M4 | 40 | 220 | 1105 | 416 | 38 | 71 | 720 | 349 | 2699 |
 | bench loss 60/80 | M2 | 8 | 560 | 1056 | 182 | 140 | 144 | 193 | 0 | 1715 |
 | bench loss 60/80 | M4 | 8 | 560 | 715 | 197 | 140 | 144 | 137 | 442 | 1775 |
+
+## After the unit-order search
+
+Tables 1-3 above were laid at `b84f2e686`, before M4's unit-order search (RUK-3068) was merged. The M4 verification
+(RUK-3072) re-ran the same harness on `cd493333b`, which has the search, into `rows-m4-reorder.txt`. It differs from
+`rows-m4.txt` on **22 of 140 rows**, all of them mixed lines: `mixed-01` (direct, enderio), `mixed-02` and `mixed-03`
+(all four modes), `mixed-07` (direct, routed, enderio), `mixed-09` (direct, ae2, enderio), `mixed-13` routed,
+`mixed-14` (routed, ae2), `mixed-17` (routed, ae2) and `mixed-18` ae2. Every changed row chose a `Reordered` line.
+No loss or fluid row changed, and neither did `lossLine(60)` or `lossLine(80)`: the search's cap,
+`min(8, floor(160 / movable machines))`, gives the long lines few or no swaps, and no fluid line's reordered candidate
+beat the line M3 kept.
+
+### Table 4: per mode, before and after the search
+
+| mode | rev | rows | machines | cable | pipe | iface | chip | hookup | roof | sum |
+|---|---|---|---|---|---|---|---|---|---|---|
+| direct | M4 before | 35 | 376 | 2.93 | 1.01 | 0.00 | 0.00 | 1.54 | 1.11 | 6.59 |
+| direct | M4 after | 35 | 376 | 2.91 | 1.01 | 0.00 | 0.00 | 1.54 | 1.10 | 6.55 |
+| routed | M4 before | 35 | 376 | 3.57 | 0.48 | 0.00 | 1.20 | 1.70 | 1.39 | 8.34 |
+| routed | M4 after | 35 | 376 | 3.55 | 0.48 | 0.00 | 1.20 | 1.70 | 1.38 | 8.32 |
+| ae2 | M4 before | 35 | 376 | 2.72 | 0.55 | 0.98 | 0.00 | 1.64 | 1.28 | 7.16 |
+| ae2 | M4 after | 35 | 376 | 2.70 | 0.55 | 0.98 | 0.00 | 1.64 | 1.26 | 7.14 |
+| enderio | M4 before | 35 | 376 | 2.92 | 0.81 | 0.00 | 0.00 | 1.68 | 1.20 | 6.60 |
+| enderio | M4 after | 35 | 376 | 2.90 | 0.80 | 0.00 | 0.00 | 1.68 | 1.18 | 6.56 |
+
+The search saves 15 / 8 / 11 / 15 blocks across the four modes (direct / routed / ae2 / enderio), the same numbers the
+benchmark gives (2098 / 2509 / 2333 / 2075 → 2083 / 2501 / 2322 / 2060 on its 132 rows). Over 376 machines a mode,
+that is 0.02-0.04 blocks per machine. The saving is cable and roof: a reordered line puts machines that share a feed
+next to each other, which shortens the cable run and narrows the roof. Pipes, interfaces, chip pipes and hookup runs
+barely move.
+
+On the mixed family alone (Table 3's grouping) it is 11.58 → **11.47** blocks per machine (5142 → 5093 blocks over
+444 machines). The other three families are unchanged.
+
+### Table 5: per mode and chosen kind, after the search
+
+| mode | chosen kind | rows | machines | cable | pipe | iface | chip | hookup | roof | sum |
+|---|---|---|---|---|---|---|---|---|---|---|
+| direct | WestHead (0) | 14 | 70 | 5.20 | 1.80 | 0.00 | 0.00 | 3.47 | 1.54 | 12.01 |
+| direct | MiddleHead (1) | 1 | 6 | 3.17 | 1.17 | 0.00 | 0.00 | 2.67 | 0.67 | 7.67 |
+| direct | Stacked (2) | 12 | 241 | 2.19 | 0.75 | 0.00 | 0.00 | 0.82 | 0.88 | 4.64 |
+| direct | Packed (3) | 3 | 35 | 0.89 | 1.00 | 0.00 | 0.00 | 1.00 | 1.54 | 4.43 |
+| direct | Reordered (5) | 5 | 24 | 6.33 | 1.25 | 0.00 | 0.00 | 3.62 | 1.42 | 12.62 |
+| routed | WestHead (0) | 11 | 43 | 6.60 | 2.07 | 0.00 | 1.47 | 4.47 | 1.88 | 16.49 |
+| routed | MiddleHead (1) | 1 | 6 | 3.83 | 0.50 | 0.00 | 1.67 | 2.67 | 1.33 | 10.00 |
+| routed | Stacked (2) | 17 | 295 | 2.84 | 0.26 | 0.00 | 1.12 | 1.09 | 1.27 | 6.58 |
+| routed | Reordered (5) | 6 | 32 | 5.94 | 0.41 | 0.00 | 1.53 | 3.47 | 1.75 | 13.09 |
+| ae2 | WestHead (0) | 10 | 39 | 6.97 | 2.10 | 0.67 | 0.00 | 4.49 | 2.13 | 16.36 |
+| ae2 | Stacked (2) | 12 | 82 | 4.98 | 0.59 | 0.99 | 0.00 | 2.80 | 1.85 | 11.21 |
+| ae2 | Packed (3) | 1 | 5 | 1.60 | 1.00 | 1.00 | 0.00 | 3.80 | 1.80 | 9.20 |
+| ae2 | PackedOpen (4) | 6 | 218 | 0.77 | 0.25 | 1.00 | 0.00 | 0.39 | 0.84 | 3.25 |
+| ae2 | Reordered (5) | 6 | 32 | 4.94 | 0.56 | 1.19 | 0.00 | 3.41 | 1.50 | 11.59 |
+| enderio | WestHead (0) | 14 | 70 | 5.16 | 0.97 | 0.00 | 0.00 | 3.47 | 1.89 | 11.49 |
+| enderio | MiddleHead (1) | 1 | 6 | 3.17 | 1.17 | 0.00 | 0.00 | 2.67 | 0.67 | 7.67 |
+| enderio | Stacked (2) | 12 | 241 | 2.19 | 0.67 | 0.00 | 0.00 | 0.97 | 0.92 | 4.74 |
+| enderio | Packed (3) | 3 | 35 | 0.89 | 1.00 | 0.00 | 0.00 | 1.46 | 1.54 | 4.89 |
+| enderio | Reordered (5) | 5 | 24 | 6.33 | 1.25 | 0.00 | 0.00 | 3.62 | 1.42 | 12.62 |
+
+`Reordered` rows look expensive per machine (11.6-13.1) because the search only wins on small mixed lines, which cost
+10-12 blocks per machine whatever kind they choose (Table 3). None of those lines uses more blocks than before, and each
+uses fewer blocks or loses less power: `mixed-09` and `mixed-14` in AE2 keep 38 and 39 blocks and lose 3 and 8 EU/t
+less. Compare the same line before and after, not the `Reordered` row with the `Stacked` one. AE2 has no `MiddleHead` row after the search:
+the one line that chose it before (`mixed-18`) now chooses `Reordered` (58 → 56 blocks).
+
+### Raw sums after the search
+
+| rev mode | rows | machines | cable | pipe | iface | chip | hookup | roof | blocks |
+|---|---|---|---|---|---|---|---|---|---|
+| M4 after direct | 35 | 376 | 1094 | 378 | 0 | 0 | 578 | 413 | 2463 |
+| M4 after routed | 35 | 376 | 1336 | 182 | 0 | 451 | 640 | 519 | 3128 |
+| M4 after ae2 | 35 | 376 | 1014 | 208 | 368 | 0 | 618 | 475 | 2683 |
+| M4 after enderio | 35 | 376 | 1091 | 301 | 0 | 0 | 630 | 445 | 2467 |
+| mixed (20 lines) | 80 | 444 | 2254 | 321 | 120 | 160 | 1458 | 780 | 5093 |
+
+### What the search costs
+
+Timed by RUK-3072 on this Mac, each run on its own: the 132 benchmark rows take 2208 ms on M3 and 2957 ms on M4, about
+5.7 ms more per row. `lossLine(80)` is unchanged (76-189 ms on M3, 78-181 ms on M4, by mode).
 
 ## How this was measured
 
