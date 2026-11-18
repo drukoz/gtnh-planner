@@ -21,14 +21,13 @@ import type { TailChest } from '../../../shared/types/layout.ts';
 import type { BomLine, PlanWarning } from '../../../shared/types/plan.ts';
 import { comparePos } from '../../world/graph.ts';
 import type { HostConfig, HostCover, LocalBlock, Placement } from '../arrange.ts';
+import { tailColumn } from '../arrange.ts';
 import { linkBits } from '../path.ts';
 import { machineRef, pickItemPipe } from '../parts.ts';
 import {
   conveyorCover, finalItemOutputs, itemRisers, itemStacksPerSecond, nameList, outputSideInputs, placedStepIds, rawItemInputs, rawItemRate,
   RISER_WORDS, spineConflicts, unitItemRate, type ModeHookup, type ModeInput, type ModeResult, type StepDraft,
 } from './mode.ts';
-
-const NORTH = 2, SOUTH = 3;
 
 function noLine(warnings: PlanWarning[]): ModeResult {
   return { blocks: [], covers: [], configs: [], logisticsPort: null, hookup: null, extraParts: [], drafts: [], warnings, tailFluidY: 1 };
@@ -92,13 +91,13 @@ function networkHookup(input: ModeInput, rawNames: string): { hookup: ModeHookup
 }
 
 /**
- * The shared spine pipe `[firstX … tailX] × (y 0, z spineZ)`, up the spine's column to any bus above it (`itemRisers`),
- * with its covers, input filters, tail chests and hookup.
+ * The shared spine pipe along `placement.spine` (today `[firstX … tailX] × (y 0, z spineZ)`), up the spine's column
+ * to any bus above it (`itemRisers`), with its covers, input filters, and the tail chests off `placement.tail`, and hookup.
  * Nothing when no placed unit moves items; only `no_pipe` when the pack has no GT item pipe.
  */
 export function directMode(input: ModeInput): ModeResult {
   const { pack, plan, parts, placement } = input;
-  const { units, firstX, tailX, spineZ } = placement;
+  const { units } = placement;
   const benchWarnings: PlanWarning[] = [...new Set(units.filter((u) => u.bench !== undefined).map((u) => u.stepId))]
     .map((stepId) => ({ code: 'bench_by_hand', stepId, text: BENCH_BY_HAND }));
   if (!units.some((u) => u.bench === undefined && (u.io.itemIn || u.io.itemOut))) return noLine(benchWarnings);
@@ -121,12 +120,11 @@ export function directMode(input: ModeInput): ModeResult {
   };
 
   const spine = new Set<string>();
-  for (let x = firstX; x <= tailX; x++) {
-    const cell: Vec3 = [x, 0, spineZ];
-    layPipe(cell);
+  placement.spine.forEach((cell, i) => {
+    layPipe([...cell]);
     spine.add(posKey(cell));
-    if (x > firstX) links.push([[x - 1, 0, spineZ], cell]);
-  }
+    if (i > 0) links.push([[...placement.spine[i - 1]!], [...cell]]);
+  });
   // the pipe climbs the spine's column to a bus GT takes only higher up
   const risers = itemRisers(placement);
   for (const cell of [...risers.cells, ...risers.ports]) {
@@ -156,29 +154,30 @@ export function directMode(input: ModeInput): ModeResult {
     }
   }
 
-  // the tail: the input chest north of the tail pipe, output chest i south of tail pipe cell i (one item per filter)
-  const tail: Vec3 = [tailX, 0, spineZ];
+  // the tail: the input chest off the tail cell's input side, output chest i off tail column cell i's output side (one item per filter)
+  const { tail: line } = placement;
+  const tail: Vec3 = [...line.cell];
   const raw = rawItemInputs(plan, placed);
   let inputChest: Vec3 | null = null;
   if (raw.length > 0) {
-    inputChest = [tailX, 0, spineZ - 1];
+    inputChest = step(tail, line.inputSide);
     layChest(inputChest, 'Chest (input)', { side: 'input', keys: [...raw] });
     links.push([tail, inputChest]);
-    const { cover, warning } = conveyorCover(input, { pos: tail, side: NORTH }, 'import', false, rawItemRate(plan, placed), 'the input chest');
+    const { cover, warning } = conveyorCover(input, { pos: tail, side: line.inputSide }, 'import', false, rawItemRate(plan, placed), 'the input chest');
     covers.push(cover);
     if (warning !== null) warnings.push(warning);
   }
   const outputs = finalItemOutputs(plan, placed);
   outputs.forEach((key, i) => {
-    const cell: Vec3 = [tailX, i, spineZ];
-    const chest: Vec3 = [tailX, i, spineZ + 1];
+    const cell: Vec3 = tailColumn(line, i);
+    const chest: Vec3 = step(cell, line.outputSide);
     if (i > 0) {
       layPipe(cell);
-      links.push([[tailX, i - 1, spineZ], cell]);
+      links.push([tailColumn(line, i - 1), cell]);
     }
     layChest(chest, 'Chest (output)', { side: 'output', keys: [key] });
     links.push([cell, chest]);
-    covers.push({ pos: cell, cover: { face: FACES[SOUTH]!, item: parts.item_filter_cover.key, settings: { mode: 'whitelist' }, filter: [key] } });
+    covers.push({ pos: cell, cover: { face: FACES[line.outputSide]!, item: parts.item_filter_cover.key, settings: { mode: 'whitelist' }, filter: [key] } });
   });
 
   const hooked = inputChest === null ? null : networkHookup(input, nameList(plan, pack, raw));
