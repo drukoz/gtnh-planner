@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-13, M3-P1 … M3-P4, SP-F … SP-L, SP-R and R-rain merged; M3-14, M3-15, M3-16 and R-cover running**, 2026-11-18 (revision 14). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-16, M3-P1 … M3-P4, SP-F … SP-L, SP-R, R-rain and R-cover merged; M3-17 … M3-20 (no roof where it never rains) running**, 2026-11-18 (revision 15). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -63,6 +63,13 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
    prefers shapes that shelter themselves: 11 of 132 benchmark rows choose another line, none gets worse on power,
    reach or tiers, and the benchmark's totals grow by the roof (about 20 %). The user may prefer another block, a full
    slab (Box), or no roof where the site is covered; those are later choices. (Added 2026-11-18, revision 13.)
+   **No roof where it never rains** (revision 15): GT checks rain only in a biome with `rainfall > 0` that can rain or
+   snow (§3.4a). The exporter writes every biome's raw fields (`biomes.jsonl.gz`), the voxel reader keeps each column's
+   biome, and when every read column where the line can stand is in such a dry biome (a desert, the Nether, the End,
+   most space bodies), the line lays no roof and the search scores it without one (`Layout.dryBiomes` names them). An
+   export without the table, an unknown biome id or a read chunk with no biome keeps the roof. Cover above the site
+   and per-dimension weather stay out: the site search today only picks spots with open sky up to 8 blocks above
+   (rain-site.md §3), and our data has no weather flag per dimension.
 
 ## Target architecture
 
@@ -190,7 +197,12 @@ The packed shape follows Assumption 7.
 | M3-15 RUK-3035 | the 3D view draws the roof faint (`SceneInstance.roof`), never picks it, a Roof switch when the line has one; the map's `ROLE_PRIORITY` gets `'roof'` (since M3-13 every roofed map column had no fill) | M3-13 |
 | M3-16 RUK-3033 | SP-L promoted (`promote.patch`, `baseline-promote.json`), 1 re-pin, 9 new tests | M3-12 |
 | R-cover RUK-3036 | research: what our scan and layout know about a site's dimension, biome and the blocks above it (gt-mechanics §3.4a's three gates), before any rule drops the roof | — |
-| next in M3 | the roof's no-rain cases from R-cover; then M3-V | R-cover |
+| R-cover result | the planner knows each layout's dimension id but no weather flag for it; the world decoder can read biome ids (`biomeAt`) but no code calls it; the site search treats a block above the line as an obstacle, never as cover (`docs/research/rain-site.md`) | — |
+| M3-17 RUK-3040 | the exporter writes `biomes.jsonl.gz` (`BiomeLine`: id, name, rainfall, snow, lightning; `WorldgenSection` part `biomes`) | — |
+| M3-18 RUK-3038 | the pack loader reads it into `pack.biomes` (`BiomeInfo { id, name, rain }`, `rain` = GT's gate) | — |
+| M3-19 RUK-3039 | `readAreaVoxels` returns `Voxels.biomes` per column (−1 for chunks not available); the layout fixtures take a `biome` | — |
+| M3-20 RUK-3041 | `dryBiomes`: no roof when every read column where the line can stand is dry, decided before `buildLocal`; `Layout.dryBiomes`. No benchmark row moves (its packs have no table) | M3-18, M3-19 |
+| next in M3 | show `dryBiomes` to the user; the user's next export carries the biome table; then M3-V | M3-20 |
 | M3-V | QA verification of the milestone branch | all above |
 
 Deferred from M3, with the reason: **L and U shapes** and a single row. Nothing has measured them, they need the
