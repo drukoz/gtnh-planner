@@ -1,0 +1,254 @@
+diff --git a/src/server/layout/arrange.ts b/src/server/layout/arrange.ts
+index 6e427fbe1..4f765e32b 100644
+--- a/src/server/layout/arrange.ts
++++ b/src/server/layout/arrange.ts
+@@ -189,6 +189,12 @@ export interface Placement {
+   spine: Vec3[];
+   /** Where the spine ends and the tail chests hang (`LineTail`). */
+   tail: LineTail;
++  /**
++   * The packed line is laid for AE2 (`placePacked` with `ownPorts`, spike SP-G): every machine has its own item port — an
++   * ME Interface cell above it (`PORT_SPACING.ae2` is 1, so AE2 may not share one) — on the lanes `[x, 1, 0]`, `[x, 1, 2]`
++   * and `[x, 2, 1]`. The `ae2` mode then lays its ME network on those lanes, joined at the tail column, and lays no risers.
++   */
++  packed?: true;
+ }
+ 
+ /**
+@@ -1287,13 +1293,26 @@ export function packedLine(units: readonly Unit[]): boolean {
+     && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0 && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1);
+ }
+ 
+-/** The three slots of a packed column and their faces (`placePacked`). */
++/** The three slots of a packed column and their faces (`placePacked`): B and T share the item port `[x, 1, 2]`. */
+ const PACKED_SLOTS: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
+   { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
+   { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
+   { cell: [0, 1, 1], facing: SOUTH, mainFacing: NORTH, powerSide: UP, items: [0, 1, 2] },
+ ];
+ 
++/**
++ * The three slots of a packed column laid for AE2 (`placePacked` with `ownPorts`, spike SP-G): AE2 may not share an item
++ * port (`PORT_SPACING.ae2` is 1), so each machine has its own cell above it, and the Wrench points that interface down
++ * into its machine — a full-block ME Interface pushes into every neighbour unless wrenched (machine-feeding §…:
++ * `feed.interface.targets`). T's output side moves from south to up, so it pushes into its own interface and not into
++ * B's; A's and B's interfaces touch T, and their Wrench targets keep them from pushing into it.
++ */
++const PACKED_SLOTS_AE2: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
++  { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
++  { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
++  { cell: [0, 1, 1], facing: UP, mainFacing: NORTH, powerSide: UP, items: [0, 2, 1] },
++];
++
+ /**
+  * A packed line (RUK-2877, plan Assumption 7; spikes SP-E and SP-F). One cable lane at `[x, 0, 1]` carries one cable
+  * cell per column, and three machines hang off every cell: A at `[x, 0, 0]` (front north, output up), B at `[x, 0, 2]`
+@@ -1307,9 +1326,13 @@ const PACKED_SLOTS: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: numb
+  * join, south lane east→west); the input chest hangs below the tail cell and output chest i east of tail column cell
+  * i. `spineZ` is 1; the box is `[tailX + 2, 2, 3]` (the output chests stand at `tailX + 1`; `buildLocalAt` counts the
+  * rising tail column's height from the laid blocks).
++ * `ownPorts` (spike SP-G) lays the column for AE2 (`PACKED_SLOTS_AE2`): T's output side is up and every machine's item
++ * port is its own cell above it, `[x, 1, 0]`, `[x, 1, 2]` and `[x, 2, 1]`, so T's interface stands one cell higher and
++ * the box is one cell taller (`[x, 2, 1]` is a laid block, so `buildLocalAt` counts it); `packed` tells the mode.
+  */
+-export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number }): Placement {
++export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number; ownPorts?: boolean }): Placement {
+   const { headWidth } = opts;
++  const slots = opts.ownPorts === true ? PACKED_SLOTS_AE2 : PACKED_SLOTS;
+   const feedTier = (u: Unit): number | null => (opts.supplyTier === undefined || !u.electric ? null : Math.min(u.tier, opts.supplyTier));
+   const ordered = lowestFeedFirst(units, feedTier);
+   const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
+@@ -1324,7 +1347,7 @@ export function placePacked(units: readonly Unit[], opts: { headWidth: number; s
+       colX = lastX < 0 ? (tier === headTier ? firstX : firstX + 1) : lastX + (tier === prevTier ? 1 : 2);
+       slot = 0;
+     }
+-    const s = PACKED_SLOTS[slot]!;
++    const s = slots[slot]!;
+     const cell: Vec3 = [colX + s.cell[0], s.cell[1], s.cell[2]];
+     const machine = u.cells.find((c) => c.role === 'machine') ?? u.cells[0]!;
+     blocks.push({ pos: [...cell], block: { ...machine.block }, role: 'machine', facing: s.facing, mainFacing: s.mainFacing,
+@@ -1346,7 +1369,8 @@ export function placePacked(units: readonly Unit[], opts: { headWidth: number; s
+   for (let x = tailX; x >= firstX; x--) spine.push([x, 1, 2]);
+   blocks.sort((a, b) => comparePos(a.pos, b.pos));
+   return { units: placed, size: [tailX + 2, 2, 3], spineZ: 1, headX: 0, firstX, tailX, blocks, reserved: [],
+-    spine, tail: { cell: [tailX, 1, 2], inputSide: DOWN, outputSide: EAST } };
++    spine, tail: { cell: [tailX, 1, 2], inputSide: DOWN, outputSide: EAST },
++    ...(opts.ownPorts === true ? { packed: true as const } : {}) };
+ }
+ 
+ /**
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index cd99d95f5..3bc1f0b25 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -30,7 +30,7 @@ import { emptyContext } from '../planner/plan.ts';
+ import { contextFromScan } from '../world/context.ts';
+ import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
+ import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
+-import { addedBlocks, attachCovers, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
++import { addedBlocks, attachCovers, packedLine, placePacked, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
+ import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
+ import { feedingWarnings } from './feed-rules.ts';
+ import {
+@@ -344,6 +344,15 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+       kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
+     }
+   }
++  if (process.env.PROBE_PACKED !== '0' && (input.mode === 'direct' || input.mode === 'enderio' || input.mode === 'ae2') && packedLine(input.units)) {
++    const sup = input.stages?.supplyTier;
++    const tiers = new Set(input.units.filter((u) => u.electric).map((u) => (sup === undefined ? -1 : Math.min(u.tier, sup))));
++    if (tiers.size <= 1) {
++      // AE2 gives every machine its own ME Interface cell (`placePacked` with `ownPorts`, spike SP-G)
++      lines.push(buildLocalAt(input, 0, false, input.mode === 'ae2' ? 'own' : true));
++      kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
++    }
++  }
+   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+   // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
+   let chosen = baseline;
+@@ -362,12 +371,16 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+  * cells its multiblocks need kept empty as well as its blocks.
+  * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
+  * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
++ * `packed` lays the packed line (`placePacked`, RUK-2877); `'own'` gives every machine its own item port, the AE2 column
++ * with one ME Interface per machine (`placePacked` with `ownPorts`, spike SP-G).
+  */
+-function buildLocalAt(input: LocalInput, westUnits: number, stack = false): LocalLine {
++function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed: boolean | 'own' = false): LocalLine {
+   const { pack, plan, parts, mode, units, stages, network } = input;
+-  const placement = placeUnits(units, {
+-    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+-  });
++  const placement = packed !== false
++    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : {}) })
++    : placeUnits(units, {
++      headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
++    });
+   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
+   // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
+   const internal = routeInternal({
+diff --git a/src/server/layout/modes/ae2.ts b/src/server/layout/modes/ae2.ts
+index 7548bd5eb..066e122ba 100644
+--- a/src/server/layout/modes/ae2.ts
++++ b/src/server/layout/modes/ae2.ts
+@@ -401,10 +401,21 @@ function fluidShortText(input: ModeInput, unit: PlacedUnit, pattern: PatternSpec
+ 
+ // ---- The mode ----
+ 
++/**
++ * The AE2 packed column's interface lanes (`Placement.packed`, `placePacked` with `ownPorts`, spike SP-G): the `y, z` of
++ * every lane's cells `[x, y, z]` for x = `firstX` … `tailX`. A's interfaces stand at `[x, 1, 0]`, B's at `[x, 1, 2]` and
++ * T's at `[x, 2, 1]`, each wrenched down into its own machine; the lanes join at the tail cell's column.
++ */
++const PACKED_LANES: ReadonlyArray<readonly [number, number]> = [[1, 0], [1, 2], [2, 1]];
++
+ /**
+  * The ME spine `[firstX … tailX] × (y 0, z spineZ)`: interfaces with their patterns, or cable with an export bus in front
+  * of a machine that makes only fluids, cable between and up the spine's column to an interface above it (`itemRisers`),
+  * output covers on the machines. Nothing when no placed unit moves items.
++ * On a packed line (`Placement.packed`, spike SP-G) the interfaces are the cells of `PACKED_LANES`, one per machine, each
++ * wrenched down into it, and the ME cable fills the rest of those lanes and joins them at the tail column. The port is the
++ * south lane's tail cell, on the box's face (`Placement.tail`), because a hookup goes round the box's columns
++ * (`hookups.ts`). Every Wrench target is the interface's one machine, so no interface pushes into two.
+  */
+ export function ae2Mode(input: ModeInput): ModeResult {
+   const { pack, plan, parts, placement, network } = input;
+@@ -547,16 +558,35 @@ export function ae2Mode(input: ModeInput): ModeResult {
+   }
+ 
+   const links: Array<[Vec3, Vec3]> = [];
+-  for (let x = firstX; x <= tailX; x++) {
+-    const cell: Vec3 = [x, 0, spineZ];
+-    if (!portCells.has(posKey(cell))) {
+-      blocks.push({ pos: cell, block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key });
++  /** An ME glass cable cell. */
++  const cable = (pos: Vec3): LocalBlock => ({ pos: [...pos], block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key });
++  const packed = placement.packed === true;
++  if (packed) {
++    // the three interface lanes, cable where no interface stands, and their join at the tail column (SP-G): the join cell
++    // `[tailX, 1, 1]` links the north and south lanes and climbs to T's lane, and the south lane's tail cell is the port.
++    // The lanes run from the head column like the spine, whose interfaces join the network through the grid node they are
++    // (`PORT_SPACING.ae2` 1 puts interfaces side by side there), and cable fills every lane cell no interface stands in.
++    const join: Vec3 = [tailX, 1, 1];
++    for (const [y, z] of PACKED_LANES) {
++      for (let x = firstX; x <= tailX; x++) {
++        const cell: Vec3 = [x, y, z];
++        if (!portCells.has(posKey(cell))) blocks.push(cable(cell));
++        if (x > firstX) links.push([[x - 1, y, z], cell]);
++      }
++      links.push([join, [tailX, y, z]]);
++    }
++    blocks.push(cable(join));
++  } else {
++    for (let x = firstX; x <= tailX; x++) {
++      const cell: Vec3 = [x, 0, spineZ];
++      if (!portCells.has(posKey(cell))) blocks.push(cable(cell));
++      if (x > firstX) links.push([[x - 1, 0, spineZ], cell]);
+     }
+-    if (x > firstX) links.push([[x - 1, 0, spineZ], cell]);
+   }
+-  // cable climbs the spine's column to the interface of a bus GT takes only higher up
+-  const risers = itemRisers(placement);
+-  for (const cell of risers.cells) blocks.push({ pos: cell, block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key });
++  // cable climbs the spine's column to the interface of a bus GT takes only higher up; a packed line's ports are the lane
++  // cells, so its risers would link the lanes to cells no machine touches (SP-G, as SP-F found for direct and EnderIO)
++  const risers = packed ? { cells: [] as Vec3[], ports: [] as Vec3[], links: [] as Array<[Vec3, Vec3]> } : itemRisers(placement);
++  for (const cell of risers.cells) blocks.push(cable(cell));
+   links.push(...risers.links);
+   // every output face pushes its machine's share into the interface in front of it
+   const rateWarned = new Set<string>();
+@@ -593,8 +623,8 @@ export function ae2Mode(input: ModeInput): ModeResult {
+     : `, but only cable in front of ${joinNames([...exportBusFor].map(([name, n]) => (n === 1 ? `the ${name}` : `${fmtInt(n)}× ${name}`)))}, with an ME `
+       + 'Export Bus on its face toward the machine';
+   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
+-    text: `Lay ME glass cable along the middle row with an ME interface at every machine's output side or bus${lineExceptions(placement)}`
+-      + `${exportWords}${risers.links.length > 0 ? RISER_WORDS : ''}` }];
++    text: `Lay ME glass cable ${packed ? 'on the lanes above the machines' : 'along the middle row'} with an ME interface at every machine's output side or bus`
++      + `${lineExceptions(placement)}${exportWords}${risers.links.length > 0 ? RISER_WORDS : ''}` }];
+ 
+   // cable cells show their joins to the spine cells beside them; an interface is a full block
+   const bits = linkBits(links);
+@@ -609,7 +639,8 @@ export function ae2Mode(input: ModeInput): ModeResult {
+     // the interface pushes the pattern's inputs through the machine's output side; the machines' feeding settings
+     // (architecture §11 entry 51)
+     configs: mergeHostConfigs([...outputSideInputs(placement).values(), ...feedSettings(pack, plan, placement)]),
+-    logisticsPort: hooked ? [tailX, 0, spineZ] : null,
++    // the packed line's port is the south lane's tail cell, on the box's face (SP-G; `hookups.ts` keeps out of the columns)
++    logisticsPort: hooked ? (packed ? [...placement.tail.cell] : [tailX, 0, spineZ]) : null,
+     hookup: hooked ? { part: 'me_cable', end: null } : null,
+     extraParts, drafts, warnings, tailFluidY: 1,
+   };
+diff --git a/src/shared/types/layout.ts b/src/shared/types/layout.ts
+index 3e50bc441..c832ae1af 100644
+--- a/src/shared/types/layout.ts
++++ b/src/shared/types/layout.ts
+@@ -182,7 +182,7 @@ export interface LayoutLoss {
+  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
+  * takes the next number.
+  */
+-export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2 } as const;
++export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3 } as const;
+ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
+ 
+ /**
+diff --git a/tests/unit/layout/layout.test.ts b/tests/unit/layout/layout.test.ts
+index 775f691c2..7fe07a717 100644
+--- a/tests/unit/layout/layout.test.ts
++++ b/tests/unit/layout/layout.test.ts
+@@ -393,9 +393,14 @@ describe('layoutLine: mixed-tier lines', () => {
+     const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not wire')).map((w) => w.text);
+     for (const m of placed) {
+       if (m.role !== 'machine' || m.mainFacing === undefined) continue;
+-      const port = at.get(key(step(m.pos, OPPOSITE[m.facing!]!)));
+       const feed = Math.min(stepTier.get(m.stepId!)!, supply);
+-      if (port?.role !== 'cable' || tierOf(layout, port) !== feed || ((port.connections ?? 0) & (1 << m.facing!)) === 0) {
++      // GT takes energy through any face but the front (gt-mechanics §…: isInputFacing): a cable of the feed tier on such a face, linked into the machine
++      const fed = [0, 1, 2, 3, 4, 5].some((side) => {
++        if (side === m.mainFacing) return false;
++        const port = at.get(key(step(m.pos, side)));
++        return port?.role === 'cable' && tierOf(layout, port) === feed && ((port.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0;
++      });
++      if (!fed) {
+         out.push(`${m.label} at ${key(m.pos)} has no ${tierName(feed)} cable at its power input`);
+       }
+     }
