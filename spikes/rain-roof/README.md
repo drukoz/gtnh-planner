@@ -51,6 +51,24 @@ Checked blocks, exposed faces, and the cells each rule lays, summed over the 33 
   cells as blocks, no checked block has any exposed face left (asserted), and no roof cell lands on an existing block or
   a reserved cell.
 
+The 10 rows with the most roof cells (by `Flat`; `Lowest` ties every one, and each row's `Box` is its footprint × 1 slab):
+
+| line (mode) | size | tops | sides | Box | Flat | Lowest |
+|---|---|---|---|---|---|---|
+| loss-40 (ae2) | 44×4×5 | 35 | 90 | 322 | 78 | 78 |
+| loss-40 (routed) | 44×4×5 | 35 | 89 | 322 | 77 | 77 |
+| loss-20 (routed) | 15×2×5 | 14 | 40 | 119 | 28 | 28 |
+| loss-40 (direct) | 15×3×5 | 23 | 5 | 119 | 28 | 28 |
+| loss-40 (enderio) | 15×3×5 | 23 | 5 | 119 | 28 | 28 |
+| loss-20 (direct) | 12×2×3 | 9 | 18 | 70 | 27 | 27 |
+| loss-20 (enderio) | 12×2×3 | 9 | 18 | 70 | 27 | 27 |
+| mixed-00 (ae2) | 13×3×5 | 10 | 21 | 105 | 22 | 22 |
+| mixed-00 (routed) | 13×3×5 | 10 | 20 | 105 | 21 | 21 |
+| loss-10 (routed) | 10×2×5 | 11 | 20 | 84 | 20 | 20 |
+
+The two `loss-40` rows that stack their machines two-high (ae2, routed) pay the most: Box grows with the 44×5 footprint,
+Flat grows with the 35 stacked tops and ~90 side faces, and the gap to Box widens (322 → 77).
+
 ## Thin-only covers (step 3)
 
 GT's rain test reads real blocks; a stone pipe in a column covers the exposure beside it. Counting an exposure as covered
