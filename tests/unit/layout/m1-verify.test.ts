@@ -58,6 +58,13 @@ describe('milestone M1 verification', () => {
     expect(named).toBe(layout.loss?.unpowered ?? 0);
   }, 120_000);
 
+  it('counts no starved machine on the 40-machine AE2 line with satellites', async () => {
+    // the satellites on the default line run every far machine, so the warning has nothing left to count (RUK-2679)
+    const { layout } = await lossLine(40, 'ae2', { satellites: true });
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(0);
+    expect(layout.loss?.unpowered ?? 0).toBe(0);
+  }, 120_000);
+
   it('lays the same layout twice', async () => {
     for (const [n, mode] of [[40, 'enderio'], [20, 'routed']] as const) {
       const first = (await lossLine(n, mode)).layout;

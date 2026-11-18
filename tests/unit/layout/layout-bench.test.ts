@@ -27,6 +27,12 @@ describe('layout benchmark', () => {
     expect(lengthOf(layout).weakTiers).toEqual([1]);
   }, 30_000);
 
+  it("runs the 40-machine AE2 line's LV wiring with no weak tier once satellites are laid", async () => {
+    // satellites step down beside the far machines (RUK-2679): the default line leaves no tier under-volted
+    const { layout } = await lossLine(40, 'ae2', { satellites: true });
+    expect(lengthOf(layout).weakTiers).toEqual([]);
+  }, 30_000);
+
   it('lays every benchmark line deterministically', async () => {
     const rows = await runBench();
     expect(rows).toEqual(await runBench());

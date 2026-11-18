@@ -54,7 +54,7 @@ export interface LayoutDeps {
   readArea?: (dim: number, bbox: BBox) => Promise<Voxels>;
   /** The A* budget of each hookup search (default `MAX_PATH_NODES`). */
   maxPathNodes?: number;
-  /** Lay satellite step-down banks (RUK-2668). */
+  /** Lay satellite step-down banks (RUK-2668); default true, false keeps a long line's far machines on the head (tests of the starved-line warnings). */
   satellites?: boolean;
   /**
    * Tests only: called once with the line's own placement and internal route as `buildLocal` chose them (RUK-121), so a
@@ -276,10 +276,11 @@ function lineLoss(line: Omit<LocalLine, 'score'>): number {
 
 /**
  * What a line leaves to finish by hand inside its own grid (RUK-121): the connections it could not lay (`route_failed`)
- * and the transformers its banks have no room for (`transformer_bank`).
+ * and the transformers its banks and satellites have no room for (`transformer_bank`). A satellite lays one transformer
+ * block, so its `count` joins `needed` too (RUK-2679), and only the extra beyond the one block it lays is hand work.
  */
 function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transformers: number } {
-  const needed = line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0;
+  const needed = (line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0) + line.internal.satellites.reduce((n, s) => n + s.count, 0);
   const placed = line.internal.blocks.filter((b) => b.role === 'transformer').length;
   return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
 }
@@ -898,7 +899,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   }
 
   // stage 5; from here on the stages are the ones sized for the volts every machine gets
-  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites === true });
+  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites !== false });
   deps.localLine?.({ placement: line.placement, internal: line.internal });
   const { stages } = line;
   // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
@@ -995,6 +996,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     status: finish.status, pins, size: lineSize, ...(areas.length === 0 ? {} : { siteSize: worldSize }), site: finish.site,
     units: line.placement.units, stages: stages?.stages ?? [], transformerName,
     cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
+    satellites: line.internal.satellites.map((s, i) => ({ fromTier: s.fromTier, toTier: s.toTier, count: s.count, machines: s.machines.length,
+      transformer: line.internal.blocks.find((b) => b.satellite === i)?.label ?? transformerName(s.toTier), hiAmp: s.hiAmp })),
     power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
     fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
     logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...lineBox.min], rotation: frame.rotation, nameOf, stepName,

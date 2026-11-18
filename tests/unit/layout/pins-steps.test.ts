@@ -206,16 +206,23 @@ describe('layout steps', () => {
       power: { cable: '2x Annealed Copper Cable', blocks: 12, amps: 2, tier: 2, arrivingVolts: 116 }, supplyTier: 2 };
     const today = ['layout:site', 'layout:roof', 'layout:place:s1', 'layout:place:s2',
       'layout:power:stage:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test'];
-    // two satellites of one tier feeding 5 + 4 machines: n = 2, m = 9
+    // two satellites of one tier feeding 5 + 4 machines: n = 2, m = 9; each lays GT++'s Hi-Amp Transformer (RUK-2677)
+    const HIAMP = { transformer: 'LV Hi-Amp Transformer', hiAmp: true };
     const steps = layoutSteps(base({ ...parts,
-      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 5 }, { fromTier: 2, toTier: 1, count: 1, machines: 4 }] }));
+      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 5, ...HIAMP }, { fromTier: 2, toTier: 1, count: 1, machines: 4, ...HIAMP }] }));
     expect(steps.map((s) => s.id)).toEqual(['layout:site', 'layout:roof', 'layout:place:s1', 'layout:place:s2',
       'layout:power:stage:1', 'layout:power:satellites:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test']);
     const sat = steps.find((s) => s.id === 'layout:power:satellites:1')!;
     expect(sat.kind).toBe('power');
     expect(sat.pin).toBe(1);
-    expect(sat.text).toBe('Place 2× Low Voltage Transformer out along the line where the view marks them, one beside each group of far LV machines '
-      + '(9 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it');
+    expect(sat.text).toBe('Place 2× LV Hi-Amp Transformer out along the line where the view marks them, one beside each group of far LV machines '
+      + '(9 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it'
+      + '. Leave it in full mode; a screwdriver toggles half mode, which halves its amps');
+    // without GT++ a satellite lays the plain transformer, which has no half mode: the step names it and adds no mode sentence
+    const plain = layoutSteps(base({ ...parts, satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 3, transformer: 'Low Voltage Transformer', hiAmp: false }] }))
+      .find((s) => s.id === 'layout:power:satellites:1')!;
+    expect(plain.text).toBe('Place 1× Low Voltage Transformer out along the line where the view marks them, one beside each group of far LV machines '
+      + '(3 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it');
     // no satellites, empty or absent: the step ids are the same as today
     expect(layoutSteps(base({ ...parts, satellites: [] })).map((s) => s.id)).toEqual(today);
     expect(layoutSteps(base(parts)).map((s) => s.id)).toEqual(today);
@@ -399,7 +406,7 @@ describe('layout steps', () => {
     const parts = {
       stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 1, ampsOut: 2 }], transformerName: () => 'Low Voltage Transformer',
       cables: [{ tier: 1, cable: '2x Tin Cable', cells: 3 }], fluids: [],
-      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 3 }],
+      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 3, transformer: 'Low Voltage Transformer', hiAmp: false }],
     };
     const steps = layoutSteps(base({ ...parts }));
     const blocks: LayoutBlock[] = [
