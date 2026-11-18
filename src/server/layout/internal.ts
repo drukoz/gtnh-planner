@@ -730,7 +730,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
         if (blocks === undefined) return null;
         ampsOut += Math.ceil(units[i]!.euPerTick / deliveredVolts(voltsOf(s.tier), lossT * blocks));
       }
-      const ampsIn = Math.ceil((ampsOut * (voltsOf(s.tier) + emitterLoss(s.tier))) / deliveredVolts(voltsOf(s.fromTier), lossAbove(s.fromTier)));
+      const ampsIn = Math.ceil((ampsOut * (voltsOf(s.tier) + emitterLoss(s.tier))) / deliveredVolts(voltsOf(s.fromTier), lossPerBlock(s.fromTier) * (blocksTo(s.fromTier, s.input) ?? 1) + (s.fromTier === supply ? supplyLoss : 0)));
       return { ampsOut, ampsIn, count: Math.max(1, Math.ceil(ampsOut / (s.hiAmp ? HIAMP_AMPS_OUT : TRANSFORMER_AMPS_OUT)),
         Math.ceil(ampsIn / (s.hiAmp ? HIAMP_AMPS_IN : TRANSFORMER_AMPS_IN))) };
     });
@@ -800,7 +800,7 @@ function supplyConsumers(pack: Pack, sizing: Sizing, supply: number, units: read
   // RUK-2677: every satellite on the supply tier stands as its consumer, at its input cell
   for (const s of satellites) {
     if (s.fromTier !== supply) continue;
-    consumers.push({ amps: s.ampsIn, blocks: candidates.map((c) => { const d = edgesFrom(graph, c).get(posKey(s.input)); return d === undefined ? 0 : d + 1; }) });
+    consumers.push({ amps: s.ampsIn, blocks: fromCell.map((seen) => { const d = seen.get(posKey(s.input)); return d === undefined ? 0 : d + 1; }) });
   }
   return { tier: supply, cable: chosen.cable.name, lossPerBlock: chosen.cable.cable?.lossPerBlock ?? 0,
     remedy: lossRemedy(pack, supply, Math.ceil(chosen.amps / chosen.runs), chosen.cable, true), consumers };
@@ -1143,20 +1143,23 @@ function planSatellites(input: InternalInput, stages: Stages, head: Head, trees:
     if (far.length === 0) continue;
     far.sort((a, b) => comparePos(a.pos, b.pos));
     // RUK-2677: a group closes at one Hi-Amp Transformer's estimate — the amps its machines count at the reach limit,
-    // and the amps a bank taking them draws at `F`, must stay within its 16 A out and 6 A in. Without GT++ the M2-3
+    // and the amps a bank taking them draws at `F` across the cable from the head out to its farthest port and the
+    // line's length, must stay within its 16 A out and 6 A in. Without GT++ the M2-3
     // grouping stands: one standard transformer laid and the `transformer_bank` warning for the rest.
     const est = (i: number): number => Math.ceil(units[i]!.euPerTick / deliveredVolts(voltsOf(T), lossT * reach));
-    const oneTransformer = (g: typeof far, extra: number): boolean => {
+    const lossF = sizing.cables.get(F)?.cable.cable?.lossPerBlock ?? 0;
+    const oneTransformer = (g: typeof far): boolean => {
       if (!hiAmp) return true;
-      const sum = g.reduce((s, f) => s + est(f.idx), extra);
+      const sum = g.reduce((s, f) => s + est(f.idx), 0);
+      const blocksF = Math.max(...g.map((f) => Math.abs(f.pos[0] - head.headX))) + l + 1;
       return sum <= HIAMP_AMPS_OUT
-        && Math.ceil((sum * (voltsOf(T) + emitterLoss(T))) / deliveredVolts(voltsOf(F), input.supplyLossVolts ?? 0)) <= HIAMP_AMPS_IN;
+        && Math.ceil((sum * (voltsOf(T) + emitterLoss(T))) / deliveredVolts(voltsOf(F), lossF * blocksF + (input.supplyLossVolts ?? 0))) <= HIAMP_AMPS_IN;
     };
     const groups: Array<typeof far> = [];
     for (const f of far) {
       const g = groups[groups.length - 1];
       if (g !== undefined && (g[0]!.pos[0] >= head.headX) === (f.pos[0] >= head.headX) && Math.abs(f.pos[0] - g[0]!.pos[0]) <= reach - 4
-        && oneTransformer(g, est(f.idx))) g.push(f);
+        && oneTransformer([...g, f])) g.push(f);
       else groups.push([f]);
     }
     const mvCells = new Set<string>();
