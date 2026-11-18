@@ -119,3 +119,35 @@ if it is built, should probably stack Hi-Amps the same way, but nothing in the b
 that branch and the temp test is not in the patch. Verify with `git apply --check spikes/bank-room/change.patch` in a
 clean checkout of that branch. The switch is read in one place (`SPIKE_BANK` in `src/server/layout/internal.ts`):
 1 turns H1 on, 2 adds H2.
+
+## CTO addendum (RUK-2877, 2026-11-18): H1 to promote, and the score order it needs
+
+**Why the unpacked 40-machine direct line starves 16 under H1.** With the switches off (`stacking: false,
+packing: false`) the search has a west head and four middle heads. Before H1 every one left 20-21 transformers to
+place by hand, so the middle head won on `unpowered` (7). With H1 the west head leaves 2 Hi-Amps to place by hand and
+the middle heads 4, and `compareScore` ranks `handTransformers` before `unpowered`, so the west head wins while
+starving 16 machines. `replacesBaseline` also refuses any candidate with more hand transformers than the baseline.
+
+**The fix (in `h1.patch`).** Assumption 3 puts "buildable" first, and a bank short of room makes a line unbuildable
+whatever its count. So `handTransformers` now ranks as "any at all" before `unpowered`, and as a count after it.
+`replacesBaseline` refuses a candidate that is short of bank room where the baseline is not, or that leaves more
+transformers by hand while powering no more machines. Measured: **no benchmark row moves** from that change; it
+brings the unpacked 40-machine direct and EnderIO lines back to 7 starved and the middle head, and removes 5 of the
+spike's 17 re-pins.
+
+**`h1.patch`** is H1 alone, without the switch and without H2, plus the score order: `internal.ts` (`stageRows`,
+`BankRows`), `power.ts` (`Stage.layCount`, `Stage.hiAmp`), `layout.ts` (`handWork` counts `layCount`) and `score.ts`.
+It applies on top of `spikes/packed-ae2/change.patch`. With both patches, `spikes/packed-ae2/repins.diff` and
+`h1-repins.diff`, the suite passes (4430 of 4430). The benchmark is identical to `SPIKE_BANK=1`: 9 rows lower, none
+worse (`loss-10` direct 35 → 29, enderio 41 → 38, ae2 53 → 44; `loss-20` direct 48 → 38, enderio 57 → 45, routed
+122 → 76, ae2 119 → 54; `loss-40` direct 117 → 97, enderio 131 → 106).
+
+| test (`h1-repins.diff`) | why it moved | re-pin |
+| --- | --- | --- |
+| `internal.test.ts:283` bank column | the export's Hi-Amp now fits the bank | delete the LV Hi-Amp (878) from that test's pack |
+| `layout-bench.test.ts:21` | `loss-10` direct is laid packed | `[29, 10, 11, 8, []]` |
+| `m1-verify-panel.test.tsx:32` | `loss-10` enderio is laid packed, its estimate matches | `[]` |
+| `satellites.test.ts` ROWS, `:111` | the unstacked 20-machine routed and AE2 lines starve 7, not 8 | `7` |
+| `satellites.test.ts`, the 7 calls with satellites on | stacked 20-machine routed and AE2 lines need no satellite now | `{ satellites: true, stacking: false, packing: false }` |
+
+H2 stays parked.

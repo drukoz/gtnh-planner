@@ -271,3 +271,20 @@ offender checks and the per-row dumps above, and writes `/tmp/spike-g.json` (33 
 Nothing else: `CandidateKind.Packed = 3` (`src/shared/types/layout.ts`), the `isInputFacing` power-port reading in
 `tests/unit/layout/layout.test.ts` and the `tierContacts` `powerSide` fix (`tests/helpers/power-loss.ts`) are
 committed on this tip (RUK-2974), so the patch carries no `tests/` and no types diff.
+
+## CTO addendum (RUK-2877, 2026-11-18): the whole suite, not three files
+
+The README's failing-test list covers the three files the spike ran. With `change.patch` applied, `npx vitest run`
+fails **8** tests, all because the 40-machine AE2 line is now laid packed and powers every machine, or because the
+search lays one more (packed) candidate. `repins.diff` holds the re-pins, measured on `b1b1355e5`; with
+`change.patch` and `repins.diff` applied the suite passes (4430 of 4430):
+
+| test | why it moved | re-pin |
+| --- | --- | --- |
+| `internal.test.ts:530`, `score.test.ts:49`, `m1-verify.test.ts:49`, `layout-bench.test.ts:26` | they use the 40-machine AE2 line as their example of starved machines; packed, it starves none | `lossLine(40, 'ae2', { packing: false })` |
+| `layout-search.test.ts:56`, `:67` | they count head and stacked candidates; AE2 now adds a packed one | add `packing: false` |
+| `packed.test.ts:22` | it pinned "direct and EnderIO only" | AE2 gets one packed candidate, laid last; routed none |
+| `feeding/precheck.test.ts:262-264` | the 2-macerator AE2 line is now laid packed | macerator `1 64 1` → `1 64 0`, its interface `1 64 2` → `1 65 0` |
+
+Benchmark: 4 AE2 rows lower, none worse: `mixed-05` 43 → 38 blocks, `mixed-09` loss 381 → 362, `mixed-13` 42 → 37,
+`mixed-14` 35 → 34. AE2 total 2 138 → 2 127 blocks, loss 11 843 → 11 751 EU/t.

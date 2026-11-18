@@ -1,0 +1,102 @@
+diff --git a/tests/unit/layout/feeding/precheck.test.ts b/tests/unit/layout/feeding/precheck.test.ts
+index 6bce424ff..b3ce62331 100644
+--- a/tests/unit/layout/feeding/precheck.test.ts
++++ b/tests/unit/layout/feeding/precheck.test.ts
+@@ -260,8 +260,8 @@ describe('precheckFeeding', () => {
+     expect(push.map(brief)).toEqual(['feed_pool_starve certain - Basic Macerator at 1 64 1']);
+     expect(push[0]!.text).toBe('Basic Macerator at 1 64 1 runs 2 recipes in Project Red: it reruns its last recipe while that recipe\'s output waits, so Why can starve');
+     const ae2 = await run('ae2');
+-    expect(ae2.map(brief)).toEqual(['feed_pool_starve risk - Basic Macerator at 1 64 1']);
+-    expect(ae2[0]!.text).toBe("Basic Macerator at 1 64 1 runs 2 recipes and ME Interface (Basic Macerator) at 1 64 2 has blocking mode off: it mixes the recipes' sets");
++    expect(ae2.map(brief)).toEqual(['feed_pool_starve risk - Basic Macerator at 1 64 0']);
++    expect(ae2[0]!.text).toBe("Basic Macerator at 1 64 0 runs 2 recipes and ME Interface (Basic Macerator) at 1 65 0 has blocking mode off: it mixes the recipes' sets");
+     // blocking mode on pushes one recipe's set at a time into an empty machine: nothing to say
+     expect(await run('ae2', true)).toEqual([]);
+     // an interface that holds no pattern is never pushed into, so it mixes nothing (main lays one on a multiblock's second input
+diff --git a/tests/unit/layout/internal.test.ts b/tests/unit/layout/internal.test.ts
+index 7bda9e3b0..5205b00aa 100644
+--- a/tests/unit/layout/internal.test.ts
++++ b/tests/unit/layout/internal.test.ts
+@@ -527,7 +527,7 @@ describe('supply landing cells on the line boundary', () => {
+ describe('machine_unpowered: the machines a tier\'s wiring cannot run', () => {
+   it('warns which LV machines the 40-machine AE2 line cannot run', async () => {
+     // 53 LV cable blocks to the farthest macerator leave it 1 V, and 30 EU/t at 2 A needs 15 V
+-    const { layout } = await lossLine(40, 'ae2');
++    const { layout } = await lossLine(40, 'ae2', { packing: false });
+     const unpowered = layout.warnings.filter((w) => w.code === 'machine_unpowered');
+     expect(unpowered).toHaveLength(1);
+     expect(unpowered[0]!.text.startsWith('The LV wiring cannot run ')).toBe(true);
+diff --git a/tests/unit/layout/layout-bench.test.ts b/tests/unit/layout/layout-bench.test.ts
+index 34940fc95..871cb8e29 100644
+--- a/tests/unit/layout/layout-bench.test.ts
++++ b/tests/unit/layout/layout-bench.test.ts
+@@ -23,7 +23,7 @@ describe('layout benchmark', () => {
+ 
+   it("flags the 40-machine AE2 line's LV wiring as weak", async () => {
+     // 53 cable blocks of LV to the farthest macerator leave it 1 V: under half of LV's 32 V
+-    const { layout } = await lossLine(40, 'ae2');
++    const { layout } = await lossLine(40, 'ae2', { packing: false });
+     expect(lengthOf(layout).weakTiers).toEqual([1]);
+   }, 30_000);
+ 
+diff --git a/tests/unit/layout/layout-search.test.ts b/tests/unit/layout/layout-search.test.ts
+index a9e1f88c7..0465d332a 100644
+--- a/tests/unit/layout/layout-search.test.ts
++++ b/tests/unit/layout/layout-search.test.ts
+@@ -53,7 +53,7 @@ describe('the layout search', () => {
+   }, 60_000);
+ 
+   it('lays one candidate per head split when the line loses something', async () => {
+-    const { layout } = await lossLine(40, 'ae2', { stacking: false });
++    const { layout } = await lossLine(40, 'ae2', { stacking: false, packing: false });
+     const { candidates } = layout.search!;
+     expect(candidates.length).toBe(1 + headSplits(40).length);
+     for (let i = 1; i < candidates.length; i++) {
+@@ -64,7 +64,7 @@ describe('the layout search', () => {
+   it('lays a stacked twin of every head candidate', async () => {
+     // RUK-2877: with stacking on (the default) every head candidate is laid again with the single-block machines
+     // stacked two high, the twins in the order of the head candidates they twin
+-    const { layout } = await lossLine(40, 'ae2');
++    const { layout } = await lossLine(40, 'ae2', { packing: false });
+     const { candidates } = layout.search!;
+     const heads = 1 + headSplits(40).length;
+     expect(candidates.length).toBe(2 * heads);
+diff --git a/tests/unit/layout/m1-verify.test.ts b/tests/unit/layout/m1-verify.test.ts
+index 1916e867d..4d3108fab 100644
+--- a/tests/unit/layout/m1-verify.test.ts
++++ b/tests/unit/layout/m1-verify.test.ts
+@@ -46,7 +46,7 @@ describe('milestone M1 verification', () => {
+   }, 120_000);
+ 
+   it('names every machine the warning counts', async () => {
+-    const { layout } = await lossLine(40, 'ae2');
++    const { layout } = await lossLine(40, 'ae2', { packing: false });
+     const warnings = layout.warnings.filter((w) => w.code === 'machine_unpowered');
+     expect(warnings.length).toBeGreaterThan(0);
+     let named = 0;
+diff --git a/tests/unit/layout/packed.test.ts b/tests/unit/layout/packed.test.ts
+index f59fcd785..18f13248d 100644
+--- a/tests/unit/layout/packed.test.ts
++++ b/tests/unit/layout/packed.test.ts
+@@ -15,7 +15,7 @@ describe('the packed line as a search candidate', () => {
+       const { layout } = await lossLine(10, mode);
+       const kinds = layout.search!.candidates.map((c) => c.kind);
+       const packed = kinds.filter((k) => k === CandidateKind.Packed);
+-      if (mode === 'direct' || mode === 'enderio') {
++      if (mode !== 'routed') {
+         expect(packed.length, `${mode}: one packed candidate`).toBe(1);
+         expect(kinds.at(-1), `${mode}: packed laid last`).toBe(CandidateKind.Packed);
+       } else {
+diff --git a/tests/unit/layout/score.test.ts b/tests/unit/layout/score.test.ts
+index 37bfed265..e441d5537 100644
+--- a/tests/unit/layout/score.test.ts
++++ b/tests/unit/layout/score.test.ts
+@@ -46,7 +46,7 @@ describe('per-machine power report', () => {
+   }, 30_000);
+ 
+   it("reports the far macerators of the 40-machine AE2 loss line as unpowered", async () => {
+-    const { layout, internal } = await lossLine(40, 'ae2');
++    const { layout, internal } = await lossLine(40, 'ae2', { packing: false });
+     const dark = internal.machines.filter((m) => !m.powered);
+     expect(dark.length, 'at least one unpowered macerator').toBeGreaterThan(0);
+     expect(Math.min(...dark.map((m) => m.arrivingVolts)), 'the farthest gets under the 15 V it needs').toBeLessThan(15);
