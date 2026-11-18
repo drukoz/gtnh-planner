@@ -1080,23 +1080,23 @@
     "mode": "direct",
     "size": [
       6,
-      1,
-      5
+      2,
+      3
     ],
-    "total": 35,
-    "cable": 13,
-    "pipe": 5,
+    "total": 34,
+    "cable": 6,
+    "pipe": 9,
     "iface": 0,
     "chip": 0,
     "transformer": 0,
     "chest": 2,
-    "hookup": 17,
-    "lossEUt": 614,
+    "hookup": 19,
+    "lossEUt": 585,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 9,
-        "worstVolts": 119
+        "worstBlocks": 4,
+        "worstVolts": 124
       }
     ],
     "weakTiers": [],
@@ -1164,23 +1164,23 @@
     "mode": "enderio",
     "size": [
       6,
-      1,
-      5
+      2,
+      3
     ],
-    "total": 35,
-    "cable": 13,
-    "pipe": 5,
+    "total": 34,
+    "cable": 6,
+    "pipe": 9,
     "iface": 0,
     "chip": 0,
     "transformer": 0,
     "chest": 2,
-    "hookup": 17,
-    "lossEUt": 614,
+    "hookup": 19,
+    "lossEUt": 585,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 9,
-        "worstVolts": 119
+        "worstBlocks": 4,
+        "worstVolts": 124
       }
     ],
     "weakTiers": [],
@@ -2175,19 +2175,19 @@
     "name": "mixed-13",
     "mode": "direct",
     "size": [
-      6,
+      7,
       2,
-      5
+      3
     ],
-    "total": 38,
-    "cable": 15,
-    "pipe": 4,
+    "total": 34,
+    "cable": 8,
+    "pipe": 7,
     "iface": 0,
     "chip": 0,
     "transformer": 2,
     "chest": 2,
     "hookup": 19,
-    "lossEUt": 105,
+    "lossEUt": 93,
     "tiers": [
       {
         "tier": 2,
@@ -2196,8 +2196,8 @@
       },
       {
         "tier": 1,
-        "worstBlocks": 6,
-        "worstVolts": 26
+        "worstBlocks": 4,
+        "worstVolts": 28
       }
     ],
     "weakTiers": [],
@@ -2274,19 +2274,19 @@
     "name": "mixed-13",
     "mode": "enderio",
     "size": [
-      6,
+      7,
       2,
-      5
+      3
     ],
-    "total": 38,
-    "cable": 15,
-    "pipe": 4,
+    "total": 34,
+    "cable": 8,
+    "pipe": 7,
     "iface": 0,
     "chip": 0,
     "transformer": 2,
     "chest": 2,
     "hookup": 19,
-    "lossEUt": 105,
+    "lossEUt": 93,
     "tiers": [
       {
         "tier": 2,
@@ -2295,8 +2295,8 @@
       },
       {
         "tier": 1,
-        "worstBlocks": 6,
-        "worstVolts": 26
+        "worstBlocks": 4,
+        "worstVolts": 28
       }
     ],
     "weakTiers": [],
@@ -2307,24 +2307,24 @@
     "name": "mixed-14",
     "mode": "direct",
     "size": [
-      4,
+      5,
       2,
-      5
+      3
     ],
     "total": 31,
-    "cable": 10,
-    "pipe": 4,
+    "cable": 5,
+    "pipe": 7,
     "iface": 0,
     "chip": 0,
     "transformer": 0,
     "chest": 2,
-    "hookup": 17,
-    "lossEUt": 286,
+    "hookup": 19,
+    "lossEUt": 283,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 7,
-        "worstVolts": 121
+        "worstBlocks": 3,
+        "worstVolts": 125
       }
     ],
     "weakTiers": [],
@@ -2391,24 +2391,24 @@
     "name": "mixed-14",
     "mode": "enderio",
     "size": [
-      4,
+      5,
       2,
-      5
+      3
     ],
     "total": 31,
-    "cable": 10,
-    "pipe": 4,
+    "cable": 5,
+    "pipe": 7,
     "iface": 0,
     "chip": 0,
     "transformer": 0,
     "chest": 2,
-    "hookup": 17,
-    "lossEUt": 286,
+    "hookup": 19,
+    "lossEUt": 283,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 7,
-        "worstVolts": 121
+        "worstBlocks": 3,
+        "worstVolts": 125
       }
     ],
     "weakTiers": [],
