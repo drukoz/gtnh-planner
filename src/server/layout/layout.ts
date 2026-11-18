@@ -287,7 +287,7 @@ function lineLoss(line: Omit<LocalLine, 'score'>): number {
  * block, so its `count` joins `needed` too (RUK-2679), and only the extra beyond the one block it lays is hand work.
  */
 function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transformers: number } {
-  const needed = (line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0) + line.internal.satellites.reduce((n, s) => n + s.count, 0);
+  const needed = (line.stages?.stages.reduce((n, s) => n + (s.layCount ?? s.count), 0) ?? 0) + line.internal.satellites.reduce((n, s) => n + s.count, 0);
   const placed = line.internal.blocks.filter((b) => b.role === 'transformer').length;
   return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
 }

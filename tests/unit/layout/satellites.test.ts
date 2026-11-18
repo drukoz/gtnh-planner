@@ -15,13 +15,17 @@ type Row = { n: number; mode: 'direct' | 'routed' | 'ae2' | 'enderio'; starved: 
 // the starved benchmark rows (spike SP-C), the machines each starves with the switch off on this branch (measured: the
 // RUK-121 middle-head and AE2-interface work changed a few of these from the spike's numbers)
 const ROWS: readonly Row[] = [
-  { n: 20, mode: 'routed', starved: 8 },
-  { n: 20, mode: 'ae2', starved: 8 },
+  { n: 20, mode: 'routed', starved: 7 },
+  { n: 20, mode: 'ae2', starved: 7 },
   { n: 40, mode: 'direct', starved: 7 },
   { n: 40, mode: 'routed', starved: 22 },
   { n: 40, mode: 'ae2', starved: 22 },
   { n: 40, mode: 'enderio', starved: 7 },
 ];
+
+// RUK-2976: Hi-Amp banks and stacking power the stacked 20-machine routed and AE2 lines without a satellite, so the
+// satellite tests lay their satellites on the unstacked, unpacked line, which still needs them
+const SATELLITES = { satellites: true, stacking: false, packing: false };
 
 const UP = 1;
 // the transformer feeds tier `toTier` out these five faces (its front, up, is its `fromTier` input): no lower-tier
@@ -46,7 +50,7 @@ describe('satellite step-down banks', () => {
 
   for (const { n, mode, starved } of ROWS) {
     it(`the ${n}-machine ${mode} line lays satellites that starve no machine`, async () => {
-      const { internal } = await lossLine(n, mode, { satellites: true });
+      const { internal } = await lossLine(n, mode, SATELLITES);
       expect(internal.satellites.length, `${n} ${mode}: satellites laid`).toBeGreaterThan(0);
       expect(starvedByWiring(internal), `${n} ${mode}: starved by wiring`).toBe(0);
     }, 60_000);
@@ -58,7 +62,7 @@ describe('satellite step-down banks', () => {
     }, 60_000);
 
     it(`the ${n}-machine ${mode} satellites face up into a supply cable with a tier cable beside`, async () => {
-      const { internal } = await lossLine(n, mode, { satellites: true });
+      const { internal } = await lossLine(n, mode, SATELLITES);
       const { satellites, blocks } = internal;
       expect(satellites.length).toBeGreaterThan(0);
       satellites.forEach((s: SatelliteBank, i) => {
@@ -86,7 +90,7 @@ describe('satellite step-down banks', () => {
     }, 60_000);
 
     it(`the ${n}-machine ${mode} satellites touch no foreign cable or lower-tier machine`, async () => {
-      const { placement, internal } = await lossLine(n, mode, { satellites: true });
+      const { placement, internal } = await lossLine(n, mode, SATELLITES);
       expect(tierContacts(internal.blocks, internal.cables, placement), `${n} ${mode}: tier contacts`).toEqual([]);
       const machineTier = new Map(placement.units.filter((u) => u.electric && u.ports.power !== null)
         .map((u) => [posKey(step(u.ports.power!, u.facing)), u.tier]));
@@ -99,8 +103,8 @@ describe('satellite step-down banks', () => {
     }, 60_000);
 
     it(`the ${n}-machine ${mode} line lays the same satellites every time`, async () => {
-      const a = await lossLine(n, mode, { satellites: true });
-      const b = await lossLine(n, mode, { satellites: true });
+      const a = await lossLine(n, mode, SATELLITES);
+      const b = await lossLine(n, mode, SATELLITES);
       expect(JSON.stringify(b.internal.satellites)).toBe(JSON.stringify(a.internal.satellites));
     }, 60_000);
   }
@@ -108,7 +112,7 @@ describe('satellite step-down banks', () => {
   it('stacking alone powers the 20-machine routed line with satellites off', async () => {
     // RUK-2877: the stacked line is shorter, so the head's own trees reach every machine where the unstacked line starves 8
     const { internal } = await lossLine(20, 'routed', { stacking: false });
-    expect(starvedByWiring(internal)).toBe(8);
+    expect(starvedByWiring(internal)).toBe(7);
     const stacked = await lossLine(20, 'routed');
     expect(starvedByWiring(stacked.internal)).toBe(0);
   }, 60_000);
@@ -121,7 +125,7 @@ const HIAMP_MTE_ID = 878;   // the fixture's LV Hi-Amp Transformer
 describe('one transformer per satellite (RUK-2677)', () => {
   for (const { n, mode } of ROWS) {
     it(`the ${n}-machine ${mode} line gives every satellite one transformer, no bank warning, no starved machine`, async () => {
-      const { internal, layout } = await lossLine(n, mode, { satellites: true });
+      const { internal, layout } = await lossLine(n, mode, SATELLITES);
       expect(internal.satellites.length, `${n} ${mode}: satellites laid`).toBeGreaterThan(0);
       internal.satellites.forEach((s, i) => { expect(s.count, `bank ${i}: one transformer`).toBe(1); });
       // the head bank's own `transformer_bank` (the M2-3 baseline, on these rows' OFF layout too) is allowed: the
@@ -131,7 +135,7 @@ describe('one transformer per satellite (RUK-2677)', () => {
     }, 60_000);
 
     it(`the ${n}-machine ${mode} line lays the Hi-Amp Transformer on every satellite`, async () => {
-      const { internal } = await lossLine(n, mode, { satellites: true });
+      const { internal } = await lossLine(n, mode, SATELLITES);
       const laid = internal.blocks.filter((b) => b.satellite !== undefined);
       expect(laid.length, `${n} ${mode}: one block per satellite`).toBe(internal.satellites.length);
       laid.forEach((b) => { expect(b.block.mteId, `satellite block at ${posKey(b.pos)}`).toBe(HIAMP_MTE_ID); });

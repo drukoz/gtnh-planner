@@ -112,3 +112,19 @@ describe('line score', () => {
     expect(got).toEqual({ unwired: 1, unpowered: 2, total: 3, lossEUt: 12 });
   });
 });
+
+describe('the score order (RUK-2976)', () => {
+  const s = (o: Partial<LineScore>): LineScore => ({ unwired: 0, handTransformers: 0, unpowered: 0, total: 50, lossEUt: 100, volume: 100, ...o });
+
+  it('ranks starved machines above hand-placed transformers, and buildable lines above both', () => {
+    expect(compareScore(s({ handTransformers: 4, unpowered: 7 }), s({ handTransformers: 2, unpowered: 16 })), 'fewer starved wins').toBeLessThan(0);
+    expect(compareScore(s({ handTransformers: 0, unpowered: 3 }), s({ handTransformers: 1, unpowered: 0 })), 'buildable first').toBeLessThan(0);
+    expect(compareScore(s({ handTransformers: 2, unpowered: 7 }), s({ handTransformers: 4, unpowered: 7, total: 10 })), 'the count decides before length').toBeLessThan(0);
+  });
+
+  it('refuses a candidate that hands the bank to the user where today does not', () => {
+    expect(replacesBaseline(s({ handTransformers: 4, unpowered: 7 }), s({ handTransformers: 2, unpowered: 16 }))).toBe(true);
+    expect(replacesBaseline(s({ handTransformers: 1, unpowered: 0 }), s({ handTransformers: 0, unpowered: 3 }))).toBe(false);
+    expect(replacesBaseline(s({ handTransformers: 4, unpowered: 7, total: 10 }), s({ handTransformers: 2, unpowered: 7 }))).toBe(false);
+  });
+});
