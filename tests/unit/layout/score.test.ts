@@ -21,7 +21,7 @@ const machine = (powered: boolean): MachinePower => ({
 });
 
 const score = (over: Partial<LineScore> = {}): LineScore => ({
-  unwired: 0, handTransformers: 0, unpowered: 0, total: 20, lossEUt: 100, volume: 60, ...over,
+  unwired: 0, unreachable: 0, handTransformers: 0, unpowered: 0, total: 20, lossEUt: 100, volume: 60, ...over,
 });
 
 const measure = (over: Partial<FinalMeasure> = {}): FinalMeasure => ({
@@ -108,13 +108,13 @@ describe('line score', () => {
       blocks: [lblock('cable'), lblock('pipe'), lblock('machine'), lblock('cable', 0), lblock('ghost', 0)],
       warnings: [{ code: 'route_failed', text: 'no path' }, { code: 'cable_loss_high', text: 'lossy' }],
       loss,
-    });
-    expect(got).toEqual({ unwired: 1, unpowered: 2, total: 3, lossEUt: 12 });
+    }, 0);
+    expect(got).toEqual({ unwired: 1, unpowered: 2, unreachable: 0, total: 3, lossEUt: 12 });
   });
 });
 
 describe('the score order (RUK-2976)', () => {
-  const s = (o: Partial<LineScore>): LineScore => ({ unwired: 0, handTransformers: 0, unpowered: 0, total: 50, lossEUt: 100, volume: 100, ...o });
+  const s = (o: Partial<LineScore>): LineScore => ({ unwired: 0, unreachable: 0, handTransformers: 0, unpowered: 0, total: 50, lossEUt: 100, volume: 100, ...o });
 
   it('ranks starved machines above hand-placed transformers, and buildable lines above both', () => {
     expect(compareScore(s({ handTransformers: 4, unpowered: 7 }), s({ handTransformers: 2, unpowered: 16 })), 'fewer starved wins').toBeLessThan(0);

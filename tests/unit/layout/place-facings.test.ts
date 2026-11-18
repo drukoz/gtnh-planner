@@ -36,7 +36,7 @@ function faces(layout: Layout, stepId: string, packed: boolean): Group[] {
 const fragment = (g: Group): string => `${fmtInt(g.n)} with the output side facing ${g.out} and the front facing ${g.front}`;
 
 function machineSteps(layout: Layout): string[] {
-  return [...new Set(layout.blocks.filter((b) => b.role === 'machine' && b.hookup === undefined).map((b) => b.stepId))];
+  return [...new Set(layout.blocks.flatMap((b) => (b.role === 'machine' && b.hookup === undefined && b.stepId !== undefined ? [b.stepId] : [])))];
 }
 
 function placeText(layout: Layout, stepId: string): string {
