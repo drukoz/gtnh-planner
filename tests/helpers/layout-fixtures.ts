@@ -424,7 +424,7 @@ export function makeScan(spec: ScanSpec = {}): WorldScan {
 
 // ---- Voxels ----
 
-export interface VoxSpec { origin: Vec3; size: Vec3; groundY: number; ground?: BlockRef; boxes?: Array<{ from: Vec3; to: Vec3; block: BlockRef }> }
+export interface VoxSpec { origin: Vec3; size: Vec3; groundY: number; ground?: BlockRef; boxes?: Array<{ from: Vec3; to: Vec3; block: BlockRef }>; biome?: number }
 
 function sameBlock(a: BlockRef, b: BlockRef): boolean {
   return a.id === b.id && a.meta === b.meta && a.mteId === b.mteId;
@@ -440,8 +440,9 @@ function paletteIndex(palette: BlockRef[], block: BlockRef): number {
 /**
  * A voxel area of `size` at `origin`: every cell at world y ≤ `groundY` is `ground` (stone), the rest air; then each
  * box (inclusive world corners) overwrites its cells inside the area. Palette `[air, UNKNOWN_BLOCK, ground, …]`.
+ * With `biome`, every column gets that biome id; without it `biomes` stays absent.
  */
-export function flatVoxels({ origin, size, groundY, ground = STONE, boxes = [] }: VoxSpec): Voxels {
+export function flatVoxels({ origin, size, groundY, ground = STONE, boxes = [], biome }: VoxSpec): Voxels {
   const [sx, sy, sz] = size;
   const palette: BlockRef[] = [{ ...AIR }, { ...UNKNOWN_BLOCK }];
   const blocks = new Uint32Array(sx * sy * sz).fill(AIR_INDEX);
@@ -458,12 +459,16 @@ export function flatVoxels({ origin, size, groundY, ground = STONE, boxes = [] }
       }
     }
   }
-  return { origin: [...origin], size: [...size], blocks, palette };
+  return {
+    origin: [...origin], size: [...size], blocks, palette,
+    ...(biome === undefined ? {} : { biomes: new Int32Array(sx * sz).fill(biome) }),
+  };
 }
 
 /**
  * A stand-in for Plan 4's `readArea` over `vox`: copies the requested inclusive box, with `UNKNOWN_INDEX` for cells
- * outside `vox`. Like `readArea` it throws a `RangeError` for an empty or malformed box or one above `MAX_AREA_VOXELS`.
+ * outside `vox`, and copies `vox.biomes` when set (−1 for columns outside `vox`). Like `readArea` it throws a
+ * `RangeError` for an empty or malformed box or one above `MAX_AREA_VOXELS`.
  */
 export function areaReader(vox: Voxels): (dim: number, bbox: BBox) => Promise<Voxels> {
   return async (_dim, bbox) => {
@@ -488,6 +493,19 @@ export function areaReader(vox: Voxels): (dim: number, bbox: BBox) => Promise<Vo
         }
       }
     }
-    return { origin: [minX, minY, minZ], size, blocks, palette: vox.palette.map((b) => ({ ...b })) };
+    let biomes: Int32Array | undefined;
+    if (vox.biomes !== undefined) {
+      biomes = new Int32Array(size[0] * size[2]).fill(-1);
+      for (let z = 0; z < size[2]; z++) {
+        const fz = minZ + z - vox.origin[2];
+        if (fz < 0 || fz >= vz) continue;
+        for (let x = 0; x < size[0]; x++) {
+          const fx = minX + x - vox.origin[0];
+          if (fx < 0 || fx >= vx) continue;
+          biomes[z * size[0] + x] = vox.biomes[fz * vx + fx]!;
+        }
+      }
+    }
+    return { origin: [minX, minY, minZ], size, blocks, palette: vox.palette.map((b) => ({ ...b })), ...(biomes === undefined ? {} : { biomes }) };
   };
 }
