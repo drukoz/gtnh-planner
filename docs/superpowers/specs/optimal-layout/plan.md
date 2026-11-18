@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-5, M3-P1 … M3-P4, SP-F, SP-G and SP-H merged; M3-6 (RUK-3013), M3-8 (RUK-3015) and SP-I (RUK-3016) running, M3-7 (RUK-3014) after M3-6**, 2026-11-18 (revision 10). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-8, M3-P1 … M3-P4 and SP-F … SP-I merged; M3-9, M3-10 (after M3-9) and SP-J running**, 2026-11-18 (revision 11). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -36,7 +36,10 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
    today gets nothing usable, or to reach one it shuts in (M3-8). The S1 ratchet and the loss
    budgets in `power-loss.test.ts` keep that true: a row may get longer or lossier only where its `unpowered` count
    drops, and the commit names the row. (When shapes arrive in M3 and the shortest shape loses more, this rule is what
-   I will ask you about in the PR, with the numbers.)
+   I will ask you about in the PR, with the numbers.) The finished layouts (with their hookups) of the search's two best
+   candidates are judged against today's, and a finished line may not have more **weak tiers** (a tier whose farthest
+   machine gets under half its volts, the benchmark's `weakTiers`) than today's unless it powers more machines
+   (revision 11, M3-9).
 5. RUK-351 is folded into this program: M1 reports unpowered machines honestly, M2 powers them.
 6. AE2 lines get port spacing 1 with Wrench targets on every interface (RUK-119; proven first by spike SP-A).
 7. The packed shape (design goal 2) is SP-E's 3-wide, 2-high column: machines A and B beside the cable lane, T on top
@@ -49,7 +52,9 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
    machines under their pipes) and 64 under stacked machines; this one finds 14 in the benchmark, all in AE2: the top
    machines of the packed AE2 column and 6 multiblock controllers behind ME Interfaces on today's AE2 rows
    (`spikes/reach/README.md`). Scoring it costs 3 AE2 benchmark rows their packed gain (AE2 2 053 → 2 086 blocks) until
-   SP-I finds a column that keeps every machine reachable. (Added 2026-11-18, revision 10.)
+   SP-I finds a column that keeps every machine reachable. (Added 2026-11-18, revision 10.) SP-I's open column (A's and
+   B's interfaces on the box's outer faces, 5 wide) wins `loss-10` and `loss-20` back (AE2 2 086 → 2 073) as a second
+   AE2 packed candidate (M3-10); `loss-40` waits on satellites beside a packed box (SP-J). (Revision 11.)
 
 ## Target architecture
 
@@ -159,6 +164,10 @@ The packed shape follows Assumption 7.
 | M3-7 RUK-3014 | a packed line's logistics step says "on the lanes above the machines" (direct, EnderIO; AE2 already does), and Input from Output Side names "its output side", not "its middle-row side" | M3-6 |
 | M3-8 RUK-3015 | reach in the score (Assumption 8): `unreachableMachines`, `LineScore.unreachable` after `unwired`, `replacesBaseline`/`finalReplaces` refuse more unreachable machines than the baseline; the benchmark reports and ratchets it. From the CTO prototype `spikes/reach/change.patch`: 3 AE2 rows up (`loss-10`, `loss-20`, `mixed-05`), none other moves | — |
 | SP-I RUK-3016 | spike: an AE2 packed column with no machine shut in: I1, T in every other column; I2, A's and B's interfaces on their outer faces (5 wide). Every score field per candidate on the four AE2 loss rows, whole-suite re-pins | reach patch |
+| CTO probe | after SP-I (`spikes/reach-ae2-promote/`): I2 *replaced* the SP-G column, which is the better one on short lines (mixed-09/13/14), and the finished check judged one finalist (mixed-05: I2 first in-line, 1 block longer hooked up). Two finished finalists plus both AE2 columns: 2 rows lower, none worse. I2's A and B had front = output side, which GT forbids; fronts turned west | SP-I |
+| M3-9 | the finished check judges the two best candidates (`FINALISTS = 2`, `compareFinal`), and `finalReplaces` refuses more weak tiers unless more machines are powered (`a.patch`). Changes no benchmark row | — |
+| M3-10 | the open AE2 packed column as `CandidateKind.PackedOpen = 4`, laid after `Packed` (`b.patch`): `loss-10` 53 → 52, `loss-20` 73 → 61 blocks | M3-9 |
+| SP-J | spike: satellite banks beside or on a packed box, so `loss-40` AE2 can keep the open column (82 blocks against 232) without a weak tier | M3-9, M3-10 patches |
 | later in M3 | rain cover counted in the score and the build list (goal 7); a warning for machines out of reach (today's AE2 multiblock controllers) | M3-8 |
 | M3-V | QA verification of the milestone branch | all above |
 
