@@ -1,0 +1,37 @@
+diff --git a/src/server/layout/internal.ts b/src/server/layout/internal.ts
+index b6ea80ba6..9cb967af5 100644
+--- a/src/server/layout/internal.ts
++++ b/src/server/layout/internal.ts
+@@ -28,6 +28,7 @@ import { handRunSurroundings, placedStepIds, unitSteps, type HostCover, type Loc
+ import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
+ import { coverRateWarning, lowerLossCable, machineRef, pickCable, pickFluidPipe, pickPump, pickHiAmpTransformer, pickTransformer, type Parts } from './parts.ts';
+ import { bankLossEUt, deliveredVolts, emitterLoss, HIAMP_AMPS_IN, HIAMP_AMPS_OUT, LOSS_WARN_FRACTION, tierGroups, transformerStages, TRANSFORMER_AMPS_IN, TRANSFORMER_AMPS_OUT, type Stage, type Stages } from './power.ts';
++import { unreachableMachines } from './reach.ts';
+ 
+ // ---- Types ----
+ 
+@@ -1153,6 +1154,12 @@ function planSatellites(input: InternalInput, stages: Stages, head: Head, trees:
+   const inside = (p: Vec3): boolean => p[0] >= 0 && p[0] < w && p[1] >= 0 && p[1] <= h && p[2] >= 0 && p[2] < l;
+   const insideAir = (p: Vec3): boolean => p[0] >= 0 && p[0] < w && p[1] >= 1 && p[1] <= h + 1 && p[2] >= 0 && p[2] < l;
+   const satellites: Satellite[] = [];
++  // a satellite's transformer is a full block, so it may not stand where it shuts a machine in (RUK-3031, design goal
++  // 3): the line as it stands (its machines and mode blocks, the phase-1 cables `grid` laid, and every satellite this
++  // call accepted) and how many machines it shuts in; a cell is accepted only while its transformer and input cable
++  // raise that count by nothing. The output cable is thin and never closes a face, so it is left out.
++  const reachBase: Array<{ pos: Vec3; role: string }> = [...input.occupied, ...grid.blocks];
++  const shutIn = unreachableMachines(reachBase).length;
+   for (const stage of stages.stages) {
+     const T = stage.toTier, F = stage.fromTier;
+     if (F !== supply) continue;                                            // spike: only banks fed straight off the supply run
+@@ -1234,6 +1241,11 @@ function planSatellites(input: InternalInput, stages: Stages, head: Head, trees:
+                 }
+                 if (output === null) continue;
+                 if ([cell, inp, output].some((c) => DIRS.some((_, sd) => satCells.has(posKey(step(c, sd)))))) continue;
++                // a cell that shuts a machine in (its top the only builder face, as on the open packed AE2 column) is
++                // no place for a satellite
++                const withBank = [...reachBase, { pos: cell, role: 'transformer' }, { pos: inp, role: 'cable' }];
++                if (unreachableMachines(withBank).length > shutIn) continue;
++                reachBase.push({ pos: cell, role: 'transformer' }, { pos: inp, role: 'cable' });
+                 grid.take(cell); grid.take(inp); grid.take(output);
+                 for (const c of [cell, inp, output]) satCells.add(posKey(c));
+                 placed = { tier: T, fromTier: F, cell, input: inp, output, outSide, ports: g.map((f) => [...f.pos] as Vec3),

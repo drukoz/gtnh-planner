@@ -1,0 +1,155 @@
+diff --git a/tests/unit/layout/farms.test.ts b/tests/unit/layout/farms.test.ts
+index d6a430f32..6fbd2bdcc 100644
+--- a/tests/unit/layout/farms.test.ts
++++ b/tests/unit/layout/farms.test.ts
+@@ -157,14 +157,13 @@ describe('farm areas', () => {
+       nameOf: (k) => k, ...over });
+     const farms = [{ stepId: 'crop', text: 'Lay out A', pin: 3 }, { stepId: 'crop', text: 'Lay out B', pin: 4 }, { stepId: 'tgs', text: 'Build C' }];
+     const ok = layoutSteps(input({ farms, siteSize: [20, 7, 13] }));
+-    expect(ok.map((s) => s.id)).toEqual(['layout:site', 'layout:roof', 'layout:farm:crop', 'layout:farm:crop:2', 'layout:farm:tgs',
++    expect(ok.map((s) => s.id)).toEqual(['layout:site', 'layout:farm:crop', 'layout:farm:crop:2', 'layout:farm:tgs',
+       'layout:reuse:m', 'layout:test']);
+     expect(ok.filter((s) => s.id.startsWith('layout:farm:')).map((s) => [s.kind, s.pin, s.text]))
+       .toEqual([['place', 3, 'Lay out A'], ['place', 4, 'Lay out B'], ['place', undefined, 'Build C']]);
+     // the clear step names the box the site search found clear, the line's and its farm areas' (the site pin stays in
+-    // the middle of the line's own box: the final review's T8-a); the roof stays the line's own
++    // the middle of the line's own box: the final review's T8-a); no roof blocks in the input, so no roof step (RUK-2877)
+     expect(ok[0]!.text).toBe('Clear a 20×13 spot for the line and its farm areas (7 high) and keep a 1-block path around it');
+-    expect(ok[1]!.text).toBe('Roof the line: GT machines left in the rain can catch fire or explode');
+     // with pins, from the line at its pin to the farm areas at theirs
+     const site = { n: 1, dim: 0, pos: [3, 64, 2] as Vec3, kind: 'site' as const, text: 'Build the line here' };
+     const pinned = farms.map((f, i) => ({ ...f, pin: 3 + i }));
+diff --git a/tests/unit/layout/hatch-placement.test.ts b/tests/unit/layout/hatch-placement.test.ts
+index 0cc77a64c..f58e982e7 100644
+--- a/tests/unit/layout/hatch-placement.test.ts
++++ b/tests/unit/layout/hatch-placement.test.ts
+@@ -72,8 +72,9 @@ describe('a line whose tallest unit is an EBF', () => {
+     expect(step(muffler!.pos, muffler!.facing!)[1]).toBe(layout.origin[1] + layout.size[1] - 1);
+     const text = (l: Layout, id: string) => l.buildSteps.find((s) => s.id === id)!.text;
+     expect(text(layout, 'layout:site')).toContain('(5 high)');
+-    expect(text(layout, 'layout:roof')).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, '
+-      + 'and a Muffler Hatch needs the block it faces kept empty');
++    // the EBF's own casings keep the rain off its energy hatch, so the line lays no roof and has no roof step (RUK-2877)
++    expect(layout.blocks.filter((b) => b.role === 'roof')).toEqual([]);
++    expect(layout.buildSteps.some((s) => s.id === 'layout:roof')).toBe(false);
+     expect(text(layout, 'layout:place:e')).toMatch(/; keep the block above its Muffler Hatch empty, or GregTech stops the machine \(a muffler needs air to vent\)$/);
+     // a block where the muffler's air goes, at a spot the group chose: the check finds it in the way
+     const scan = makeScan({ base: { center: [20, 64, 20], bbox: { minX: 16, minY: 64, minZ: 16, maxX: 24, maxY: 65, maxZ: 24 } } });
+diff --git a/tests/unit/layout/pins-steps.test.ts b/tests/unit/layout/pins-steps.test.ts
+index 8db4c5fc5..6449348c6 100644
+--- a/tests/unit/layout/pins-steps.test.ts
++++ b/tests/unit/layout/pins-steps.test.ts
+@@ -178,20 +178,20 @@ describe('layout steps', () => {
+       power: { cable: '2x Annealed Copper Cable', blocks: 12, amps: 2, tier: 2, arrivingVolts: 116 }, supplyTier: 2,
+       drafts: [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site', text: 'Lay pipe' }, { id: 'layout:configure:s1', kind: 'configure', pin: null, text: 'Set covers' }] }));
+     expect(steps.map((s) => [s.order, s.id, s.kind, s.pin])).toEqual([
+-      [1, 'layout:site', 'place', 1], [2, 'layout:roof', 'place', 1], [3, 'layout:place:s1', 'place', 1], [4, 'layout:place:s2', 'place', 1],
+-      [5, 'layout:power:stage:1', 'power', 2], [6, 'layout:power:wire:2', 'power', 1], [7, 'layout:power:wire:1', 'power', 1],
+-      [8, 'layout:power:hookup', 'power', 2], [9, 'layout:logistics:line', 'logistics', 1], [10, 'layout:configure:s1', 'configure', undefined],
+-      [11, 'layout:test', 'test', 1]]);
++      [1, 'layout:site', 'place', 1], [2, 'layout:place:s1', 'place', 1], [3, 'layout:place:s2', 'place', 1],
++      [4, 'layout:power:stage:1', 'power', 2], [5, 'layout:power:wire:2', 'power', 1], [6, 'layout:power:wire:1', 'power', 1],
++      [7, 'layout:power:hookup', 'power', 2], [8, 'layout:logistics:line', 'logistics', 1], [9, 'layout:configure:s1', 'configure', undefined],
++      [10, 'layout:test', 'test', 1]]);
+     expect(steps[0]!.text).toBe('Clear a 6×5 spot at pin 1 (1 high) and keep a 1-block path around it; dig 2 and fill 0 blocks to level it');
+     // final review: a basic machine's front and output side are two faces (GT's mMainFacing and mFacing); GT never lets
+     // the front face up or down, sets it with a sneaking wrench click and the output side with a plain one
+-    expect(steps[2]!.text).toBe(PLACE_MACERATORS);
+-    expect(steps[4]!.text).toBe('Place 1× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
++    expect(steps[1]!.text).toBe(PLACE_MACERATORS);
++    expect(steps[3]!.text).toBe('Place 1× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
+     // final review C2: GT joins a cable to the block it is placed against, so the wire steps say to keep tiers apart
+-    expect([steps[5]!.text, steps[6]!.text]).toEqual([
++    expect([steps[4]!.text, steps[5]!.text]).toEqual([
+       'Wire the MV machines with 2x Annealed Copper Cable (8 blocks); connect only the drawn sides, and never let the MV cables touch the LV cables',
+       'Wire the LV machines with 2x Tin Cable (7 blocks); connect only the drawn sides, and never let the MV cables touch the LV cables']);
+-    expect(steps[7]!.text).toBe('Run 12× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 2 A at MV, arriving at 116 V');
++    expect(steps[6]!.text).toBe('Run 12× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 2 A at MV, arriving at 116 V');
+   });
+ 
+   // RUK-2668: satellite step-down banks laid along the line get one build step per tier they step down to
+@@ -204,13 +204,13 @@ describe('layout steps', () => {
+       stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 1, ampsOut: 2 }],
+       cables: [{ tier: 2, cable: '2x Annealed Copper Cable', cells: 8 }, { tier: 1, cable: '2x Tin Cable', cells: 7 }],
+       power: { cable: '2x Annealed Copper Cable', blocks: 12, amps: 2, tier: 2, arrivingVolts: 116 }, supplyTier: 2 };
+-    const today = ['layout:site', 'layout:roof', 'layout:place:s1', 'layout:place:s2',
++    const today = ['layout:site', 'layout:place:s1', 'layout:place:s2',
+       'layout:power:stage:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test'];
+     // two satellites of one tier feeding 5 + 4 machines: n = 2, m = 9; each lays GT++'s Hi-Amp Transformer (RUK-2677)
+     const HIAMP = { transformer: 'LV Hi-Amp Transformer', hiAmp: true };
+     const steps = layoutSteps(base({ ...parts,
+       satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 5, ...HIAMP }, { fromTier: 2, toTier: 1, count: 1, machines: 4, ...HIAMP }] }));
+-    expect(steps.map((s) => s.id)).toEqual(['layout:site', 'layout:roof', 'layout:place:s1', 'layout:place:s2',
++    expect(steps.map((s) => s.id)).toEqual(['layout:site', 'layout:place:s1', 'layout:place:s2',
+       'layout:power:stage:1', 'layout:power:satellites:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test']);
+     const sat = steps.find((s) => s.id === 'layout:power:satellites:1')!;
+     expect(sat.kind).toBe('power');
+@@ -244,7 +244,7 @@ describe('layout steps', () => {
+     const place = (rotation: 0 | 90 | 180 | 270) => layoutSteps(base({ units: placement.units, rotation })).filter((s) => s.kind === 'place').map((s) => s.text);
+     // local west turns north → east → south → west by 90° each
+     for (const [rotation, side] of [[0, 'west'], [90, 'north'], [180, 'east'], [270, 'south']] as const) {
+-      expect(place(rotation).slice(2), String(rotation)).toEqual([
++      expect(place(rotation).slice(1), String(rotation)).toEqual([
+         `Place 2× Basic Macerator ${PLACE_FACES.replaceAll('west', side)}${CHECK_INPUT_SIDE}`,
+         `Place 1× Basic Fluid Extractor ${PLACE_FACES.replaceAll('west', side)}`]);                 // takes only fluids: no check
+     }
+@@ -264,7 +264,7 @@ describe('layout steps', () => {
+       label: 'Ender Fluid Conduit', conduits: [{ kind: 'liquid_ender', item: 'EnderIO:itemLiquidConduit@2', connections: 0, faces: [insert
+         ? { face: 'north', mode: 'insert', target, insert: { color: 'red', filter: { whitelist: true, keys: ['fluid:water'] }, rate: 1, outputSide: true } }
+         : { face: 'north', mode: 'extract', target, extract: { color: 'red', filter: { whitelist: true, keys: ['fluid:water'] }, rate: 1, roundRobin: false, redstone: 'ignore' } }] }] });
+-    const place = (blocks: LayoutBlock[]) => layoutSteps(base({ units: placement.units, blocks })).filter((s) => s.kind === 'place').map((s) => s.text).slice(2);
++    const place = (blocks: LayoutBlock[]) => layoutSteps(base({ units: placement.units, blocks })).filter((s) => s.kind === 'place').map((s) => s.text).slice(1);
+     const [s1, x] = [machine(1, 's1', 'Basic Macerator', IDS.MACERATOR), machine(2, 'x', 'Basic Fluid Extractor', IDS.EXTRACTOR)];
+     expect(place([s1, x, conduit(1, 'Basic Macerator', true), conduit(2, 'Basic Fluid Extractor', true)])).toEqual([
+       `Place 1× Basic Macerator ${PLACE_FACES}${CHECK_INPUT_SIDE.replace('its items', 'its items and fluids')}`,
+@@ -285,8 +285,8 @@ describe('layout steps', () => {
+       + 'hatches: Input Bus (ULV), Output Bus (LV), MV Energy Hatch, Maintenance Hatch, Input Hatch (LV), Muffler Hatch (LV); '
+       + 'keep the block above its Muffler Hatch empty, or GregTech stops the machine (a muffler needs air to vent)');
+     expect(steps[0]!.text).toBe('Clear a 5×7 spot (5 high) and keep a 1-block path around it');
+-    expect(steps[1]!.text).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, and a Muffler Hatch '
+-      + 'needs the block it faces kept empty');
++    // no roof blocks in the input: no roof step (RUK-2877)
++    expect(steps.some((s) => s.id === 'layout:roof')).toBe(false);
+     expect(steps.every((s) => s.pin === undefined)).toBe(true);
+     expect(steps.find((s) => s.id === 'layout:power:hookup')!.text).toBe('No power network found: feed the line from your own MV supply (see the power suggestions)');
+     expect(layoutSteps(base({ status: 'empty', reuse: [{ stepId: 's1', name: 'Basic Macerator', count: 1, positions: [[1, 64, 1]] }] })).map((s) => s.id))
+@@ -298,12 +298,15 @@ describe('layout steps', () => {
+     const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120, inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
+       { id: 's', mteId: STEAM, count: 1, euPerTick: 4, inputs: [['t:ingot@0', 1]], outputs: [['t:out_s@0', 1]] }]);
+     const { units } = placeUnits(unitsFromPlan(primitivePack(), plan, { primitive: true }).units, { headWidth: 1, portSpacing: 0 });
+-    const roof = (only: readonly string[]) => layoutSteps(base({ status: 'no-world', size: [6, 5, 7], supplyTier: 2,
++    // two roof blocks the layout laid one block above the line's 5-high space (size 6: the roof's layer counts in it)
++    const GLASS = (x: number): LayoutBlock => ({ pos: [x, 69, 1], block: { id: 'minecraft:glass', meta: 0 }, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' });
++    const roof = (only: readonly string[]) => layoutSteps(base({ status: 'no-world', size: [6, 6, 7], supplyTier: 2, blocks: [GLASS(1), GLASS(2)],
+       units: units.filter((u) => only.includes(u.stepId)) })).find((s) => s.id === 'layout:roof')!.text;
+-    const STEAM_ROOF = 'each steam machine vents its steam through its top: keep the block above it open and roof above it';
+-    expect(roof(['e', 's'])).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, a Muffler Hatch '
+-      + `needs the block it faces kept empty, and ${STEAM_ROOF}`);
+-    expect(roof(['s'])).toBe(`Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, and ${STEAM_ROOF}`);
++    const ROOF = 'Roof the line last, once everything under it is placed and set: lay 2× Glass in one layer one block above its 5-high space, '
++      + 'where the view marks them, to keep the rain off its machines, transformers and energy hatches (GT machines left in the rain can catch fire or explode)';
++    const STEAM_ROOF = 'keep the block above each steam machine open: it vents its steam through its top';
++    expect(roof(['e', 's'])).toBe(`${ROOF}; keep the block each Muffler Hatch faces empty, and ${STEAM_ROOF}`);
++    expect(roof(['s'])).toBe(`${ROOF}; ${STEAM_ROOF}`);
+   });
+ 
+   it('bomFromBlocks groups cables as power and covers as logistics', () => {
+diff --git a/tests/unit/layout/primitive.test.ts b/tests/unit/layout/primitive.test.ts
+index dd098f72c..f75eceb55 100644
+--- a/tests/unit/layout/primitive.test.ts
++++ b/tests/unit/layout/primitive.test.ts
+@@ -202,8 +202,12 @@ describe.each(MODES)('primitive machines in %s mode', (mode) => {
+   it('roofs the line above every steam machine, whose top stays open', async () => {
+     // the line is as tall as the furnace (4 blocks); the block above the steam macerator is its vent, under the roof
+     const layout = await laid(mode);
+-    expect(layout.buildSteps.find((s) => s.id === 'layout:roof')?.text).toBe('Roof the line over its 4-high space: GT machines left in the rain '
+-      + 'can catch fire or explode, and each steam machine vents its steam through its top: keep the block above it open and roof above it');
++    // the roof goes on last, just before the test step (RUK-2877); it shelters the LV macerator, the steam machines need none
++    expect(layout.buildSteps.at(-2)?.id).toBe('layout:roof');
++    expect(layout.buildSteps.find((s) => s.id === 'layout:roof')?.text).toBe('Roof the line last, once everything under it is placed and set: '
++      + 'lay 5× Glass in one layer one block above its 4-high space, where the view marks them, to keep the rain off its machines, transformers '
++      + 'and energy hatches (GT machines left in the rain can catch fire or explode); keep the block above each steam machine open: it vents its '
++      + 'steam through its top');
+   });
+ 
+   it('sends the projector the same output side and nothing on the vent', async () => {
