@@ -2,8 +2,8 @@
 
 GT rains on machines that stand under open sky: a single-block machine, a transformer and an energy hatch each holds an
 EU buffer, and rain on an exposed face shorts it (`docs/research/gt-mechanics.md` §3.4a "Planner use."). A line needs a
-roof only over those faces, and today's `roof.ts` step lays a full slab over the whole footprint (`Box`) with a fixed
-one-block gap. This spike asks what a roof that covers only the exposures costs, and where the gap can close. Measured
+roof only over those faces, and today's build step (`src/server/layout/steps.ts:229-237`) asks for a full slab over the
+whole footprint (`Box`) and counts no roof block. This spike asks what a roof that covers only the exposures costs, and where the gap can close. Measured
 on `feat/optimal-layout-m3-RUK-3026` (the merged SP-K reach work), 132 benchmark layouts (33 lines × 4 modes).
 
 Nothing here is promoted. `src/server/layout/rain.ts` is the one committed file: the pure exposure test and the three
@@ -22,7 +22,7 @@ side exposed. Site cover and dimensions come later.
 
 Three rules lay cells (`roofCells`), all at `H = size[1]` (one above the tallest block) unless stated:
 
-- **Box** (`0`) — the footprint grown one cell on each side, at `H`: what today's `roof.ts` lays.
+- **Box** (`0`) — the footprint grown one cell on each side, at `H`: what today's build step asks for.
 - **Flat** (`1`) — at `H`, only the columns that cover an exposure: each top-exposed machine's own column, each exposed
   side's neighbour column, deduplicated.
 - **Lowest** (`2`) — the same columns as Flat, each at the lowest `y ≥` (the highest exposed block it covers + 1) that
@@ -43,10 +43,11 @@ Checked blocks, exposed faces, and the cells each rule lays, summed over the 33 
 - **Flat covers every exposure at ~14 % of Box's cells.** 1564 against 11204 — a **7.2×** reduction. Box pays for the
   air around the line (its slab is the whole footprint grown a cell each side, on a line up to 44 long); Flat pays only
   for the 1933 exposed faces (722 tops + 1211 sides), 1.6 faces per checked block, deduplicated into columns.
-- **Lowest lays the same number of cells as Flat in all 132 rows.** The gap Flat leaves (one block above the tallest
-  machine) is free: no column in this benchmark has a machine tall enough under a low exposure to force the cover lower.
-  Lowest drops each column to `block y + 1` where it can, never under a block or into a reserved cell, and the count is
-  identical — the roof is one slab at the same height here.
+- **Lowest lays the same number of cells as Flat in all 132 rows — by construction.** Both rules cover the same
+  columns with one cell each, so the count can never differ; only the cells' heights do. Lowest drops each column to
+  `block y + 1` where it can (never into a block or a reserved cell), so its roof is stepped, not one slab at `H`
+  (the 2 extra `read.test.ts` re-pins under `SPR_ROOF=2` are those lowered cells). Height, not count, is what Lowest
+  changes; this census does not measure it.
 - **Every checked block that is exposed is covered by every rule.** For all 132 rows × 3 rules, after laying the rule's
   cells as blocks, no checked block has any exposed face left (asserted), and no roof cell lands on an existing block or
   a reserved cell.
@@ -161,7 +162,7 @@ Anti-goals:
 
 A Flat (or Lowest) roof costs ~14 % of Box's blocks, covers every rain exposure, never lands on a block, a reserved cell,
 or a machine's builder side, and does not change which line the search picks. The roof belongs in the length, not in the
-line search: lay it after the line is chosen, one slab at `H`. Lowest buys nothing over Flat on this benchmark and costs
+line search: lay it after the line is chosen, one slab at `H`. Lowest lays the same cell count as Flat (always: same columns) and costs
 2 more re-pins (21 vs 19), so **Flat is the rule to promote**; keep Lowest's per-column drop for tall lines where a low
 exposure sits under a high machine. A promotion re-pins the 19 tests above (block lists, bench totals, the 3D view). The
-next step (a later RUK) folds `roofCells` into `roof.ts` and the final measure, behind the site's own cover.
+next step (a later RUK) folds `roofCells` into the line's final measure and the roof build step, behind the site's own cover.
