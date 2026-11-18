@@ -332,7 +332,7 @@ function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run
 
 /** The cell a unit's power reaches it through: the machine (singleblock) or its energy hatch, behind the power port. */
 function powerCell(u: PlacedUnit): Vec3 | null {
-  return u.ports.power === null ? null : step(u.ports.power, u.facing);
+  return u.ports.power === null ? null : step(u.ports.power, u.powerSide);
 }
 
 /** `power_tier_low`, one per unit tier above the supply tier (highest first), naming the machines of that tier. */
@@ -859,7 +859,7 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
     if (chosen === undefined || tree === undefined) continue;
     for (const c of tree.cells) grid.lay(c, chosen.cable, 'cable', chosen.cable.name);
     grid.links.push(...tree.links);
-    for (const { pos, unit } of tree.ports) if (!tree.unreached.has(posKey(pos))) grid.links.push([pos, step(pos, unit.facing)]);   // into the machine or energy hatch
+    for (const { pos, unit } of tree.ports) if (!tree.unreached.has(posKey(pos))) grid.links.push([pos, step(pos, unit.powerSide)]);   // into the machine or energy hatch
     cells.set(run.tier, run.cells.length + tree.cells.length);
   }
 

@@ -157,6 +157,12 @@ export interface PlacedUnit extends Unit {
   mainFacing?: number;
   /** A singleblock's output side where it does not face the spine: up (1) for a venting steam singleblock (`Unit.vent`). */
   outputSide?: number;
+  /**
+   * The side from `ports.power` into the unit (a singleblock, or a multiblock's energy hatch): `facing` on today's rows,
+   * where the power cell lies behind the unit's spine side. A packed line (RUK-2877) hangs three machines off one cable
+   * cell, so there it is north, south or up.
+   */
+  powerSide: number;
   ports: UnitPorts;
 }
 
@@ -176,6 +182,25 @@ export interface Placement {
    * by hand, between it and the spine (`Unit.manual`).
    */
   reserved: Vec3[];
+  /**
+   * The item spine's cells in lay order, each joined to the next (RUK-2877 placement contract): `[x, 0, spineZ]` for
+   * x = `firstX` … `tailX` on today's rows. A mode lays its item pipe or conduit along these cells.
+   */
+  spine: Vec3[];
+  /** Where the spine ends and the tail chests hang (`LineTail`). */
+  tail: LineTail;
+}
+
+/**
+ * A line's tail (RUK-2877 placement contract). `cell` is the spine's last cell; the input chest stands off its
+ * `inputSide`; output chest i stands off the `outputSide` of the tail column's cell i (`tailColumn`), i cells above
+ * `cell`. Today's rows: `[tailX, 0, spineZ]`, north, south.
+ */
+export interface LineTail { cell: Vec3; inputSide: number; outputSide: number }
+
+/** Cell `i` of a line's tail column: `i` cells above `tail.cell` (0 is the tail cell itself). */
+export function tailColumn(tail: LineTail, i: number): Vec3 {
+  return [tail.cell[0], tail.cell[1] + i, tail.cell[2]];
 }
 
 // ---- Small helpers ----
@@ -1234,7 +1259,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
       const off = standOff(u);
       const at: Vec3 = pos(row === 'S' ? [x, 0, spineZ + 1 + off] : [x, 0, spineZ - u.size[2] - off]);
       placed.push({
-        ...u, row, at, facing: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ...(u.vent === true ? { outputSide: UP } : {}),
+        ...u, row, at, facing: toSpine, powerSide: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ...(u.vent === true ? { outputSide: UP } : {}),
         ports: mapPorts(unitPorts(u, row, x, spineZ), pos, flip),
       });
     }
@@ -1248,7 +1273,11 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1),
     blocks.reduce((h, b) => Math.max(h, b.pos[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1)));
   const size: Vec3 = [tailX + 1, height, dN + dS + 3];
-  return { units: placed, size, spineZ, headX, firstX: split === 0 ? headWidth : 0, tailX, blocks, reserved };
+  const firstX = split === 0 ? headWidth : 0;
+  const spine: Vec3[] = [];
+  for (let x = firstX; x <= tailX; x++) spine.push([x, 0, spineZ]);
+  return { units: placed, size, spineZ, headX, firstX, tailX, blocks, reserved, spine,
+    tail: { cell: [tailX, 0, spineZ], inputSide: NORTH, outputSide: SOUTH } };
 }
 
 /**
