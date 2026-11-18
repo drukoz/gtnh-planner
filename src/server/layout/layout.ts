@@ -46,7 +46,7 @@ import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Sta
 import { unreachableWarning } from './reach.ts';
 import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine, type FinalMeasure } from './score.ts';
 import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
-import { RoofRule, rainChecked, rainExposures, roofCells } from './rain.ts';
+import { RoofRule, dryBiomes, rainChecked, rainExposures, roofCells } from './rain.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
 
 // ---- Types ----
@@ -258,6 +258,8 @@ interface LocalInput {
   satellites?: boolean;
   stacking: boolean;
   packing: boolean;
+  /** Lay the rain roof (RUK-3041): false when every biome the line can stand among never rains (GT's rain gate). */
+  roof: boolean;
 }
 
 /**
@@ -435,8 +437,11 @@ function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packe
   // stops a machine whose muffler has no air in front: MTEHatchMuffler.polluteEnvironment; a steam machine waits while
   // its vent is blocked: MTEBasicMachineBronze.allowToCheckRecipe)
   const top0 = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
-  // the rain roof (RUK-2877, SP-R): one block over each exposed face of a block GT rains on, one above the tallest block
-  const roof = roofCells(blocks, rainExposures(blocks, rainChecked(blocks, placement.units)), placement.reserved, 1 + top0, RoofRule.Flat);
+  // the rain roof (RUK-2877, SP-R): one block over each exposed face of a block GT rains on, one above the tallest block,
+  // and none at all when the line stands where GT never rains (RUK-3041, GT's rain gate: `input.roof` false)
+  const roof = input.roof
+    ? roofCells(blocks, rainExposures(blocks, rainChecked(blocks, placement.units)), placement.reserved, 1 + top0, RoofRule.Flat)
+    : [];
   for (const pos of roof) blocks.push({ pos, block: { ...parts.roof.block }, role: 'roof', label: parts.roof.name, item: parts.roof.key });
   const top = roof.length > 0 ? top0 + 1 : top0;
   const [pw, , pl] = placement.size;
@@ -570,6 +575,46 @@ async function chooseSite(input: {
       text: `No clear, flat ground near the base: the line is placed beside it — ${fmtInt(site.blocked)} blocks in the way, ${fmtInt(site.unsupported)} columns without a floor` });
   }
   return { site, vox, warnings };
+}
+
+/**
+ * The biomes a site of this layout can land among, when GT never rains in any of them (GT's rain gate, gt-mechanics
+ * §3.4a; RUK-3041): the names `dryBiomes` finds in the biome table for the one-layer voxel read over the columns any
+ * site of this layout can reach, or `null` (the roof stays). The columns are where a site can stand, mirroring how
+ * `chooseSite` builds its search box: with no dragged placement, the x/z of `siteSearchBox` grown to the nearest taps
+ * (its x/z does not depend on the footprint); with one, the whole `MAX_SITE_SPAN` square around the base centre that
+ * `withinReach` allows. A `RangeError` from the read keeps the roof, as `chooseSite` treats it; any other error is
+ * rethrown. No base, no biome table, or no read means the roof stays.
+ */
+async function dryAround(input: {
+  pack: Pack; scan: WorldScan; project: Project; base: Base; supply: { taps: readonly LayoutTap[] } | null;
+  logisticsNet: LogisticsNetwork | null; deps: LayoutDeps;
+}): Promise<string[] | null> {
+  const { pack, scan, project, base, supply, logisticsNet, deps } = input;
+  if (pack.biomes === undefined || pack.biomes.length === 0 || deps.readArea === undefined) return null;
+  const floorY = baseFloorY(scan, base);
+  const y = Math.min(Math.max(floorY, 0), 255); // one layer, as `chooseSite` keeps a read's y inside the world
+  let box: BBox;
+  if (project.placement === null) {
+    const taps: Vec3[] = [];
+    const power = supply === null ? null : nearestTap(supply.taps, base.center);
+    if (power !== null) taps.push([...power.pos]);
+    const logistics = logisticsNet === null ? null : nearestTap(logisticsNet.taps, base.center);
+    if (logistics !== null) taps.push([...logistics.pos]);
+    const b = siteSearchBox(base, floorY, { w: 1, h: 1, l: 1 }, taps);
+    box = { minX: b.minX, minY: y, minZ: b.minZ, maxX: b.maxX, maxY: y, maxZ: b.maxZ };
+  } else {
+    const [cx, , cz] = base.center;
+    const half = MAX_SITE_SPAN / 2;
+    box = { minX: cx - half, minY: y, minZ: cz - half, maxX: cx + half - 1, maxY: y, maxZ: cz + half - 1 };
+  }
+  let vox: Voxels | null = null;
+  try {
+    vox = await deps.readArea(base.dim, box);
+  } catch (e) {
+    if (!(e instanceof RangeError)) throw e;
+  }
+  return vox === null ? null : dryBiomes(pack.biomes, vox);
 }
 
 // ---- To the world (stage 7) ----
@@ -982,6 +1027,11 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     };
   }
 
+  // GT's rain gate (gt-mechanics §3.4a, RUK-3041): when the pack has a biome table and every biome a site of this
+  // layout can land among never rains, the line lays no rain roof. Decided before the search, so every candidate is
+  // scored without the roof; `null` keeps it. A layout of owned machines only (the block above) never reads biomes.
+  const dry = base === null ? null : await dryAround({ pack, scan, project, base, supply, logisticsNet, deps });
+
   // stage 5; from here on the stages are the ones sized for the volts every machine gets
   /** Stages 6–11 of one candidate line: its site, hookups, loss, pins, parts and build steps, as a finished layout. */
   const finishLine = async (line: LocalLine, search: LayoutSearch): Promise<Layout> => {
@@ -1101,13 +1151,14 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
       loss,
       search,
+      ...(dry === null ? {} : { dryBiomes: dry }),
       ...(replaced.length === 0 ? {} : { replaced }),
       ...(reserved.length === 0 ? {} : { reserved }),
     };
   };
   const { lines, search, finalists } = buildLocal({
     pack, plan, parts, mode, units, stages: provisional, network: logisticsNet,
-    satellites: deps.satellites !== false, stacking: deps.stacking !== false, packing: deps.packing !== false,
+    satellites: deps.satellites !== false, stacking: deps.stacking !== false, packing: deps.packing !== false, roof: dry === null,
   });
   // the search scores a line without its hookup, so a winner there can lose once the hookup is laid (RUK-2877): the
   // baseline and every finalist are finished, and the best finished finalist that replaces the finished baseline is

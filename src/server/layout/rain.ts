@@ -3,10 +3,13 @@
 // or through an open side column (gt-mechanics §3.4a "Planner use."): singleblock machines of a unit with `electric`
 // true and `multiblock` false, every transformer (head banks, Hi-Amp banks, satellites) and every energy hatch; cables,
 // pipes, buses, item/fluid hatches, steam machines and buffer-less multiblock controllers are exempt. The line stands
-// in its own local grid (floor at y 0), the spike assuming open sky everywhere (site cover and dimensions come later).
+// in its own local grid (floor at y 0), the spike assuming open sky above the site: GT's biome gate is checked by
+// `dryBiomes` below, while cover above the site and dimension weather are not (rain-site.md §3).
 // Pure: it lays nothing and reads only a laid line's blocks and units.
 
 import { posKey, type Vec3 } from '../../shared/layout/geometry.ts';
+import type { BiomeInfo } from '../../shared/types/pack.ts';
+import { UNKNOWN_INDEX, type Voxels } from '../../shared/types/world.ts';
 import type { LocalBlock, PlacedUnit } from './arrange.ts';
 
 /**
@@ -138,4 +141,37 @@ export function roofCells(
 
 function compareCell(a: Vec3, b: Vec3): number {
   return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+/**
+ * The biomes a line stands among when GT never rains in any of them, so it lays no rain roof (GT's rain gate,
+ * gt-mechanics §3.4a; RUK-3041): the sorted, de-duplicated names of the biomes of the voxel columns in `vox`, read
+ * against the pack's biome table `biomes` (`BiomeInfo.rain`). `vox` is one layer high, so its biome of column `i`
+ * (`vox.biomes[i]`) lines up with its voxel (`vox.blocks[i]`). Returns `null` (the roof stays) when:
+ * - `biomes` is absent or empty, or `vox` carries no biomes;
+ * - any column's biome id is missing from the table, or its `BiomeInfo.rain` is true;
+ * - any column is a read chunk with no biome (id −1) over a voxel that is not `UNKNOWN_INDEX` — an unknown biome, so
+ *   the roof stays;
+ * - no column was dry at all.
+ * A column of id −1 over an `UNKNOWN_INDEX` voxel is an unread chunk, where no site can be checked, and is skipped.
+ */
+export function dryBiomes(biomes: readonly BiomeInfo[] | undefined, vox: Voxels): string[] | null {
+  if (biomes === undefined || biomes.length === 0 || vox.biomes === undefined) return null;
+  const table = new Map<number, BiomeInfo>();
+  for (const b of biomes) table.set(b.id, b);
+  const ids = vox.biomes;
+  const names = new Set<string>();
+  let dry = false;
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i]!;
+    if (id === -1) {
+      if (vox.blocks[i] !== UNKNOWN_INDEX) return null; // a read chunk with no biome is unknown: the roof stays
+      continue;                                         // an unread chunk: no site can be checked here
+    }
+    const info = table.get(id);
+    if (info === undefined || info.rain) return null;
+    names.add(info.name);
+    dry = true;
+  }
+  return dry ? [...names].sort() : null;
 }
