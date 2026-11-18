@@ -1049,6 +1049,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
       fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
       logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...lineBox.min], rotation: frame.rotation, nameOf, stepName,
+      ...(line.placement.packed === true ? { packed: true } : {}),
       ...farmStepsInput(plan, areas, reserved),
     };
     const buildSteps = layoutSteps(stepsInput);

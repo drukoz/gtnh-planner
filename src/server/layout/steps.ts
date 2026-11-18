@@ -53,6 +53,8 @@ export interface StepsInput {
    * whether that is a Hi-Amp Transformer. Absent or empty: no satellite step.
    */
   satellites?: ReadonlyArray<{ fromTier: number; toTier: number; count: number; machines: number; transformer: string; hiAmp: boolean }>;
+  /** The line is laid packed (`Placement.packed`, RUK-2877): a singleblock's output side faces up or along the item lanes, not the middle row. */
+  packed?: boolean;
 }
 
 type Group = NonNullable<BomLine['group']>;
@@ -143,18 +145,31 @@ function mufflerWords(u: PlacedUnit): string {
 }
 
 /**
- * How a singleblock gets its two faces (`PlacedUnit.mainFacing`, along the row, and its output side toward the middle
- * row) in GT 5.09.54: a sneaking Wrench click makes the side the wrench grid picks the front
- * (`MTEBasicMachine.setMainFacing`, which turns the output side away when it was there), a plain one makes it the output
- * side (anywhere but the front), and a click on an edge of the grid picks the side beyond that edge
- * (`GTUtility.determineWrenchingSide`), so a side a neighbour covers can be picked too. The front is named by the
- * compass (`front`, already turned into the world): the place steps come before the power steps, so nothing built yet,
- * such as the power head it points along the row to, can name it.
+ * A singleblock's output-side words for its place step. On rows its output faces the spine, so the step says the middle row
+ * (today's text, byte-identical). On a packed line (`packed`) a machine's output faces up over its own item port, or along
+ * the item lanes, so the step names that side: `up`/`its top` when it faces up, else its compass side.
  */
-function singleblockFaces(front: string): string {
-  return `with its output side facing the middle row and its front facing ${front}: with a Wrench, sneak-right-click its ${front} side to `
-    + 'make that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click its middle-row '
-    + 'side to make that the output side';
+function outputWords(u: PlacedUnit, packed: boolean, rotation: Rotation): { outWhere: string; outClick: string } {
+  if (!packed) return { outWhere: 'the middle row', outClick: 'its middle-row side' };
+  const side = rotateFacing(u.facing, rotation);
+  if (side === UP) return { outWhere: 'up', outClick: 'its top' };
+  const name = SIDE_NAMES[side]!;
+  return { outWhere: name, outClick: `its ${name} side` };
+}
+
+/**
+ * How a singleblock gets its two faces (`PlacedUnit.mainFacing`, along the row, and its output side, `outWhere` — the middle
+ * row on rows, the side `outputWords` names on a packed line) in GT 5.09.54: a sneaking Wrench click makes the side the
+ * wrench grid picks the front (`MTEBasicMachine.setMainFacing`, which turns the output side away when it was there), a plain
+ * one makes it the output side (anywhere but the front), and a click on an edge of the grid picks the side beyond that edge
+ * (`GTUtility.determineWrenchingSide`), so a side a neighbour covers can be picked too. The front is named by the compass
+ * (`front`, already turned into the world): the place steps come before the power steps, so nothing built yet, such as the
+ * power head it points along the row to, can name it.
+ */
+function singleblockFaces(front: string, outWhere: string, outClick: string): string {
+  return `with its output side facing ${outWhere} and its front facing ${front}: with a Wrench, sneak-right-click its ${front} side to `
+    + `make that the front (where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click ${outClick} `
+    + 'to make that the output side';
 }
 
 /**
@@ -164,12 +179,15 @@ function singleblockFaces(front: string): string {
  * may have it off (its item's NBT has no `mAllowInputFromOutputSide`, which `loadNBTData` reads as false). A Screwdriver
  * switches it only on the output side or the front, on the side clicked itself (`BaseMetaTileEntity.onRightclick`
  * passes no wrench-grid side), and also works the cover on that side; the front faces the machine beside it along the
- * row. So the check is on the middle-row side while nothing stands in the middle row yet, before any pipe, conduit or
- * interface there and before its configure step puts a cover on that side.
+ * row. So the check is on the side the output faces while nothing stands there yet, before any pipe, conduit or
+ * interface there and before its configure step puts a cover on that side: on the middle-row side of a row machine
+ * (`packed` false), on the output side of a packed machine while its item lanes are still empty (`packed` true).
  */
-function checkInputSide(what: string): string {
+function checkInputSide(what: string, packed: boolean): string {
+  const where = packed ? "the item lanes are still empty right-click such a machine's output side"
+    : "the middle row is still empty right-click such a machine's middle-row side";
   return `; it takes its ${what} through that side, which needs Input from Output Side allowed: a newly crafted machine has it, `
-    + "but one broken and placed again may not, so while the middle row is still empty right-click such a machine's middle-row side with a "
+    + `but one broken and placed again may not, so while ${where} with a `
     + 'Screwdriver, not sneaking (a sneak-click switches the Input Filter), and once more if the chat says "Input from Output Side forbidden"';
 }
 
@@ -252,17 +270,21 @@ function fluidsThroughOutputSide(blocks: readonly LayoutBlock[]): Set<string> {
  * (`fluidSteps`), how to check Input from Output Side (a venting steam machine's output side faces up instead:
  * `steamPlaceText`); a multiblock's size, controller and hatches and the block each of its mufflers needs empty
  * (`mufflerWords`), or for one run by hand where it stands (`MANUAL_PLACE`). The front's compass side is turned by
- * `rotation`.
+ * `rotation`. A singleblock's output side is named by each machine's own facing: on rows all of a step's machines share
+ * it and the middle-row words stay; on a packed line (`packed`), or a step whose machines face two ways (a middle power
+ * head), the step groups its units by their own world output side and front (`outputWords`) and lists the groups.
  */
-function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, fluidSteps: ReadonlySet<string>,
-  stepName: (stepId: string) => string): Draft[] {
-  const byStep = new Map<string, { first: PlacedUnit; n: number }>();
+function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, rotation: Rotation, packed: boolean,
+  fluidSteps: ReadonlySet<string>, stepName: (stepId: string) => string): Draft[] {
+  const byStep = new Map<string, PlacedUnit[]>();
   for (const u of units) {
     const seen = byStep.get(u.stepId);
-    if (seen === undefined) byStep.set(u.stepId, { first: u, n: 1 });
-    else seen.n += 1;
+    if (seen === undefined) byStep.set(u.stepId, [u]);
+    else seen.push(u);
   }
-  return [...byStep].map(([stepId, { first: u, n }]) => {
+  return [...byStep].map(([stepId, group]) => {
+    const u = group[0]!;
+    const n = group.length;
     // a machine several steps share (plan 12) says which it runs
     const runs = u.stepIds === undefined ? '' : `; it runs ${joinNames(u.stepIds.map(stepName))}`;
     if (u.bench !== undefined) return draft(`layout:place:${stepId}`, 'place', sitePin, benchPlaceText(u, n));
@@ -271,8 +293,29 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
       if (u.outputSide === OUTPUT_UP) return draft(`layout:place:${stepId}`, 'place', sitePin, `${steamPlaceText(u, n, front)}${runs}`);
       const fluids = fluidSteps.has(stepId);
       const what = u.io.itemIn && fluids ? 'items and fluids' : u.io.itemIn ? 'items' : fluids ? 'fluids' : null;
+      const check = what === null ? '' : checkInputSide(what, packed);
+      // the step's units grouped by their own world output side and front, in the order of each group's first unit
+      const groups: Array<{ outWhere: string; outClick: string; front: string; n: number }> = [];
+      const seen = new Map<string, { outWhere: string; outClick: string; front: string; n: number }>();
+      for (const v of group) {
+        const vFront = SIDE_NAMES[rotateFacing(v.mainFacing ?? WEST, rotation)]!;
+        const { outWhere, outClick } = outputWords(v, packed, rotation);
+        const key = `${outWhere}\u0000${vFront}`;
+        const g = seen.get(key);
+        if (g === undefined) {
+          const ng = { outWhere, outClick, front: vFront, n: 1 };
+          seen.set(key, ng);
+          groups.push(ng);
+        } else g.n += 1;
+      }
+      const faces = groups.length === 1
+        ? ` ${singleblockFaces(groups[0]!.front, groups[0]!.outWhere, groups[0]!.outClick)}`
+        : `, each turned as the 3D view shows it: ${joinNames(groups.map((g) => `${fmtInt(g.n)} with the output side facing ${g.outWhere} and the front facing ${g.front}`))}. `
+          + 'For each, with a Wrench, sneak-right-click the side its front faces to make that the front '
+          + '(where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click the side its output faces '
+          + 'to make that the output side';
       return draft(`layout:place:${stepId}`, 'place', sitePin,
-        `Place ${fmtInt(n)}× ${u.name} ${singleblockFaces(front)}${what === null ? '' : checkInputSide(what)}${runs}`);
+        `Place ${fmtInt(n)}× ${u.name}${faces}${check}${runs}`);
     }
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;
@@ -451,7 +494,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${spotWhere(sitePin, input.farms ?? [])} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
     steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, input.size[1])));
-    steps.push(...placeSteps(input.units, sitePin, input.rotation, fluidsThroughOutputSide(input.blocks), input.stepName ?? ((id) => id)));
+    steps.push(...placeSteps(input.units, sitePin, input.rotation, input.packed === true, fluidsThroughOutputSide(input.blocks), input.stepName ?? ((id) => id)));
   }
   steps.push(...farmSteps(input.farms ?? []));
   if (placing) {

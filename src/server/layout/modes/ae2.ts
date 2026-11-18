@@ -402,7 +402,7 @@ function fluidShortText(input: ModeInput, unit: PlacedUnit, pattern: PatternSpec
 // ---- The mode ----
 
 /**
- * The AE2 packed column's interface lanes (`Placement.packed`, `placePacked` with `ownPorts`, spike SP-G): the `y, z` of
+ * The AE2 packed column's interface lanes (`Placement.ownPorts`, `placePacked` with `ownPorts`, spike SP-G): the `y, z` of
  * every lane's cells `[x, y, z]` for x = `firstX` … `tailX`. A's interfaces stand at `[x, 1, 0]`, B's at `[x, 1, 2]` and
  * T's at `[x, 2, 1]`, each wrenched down into its own machine; the lanes join at the tail cell's column.
  */
@@ -412,7 +412,7 @@ const PACKED_LANES: ReadonlyArray<readonly [number, number]> = [[1, 0], [1, 2], 
  * The ME spine `[firstX … tailX] × (y 0, z spineZ)`: interfaces with their patterns, or cable with an export bus in front
  * of a machine that makes only fluids, cable between and up the spine's column to an interface above it (`itemRisers`),
  * output covers on the machines. Nothing when no placed unit moves items.
- * On a packed line (`Placement.packed`, spike SP-G) the interfaces are the cells of `PACKED_LANES`, one per machine, each
+ * On a packed line (`Placement.ownPorts`, spike SP-G) the interfaces are the cells of `PACKED_LANES`, one per machine, each
  * wrenched down into it, and the ME cable fills the rest of those lanes and joins them at the tail column. The port is the
  * south lane's tail cell, on the box's face (`Placement.tail`), because a hookup goes round the box's columns
  * (`hookups.ts`). Every Wrench target is the interface's one machine, so no interface pushes into two.
@@ -560,7 +560,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
   const links: Array<[Vec3, Vec3]> = [];
   /** An ME glass cable cell. */
   const cable = (pos: Vec3): LocalBlock => ({ pos: [...pos], block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key });
-  const packed = placement.packed === true;
+  const packed = placement.ownPorts === true;
   if (packed) {
     // the three interface lanes, cable where no interface stands, and their join at the tail column (SP-G): the join cell
     // `[tailX, 1, 1]` links the north and south lanes and climbs to T's lane, and the south lane's tail cell is the port.
