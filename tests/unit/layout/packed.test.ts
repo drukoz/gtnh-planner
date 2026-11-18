@@ -55,9 +55,9 @@ describe('the packed line as a search candidate', () => {
       { pos: [23, 65, 21], tail: { side: 'output', keys: ['t:o0@0'] } },
       { pos: [23, 66, 21], tail: { side: 'output', keys: ['t:o1@0'] } },
     ]);
-    expect(layout.size).toEqual([7, 3, 3]);
+    expect(layout.size).toEqual([7, 4, 5]);
     expect(overlaps(layout.blocks)).toEqual([]);
-    expect(lengthOf(layout).total).toBe(26);
+    expect(lengthOf(layout).total).toBe(38);
   }, 60_000);
 
   it('lays a 6-machine AE2 line packed, each ME Interface wrenched down into its own machine', async () => {

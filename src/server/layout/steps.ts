@@ -493,7 +493,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
       ? `; dig ${fmtInt(input.site.dig)} and fill ${fmtInt(input.site.fill)} blocks to level it` : '';
     steps.push(draft('layout:site', 'place', sitePin,
       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${spotWhere(sitePin, input.farms ?? [])} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
-    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, input.size[1])));
+    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, input.size[1] - (input.blocks.some((b) => b.role === 'roof') ? 1 : 0))));
     steps.push(...placeSteps(input.units, sitePin, input.rotation, input.packed === true, fluidsThroughOutputSide(input.blocks), input.stepName ?? ((id) => id)));
   }
   steps.push(...farmSteps(input.farms ?? []));
@@ -566,6 +566,7 @@ export function assignBuildSteps(blocks: readonly LayoutBlock[], steps: readonly
     }
     if (b.conduits !== undefined && b.conduits.length > 0 && b.conduits.every((c) => c.kind !== 'item')) candidates.push('layout:logistics:fluids');
     if (LINE_ROLES.has(b.role)) candidates.push('layout:logistics:line');
+    if (b.role === 'roof') candidates.push('layout:roof');
     return candidates.find(has);
   };
   return blocks.map((b): LayoutBlock => {
@@ -586,6 +587,7 @@ const BLOCK_PARTS: Partial<Readonly<Record<BlockRole, { why: string; hookupWhy?:
   interface: { why: 'logistics parts', hookupWhy: 'logistics hookup', group: 'logistics' },
   chip_pipe: { why: 'logistics parts', hookupWhy: 'logistics hookup', group: 'logistics' },
   chest: { why: 'chests', group: 'logistics' },
+  roof: { why: 'rain roof', group: 'one-off' },
 };
 
 /**

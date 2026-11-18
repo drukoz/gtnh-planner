@@ -96,7 +96,7 @@ describe('3D scene data: tiles', () => {
   it('names the plain colour of every role', () => {
     expect(ROLE_FALLBACK).toEqual({ machine: [96, 125, 139], hatch: [121, 85, 72], casing: [158, 158, 158], transformer: [142, 36, 170],
       cable: [66, 66, 66], pipe: [255, 179, 0], cover: [220, 220, 220], interface: [126, 87, 194], chip_pipe: [255, 112, 67],
-      chest: [160, 110, 50], ghost: [200, 200, 200] });
+      chest: [160, 110, 50], ghost: [200, 200, 200], roof: [179, 229, 252] });
   });
 
   it('shows the front texture on the side the machine faces, whatever the facing', () => {

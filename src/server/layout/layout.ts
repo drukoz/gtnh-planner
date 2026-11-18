@@ -46,6 +46,7 @@ import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Sta
 import { unreachableWarning } from './reach.ts';
 import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine, type FinalMeasure } from './score.ts';
 import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
+import { RoofRule, rainChecked, rainExposures, roofCells } from './rain.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
 
 // ---- Types ----
@@ -66,7 +67,7 @@ export interface LayoutDeps {
    * chose them (RUK-121), the kept finalist's or the baseline's once the finished layouts are judged (RUK-2877) —
    * so a test reads the line the layout was built from instead of laying it again by hand.
    */
-  localLine?: (line: { placement: Placement; internal: InternalResult }) => void;
+  localLine?: (line: { placement: Placement; internal: InternalResult; shift: Vec3 }) => void;
 }
 
 /** Where a line without a scan or base is drawn. */
@@ -241,6 +242,11 @@ interface LocalLine {
   size: Vec3;
   /** Mode, then routing warnings. */
   warnings: PlanWarning[];
+  /**
+   * How far the line's box reaches west (x) and north (z) of local 0, 0 or 1 each: the rain roof's cover over an outward
+   * side of the west or north edge stands in the column beyond it (RUK-2877, design goal 7). `size` includes it.
+   */
+  shift: Vec3;
   /** How good this line is as the search ranks it (RUK-2571, Assumption 3): hand work, unpowered machines, length, loss, volume. */
   score: LineScore;
 }
@@ -428,9 +434,16 @@ function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packe
   // machine's vent), so the site, its clearance and obstruction checks and the steps' height keep that cell free too (GT
   // stops a machine whose muffler has no air in front: MTEHatchMuffler.polluteEnvironment; a steam machine waits while
   // its vent is blocked: MTEBasicMachineBronze.allowToCheckRecipe)
-  const top = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
+  const top0 = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
+  // the rain roof (RUK-2877, SP-R): one block over each exposed face of a block GT rains on, one above the tallest block
+  const roof = roofCells(blocks, rainExposures(blocks, rainChecked(blocks, placement.units)), placement.reserved, 1 + top0, RoofRule.Flat);
+  for (const pos of roof) blocks.push({ pos, block: { ...parts.roof.block }, role: 'roof', label: parts.roof.name, item: parts.roof.key });
+  const top = roof.length > 0 ? top0 + 1 : top0;
+  const [pw, , pl] = placement.size;
+  const shift: Vec3 = [roof.some((p) => p[0] < 0) ? 1 : 0, 0, roof.some((p) => p[2] < 0) ? 1 : 0];
+  const size: Vec3 = [shift[0] + pw + (roof.some((p) => p[0] >= pw) ? 1 : 0), 1 + top, shift[2] + pl + (roof.some((p) => p[2] >= pl) ? 1 : 0)];
   const line: Omit<LocalLine, 'score'> = {
-    placement, mode: modeResult, internal, stages: internal.stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
+    placement, mode: modeResult, internal, stages: internal.stages, blocks, size, shift,
     warnings: [...modeResult.warnings, ...internal.warnings],
   };
   return {
@@ -502,12 +515,14 @@ async function chooseSite(input: {
   if (line !== null && line.stages !== null) {
     // the hookup lands on the supply run: beside the spine's row at the line's west end, or at the north end of a head
     // in the middle of the line (RUK-121), whose run reaches both long sides
-    ports.power = line.placement.headX === 0 ? [-1, 0, line.placement.spineZ] : [line.placement.headX, 0, -1];
+    const [sx, , sz] = line.shift;
+    ports.power = line.placement.headX === 0 ? [sx - 1, 0, sz + line.placement.spineZ] : [sx + line.placement.headX, 0, sz - 1];
     const tap = powerTaps === null ? null : nearestTap(powerTaps, base.center);
     if (tap !== null) taps.power = [...tap.pos];
   }
   if (line !== null && line.mode.logisticsPort !== null) {
-    ports.logistics = outsideNeighbour(line.mode.logisticsPort, line.size);
+    const p = line.mode.logisticsPort;
+    ports.logistics = outsideNeighbour([p[0] + line.shift[0], p[1], p[2] + line.shift[2]], line.size);
     const tap = logisticsNet === null ? null : nearestTap(logisticsNet.taps, base.center);
     if (tap !== null) taps.logistics = [...tap.pos];
   }
@@ -564,15 +579,15 @@ async function chooseSite(input: {
  * line's with the areas kept for its farms (`farmExtent`, add-on 17), which then turn with it as one box. The line
  * stands at the box's local min corner either way.
  */
-interface Frame { origin: Vec3; rotation: Rotation; size: Vec3 }
+interface Frame { origin: Vec3; rotation: Rotation; size: Vec3; shift: Vec3 }
 
 /** The frame of a box of `size` at the chosen site, or at `DEFAULT_ORIGIN` unturned without one. */
-function frameAt(site: Site | null, size: Vec3): Frame {
-  return site === null ? { origin: [...DEFAULT_ORIGIN], rotation: 0, size } : { origin: [...site.origin], rotation: site.rotation, size };
+function frameAt(site: Site | null, size: Vec3, shift: Vec3 = [0, 0, 0]): Frame {
+  return site === null ? { origin: [...DEFAULT_ORIGIN], rotation: 0, size, shift } : { origin: [...site.origin], rotation: site.rotation, size, shift };
 }
 
 function worldPos(p: Vec3, f: Frame): Vec3 {
-  return toWorld(p, f.origin, f.rotation, f.size);
+  return toWorld([p[0] + f.shift[0], p[1] + f.shift[1], p[2] + f.shift[2]], f.origin, f.rotation, f.size);
 }
 
 /** The cover turned with its block; its settings and filter copied unchanged. */
@@ -592,8 +607,11 @@ function worldConduit(c: ConduitSpec, r: Rotation): ConduitSpec {
 
 /** The world box, inclusive, of the local box of `size` at the frame's local min corner: the line's own box. */
 function worldBoxOf(size: Vec3, f: Frame): PathBounds {
-  const a = worldPos([0, 0, 0], f);
-  const b = worldPos([size[0] - 1, size[1] - 1, size[2] - 1], f);
+  return cornersBox(worldPos([-f.shift[0], -f.shift[1], -f.shift[2]], f), worldPos([size[0] - 1 - f.shift[0], size[1] - 1 - f.shift[1], size[2] - 1 - f.shift[2]], f));
+}
+
+/** The world box, inclusive, between two opposite corners. */
+function cornersBox(a: Vec3, b: Vec3): PathBounds {
   return {
     min: [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.min(a[2], b[2])],
     max: [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.max(a[2], b[2])],
@@ -722,7 +740,9 @@ function buildHookups(input: {
   const taken = new Set(lineBlocks.map((b) => posKey(b.pos)));
   // a hookup must never fill a cell a multiblock needs empty
   const routeLine = new Set([...taken, ...line.placement.reserved.map((p) => posKey(worldPos(p, frame)))]);
-  const box = worldBoxOf(line.size, frame);
+  // the hookups keep out of the line's own cells: its placement's box, not the roof's overhang beyond it, whose blocks
+  // are in `taken` like every other line block (RUK-2877)
+  const box = cornersBox(worldPos([0, 0, 0], frame), worldPos([line.placement.size[0] - 1, line.size[1] - 1, line.placement.size[2] - 1], frame));
   const lineKeepAway = line.internal.keepAway.map((p) => posKey(worldPos(p, frame)));
   const out: Hookups = { hookups: [], blocks: [], power: null, logistics: null, warnings: [], noPathAt: new Map() };
   const taps: LayoutTap[] = [];
@@ -967,8 +987,10 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   const finishLine = async (line: LocalLine, search: LayoutSearch): Promise<Layout> => {
     const { stages } = line;
     // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
-    const areas = farmAreas(plan, line.size);
-    const extent = farmExtent(line.size, areas);
+    // farm areas stand east of the line's whole box (its roof's overhang included), in the line's local cells
+    const boxAreas = farmAreas(plan, line.size);
+    const extent = farmExtent(line.size, boxAreas);
+    const areas = boxAreas.map((a) => ({ ...a, local: [a.local[0] - line.shift[0], a.local[1], a.local[2] - line.shift[2]] as Vec3 }));
     const replaced = replacedCasings(units);
     const supplyWarnings: PlanWarning[] = stages === null || powerNet === null || supply === null || !supply.other ? [] : [{ code: 'power_tap_tier',
       text: `The ${tierName(powerNet.voltageTier)} network has no ${tierName(powerNet.voltageTier)} cable to tap: the line is fed at `
@@ -977,7 +999,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     // stages 6–7: the site is found for the line and its farms' areas together, which turn with it as one box
     const chosen = base === null ? null
       : await chooseSite({ scan, project, base, line, size: extent, powerTaps: supply?.taps ?? null, logisticsNet, deps });
-    const frame = frameAt(chosen?.site ?? null, extent);
+    const frame = frameAt(chosen?.site ?? null, extent, line.shift);
     const vox = chosen?.vox ?? null;
     const siteWarnings = chosen?.warnings ?? worldWarnings;
     const worldSize = rotatedSize(extent, frame.rotation);
@@ -1101,6 +1123,6 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     if (!finalReplaces(measure, finishedBaseline) || (best !== null && compareFinal(measure, best) >= 0)) continue;
     best = measure; kept = layout; keptLine = lines[i]!;
   }
-  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal });
+  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal, shift: [...keptLine.shift] });
   return kept;
 }

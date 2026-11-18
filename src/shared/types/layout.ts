@@ -13,7 +13,7 @@ import type { BomLine, BuildStep, LogisticsMode, PlanContext, PlanWarning, Power
 import type { TapPoint } from './world.ts';
 
 /** No task emits a `cover` block: a cover is a `CoverSpec` on the block it sits on (§11.14). */
-export type BlockRole = 'machine' | 'casing' | 'hatch' | 'cable' | 'transformer' | 'pipe' | 'cover' | 'interface' | 'chip_pipe' | 'chest' | 'ghost';
+export type BlockRole = 'machine' | 'casing' | 'hatch' | 'cable' | 'transformer' | 'pipe' | 'cover' | 'interface' | 'chip_pipe' | 'chest' | 'ghost' | 'roof';
 
 /** A cover on one face of its host block (§11.14). */
 export interface CoverSpec {

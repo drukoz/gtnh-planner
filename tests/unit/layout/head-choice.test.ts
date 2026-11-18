@@ -55,8 +55,12 @@ describe('power head choice', () => {
     for (const n of [10, 20, 40]) for (const mode of ['direct', 'ae2'] as const) for (const rotation of [0, 90, 180, 270] as const) {
       // no `readArea`: the ground is unknown, so the hookup cannot route and a dashed guide is drawn instead
       const layout = await layoutLine(layoutPack(), lossPlan(n), lossScan(mode), makeProject({ logistics: mode, placement: { origin: [20, 64, 10], rotation } }));
-      const [min, size] = [layout.origin, layout.size];
-      const inColumns = (p: number[]) => p[0]! >= min[0] && p[0]! < min[0] + size[0] && p[2]! >= min[2] && p[2]! < min[2] + size[2];
+      // the guide may pass under the roof's overhang, which stands outside the line's own columns: the box is drawn
+      // around the line's own blocks without the roof (RUK-3032)
+      const own = layout.blocks.filter((b) => b.hookup === undefined && b.role !== 'ghost' && b.role !== 'roof');
+      const [minX, maxX] = [Math.min(...own.map((b) => b.pos[0]!)), Math.max(...own.map((b) => b.pos[0]!))];
+      const [minZ, maxZ] = [Math.min(...own.map((b) => b.pos[2]!)), Math.max(...own.map((b) => b.pos[2]!))];
+      const inColumns = (p: number[]) => p[0]! >= minX && p[0]! <= maxX && p[2]! >= minZ && p[2]! <= maxZ;
       const hookup = layout.hookups.find((h) => h.kind === 'power')!;
       expect(hookup.found === false, `${n} ${mode} r${rotation}: found`).toBe(true);
       expect(hookup.path.some(inColumns), `${n} ${mode} r${rotation}: guide crosses the line`).toBe(false);

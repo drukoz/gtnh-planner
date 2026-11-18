@@ -20,7 +20,7 @@ export const PIN_COLORS: Readonly<Record<Pin['kind'], string>> = {
 };
 export const ROLE_COLORS: Readonly<Record<BlockRole, string>> = {
   machine: '#90caf9', casing: '#b0bec5', hatch: '#a1887f', cable: '#616161', transformer: '#8e24aa', pipe: '#ffb300', cover: '#ffffff',
-  interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)',
+  interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)', roof: '#b3e5fc',
 };
 /** The mark on a configured block: one with covers, settings (§11.14), conduit faces, or chips and patterns (§11 entry 51). */
 export const CONFIGURED_COLOR = '#ffffff';

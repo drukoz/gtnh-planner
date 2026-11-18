@@ -36,7 +36,7 @@ export type ShapeKind = 'cube' | 'core' | 'arm' | 'plate' | 'hub';
 export const ROLE_FALLBACK: Readonly<Record<BlockRole, Rgb>> = {
   machine: [...KIND_COLORS.basic], hatch: [...KIND_COLORS.hatch], casing: [...KIND_COLORS.casing], transformer: [...KIND_COLORS.transformer],
   cable: [...KIND_COLORS.cable], pipe: [...KIND_COLORS.item_pipe],
-  cover: [220, 220, 220], interface: [126, 87, 194], chip_pipe: [255, 112, 67], chest: [160, 110, 50], ghost: [200, 200, 200],
+  cover: [220, 220, 220], interface: [126, 87, 194], chip_pipe: [255, 112, 67], chest: [160, 110, 50], ghost: [200, 200, 200], roof: [179, 229, 252],
 };
 
 /** The roles drawn as a core with arms instead of a cube. */

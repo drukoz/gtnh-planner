@@ -85,15 +85,15 @@ describe('the layout search', () => {
   }, 60_000);
 
   it('keeps the runner-up when it is shorter once hooked up', async () => {
-    // RUK-2877 (spike `spikes/reach-ae2-promote/`): the search ranks the stacked line best on its in-line score, and
-    // that is 78 blocks once hooked up; the packed runner-up is 55, so layoutLine keeps the packed line and the search
-    // names the stacked one `rejected`
+    // RUK-2877 (spike `spikes/reach-ae2-promote/`): the search ranks the stacked line best on its in-line score, but
+    // its finished layout with the hookups is longer; the packed runner-up is 102 once hooked up (the roof counts in
+    // `total` since RUK-3032), so layoutLine keeps the packed line and the search names the stacked one `rejected`
     const { layout } = await lossLine(40, 'direct');
     const { candidates, chosen, baseline, rejected } = layout.search!;
     expect(rejected, 'the search ranked a line best and its finished layout lost').toBeDefined();
     expect(candidates[rejected!]!.kind, 'the rejected line is the stacked one').toBe(CandidateKind.Stacked);
     expect(candidates[chosen]!.kind, 'the kept line is the packed runner-up').toBe(CandidateKind.Packed);
     expect(chosen !== baseline, 'the kept line is not the baseline').toBe(true);
-    expect(lengthOf(layout).total, 'the packed line with its hookups').toBe(55);
+    expect(lengthOf(layout).total, 'the packed line with its hookups').toBe(102);
   }, 60_000);
 });

@@ -12,7 +12,7 @@ import { V } from '../../shared/gt/tiers.ts';
 import { unreachableMachines } from './reach.ts';
 
 /** The roles whose blocks count in a line's length (the S1 benchmark's `total`; EnderIO conduits are `pipe`). */
-export const LENGTH_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'interface', 'chip_pipe']);
+export const LENGTH_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'interface', 'chip_pipe', 'roof']);
 
 /**
  * Score a laid line (RUK-2571, plan Assumption 3): the connections left to make by hand (the `route_failed` warnings),

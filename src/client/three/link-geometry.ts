@@ -209,7 +209,7 @@ export function solidColumns(layout: Layout): SolidColumns {
   const tops = new Map<string, number>();
   const [ox, oy, oz] = layout.origin;
   for (const b of layout.blocks) {
-    if (b.role === 'ghost' || THIN_ROLES.has(b.role)) continue;
+    if (b.role === 'ghost' || b.role === 'roof' || THIN_ROLES.has(b.role)) continue;
     const key = `${b.pos[0] - ox},${b.pos[2] - oz}`;
     tops.set(key, Math.max(tops.get(key) ?? -Infinity, b.pos[1] - oy + 1));
   }
