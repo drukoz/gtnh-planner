@@ -224,6 +224,10 @@ export function candidateLabel(c: LayoutCandidate): string {
   }
   if (c.kind === CandidateKind.Packed) return 'Machines packed three to a cable, power head at the west end';
   if (c.kind === CandidateKind.PackedOpen) return 'Machines packed three to a cable, interfaces on the outside, power head at the west end';
+  if (c.kind === CandidateKind.Reordered) {
+    return c.westUnits === 0 ? 'Machines reordered within their tier, power head at the west end'
+      : `Machines reordered within their tier, power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
+  }
   return 'Other layout';
 }
 
