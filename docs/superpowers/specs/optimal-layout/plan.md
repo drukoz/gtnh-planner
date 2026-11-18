@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 running**, 2026-11-16. Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 started with spikes SP-D and SP-E**, 2026-11-17. Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -88,7 +88,7 @@ with today's rule's line beside the chosen one.
 M1 changes no chosen layout except where a candidate is better by the never-worse rule; with only today's head
 candidates in the loop that is expected to be rare. Its value is the honest report and the frame M2–M4 fill.
 
-### M2 — every machine powered, AE2 at spacing 1 — RUK-2668, branch `feat/optimal-layout-m2`
+### M2 — every machine powered, AE2 at spacing 1 — RUK-2668, **done**, branch `feat/optimal-layout-m2`
 
 Measured on the M1 branch (2026-11-16) before planning it: of the 59 benchmark rows with `unpowered > 0`, only 7 are
 starved by wiring (`loss-10 ae2`, `loss-20 routed/ae2`, `loss-40` in all four modes: 90 LV macerators). The other 52
@@ -106,7 +106,20 @@ the 7 (the best middle head still leaves 7 of 40 starved in direct, 31 in AE2).
 Dropped from M2: **shorter trees (SP-B)**. Four terminal orders save 25 cable blocks on 9 of 132 rows, every one of
 them lossier, for 1.43× the time; rip-up and reroute adds nothing (reuse ledger row 5).
 
-### M3 — new shapes (the placement contract, then rows, L, U and stacking)
+### M3 — new shapes (the placement contract, then rows, L, U and stacking) — RUK-2877, branch `feat/optimal-layout-m3`
+
+M2's result: 0 machines starved by wiring (90 before), AE2 total −21 %, loss over 132 rows 75 143 → 45 936 EU/t.
+
+**Spikes first** (RUK-121 rule). The contract costs about 8 refactoring subtasks, and what it must hold depends on which
+shapes pay. Today's rows cost 1.5 wiring and logistics blocks per machine. Stacking keeps 1.5 but halves the length.
+The user's packing (one cable lane with a machine on each side and one on top) costs 1.0 and cuts the length to two
+thirds. Neither figure is measured yet:
+- **SP-D** RUK-2878: single-block machines stacked two high on today's rows, all four modes, laid for real.
+- **SP-E** RUK-2879: the user's packing; power laid for real, logistics lanes counted.
+
+The contract (step 1 below) is specced from their numbers: one spine at y 0 or two lanes at y 1, and a power port
+shared by up to three machines (`PlacedUnit.powerSide`).
+
 
 1. **Contract, no behaviour change**: `Placement` gains the spine path, tail cells, head runs, service cells and power
    port (R1's 40 locations: 24 S, 16 M; the client and projector untouched). Direct and routed lay along the path (S each,
