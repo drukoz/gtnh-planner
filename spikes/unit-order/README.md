@@ -162,7 +162,9 @@ against `feat/optimal-layout-m4` at `0b6c6dd5d`, and it still carries the spike'
    the swap pass from the best of them (the baseline when there is none), and returns the last accepted swap as a
    separate `reordered` index. A swap must also `replacesBaseline` the baseline itself. `layoutLine` finishes M3's
    finalists exactly as before. It then finishes the reordered line and keeps it only when it `finalReplaces` the
-   finished baseline **and** the line kept so far, and `compareFinal` puts it strictly ahead of that line. This fixes
+   finished baseline **and** the line kept so far, and `compareFinal` puts it strictly ahead of that line. The search
+   record's `chosen` is the reordered line when there is one (it beats `finalists[0]` on the score). Each finished
+   line names `chosen`, or `rejected` when it is not that line. This fixes
    `mixed-14`, `fluid-09` and `mixed-05`, which lost M3's runner-up from the two finalist slots. It also fixes
    `fluid-02` direct, which is 1 block shorter but 3 EU/t lossier: Assumption 4 does not trade loss for length.
 2. **The swap cap is set by work, not by a count.** `cap = min(8, floor(160 / movable units))`. Lines of up to 20
@@ -185,4 +187,7 @@ Measured on this Mac, with M3 on the same machine and the same load:
 The three failures: `m3-verify` promise 2 (its `KIND` table has no `Reordered`), `m3-verify` promise 4 (with 1
 machine shut in it expects the plural "1 machines are closed in", and `SHUT_IN` freezes "2 ×"), and `reach-warning`
 "warns once for mixed-02 in AE2" (frozen to "2 machines"). Changed benchmark rows are in `bench-promote.txt`
-(diff it against `bench-m3.txt`).
+(diff it against `bench-m3.txt`). The re-pinned values: promise 4's list is `mixed-02 ae2: 1 ×`, `mixed-03 ae2: 2 ×`,
+`mixed-18 ae2: 1 × Electric Blast Furnace`. The `mixed-02` AE2 warning reads "1 machine is closed in by the blocks
+around it, so you cannot reach it once the line is built: 1× Electric Blast Furnace. Set up each one (circuit, covers,
+wrench) before you place the blocks beside it." and is pinned at `[35, 64, 21]`.

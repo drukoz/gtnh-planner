@@ -1,5 +1,5 @@
 diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
-index 470265249..bc84b7a3b 100644
+index 470265249..64209a8dc 100644
 --- a/src/server/layout/layout.ts
 +++ b/src/server/layout/layout.ts
 @@ -320,11 +320,17 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
@@ -60,7 +60,7 @@ index 470265249..bc84b7a3b 100644
 +  const best = finalists[0] ?? baseline;
 +  const reordered = reorderBest(input, best, baseline, lines, kinds, lays);
 +  const { candidates } = rank();
-+  return { lines, search: { candidates, chosen: best, baseline }, finalists, reordered };
++  return { lines, search: { candidates, chosen: reordered ?? best, baseline }, finalists, reordered };
 +}
 +
 +/** SP-M (spike, RUK-3058): the feed tier a unit is placed at (`placeUnits`'s `min(tier, supplyTier)`), null when it is not fed. */
@@ -220,12 +220,24 @@ index 470265249..bc84b7a3b 100644
      pack, plan, parts, mode, units, stages: provisional, network: logisticsNet,
      satellites: deps.satellites !== false, stacking: deps.stacking !== false, packing: deps.packing !== false, roof: dry === null,
    });
-@@ -1175,6 +1331,14 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+@@ -1166,15 +1322,24 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+   // kept; the search record then names the kept line `chosen` and, when that is not the search's best, the best `rejected`
+   const baselineLine = lines[search.baseline]!;
+   let keptLine = baselineLine;
+-  let kept = await finishLine(baselineLine, finalists.length === 0 ? search : { ...search, chosen: search.baseline, rejected: finalists[0]! });
++  const top = search.chosen;
++  let kept = await finishLine(baselineLine, top === search.baseline ? search : { ...search, chosen: search.baseline, rejected: top });
+   const finishedBaseline = finalMeasure(kept, baselineLine.score.unreachable);
+   let best: FinalMeasure | null = null;
+   for (const i of finalists) {
+-    const layout = await finishLine(lines[i]!, { ...search, chosen: i, ...(i === finalists[0] ? {} : { rejected: finalists[0]! }) });
++    const layout = await finishLine(lines[i]!, { ...search, chosen: i, ...(i === top ? {} : { rejected: top }) });
+     const measure = finalMeasure(layout, lines[i]!.score.unreachable);
      if (!finalReplaces(measure, finishedBaseline) || (best !== null && compareFinal(measure, best) >= 0)) continue;
      best = measure; kept = layout; keptLine = lines[i]!;
    }
 +  if (reordered !== null) {
-+    const layout = await finishLine(lines[reordered]!, { ...search, chosen: reordered, rejected: finalists[0] ?? search.baseline });
++    const layout = await finishLine(lines[reordered]!, { ...search, chosen: reordered });
 +    const measure = finalMeasure(layout, lines[reordered]!.score.unreachable);
 +    const against = best ?? finishedBaseline;
 +    if (finalReplaces(measure, finishedBaseline) && finalReplaces(measure, against) && compareFinal(measure, against) < 0) {
