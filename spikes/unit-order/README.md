@@ -152,3 +152,37 @@ reorder search's cost on 1,200-block lines so the feeding performance tests pass
 - `compare-*.md` — per-variant acceptance tables and per-changed-row detail vs M3.
 - `order-probe.test.ts.txt` — the throwaway probe (never committed) that lays all 132 rows, dumps the rich per-row
   JSON, writes the `benchTable`, and takes the step-7 timings; it reads `SPM_JSON`/`SPM_BENCH`/`SPM_TIME` paths from env.
+
+## Promotion prototype (CTO, 2026-11-18): `promote.patch`
+
+`promote.patch` is O3 pair-swap with two changes that remove both blockers above. It is a whole `git diff -- src`
+against `feat/optimal-layout-m4` at `0b6c6dd5d`, and it still carries the spike's O1/O2 helpers, which M4-1 deletes.
+
+1. **The reordered line never takes a finalist's place.** `buildLocal` ranks the finalists exactly as M3 does, runs
+   the swap pass from the best of them (the baseline when there is none), and returns the last accepted swap as a
+   separate `reordered` index. A swap must also `replacesBaseline` the baseline itself. `layoutLine` finishes M3's
+   finalists exactly as before. It then finishes the reordered line and keeps it only when it `finalReplaces` the
+   finished baseline **and** the line kept so far, and `compareFinal` puts it strictly ahead of that line. This fixes
+   `mixed-14`, `fluid-09` and `mixed-05`, which lost M3's runner-up from the two finalist slots. It also fixes
+   `fluid-02` direct, which is 1 block shorter but 3 EU/t lossier: Assumption 4 does not trade loss for length.
+2. **The swap cap is set by work, not by a count.** `cap = min(8, floor(160 / movable units))`. Lines of up to 20
+   movable machines get 8 swaps, `loss-40` gets 4, `loss-80` gets 2, and the 1,200-block feeding lines (hundreds of
+   units) get none. Every benchmark win is on a line of 10 machines or fewer.
+
+Measured on this Mac, with M3 on the same machine and the same load:
+
+| check | M3 | promote.patch |
+| --- | --: | --: |
+| `layout-bench` guardrail | passes | **passes** (no row worse) |
+| bench total, direct / routed / ae2 / enderio | 2098 / 2509 / 2333 / 2075 | **2083 / 2501 / 2322 / 2060** |
+| bench lossEUt, same order | 10176 / 10837 / 10407 / 10176 | **10100 / 10790 / 10353 / 10100** |
+| AE2 shut-in machines (bench) | 6 | **4** (`mixed-02` 2→1, `mixed-18` 2→1) |
+| `runBench()` median of 3 | — | 2766 ms |
+| `layoutLine` best of 3, loss-80 direct / ae2 | 65.7 / 145.7 ms | 61.8 / 136.8 ms (noise) |
+| `bigLine` all four modes (`feeding/check` helper) | 86 s | 88 s |
+| `npx vitest run` | — | 4536 passed, **3 failed** (all expected re-pins, below) |
+
+The three failures: `m3-verify` promise 2 (its `KIND` table has no `Reordered`), `m3-verify` promise 4 (with 1
+machine shut in it expects the plural "1 machines are closed in", and `SHUT_IN` freezes "2 ×"), and `reach-warning`
+"warns once for mixed-02 in AE2" (frozen to "2 machines"). Changed benchmark rows are in `bench-promote.txt`
+(diff it against `bench-m3.txt`).
