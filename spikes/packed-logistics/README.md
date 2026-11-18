@@ -6,8 +6,8 @@ A packed line (SP-E) stacks machines three deep on one cable lane. This spike la
 lanes `[x, 1, 0]` and `[x, 1, 2]` run `firstX … tailX`, join at `[tailX, 1, 1]`, and end at the tail cell
 `[tailX, 1, 2]` — the south lane's end cell, on the box's face — with the input chest below it at `[tailX, 0, 2]` and
 output chest *i* east of the rising tail column at `[tailX + 1, 2 + i, 2]`. The prototype is `change.patch` next to
-this file; apply it **after** `spikes/shared-cable/change.patch` (it extends `placePacked`'s packed placement).
-`src/` in the committed tree is untouched.
+this file; it **includes SP-E's lines** (`placePacked`, `packedLine`, `PlacedUnit.powerSide`, the `SPIKE_PACKED`
+switch) and applies to a clean tree on its own. `src/` in the committed tree is untouched.
 
 ## Verdict
 
@@ -101,8 +101,7 @@ cover every column — while cable (the SP-E lane) and the modes' per-unit riser
 ```bash
 npm ci
 npx tsc -b
-git apply spikes/shared-cable/change.patch
-git apply spikes/packed-logistics/change.patch
+git apply spikes/packed-logistics/change.patch    # includes SP-E's lines
 npx vitest run tests/unit/layout/tmp-spike.test.ts                          # BEFORE: $TMPDIR/before.json
 SPIKE_PACKED=1 SPIKE_OUT=after.json npx vitest run tests/unit/layout/tmp-spike.test.ts   # AFTER: $TMPDIR/after.json
 git checkout -- src/                                                        # drop the prototypes
@@ -116,7 +115,8 @@ and the new `Placement` fields are inert otherwise.
 
 ## The patch
 
-`change.patch` (on top of SP-E's): `Placement.spine`/`Placement.tail` and the lane/tail geometry in
+`change.patch` (SP-E's packed placement + SP-F's logistics, one diff on a clean tree):
+`Placement.spine`/`Placement.tail` and the lane/tail geometry in
 `src/server/layout/arrange.ts`; the packed switch in `buildLocalAt` (`oneFeedTier`, packed `direct`/`enderio`) in
 `src/server/layout/layout.ts`; spine laying, riser skip and the generalized tail in
 `src/server/layout/modes/direct.ts`; the same in `itemLine` of `src/server/layout/modes/enderio.ts`.
