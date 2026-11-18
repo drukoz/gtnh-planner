@@ -27,7 +27,7 @@ import { connectionSpans, connectionsGraph, spanDetails } from '../../src/client
 import { connLayout, connPlan } from './connections-fixture.ts';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
-  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
+  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true, roof: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
   showLinks={false} onShowLinks={() => {}} {...over} />);
 
 describe('3D tab', () => {
@@ -36,6 +36,15 @@ describe('3D tab', () => {
     for (const text of ['data-testid="block-list"', 'Basic Macerator ×1', 'Power: 1 block from pin 2', 'Size: 3×2×2', 'aria-label="Layer"', 'All layers', 'Ghosts', 'Hookups'])
       expect(html).toContain(text);
     expect(shell({ maxLayer: 0 })).toContain('Layers 1–1 of 2');
+  });
+
+  it('shows the Roof switch only where the line has a rain roof (RUK-2877)', () => {
+    expect(shell()).not.toContain('>Roof<');
+    const roofed: Layout = { ...sampleLayout, blocks: [...sampleLayout.blocks,
+      { pos: [10, 65, 20], block: { id: 'minecraft:glass', meta: 0 }, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' }] };
+    const html = shell({ layout: roofed, showLinks: true, linksNote: '3 connections drawn' });
+    expect(html).toContain('<label class="check"><input type="checkbox" checked=""/>Roof</label>');
+    expect(html.match(/<label class="check">/g)).toHaveLength(5);   // the layer slider, Ghosts, Hookups, Roof, Show connections
   });
 
   it('explains itself without WebGL2, while loading and when there is nothing to build', () => {
