@@ -93,7 +93,7 @@ byte-identical):
 | mixed-14 | ae2 | 34 / 283 / `5x3x3` | 35 / 283 / `5x3x4` |
 | mixed-14 | enderio | 31 / 283 / `5x2x3` | 31 / **286** / `4x2x5` |
 
-**0 rows better, 4 lossier, 13 longer or deeper, and `loss-40`'s chosen lines in all three modes unchanged** (same
+**0 rows better, 5 lossier, 12 longer, all 15 a different size, and `loss-40`'s chosen lines in all three modes unchanged** (same
 chosen index, size, loss and satellite list as the table above). The free row buys the box a cell of depth it never
 uses, and on the short AE2 rows it pushes the search onto the packed column, which is what the spike has been
 avoiding all along. A free row beside the box is not where the satellite's plane is lost — the loss is in y, not z.
@@ -104,7 +104,7 @@ avoiding all along. A free row beside the box is not where the satellite's plane
 `a.patch` + `b.patch` (`score.test.ts` ×3 `weakTiers`/the weak-tier guard, `packed.test.ts` ×2 AE2 packed candidates,
 `layout-search.test.ts` ×1 the runner-up, `layout-bench.test.ts` ×1 the 40-machine AE2 numbers) — they are re-pinned
 in `52c0b4526`/`61b894322`, which `origin/feat/optimal-layout-m3` has and this branch does not. Real faults caused
-here: 0. With the J2 change stashed the four files pass at HEAD (33/33), so none of the 7 is J2's.
+here: 0. (The 4 445 / 4 718 include 2 tests of the throwaway report file; without it the tree gives 4 443 / 4 716.) With the J2 change stashed the four files pass at HEAD (33/33), so none of the 7 is J2's.
 
 ## Verdict
 
