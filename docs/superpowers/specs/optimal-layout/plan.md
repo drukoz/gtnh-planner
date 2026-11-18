@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-8, M3-P1 … M3-P4 and SP-F … SP-I merged; M3-9, M3-10 (after M3-9) and SP-J running**, 2026-11-18 (revision 11). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-10, M3-P1 … M3-P4, SP-F … SP-J and R-rain merged; SP-K, SP-R and M3-11 running**, 2026-11-18 (revision 12). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -165,10 +165,15 @@ The packed shape follows Assumption 7.
 | M3-8 RUK-3015 | reach in the score (Assumption 8): `unreachableMachines`, `LineScore.unreachable` after `unwired`, `replacesBaseline`/`finalReplaces` refuse more unreachable machines than the baseline; the benchmark reports and ratchets it. From the CTO prototype `spikes/reach/change.patch`: 3 AE2 rows up (`loss-10`, `loss-20`, `mixed-05`), none other moves | — |
 | SP-I RUK-3016 | spike: an AE2 packed column with no machine shut in: I1, T in every other column; I2, A's and B's interfaces on their outer faces (5 wide). Every score field per candidate on the four AE2 loss rows, whole-suite re-pins | reach patch |
 | CTO probe | after SP-I (`spikes/reach-ae2-promote/`): I2 *replaced* the SP-G column, which is the better one on short lines (mixed-09/13/14), and the finished check judged one finalist (mixed-05: I2 first in-line, 1 block longer hooked up). Two finished finalists plus both AE2 columns: 2 rows lower, none worse. I2's A and B had front = output side, which GT forbids; fronts turned west | SP-I |
-| M3-9 | the finished check judges the two best candidates (`FINALISTS = 2`, `compareFinal`), and `finalReplaces` refuses more weak tiers unless more machines are powered (`a.patch`). Changes no benchmark row | — |
-| M3-10 | the open AE2 packed column as `CandidateKind.PackedOpen = 4`, laid after `Packed` (`b.patch`): `loss-10` 53 → 52, `loss-20` 73 → 61 blocks | M3-9 |
-| SP-J | spike: satellite banks beside or on a packed box, so `loss-40` AE2 can keep the open column (82 blocks against 232) without a weak tier | M3-9, M3-10 patches |
-| later in M3 | rain cover counted in the score and the build list (goal 7); a warning for machines out of reach (today's AE2 multiblock controllers) | M3-8 |
+| M3-9 RUK-3021 | the finished check judges the two best candidates (`FINALISTS = 2`, `compareFinal`), and `finalReplaces` refuses more weak tiers unless more machines are powered (`a.patch`). Changes no benchmark row | — |
+| M3-10 RUK-3022 | the open AE2 packed column as `CandidateKind.PackedOpen = 4`, laid after `Packed` (`b.patch`): `loss-10` 53 → 52, `loss-20` 73 → 61 blocks | M3-9 |
+| SP-J RUK-3023 | spike: satellite banks beside or on a packed box, so `loss-40` AE2 can keep the open column (82 blocks against 232) without a weak tier | M3-9, M3-10 patches |
+| R-rain RUK-3024 | research: GT's rain rules from its source (gt-mechanics §3.4a). Only blocks with an EU buffer are checked (singleblocks, transformers, energy hatches; not controllers, steam machines, cables); a side is covered by any block in the neighbour column at the machine's level or above, the top by any block above it | — |
+| SP-J RUK-3023 | result: nothing to promote. The satellite on a packed box is planned and then dropped: its supply input touches the tier-1 tree (y 3 on a packed box), and `passInput` rightly refuses it. A free row beside the box (J2) is worse on every row it touches | — |
+| SP-K RUK-3027 | spike: a free path for the satellite's supply feed on a packed box. K1 keeps other tiers off the input's rim; K2 adds two planes on packed boxes; K3 plans the satellite away from the phase-1 tier-1 tree. Every candidate's score fields on `loss-40`, whole-bench diff, whole-suite re-pins | SP-J |
+| SP-R RUK-3026 | spike: the rain roof on the benchmark (`rain.ts`, pure): exposures per row, roof cells under three rules (`RoofRule` Box / Flat / Lowest, one above the exposed block so faces stay open for reach), reach with the roof, and the search's choice with the roof in `total` | R-rain |
+| M3-11 RUK-3028 | a `machine_unreachable` warning naming the shut-in machines, pinned at the first (today: 2 controllers each on `mixed-02`, `mixed-03`, `mixed-18` AE2). No row moves | M3-8 |
+| later in M3 | the roof promoted from SP-R into the score, the build list and the roof step, then site cover and dimensions that never rain (design goal 1's roof rule); SP-K's variant if it says promote | SP-R, SP-K |
 | M3-V | QA verification of the milestone branch | all above |
 
 Deferred from M3, with the reason: **L and U shapes** and a single row. Nothing has measured them, they need the
