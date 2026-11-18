@@ -53,12 +53,23 @@ describe('the layout search', () => {
   }, 60_000);
 
   it('lays one candidate per head split when the line loses something', async () => {
-    const { layout } = await lossLine(40, 'ae2');
+    const { layout } = await lossLine(40, 'ae2', { stacking: false });
     const { candidates } = layout.search!;
     expect(candidates.length).toBe(1 + headSplits(40).length);
     for (let i = 1; i < candidates.length; i++) {
       expect(candidates[i]!.kind, `candidate ${i}: kind`).toBe(CandidateKind.MiddleHead);
     }
+  }, 60_000);
+
+  it('lays a stacked twin of every head candidate', async () => {
+    // RUK-2877: with stacking on (the default) every head candidate is laid again with the single-block machines
+    // stacked two high, the twins in the order of the head candidates they twin
+    const { layout } = await lossLine(40, 'ae2');
+    const { candidates } = layout.search!;
+    const heads = 1 + headSplits(40).length;
+    expect(candidates.length).toBe(2 * heads);
+    expect(candidates.slice(heads).map((c) => c.kind)).toEqual(candidates.slice(0, heads).map(() => CandidateKind.Stacked));
+    expect(candidates.slice(heads).map((c) => c.westUnits)).toEqual(candidates.slice(0, heads).map((c) => c.westUnits));
   }, 60_000);
 
   it('lays the line the search reports as chosen', async () => {

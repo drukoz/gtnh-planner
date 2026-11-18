@@ -27,6 +27,8 @@ describe('milestone M1 panel text on the loss lines', () => {
         if (compared === 1) comparedLines.push(`loss-${n} ${mode}`);
       }
     }
-    expect(comparedLines.sort()).toEqual(['loss-10 enderio', 'loss-20 ae2', 'loss-20 routed']);
+    // stacked twins (RUK-2877): the 20-machine routed and ae2 lines are now laid as a stacked candidate, whose estimate
+    // matches the laid line's wiring, so only the 10-machine enderio line prints the comparison line
+    expect(comparedLines.sort()).toEqual(['loss-10 enderio']);
   }, 120_000);
 });

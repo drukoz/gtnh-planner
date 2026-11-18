@@ -119,16 +119,17 @@ describe("the user's sand line", () => {
     expect(plan.cost?.build).toBe(54);   // 4 + 2 × 17 + 16
     expect(errors(pack, settings, plan)).toEqual([]);
     const layout = await laidOut(plan, 'routed');
-    expect(hammers(layout).map((b) => [b.stepId, b.stepIds])).toEqual([['hammer-gravel', undefined], ['hammer-sand', undefined]]);
+    // stacked (RUK-2877), the sand hammer stands on the gravel one, and the block order lists it first
+    expect(hammers(layout).map((b) => [b.stepId, b.stepIds])).toEqual([['hammer-sand', undefined], ['hammer-gravel', undefined]]);
     const pipes = layout.blocks.filter((b) => b.role === 'chip_pipe' && b.label === 'Routed Interface Pipe (Basic Forge Hammer)');
     const whitelist = (keys: string[]) => ({ mode: 'whitelist', keys });
     expect(pipes.map((b) => b.feed?.chips)).toEqual([
-      [{ kind: 'responder', filter: whitelist([COBBLE]) }, { kind: 'extractor', filter: whitelist([GRAVEL]) }],
       [{ kind: 'responder', filter: whitelist([GRAVEL]) }, { kind: 'extractor', filter: whitelist([SAND]) }],
+      [{ kind: 'responder', filter: whitelist([COBBLE]) }, { kind: 'extractor', filter: whitelist([GRAVEL]) }],
     ]);
     expect(configureText(layout, 'Routed Interface Pipe (Basic Forge Hammer)')).toEqual([
-      'chips: Item Responder Chip (whitelist: Cobblestone) + Item Extractor Chip (whitelist: Gravel)',
       'chips: Item Responder Chip (whitelist: Gravel) + Item Extractor Chip (whitelist: Sand)',
+      'chips: Item Responder Chip (whitelist: Cobblestone) + Item Extractor Chip (whitelist: Gravel)',
     ]);
   });
 

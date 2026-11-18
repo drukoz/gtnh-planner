@@ -52,7 +52,7 @@ describe('satellite step-down banks', () => {
     }, 60_000);
 
     it(`the ${n}-machine ${mode} line keeps today's layout with the switch off`, async () => {
-      const { internal } = await lossLine(n, mode);
+      const { internal } = await lossLine(n, mode, { stacking: false });
       expect(internal.satellites).toEqual([]);
       expect(starvedByWiring(internal), `${n} ${mode}: starved with the switch off`).toBe(starved);
     }, 60_000);
@@ -104,6 +104,14 @@ describe('satellite step-down banks', () => {
       expect(JSON.stringify(b.internal.satellites)).toBe(JSON.stringify(a.internal.satellites));
     }, 60_000);
   }
+
+  it('stacking alone powers the 20-machine routed line with satellites off', async () => {
+    // RUK-2877: the stacked line is shorter, so the head's own trees reach every machine where the unstacked line starves 8
+    const { internal } = await lossLine(20, 'routed', { stacking: false });
+    expect(starvedByWiring(internal)).toBe(8);
+    const stacked = await lossLine(20, 'routed');
+    expect(starvedByWiring(stacked.internal)).toBe(0);
+  }, 60_000);
 });
 
 // RUK-2677: one transformer per satellite. Groups close at one GT++ Hi-Amp Transformer's estimate (16 A out, 6 A in),

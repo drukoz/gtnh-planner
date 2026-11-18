@@ -212,6 +212,10 @@ function BlockList(props: { layout: Layout; names: Readonly<Record<string, strin
 export function candidateLabel(c: LayoutCandidate): string {
   if (c.kind === CandidateKind.WestHead) return 'Power head at the west end';
   if (c.kind === CandidateKind.MiddleHead) return `Power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
+  if (c.kind === CandidateKind.Stacked) {
+    return c.westUnits === 0 ? 'Machines stacked two high, power head at the west end'
+      : `Machines stacked two high, power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
+  }
   return 'Other layout';
 }
 
