@@ -409,6 +409,16 @@ function fluidShortText(input: ModeInput, unit: PlacedUnit, pattern: PatternSpec
 const PACKED_LANES: ReadonlyArray<readonly [number, number]> = [[1, 0], [1, 2], [2, 1]];
 
 /**
+ * The lanes of the open packed AE2 column (spike SP-I, RUK-3016, `Placement.open`): A's interfaces at
+ * `[x, 0, 0]`, B's at `[x, 0, 4]` and T's at `[x, 2, 2]`, with the cable lane between the machines at `[x, 0, 2]`. The
+ * lanes touch the join cell `[tailX, 0, 2]` only through a bridge cell of the tail column, one per lane.
+ */
+const PACKED_LANES_OPEN: ReadonlyArray<readonly [number, number]> = [[0, 0], [0, 4], [2, 2]];
+
+/** The tail column's bridge cell of each lane in `PACKED_LANES_OPEN`, in the same order. */
+const PACKED_BRIDGE_OPEN: ReadonlyArray<readonly [number, number]> = [[0, 1], [0, 3], [1, 2]];
+
+/**
  * The ME spine `[firstX … tailX] × (y 0, z spineZ)`: interfaces with their patterns, or cable with an export bus in front
  * of a machine that makes only fluids, cable between and up the spine's column to an interface above it (`itemRisers`),
  * output covers on the machines. Nothing when no placed unit moves items.
@@ -561,21 +571,34 @@ export function ae2Mode(input: ModeInput): ModeResult {
   /** An ME glass cable cell. */
   const cable = (pos: Vec3): LocalBlock => ({ pos: [...pos], block: { ...parts.me_cable.block }, role: 'pipe', label: parts.me_cable.name, item: parts.me_cable.key });
   const packed = placement.ownPorts === true;
+  const open = placement.open === true;
   if (packed) {
     // the three interface lanes, cable where no interface stands, and their join at the tail column (SP-G): the join cell
     // `[tailX, 1, 1]` links the north and south lanes and climbs to T's lane, and the south lane's tail cell is the port.
     // The lanes run from the head column like the spine, whose interfaces join the network through the grid node they are
     // (`PORT_SPACING.ae2` 1 puts interfaces side by side there), and cable fills every lane cell no interface stands in.
-    const join: Vec3 = [tailX, 1, 1];
-    for (const [y, z] of PACKED_LANES) {
+    // The open column (spike SP-I, RUK-3016) joins its lanes through a bridge cell of the tail column and lifts the port
+    // cell one above the south lane's tail, so the input chest has a floor cell under it.
+    const join: Vec3 = open ? [tailX, 0, 2] : [tailX, 1, 1];
+    const lanes = open ? PACKED_LANES_OPEN : PACKED_LANES;
+    for (const [i, [y, z]] of lanes.entries()) {
       for (let x = firstX; x <= tailX; x++) {
         const cell: Vec3 = [x, y, z];
         if (!portCells.has(posKey(cell))) blocks.push(cable(cell));
         if (x > firstX) links.push([[x - 1, y, z], cell]);
       }
-      links.push([join, [tailX, y, z]]);
+      if (open) {
+        const [by, bz] = PACKED_BRIDGE_OPEN[i]!;
+        const bridge: Vec3 = [tailX, by, bz];
+        blocks.push(cable(bridge));
+        links.push([join, bridge], [bridge, [tailX, y, z]]);
+      } else links.push([join, [tailX, y, z]]);
     }
     blocks.push(cable(join));
+    if (open) {
+      blocks.push(cable(placement.tail.cell));
+      links.push([[tailX, 0, 4], placement.tail.cell]);
+    }
   } else {
     for (let x = firstX; x <= tailX; x++) {
       const cell: Vec3 = [x, 0, spineZ];
@@ -623,7 +646,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
     : `, but only cable in front of ${joinNames([...exportBusFor].map(([name, n]) => (n === 1 ? `the ${name}` : `${fmtInt(n)}× ${name}`)))}, with an ME `
       + 'Export Bus on its face toward the machine';
   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ME glass cable ${packed ? 'on the lanes above the machines' : 'along the middle row'} with an ME interface at every machine's output side or bus`
+    text: `Lay ME glass cable ${open ? 'on the lanes beside the outer machines and above the middle ones' : packed ? 'on the lanes above the machines' : 'along the middle row'} with an ME interface at every machine's output side or bus`
       + `${lineExceptions(placement)}${exportWords}${risers.links.length > 0 ? RISER_WORDS : ''}` }];
 
   // cable cells show their joins to the spine cells beside them; an interface is a full block
