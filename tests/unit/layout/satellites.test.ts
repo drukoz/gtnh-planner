@@ -52,7 +52,7 @@ describe('satellite step-down banks', () => {
     }, 60_000);
 
     it(`the ${n}-machine ${mode} line keeps today's layout with the switch off`, async () => {
-      const { internal } = await lossLine(n, mode, { stacking: false });
+      const { internal } = await lossLine(n, mode, { stacking: false, packing: false });
       expect(internal.satellites).toEqual([]);
       expect(starvedByWiring(internal), `${n} ${mode}: starved with the switch off`).toBe(starved);
     }, 60_000);

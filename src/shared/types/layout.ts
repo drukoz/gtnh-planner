@@ -182,7 +182,7 @@ export interface LayoutLoss {
  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
  * takes the next number.
  */
-export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2 } as const;
+export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3 } as const;
 export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
 
 /**
@@ -200,7 +200,8 @@ export interface LineScore {
  * One line the layout search laid and scored: its kind, how many units stood west of a middle power head (0 for the west
  * end), and its score, whose `lossEUt` is the search's estimate; the laid line's `Layout.loss` can be higher. A
  * `Stacked` candidate is a head candidate (the west head when `westUnits` is 0, else a middle head with `westUnits`
- * units west of it) laid with single-block machines stacked two high (RUK-2877).
+ * units west of it) laid with single-block machines stacked two high (RUK-2877). A `Packed` candidate is the line laid
+ * by `placePacked` with the power head at the west end (`westUnits` 0), in direct and EnderIO only (RUK-2877).
  */
 export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUnits: number }
 

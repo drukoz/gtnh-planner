@@ -383,7 +383,7 @@ describe('layoutLine: mixed-tier lines', () => {
 
   /**
    * What is wrong with the line's power, as text: every "Could not wire" warning; every singleblock machine without a cable
-   * of its feed tier (`min(tier, supply)`) joined to the power input behind it; every cable beside a cable of another tier,
+   * of its feed tier (`min(tier, supply)`) joined to it through a face other than its front; every cable beside a cable of another tier,
    * a machine or energy hatch of a lower tier, or a transformer it does not belong to (one joins its own tier and the next).
    */
   function powerProblems(layout: Layout, plan: Plan, pack: Pack, supply: number): string[] {
@@ -393,9 +393,14 @@ describe('layoutLine: mixed-tier lines', () => {
     const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not wire')).map((w) => w.text);
     for (const m of placed) {
       if (m.role !== 'machine' || m.mainFacing === undefined) continue;
-      const port = at.get(key(step(m.pos, OPPOSITE[m.facing!]!)));
       const feed = Math.min(stepTier.get(m.stepId!)!, supply);
-      if (port?.role !== 'cable' || tierOf(layout, port) !== feed || ((port.connections ?? 0) & (1 << m.facing!)) === 0) {
+      // GT takes energy through any face but the front (gt-mechanics: isInputFacing): a cable of the feed tier on such a face, linked into the machine
+      const fed = [0, 1, 2, 3, 4, 5].some((side) => {
+        if (side === m.mainFacing) return false;
+        const port = at.get(key(step(m.pos, side)));
+        return port?.role === 'cable' && tierOf(layout, port) === feed && ((port.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0;
+      });
+      if (!fed) {
         out.push(`${m.label} at ${key(m.pos)} has no ${tierName(feed)} cable at its power input`);
       }
     }

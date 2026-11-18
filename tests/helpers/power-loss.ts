@@ -87,14 +87,14 @@ export const SUPPLY_TIER = 2;
  * route the layout was built from, as `layoutLine` chose them (`LayoutDeps.localLine`) (the wiring checks below read
  * the local grid, where the ports and runs live).
  */
-export async function lossLine(n: number, mode: LogisticsMode, opts: { satellites?: boolean; stacking?: boolean } = {}): Promise<{
+export async function lossLine(n: number, mode: LogisticsMode, opts: { satellites?: boolean; stacking?: boolean; packing?: boolean } = {}): Promise<{
   layout: Layout; plan: Plan; placement: Placement; internal: InternalResult; pack: Pack;
 }> {
   const pack = layoutPack();
   const plan = lossPlan(n);
   const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
   const layout = await layoutLine(pack, plan, lossScan(mode), makeProject({ logistics: mode }), {
-    ...lossGround(), localLine: (line) => { seen.push(line); }, satellites: opts.satellites === true, stacking: opts.stacking !== false,
+    ...lossGround(), localLine: (line) => { seen.push(line); }, satellites: opts.satellites === true, stacking: opts.stacking !== false, packing: opts.packing !== false,
   });
   const local = seen[0];
   if (local === undefined) throw new Error(`the ${n}-machine ${mode} line laid nothing of its own`);
@@ -115,7 +115,7 @@ export function overlaps(blocks: readonly LayoutBlock[]): string[] {
 export function tierContacts(blocks: LocalBlock[], cables: Array<{ tier: number; cable: Machine }>, placement: Placement): string[] {
   const tierOf = new Map(cables.map((c) => [c.cable.name, c.tier]));
   const at = new Map(blocks.map((b) => [posKey(b.pos), b]));
-  const machines = new Map(placement.units.filter((u) => u.ports.power !== null).map((u) => [posKey(step(u.ports.power!, u.facing)), u]));
+  const machines = new Map(placement.units.filter((u) => u.ports.power !== null).map((u) => [posKey(step(u.ports.power!, u.powerSide)), u]));
   const out: string[] = [];
   for (const b of blocks) {
     if (b.role !== 'cable') continue;
