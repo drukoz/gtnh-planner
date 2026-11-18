@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1, M3-2, SP-F, M3-3, M3-4, M3-5, M3-P1, M3-P2, SP-G and SP-H merged; M3-P3 (RUK-3005) running, M3-P4 (RUK-3006) after it**, 2026-11-18. Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1 … M3-5, M3-P1 … M3-P4, SP-F, SP-G and SP-H merged; M3-6 (RUK-3013), M3-8 (RUK-3015) and SP-I (RUK-3016) running, M3-7 (RUK-3014) after M3-6**, 2026-11-18 (revision 10). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -17,7 +17,8 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
    goal 7 (rain cover, needed once machines are stacked) and goal 9 (calibration). Goals 4 (machine reuse across steps),
    5 (cleanrooms) and 6 (wall sharing) are separate features and stay for a later program.
 3. **"Most optimal" is measured, in this order** (`LineScore`, M1):
-   1. buildable: no connection left to make by hand (`route_failed`), no transformer without room in its bank (ranked as
+   1. buildable: no connection left to make by hand (`route_failed`), **every machine reachable** (Assumption 8;
+      RUK-3015, M3-8), no transformer without room in its bank (ranked as
       "any at all"; how many ranks after step 2, since placing two more transformers is easier than feeding a starved
       machine: RUK-2976, M3-P4);
    2. **every machine actually powered**: the volts that reach a machine, times the amps it may draw
@@ -30,8 +31,9 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
    the best of a deterministic search in which every candidate is laid and routed for real, within about a second for
    the user's real line.
 4. **Never worse than today, structurally.** Today's rule's line is always a candidate. Another candidate replaces it
-   only when it is better by the score **and** either powers more machines or is no longer and no lossier. So a line
-   gets longer or lossier only to power a machine that today gets nothing usable. The S1 ratchet and the loss
+   only when it is better by the score, shuts in no more machines than today's line, **and** either powers more
+   machines, reaches more, or is no longer and no lossier. So a line gets longer or lossier only to power a machine that
+   today gets nothing usable, or to reach one it shuts in (M3-8). The S1 ratchet and the loss
    budgets in `power-loss.test.ts` keep that true: a row may get longer or lossier only where its `unpowered` count
    drops, and the commit names the row. (When shapes arrive in M3 and the shortest shape loses more, this rule is what
    I will ask you about in the PR, with the numbers.)
@@ -40,6 +42,14 @@ the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assump
 7. The packed shape (design goal 2) is SP-E's 3-wide, 2-high column: machines A and B beside the cable lane, T on top
    of it, logistics at y 1 above A and B. The design's 5-wide `logistics | machine | cable | machine | logistics` leaves
    the machine on top with no face onto the logistics. (Added 2026-11-18, M3.)
+8. **Reach (design goal 3) counts thin blocks as open.** A machine is reachable when one of its faces is next to air
+   joined to the outside, or next to a cable, pipe, conduit or chip pipe whose own cell touches that air (a builder clicks
+   past a thin block). Full blocks close a face: machines, casings, hatches, transformers, ME Interfaces, chests. The
+   strict "air only" reading would condemn 33 machines on today's rows (multiblock controllers facing the spine, fluid
+   machines under their pipes) and 64 under stacked machines; this one finds 14 in the benchmark, all in AE2: the top
+   machines of the packed AE2 column and 6 multiblock controllers behind ME Interfaces on today's AE2 rows
+   (`spikes/reach/README.md`). Scoring it costs 3 AE2 benchmark rows their packed gain (AE2 2 053 → 2 086 blocks) until
+   SP-I finds a column that keeps every machine reachable. (Added 2026-11-18, revision 10.)
 
 ## Target architecture
 
@@ -145,7 +155,11 @@ The packed shape follows Assumption 7.
 | SP-H RUK-2976 | spike: room in the head bank for a shallow line's transformers (H1 Hi-Amp Transformers where standard ones do not fit; H2 a bank two or more high). The probe found `loss-20`/`loss-40` reject the packed line only on `handTransformers` (`bankRows` lays at most one per row of the box's depth: 3 when packed; `loss-40` needs 20) | — |
 | M3-P3 RUK-3005 | AE2 packed column promoted from SP-G (`spikes/packed-ae2/change.patch` + `repins.diff`): 4 AE2 rows lower; 8 tests re-pinned, not 2 (the spike ran 3 files) | SP-G |
 | M3-P4 RUK-3006 | H1 promoted from SP-H (`spikes/bank-room/h1.patch` + `h1-repins.diff`): Hi-Amp banks where standard ones do not fit, and `compareScore` ranks "any hand transformer" before `unpowered` and the count after it (the CTO addendum in `spikes/bank-room/README.md`); 9 rows lower. H2 parked | M3-P3 |
-| later in M3 | build-step words from each unit's own facing (`steps.ts`); reach and rain cover counted in the score (goals 3, 7) | the shapes they describe |
+| M3-6 RUK-3013 | place-step words from each machine's own facing: a packed line names each machine's output side and front, a step whose machines face two ways (a middle head) lists both; rows with one front keep today's words. `Placement.packed` now means "laid by `placePacked`", `Placement.ownPorts` the AE2 column. CTO probe: on `lossLine(10, 'direct')` one plan step laid 3 machines facing 3 ways under one sentence | M3-P2 |
+| M3-7 RUK-3014 | a packed line's logistics step says "on the lanes above the machines" (direct, EnderIO; AE2 already does), and Input from Output Side names "its output side", not "its middle-row side" | M3-6 |
+| M3-8 RUK-3015 | reach in the score (Assumption 8): `unreachableMachines`, `LineScore.unreachable` after `unwired`, `replacesBaseline`/`finalReplaces` refuse more unreachable machines than the baseline; the benchmark reports and ratchets it. From the CTO prototype `spikes/reach/change.patch`: 3 AE2 rows up (`loss-10`, `loss-20`, `mixed-05`), none other moves | — |
+| SP-I RUK-3016 | spike: an AE2 packed column with no machine shut in: I1, T in every other column; I2, A's and B's interfaces on their outer faces (5 wide). Every score field per candidate on the four AE2 loss rows, whole-suite re-pins | reach patch |
+| later in M3 | rain cover counted in the score and the build list (goal 7); a warning for machines out of reach (today's AE2 multiblock controllers) | M3-8 |
 | M3-V | QA verification of the milestone branch | all above |
 
 Deferred from M3, with the reason: **L and U shapes** and a single row. Nothing has measured them, they need the
