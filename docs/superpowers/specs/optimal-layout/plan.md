@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 done (merged `173321cfa`); M4 running: spikes SP-M (unit order) and SP-N (blocks per machine)**, 2026-11-18 (revision 18). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 done (merged `173321cfa`); M4 running: SP-M and SP-N done; M4-1 (unit order as a candidate, RUK-3068), M4-2 (RUK-3069) and M4-3 (RUK-3070) running**, 2026-11-18 (revision 19). Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -228,7 +228,10 @@ built (Assumption 10).
 |---|---|---|
 | SP-M | spike: unit order within a feed tier, as extra candidates of the best line: O1 hungriest first, O2 same fluid side by side, O3 a first-improvement pair-swap pass capped at 8/16/32 extra lines. Every `compareScore` field per changed row, the finished layouts, time per line size (10 to 80 machines), whole-suite re-pins | — |
 | SP-N | measurement: blocks per machine (cable, pipe, conduit, interfaces, chip pipes, hookup, roof) of the chosen line per mode and candidate kind on the benchmark and the 60/80-machine loss lines, against M2's two rows; `docs/research/blocks-per-machine.md` | — |
-| M4-1… | the order search as candidates, specced from SP-M's numbers (or dropped, with the reason) | SP-M |
+| SP-M / SP-N results | SP-M (RUK-3058): O2 (fluid groups) only regresses, dropped; O1 (hungriest first) is loss-only; O3 pair-swap at 8 wins structurally (`mixed-01` 41 → 35 blocks) but, as spiked, broke the bench guardrail (it pushed M3's runner-up out of the two finalist slots) and the 1,200-block feeding tests (8 extra lays of a 2.8 s line). The CTO prototype `spikes/unit-order/promote.patch` fixes both: the reordered line is finished **after** M3's finalists and kept only when it `finalReplaces` the line M3 would keep, and the swap count is `min(8, floor(160 / movable machines))`. No row gets worse; the bench totals drop 2098/2509/2333/2075 → 2083/2501/2322/2060, AE2 shut-in machines drop 6 → 4, and large lines cost what they did. SP-N (RUK-3059): `docs/research/blocks-per-machine.md` | — |
+| M4-1 RUK-3068 | the unit-order search as a candidate, from `promote.patch`: `CandidateKind.Reordered = 5`, `reorderSwapCap`, the three re-pins, the bench re-baseline | SP-M |
+| M4-2 RUK-3069 | `bigLine` (feeding test helper) lays its line once per mode at a pinned step count: the "1,200-block" test took 97 s of its 120 s budget on M3 | — |
+| M4-3 RUK-3070 | the 3D tab's label for a `Reordered` candidate | M4-1 |
 | M4-V | QA verification of the milestone branch | all above |
 
 Also on the M4 branch from its first commit: the random-line test in `layout.test.ts` (600 layouts) gets a 60 s budget.
