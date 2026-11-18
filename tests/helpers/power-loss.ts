@@ -87,14 +87,14 @@ export const SUPPLY_TIER = 2;
  * route the layout was built from, as `layoutLine` chose them (`LayoutDeps.localLine`) (the wiring checks below read
  * the local grid, where the ports and runs live).
  */
-export async function lossLine(n: number, mode: LogisticsMode): Promise<{
+export async function lossLine(n: number, mode: LogisticsMode, opts: { satellites?: boolean } = {}): Promise<{
   layout: Layout; plan: Plan; placement: Placement; internal: InternalResult; pack: Pack;
 }> {
   const pack = layoutPack();
   const plan = lossPlan(n);
   const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
   const layout = await layoutLine(pack, plan, lossScan(mode), makeProject({ logistics: mode }), {
-    ...lossGround(), localLine: (line) => { seen.push(line); },
+    ...lossGround(), localLine: (line) => { seen.push(line); }, satellites: opts.satellites === true,
   });
   const local = seen[0];
   if (local === undefined) throw new Error(`the ${n}-machine ${mode} line laid nothing of its own`);

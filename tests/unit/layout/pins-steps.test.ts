@@ -194,6 +194,40 @@ describe('layout steps', () => {
     expect(steps[7]!.text).toBe('Run 12× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 2 A at MV, arriving at 116 V');
   });
 
+  // RUK-2668: satellite step-down banks laid along the line get one build step per tier they step down to
+  it('adds one satellite step per step-down tier right after the head stage, and no step without satellites', () => {
+    const pack = layoutPack();
+    const plan = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 's2', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 }]);
+    const placement = placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 3, portSpacing: 0 });
+    const pins = makePins({ dim: 0, site: { center: [5, 64, 5], text: 's' }, power: { pos: [0, 64, 0], text: 'p' }, logistics: null, reuse: [], warnings: [] });
+    const parts = { pins, site: { dig: 2, fill: 0 }, units: placement.units,
+      stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 1, ampsOut: 2 }],
+      cables: [{ tier: 2, cable: '2x Annealed Copper Cable', cells: 8 }, { tier: 1, cable: '2x Tin Cable', cells: 7 }],
+      power: { cable: '2x Annealed Copper Cable', blocks: 12, amps: 2, tier: 2, arrivingVolts: 116 }, supplyTier: 2 };
+    const today = ['layout:site', 'layout:roof', 'layout:place:s1', 'layout:place:s2',
+      'layout:power:stage:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test'];
+    // two satellites of one tier feeding 5 + 4 machines: n = 2, m = 9; each lays GT++'s Hi-Amp Transformer (RUK-2677)
+    const HIAMP = { transformer: 'LV Hi-Amp Transformer', hiAmp: true };
+    const steps = layoutSteps(base({ ...parts,
+      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 5, ...HIAMP }, { fromTier: 2, toTier: 1, count: 1, machines: 4, ...HIAMP }] }));
+    expect(steps.map((s) => s.id)).toEqual(['layout:site', 'layout:roof', 'layout:place:s1', 'layout:place:s2',
+      'layout:power:stage:1', 'layout:power:satellites:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test']);
+    const sat = steps.find((s) => s.id === 'layout:power:satellites:1')!;
+    expect(sat.kind).toBe('power');
+    expect(sat.pin).toBe(1);
+    expect(sat.text).toBe('Place 2× LV Hi-Amp Transformer out along the line where the view marks them, one beside each group of far LV machines '
+      + '(9 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it'
+      + '. Leave it in full mode; a screwdriver toggles half mode, which halves its amps');
+    // without GT++ a satellite lays the plain transformer, which has no half mode: the step names it and adds no mode sentence
+    const plain = layoutSteps(base({ ...parts, satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 3, transformer: 'Low Voltage Transformer', hiAmp: false }] }))
+      .find((s) => s.id === 'layout:power:satellites:1')!;
+    expect(plain.text).toBe('Place 1× Low Voltage Transformer out along the line where the view marks them, one beside each group of far LV machines '
+      + '(3 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it');
+    // no satellites, empty or absent: the step ids are the same as today
+    expect(layoutSteps(base({ ...parts, satellites: [] })).map((s) => s.id)).toEqual(today);
+    expect(layoutSteps(base(parts)).map((s) => s.id)).toEqual(today);
+  });
+
   it('puts the front of a machine with a fluid port toward the power head too, and a one-tier line has no tier rule', () => {
     const plan = makePlan([{ id: 'x', mteId: IDS.EXTRACTOR, count: 1, outputs: [['fluid:molten.iron', 144]] }]);
     const placement = placeUnits(unitsFromPlan(layoutPack(), plan).units, { headWidth: 1, portSpacing: 0 });
@@ -365,5 +399,20 @@ describe('layout steps', () => {
     const bare = layoutSteps(base({ ...parts, units: placement.units }));
     expect(assignBuildSteps(blocks, bare, parts, hookups).map((b) => b.buildStep)).toEqual(['layout:place:s1', undefined, 'layout:power:stage:1',
       'layout:power:wire:1', undefined, undefined, undefined, 'layout:logistics:fluid:fluid:oxygen', undefined, undefined, undefined, 'layout:power:wire:1']);
+  });
+
+  // RUK-2668: a satellite transformer shares the head bank's label, so its `satellite` index picks the satellite step
+  it('gives a satellite transformer the satellite step and a head-bank transformer its stage', () => {
+    const parts = {
+      stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 1, ampsOut: 2 }], transformerName: () => 'Low Voltage Transformer',
+      cables: [{ tier: 1, cable: '2x Tin Cable', cells: 3 }], fluids: [],
+      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 3, transformer: 'Low Voltage Transformer', hiAmp: false }],
+    };
+    const steps = layoutSteps(base({ ...parts }));
+    const blocks: LayoutBlock[] = [
+      { pos: [0, 70, 0], block: GT(IDS.TRANSFORMER_LV), role: 'transformer', label: 'Low Voltage Transformer', satellite: 0 },
+      { pos: [1, 70, 0], block: GT(IDS.TRANSFORMER_LV), role: 'transformer', label: 'Low Voltage Transformer' },
+    ];
+    expect(assignBuildSteps(blocks, steps, parts, []).map((b) => b.buildStep)).toEqual(['layout:power:satellites:1', 'layout:power:stage:1']);
   });
 });

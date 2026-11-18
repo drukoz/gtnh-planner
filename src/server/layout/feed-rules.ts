@@ -14,6 +14,7 @@ import { isFluidKey, parseItemKey, type StuffKey } from '../../shared/keys.ts';
 import { fmtInt, joinNames } from '../../shared/layout/format.ts';
 import { basicInputSlots, ignoredByBlocking, PROGRAMMED_CIRCUIT_ITEM } from '../../shared/gt/feeding.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../shared/layout/geometry.ts';
+import { FACES } from '../../shared/types/assets.ts';
 import type { InterfaceSpec, ItemFilterSpec, RoutedChipSpec } from '../../shared/types/feed.ts';
 import type { Layout, LayoutBlock } from '../../shared/types/layout.ts';
 import type { Machine, Pack } from '../../shared/types/pack.ts';
@@ -349,7 +350,12 @@ export function feedingWarnings(input: FeedRulesInput): PlanWarning[] {
     pipes: layout.mode !== 'routed' ? [] : live.filter((b) => b.role === 'chip_pipe' && b.feed?.chips !== undefined)
       .map((b) => ({ block: b, chips: b.feed!.chips!, targets: inventoriesBeside(b, byPos, linked(b)) })),
     interfaces: layout.mode !== 'ae2' ? [] : live.filter((b) => b.role === 'interface' && b.feed?.interface !== undefined)
-      .map((b) => ({ block: b, spec: b.feed!.interface!, targets: inventoriesBeside(b, byPos, () => true) })),
+      .map((b) => {
+        const spec = b.feed!.interface!;
+        const sides = spec.targets === undefined ? () => true
+          : (side: number): boolean => spec.targets!.includes(FACES[side]!);
+        return { block: b, spec, targets: inventoriesBeside(b, byPos, sides) };
+      }),
     inputChests: live.filter((b) => b.tail?.side === 'input'),
   };
   const warnings: PlanWarning[] = [];

@@ -320,6 +320,8 @@ describe('internal routing edge cases', () => {
     const noTransformer = layoutPack();
     noTransformer.machines.delete(machineIdOfLegacy(IDS.TRANSFORMER_LV));
     noTransformer.machineByMteId.delete(IDS.TRANSFORMER_LV);
+    noTransformer.machines.delete(machineIdOfLegacy(878));   // RUK-2677: and the LV Hi-Amp Transformer, so the export has no LV transformer at all
+    noTransformer.machineByMteId.delete(878);
     const a = route(noTransformer, twoStep(), 2).r;
     expect(a.warnings.map((w) => w.code)).toEqual(['cable_amps', 'no_transformer', 'cable_loss_high']);
     expect(a.warnings[1]).toEqual({ code: 'no_transformer', text: 'No LV transformer in this export' });
@@ -530,6 +532,12 @@ describe('machine_unpowered: the machines a tier\'s wiring cannot run', () => {
     expect(unpowered).toHaveLength(1);
     expect(unpowered[0]!.text.startsWith('The LV wiring cannot run ')).toBe(true);
     expect(unpowered[0]!.text).toContain('Basic Macerator');
+  }, 30_000);
+
+  it('runs every LV machine the 40-machine AE2 line lays with satellites', async () => {
+    // satellites step down beside the far machines (RUK-2679): the same line with them on warns of no starved machine
+    const { layout } = await lossLine(40, 'ae2', { satellites: true });
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(0);
   }, 30_000);
 
   it('raises no machine_unpowered warning when every machine runs', async () => {

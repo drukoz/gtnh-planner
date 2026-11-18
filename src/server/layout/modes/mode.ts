@@ -69,10 +69,12 @@ export interface ModeResult {
 // ---- Dispatch ----
 
 /**
- * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not.
+ * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed may not.
+ * AE2 may sit in every column (spacing 1) because M2-1 gives each ME Interface a Wrench target at its own machine,
+ * so an interface touching two machines no longer pushes into both.
  * EnderIO may share too: each face of a conduit is set on its own, so the N and S machines may share a spine cell.
  */
-export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2, enderio: 0 });
+export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 1, enderio: 0 });
 
 /**
  * The mode's line. Every mode but machine to machine (add-on 15's) also says how to run its hand-run machines and what

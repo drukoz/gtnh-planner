@@ -450,7 +450,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
       lockingCards += 1;
       blocks.push({
         pos, block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${unit.name})`, item: parts.me_interface.key,
-        feed: { interface: { patterns: [pattern], blocking: false, lock: 'until_result' } },
+        feed: { interface: { patterns: [pattern], blocking: false, lock: 'until_result', targets: [FACES[sideToward(pos, behind)]!] } },
       });
       continue;
     }
@@ -507,7 +507,7 @@ export function ae2Mode(input: ModeInput): ModeResult {
     }
     blocks.push({
       pos, block: { ...parts.me_interface.block }, role: 'interface', label: `${parts.me_interface.name} (${unit.name})`, item: parts.me_interface.key,
-      ...(kept.length === 0 ? {} : { feed: { interface: { patterns: kept.map(({ feed }) => structuredClone(feed.pattern)), blocking } } }),
+      ...(kept.length === 0 ? {} : { feed: { interface: { patterns: kept.map(({ feed }) => structuredClone(feed.pattern)), blocking, targets: [FACES[sideToward(pos, behind)]!] } } }),
     });
   }
   // each step whose machines move items and get no pattern, once, in unit order (a multiblock that takes no item has no

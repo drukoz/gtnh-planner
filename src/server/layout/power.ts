@@ -15,8 +15,12 @@ import { RAIN_OUTAGE_FRACTION, solarBoilerOf, turbineSteamForFull } from '../wor
 
 const TICKS_PER_SECOND = 20;
 /** A step-down transformer gives at most 4 A on its output faces and takes at most 2 A on its front (gt-mechanics §3.6). */
-const TRANSFORMER_AMPS_OUT = 4;
-const TRANSFORMER_AMPS_IN = 2;
+export const TRANSFORMER_AMPS_OUT = 4;
+export const TRANSFORMER_AMPS_IN = 2;
+
+/** A Hi-Amp Transformer (GT++ `MTETransformerHiAmp`) stepping down in full mode: 16 A out from up to 6 A in (gt-mechanics §3.6). */
+export const HIAMP_AMPS_OUT = 16;
+export const HIAMP_AMPS_IN = 6;
 
 /** A cable run that loses more than this share of its volts is flagged (`cable_loss_high`). */
 export const LOSS_WARN_FRACTION = 0.1;
@@ -28,7 +32,7 @@ function voltsOf(tier: number): number {
 }
 
 /** EU an emitter of tier `t` pays per amp on top of the volts it sends (gt-mechanics §3.2). */
-function emitterLoss(tier: number): number {
+export function emitterLoss(tier: number): number {
   return 2 ** Math.max(0, tier - 1);
 }
 

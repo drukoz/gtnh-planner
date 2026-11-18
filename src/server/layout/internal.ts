@@ -26,8 +26,8 @@ import type { Plan, PlanWarning, BomLine } from '../../shared/types/plan.ts';
 import type { TierLoss } from '../../shared/types/layout.ts';
 import { handRunSurroundings, placedStepIds, unitSteps, type HostCover, type LocalBlock, type Placement, type PlacedUnit } from './arrange.ts';
 import { growTree, linkBits, type PathBounds, type PathOptions, type TreeResult } from './path.ts';
-import { coverRateWarning, lowerLossCable, machineRef, pickCable, pickFluidPipe, pickPump, pickTransformer, type Parts } from './parts.ts';
-import { bankLossEUt, deliveredVolts, LOSS_WARN_FRACTION, tierGroups, transformerStages, type Stage, type Stages } from './power.ts';
+import { coverRateWarning, lowerLossCable, machineRef, pickCable, pickFluidPipe, pickPump, pickHiAmpTransformer, pickTransformer, type Parts } from './parts.ts';
+import { bankLossEUt, deliveredVolts, emitterLoss, HIAMP_AMPS_IN, HIAMP_AMPS_OUT, LOSS_WARN_FRACTION, tierGroups, transformerStages, TRANSFORMER_AMPS_IN, TRANSFORMER_AMPS_OUT, type Stage, type Stages } from './power.ts';
 
 // ---- Types ----
 
@@ -41,6 +41,8 @@ export interface InternalInput {
   groupTier: number /* plan.tier: the highest cover tier the group can build */;
   /** Volts the supply run's packets may already have lost before they reach it (the power hookup's allowance); default 0. */
   supplyLossVolts?: number;
+  /** Lay satellite step-down banks (RUK-2668); off unless true. */
+  satellites?: boolean;
 }
 
 /** What reaches one electric machine of the line (RUK-351): electric units in `placement.units` order. */
@@ -95,11 +97,37 @@ export interface InternalResult {
   keepAway: Vec3[];
   /** Every electric machine, in `placement.units` order; empty without `input.stages`. */
   machines: MachinePower[];
+  /** The satellite banks laid; [] when off, without stages, or when the line keeps its layout without them. */
+  satellites: SatelliteBank[];
+}
+
+/** A step-down bank laid out along the line beside one tier's far machines (RUK-2668, spike SP-C). Cells are local. */
+export interface SatelliteBank {
+  /** The tier its input cable carries (today always the supply tier). */
+  fromTier: number;
+  /** fromTier − 1: the tier of the machines it feeds. */
+  toTier: number;
+  /** The transformer block; its front (facing 1, up) is its input. */
+  cell: Vec3;
+  /** The fromTier cable cell directly above `cell`. */
+  input: Vec3;
+  /** The toTier cable cell beside `cell` that the group's tree grows from. */
+  output: Vec3;
+  /** The machines it feeds: indexes into `placement.units.filter((u) => u.electric)`, ascending. */
+  machines: number[];
+  /** Transformers the group needs; one is laid, more raise `transformer_bank`. */
+  count: number;
+  /** Amps the group draws at toTier. */
+  ampsOut: number;
+  /** Amps the bank takes at fromTier. */
+  ampsIn: number;
+  /** The transformer laid is GT++'s Hi-Amp Transformer (RUK-2677), not the plain one; `count` counts Hi-Amp Transformers. */
+  hiAmp: boolean;
 }
 
 // ---- Small helpers ----
 
-const DOWN = 0, WEST = 4;
+const DOWN = 0, UP = 1, WEST = 4;
 /** Sizing rounds at most: the amps only grow, so they settle; this only bounds a pathological pack. */
 const MAX_SIZING_ROUNDS = 8;
 
@@ -218,6 +246,18 @@ interface Bank { stage: number; fromTier: number; toTier: number; x: number }
 interface Port { pos: Vec3; unit: PlacedUnit }
 /** One feed tier's tree from its run to its machines' power ports, before its cable is chosen. */
 interface Tree { tier: number; cells: Vec3[]; links: Array<[Vec3, Vec3]>; ports: Port[]; unreached: ReadonlySet<string> }
+/**
+ * SP-C (spike, RUK-351): a step-down bank placed out along the line, fed by the stage's upper tier at its `input`
+ * cell (above `cell`) and feeding its group's machine ports from its `output` cell (beside `cell`, on side `outSide`).
+ * The transformer's front faces up into `input`; `count` is the transformers its group's amps need, of which the layout
+ * lays one and warns for the rest.
+ */
+interface Satellite {
+  tier: number; fromTier: number; cell: Vec3; input: Vec3; output: Vec3; outSide: number;
+  ports: Vec3[]; machineIdx: number[]; ampsOut: number; ampsIn: number; count: number;
+  /** True: the bank is one GT++ Hi-Amp Transformer (RUK-2677) and `count` counts Hi-Amp Transformers. */
+  hiAmp: boolean;
+}
 
 /** The cells the routing builds on, the blocks and links laid so far, and the warnings. */
 class Grid {
@@ -243,8 +283,9 @@ class Grid {
   }
 
   /** Lays a block of `m` (role `cable`, `transformer` or `pipe`) and takes its cell. */
-  lay(pos: Vec3, m: Machine, role: 'cable' | 'transformer' | 'pipe', label: string, facing?: number): void {
-    this.blocks.push({ pos: [...pos], block: machineRef(m), role, ...(facing === undefined ? {} : { facing }), label, item: m.itemKey });
+  lay(pos: Vec3, m: Machine, role: 'cable' | 'transformer' | 'pipe', label: string, facing?: number, satellite?: number): void {
+    this.blocks.push({ pos: [...pos], block: machineRef(m), role, ...(facing === undefined ? {} : { facing }), label, item: m.itemKey,
+      ...(satellite === undefined ? {} : { satellite }) });
     this.take(pos);
   }
 
@@ -320,7 +361,7 @@ function warnUnderVoltage(units: readonly PlacedUnit[], supply: number, warnings
  * whose tier has no run) get `route_failed`.
  */
 function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[] }, keepOff: ReadonlySet<string>,
-  grid: Grid, warnings: WarningList): Tree[] {
+  grid: Grid, warnings: WarningList, satellites: readonly Satellite[] = [], satStatus: { fail: boolean } = { fail: false }): Tree[] {
   const { placement } = input;
   const [w, h, l] = placement.size;
   const supply = stages.supplyTier;
@@ -345,7 +386,9 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
   }
   // a head in the middle of the line is crossed by the trees west of it (RUK-121); one at the west end keeps the old search
   const crossing = placement.headX > 0;
-  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - (crossing ? 1 : 2)), l - 1] };
+  // satellites feed their inputs off the supply tree, and a supply cable may not touch the tier trees below: with satellites
+  // the line's top opens one lane more so that feed has a plane of its own above the highest tier tree
+  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - (crossing ? 1 : 2)) + (satellites.length > 0 ? 2 : 0), l - 1] };
   const unwired = (unit: PlacedUnit) => {
     warnings.add({ code: 'route_failed', stepId: unit.stepId, text: `Could not wire ${unit.name} inside the line — connect it by hand` });
   };
@@ -380,6 +423,9 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
       const cell = u.tier < run.tier ? powerCell(u) : null;
       if (cell !== null) avoid.add(posKey(cell));
     }
+    // Fix 4: the satellite transformer is one tier's block; no other tier's cable may touch it (its own tree and its
+    // supply input are grown separately), so every satellite's cell joins the cells this tier's cables must not touch
+    for (const s of satellites) avoid.add(posKey(s.cell));
     const opts: PathOptions = {
       bounds,
       // a z leg running along the lanes (y >= 2) walls the lane above off from the taller trees to come, so price it
@@ -395,11 +441,49 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly 
         return !DIRS.some((_, side) => avoid.has(posKey(step(p, side))));
       },
     };
-    const tree = ports.length === 0 ? { cells: [], links: [], unreached: [] } : growTree(run.cells, ports.map((p) => p.pos), opts);
+    // SP-C: this tier's satellites feed their group's ports from their own output cells; the head tree feeds the rest
+    const sats = satellites.filter((s) => s.tier === run.tier);
+    const unitOf = new Map(ports.map((p) => [posKey(p.pos), p.unit]));
+    const grouped = new Set<string>();
+    for (const s of sats) for (const p of s.ports) grouped.add(posKey(p));
+    const near = ports.filter((p) => !grouped.has(posKey(p.pos)));
+    const tree: TreeResult = near.length === 0 ? { cells: [], links: [], unreached: [] }
+      : growTree(run.cells, near.map((p) => p.pos), opts);
     for (const c of tree.cells) grid.take(c);
     const unreached = new Set(tree.unreached.map(posKey));
-    for (const { pos, unit } of ports) if (unreached.has(posKey(pos))) unwired(unit);
-    trees.push({ tier: run.tier, cells: tree.cells, links: tree.links, ports, unreached });
+    for (const { pos, unit } of near) if (unreached.has(posKey(pos))) unwired(unit);
+    const allPorts: Port[] = [...near];
+    for (const s of sats) {
+      grid.take(s.output);
+      const gt = growTree([s.output], s.ports, opts);
+      tree.cells.push(s.output, ...gt.cells);
+      tree.links.push(...gt.links);
+      for (const c of gt.cells) grid.take(c);
+      const gu = new Set(gt.unreached.map(posKey));
+      if (gu.size > 0) satStatus.fail = true;
+      for (const pos of s.ports) {
+        const unit = unitOf.get(posKey(pos))!;
+        allPorts.push({ pos, unit });
+        if (gu.has(posKey(pos))) { unreached.add(posKey(pos)); unwired(unit); }
+      }
+    }
+    // SP-C: the satellites' supply inputs hang off this tier's tree (grown above, so the satellite cells are free for it)
+    if (run.tier !== sats[0]?.tier) {
+      for (const s of satellites.filter((x) => x.fromTier === run.tier)) {
+        const inKey = posKey(s.input);
+        // Fix 3: the input cell obeys every touch rule, waiving only "taken" (the satellite cell is laid for it and the
+        // transformer it faces is its one legitimate neighbour); Fix 2: keep it in the tree so its supply cable is laid
+        const passInput = (p: Vec3): boolean => posKey(p) !== inKey ? opts.passable(p)
+          : !keepOff.has(inKey) && !DIRS.some((_, side) => { const n = posKey(step(p, side)); return n !== posKey(s.cell) && avoid.has(n); });
+        const ext = growTree([...run.cells, ...tree.cells], [s.input], { ...opts, passable: passInput });
+        if (ext.unreached.length > 0) { satStatus.fail = true; continue; }
+        const cells = ext.cells;
+        tree.cells.push(...cells);
+        tree.links.push(...ext.links);
+        for (const c of cells) grid.take(c);
+      }
+    }
+    trees.push({ tier: run.tier, cells: tree.cells, links: tree.links, ports: allPorts, unreached });
   }
   // a feed tier without a laid run (no cable for it, or no run because its machines draw nothing) is never wired
   // from another tier's run
@@ -545,7 +629,7 @@ function lossWarning(loss: TierLoss, remedy: string): PlanWarning {
  * never lowering an amp or a count. A unit whose port is not wired counts the worst wired distance of its tier.
  */
 function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly Run[]; banks: readonly Bank[]; headX: number }, trees: readonly Tree[],
-  candidates: readonly Vec3[]): Sizing {
+  candidates: readonly Vec3[], satellites: readonly Satellite[] = []): Sizing {
   const { pack, placement } = input;
   const length = placement.size[2];
   const supply = stages.supplyTier;
@@ -555,6 +639,18 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
   const runOf = new Map(head.runs.map((r) => [r.tier, r]));
   const graphs = new Map(head.runs.map((r) => [r.tier, tierGraph(r, treeOf.get(r.tier))]));
   const runCell = (tier: number, z: number): Vec3 => [runX(supply, tier, head.headX), 0, z];
+  // RUK-2677: a satellite's machines count at their satellite's output cell, and the satellite itself draws from the
+  // tier it hangs on; the head's banks are sized for the machines its own trees feed
+  const satOf = new Map<number, Satellite>();
+  for (const s of satellites) for (const i of s.machineIdx) satOf.set(i, s);
+  const satSeen = new Map<Satellite, ReadonlyMap<string, number> | null>();
+  for (const s of satellites) {
+    const run = runOf.get(s.tier);
+    const tree = treeOf.get(s.tier);
+    satSeen.set(s, run === undefined || tree === undefined ? null : edgesFrom(tierGraph(run, tree), s.output));
+  }
+  const satBest: SatAmps[] = satellites.map((): SatAmps => ({ ampsOut: 0, ampsIn: 0, count: 1 }));
+  let satPrev: Array<SatAmps | null> = satellites.map((): null => null);
 
   let current: Stages = { ...stages, stages: stages.stages.map((s) => ({ ...s })) };
   const pick = (s: Stages): Sizing['cables'] => {
@@ -590,16 +686,23 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
       }
       return worst;
     };
-    const unitBlocks = units.map((u): number | undefined => {
+    const unitBlocks = units.map((u, i): number | undefined => {
+      const sat = satOf.get(i);
+      const port = u.ports.power;
+      if (sat !== undefined) {
+        if (port === null) return undefined;
+        const seen = satSeen.get(sat) ?? null;
+        const d = seen === null ? undefined : seen.get(posKey(port));
+        return d === undefined ? undefined : d + 1;
+      }
       const feed = Math.min(u.tier, supply);
       const tree = treeOf.get(feed);
-      const port = u.ports.power;
       return port === null || tree === undefined || tree.unreached.has(posKey(port)) ? undefined : blocksTo(feed, port);
     });
     const worstOf = (tier: number): number => {
       let worst = 0;
       units.forEach((u, i) => {
-        if (Math.min(u.tier, supply) === tier && unitBlocks[i] !== undefined) worst = Math.max(worst, unitBlocks[i]!);
+        if (Math.min(u.tier, supply) === tier && !satOf.has(i) && unitBlocks[i] !== undefined) worst = Math.max(worst, unitBlocks[i]!);
       });
       return worst > 0 ? worst : (runOf.get(tier)?.cells.length ?? length) + 1;
     };
@@ -613,22 +716,48 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
     const bankLoss = current.stages.map((s, i) => lossPerBlock(s.fromTier) * bankBlocks[i]!);
     const totalLoss = (u: PlacedUnit, i: number): number => unitLoss[i]! + (Math.min(u.tier, supply) === supply ? supplyLoss : 0);
     const unitAmps = units.map((u, i) => Math.ceil(u.euPerTick / deliveredVolts(voltsOf(Math.min(u.tier, supply)), totalLoss(u, i))));
-    const groups = tierGroups(units.map((u, i) => ({ tier: u.tier, euPerTick: u.euPerTick, lossVolts: totalLoss(u, i) })));
+    const groups = tierGroups(units.map((u, i) => ({ tier: u.tier, euPerTick: u.euPerTick, lossVolts: totalLoss(u, i) }))
+      .filter((_, i) => !satOf.has(i)));
     const lossAbove = (fromTier: number): number => {
       const i = current.stages.findIndex((s) => s.fromTier === fromTier);
       return (i === -1 ? 0 : bankLoss[i]!) + (fromTier === supply ? supplyLoss : 0);
     };
+    // each satellite: its group's amps at the volts its machines get, the amps its transformer takes above, and the
+    // transformers that needs (RUK-2677). A satellite whose group is not wired has no amps (the caller drops the pass).
+    const satAmps = satellites.map((s): SatAmps | null => {
+      const lossT = lossPerBlock(s.tier);
+      let ampsOut = 0;
+      for (const i of s.machineIdx) {
+        const blocks = unitBlocks[i];
+        if (blocks === undefined) return null;
+        ampsOut += Math.ceil(units[i]!.euPerTick / deliveredVolts(voltsOf(s.tier), lossT * blocks));
+      }
+      const ampsIn = Math.ceil((ampsOut * (voltsOf(s.tier) + emitterLoss(s.tier))) / deliveredVolts(voltsOf(s.fromTier), lossPerBlock(s.fromTier) * (blocksTo(s.fromTier, s.input) ?? 1) + (s.fromTier === supply ? supplyLoss : 0)));
+      return { ampsOut, ampsIn, count: Math.max(1, Math.ceil(ampsOut / (s.hiAmp ? HIAMP_AMPS_OUT : TRANSFORMER_AMPS_OUT)),
+        Math.ceil(ampsIn / (s.hiAmp ? HIAMP_AMPS_IN : TRANSFORMER_AMPS_IN))) };
+    });
+    satAmps.forEach((a, k) => {
+      if (a === null) return;
+      const best = satBest[k]!;
+      satBest[k] = { ampsOut: Math.max(best.ampsOut, a.ampsOut), ampsIn: Math.max(best.ampsIn, a.ampsIn), count: Math.max(best.count, a.count) };
+    });
+    const satIn = satBest.reduce((sum, a) => sum + a.ampsIn, 0);
+    const satLoss = satellites.reduce((sum, s, k) => sum + satBest[k]!.ampsOut * emitterLoss(s.tier), 0);
     const next = transformerStages(groups, supply, lossAbove);
     // never lower an amp or a count, so the rounds settle
     const merged: Stage[] = current.stages.map((s) => {
       const n = next.stages.find((x) => x.toTier === s.toTier) ?? s;
       return { ...s, count: Math.max(s.count, n.count), ampsIn: Math.max(s.ampsIn, n.ampsIn), ampsOut: Math.max(s.ampsOut, n.ampsOut) };
     });
-    const sized: Stages = { ...current, stages: merged, supplyAmps: Math.max(current.supplyAmps, next.supplyAmps), lossEUt: bankLossEUt(merged) };
+    const sized: Stages = { ...current, stages: merged, supplyAmps: Math.max(current.supplyAmps, next.supplyAmps + satIn),
+      lossEUt: bankLossEUt(merged) + satLoss };
     const nextCables = pick(sized);
     const same = sized.supplyAmps === current.supplyAmps && merged.every((s, i) => s.count === current.stages[i]!.count && s.ampsIn === current.stages[i]!.ampsIn
       && s.ampsOut === current.stages[i]!.ampsOut)
+      && satAmps.every((a, k) => (a === null ? satPrev[k] === null
+        : satPrev[k] !== null && satPrev[k]!.ampsOut === a.ampsOut && satPrev[k]!.ampsIn === a.ampsIn && satPrev[k]!.count === a.count))
       && [...nextCables].every(([tier, c]) => cables.get(tier)?.cable.mteId === c.cable.mteId);
+    satPrev = satAmps;
     result = {
       stages: sized, cables: nextCables, rows: merged.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0)), unitLoss, unitAmps, unitBlocks,
       bankLoss, bankBlocks, supply: null,
@@ -638,12 +767,17 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
     if (same) break;
   }
   const sizing = result!;
-  return { ...sizing, supply: supplyConsumers(pack, sizing, supply, units, runOf.get(supply)!, graphs.get(supply)!, treeOf.get(supply), candidates) };
+  satellites.forEach((s, k) => { const b = satBest[k]!; s.ampsOut = b.ampsOut; s.ampsIn = b.ampsIn; s.count = b.count; });
+  return { ...sizing,
+    supply: supplyConsumers(pack, sizing, supply, units, runOf.get(supply)!, graphs.get(supply)!, treeOf.get(supply), candidates, satellites) };
 }
 
-/** The supply tier's wired machines and the bank it feeds, with the cables from every landing candidate to each. */
+/** The amps one satellite's group and transformer settled at (RUK-2677). */
+type SatAmps = { ampsOut: number; ampsIn: number; count: number };
+
+/** The supply tier's wired machines, the bank it feeds and the satellites on it, with the cables from every landing candidate to each. */
 function supplyConsumers(pack: Pack, sizing: Sizing, supply: number, units: readonly PlacedUnit[], run: Run,
-  graph: ReadonlyMap<string, readonly string[]>, tree: Tree | undefined, candidates: readonly Vec3[]): SupplyLoss | null {
+  graph: ReadonlyMap<string, readonly string[]>, tree: Tree | undefined, candidates: readonly Vec3[], satellites: readonly Satellite[] = []): SupplyLoss | null {
   const chosen = sizing.cables.get(supply);
   if (chosen === undefined) return null;
   const fromCell = candidates.map((c) => edgesFrom(graph, c));
@@ -665,6 +799,11 @@ function supplyConsumers(pack: Pack, sizing: Sizing, supply: number, units: read
     const rows = Array.from({ length: placed }, (_, j) => blocksAt([run.x, 0, first + j])).filter((b): b is number[] => b !== undefined);
     if (rows.length > 0) consumers.push({ amps: sizing.stages.stages[top]!.ampsIn, blocks: candidates.map((_, i) => Math.max(...rows.map((b) => b[i]!))) });
   }
+  // RUK-2677: every satellite on the supply tier stands as its consumer, at its input cell
+  for (const s of satellites) {
+    if (s.fromTier !== supply) continue;
+    consumers.push({ amps: s.ampsIn, blocks: fromCell.map((seen) => { const d = seen.get(posKey(s.input)); return d === undefined ? 0 : d + 1; }) });
+  }
   return { tier: supply, cable: chosen.cable.name, lossPerBlock: chosen.cable.cable?.lossPerBlock ?? 0,
     remedy: lossRemedy(pack, supply, Math.ceil(chosen.amps / chosen.runs), chosen.cable, true), consumers };
 }
@@ -677,7 +816,7 @@ function supplyConsumers(pack: Pack, sizing: Sizing, supply: number, units: read
  * tier descending (the supply run's is `supplyRunLoss`'s, once the hookup's landing cell is known).
  */
 function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: readonly Bank[] }, trees: readonly Tree[], sizing: Sizing, grid: Grid,
-  headWarnings: WarningList, lossWarnings: WarningList): { cells: Map<number, number>; lossEUt: number; tiers: TierLoss[] } {
+  headWarnings: WarningList, lossWarnings: WarningList, satellites: readonly Satellite[] = []): { cells: Map<number, number>; lossEUt: number; tiers: TierLoss[] } {
   const { pack, placement } = input;
   const { stages, cables } = sizing;
   const supply = stages.supplyTier;
@@ -723,6 +862,18 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
     for (const { pos, unit } of tree.ports) if (!tree.unreached.has(posKey(pos))) grid.links.push([pos, step(pos, unit.facing)]);   // into the machine or energy hatch
     cells.set(run.tier, run.cells.length + tree.cells.length);
   }
+
+  // SP-C (spike, RUK-351): the satellite banks, one transformer laid facing up into its input cell and the rest left to the builder
+  satellites.forEach((s, i) => {
+    const transformer = s.hiAmp ? pickHiAmpTransformer(pack, s.tier) : pickTransformer(pack, s.tier);
+    if (transformer === null) {
+      headWarnings.add({ code: 'no_transformer', text: `No ${tierName(s.tier)} transformer in this export` });
+      return;
+    }
+    grid.lay(s.cell, transformer, 'transformer', transformer.name, UP, i);
+    grid.links.push([s.cell, s.input], [s.cell, s.output]);
+    if (s.count > 1) headWarnings.add({ code: 'transformer_bank', text: `Put ${s.count - 1} more ${transformer.name} beside the satellite` });
+  });
 
   // the loss on the lower runs: every machine's and bank's amps over its own path (gt-mechanics §3.3); the supply
   // run's depends on where the hookup lands, so `supplyRunLoss` prices it
@@ -943,14 +1094,212 @@ function unpoweredFeedTiers(machines: readonly MachinePower[]): number[] {
   return [...new Set(machines.filter(starvedByWiring).map((m) => m.feedTier))].sort((a, b) => b - a);
 }
 
+// ---- SP-C satellite banks (spike, RUK-351) ----
+
+type Head = { runs: readonly Run[]; banks: readonly Bank[]; headX: number };
+
+/**
+ * Satellites for a laid-out (phase-1) line, `grid` the grid it was routed on (its cells are the walls). For each stage
+ * fed off the supply run: a machine whose packets cross more than `reach` blocks of its tier's cable (the volts the
+ * most demanding of the tier's machines needs, over the cable's loss per block, less 2 blocks of slack) is far; far
+ * ports sorted by x, z group per side of the head, a new group when a port stands farther than `reach − 4` from its
+ * group's first or the group's estimate would outgrow one transformer (RUK-2677). Each group gets one satellite at its
+ * middle x: the first free cell (y from 1 up, z from the spine out) that is not a power port, has a free cell above
+ * for the MV input and a free side neighbour touching no supply cell for the LV output (west, east, north, south in
+ * that order). Takes the transformer and input cells on `grid`; a group with no room leaves the row today's layout
+ * (spec step 6).
+ */
+function planSatellites(input: InternalInput, stages: Stages, head: Head, trees: readonly Tree[], sizing: Sizing,
+  grid: Grid, powerPorts: ReadonlySet<string>): Satellite[] {
+  const { placement } = input;
+  const [w, h, l] = placement.size;
+  const supply = stages.supplyTier;
+  const units = placement.units.filter((u) => u.electric);
+  const treeOf = new Map(trees.map((t) => [t.tier, t]));
+  const inside = (p: Vec3): boolean => p[0] >= 0 && p[0] < w && p[1] >= 0 && p[1] <= h && p[2] >= 0 && p[2] < l;
+  const insideAir = (p: Vec3): boolean => p[0] >= 0 && p[0] < w && p[1] >= 1 && p[1] <= h + 1 && p[2] >= 0 && p[2] < l;
+  const satellites: Satellite[] = [];
+  for (const stage of stages.stages) {
+    const T = stage.toTier, F = stage.fromTier;
+    if (F !== supply) continue;                                            // spike: only banks fed straight off the supply run
+    const tree = treeOf.get(T);
+    const lossT = sizing.cables.get(T)?.cable.cable?.lossPerBlock ?? 0;
+    if (tree === undefined || lossT <= 0) continue;
+    const hiAmp = pickHiAmpTransformer(input.pack, T) !== null;                       // RUK-2677: the export has GT++'s Hi-Amp Transformer
+    const idx: number[] = [];
+    units.forEach((u, i) => { if (Math.min(u.tier, supply) === T) idx.push(i); });
+    if (idx.length === 0) continue;
+    const need = Math.max(...idx.map((i) => {
+      const u = units[i]!;
+      return Math.ceil(u.euPerTick / (u.multiblock ? 2 : Math.floor((2 * u.euPerTick) / voltsOf(u.tier)) + 1));
+    }));
+    const reach = Math.floor((voltsOf(T) - need) / lossT) - 2;
+    if (reach < 1) continue;
+    const far: Array<{ pos: Vec3; idx: number }> = [];
+    for (const i of idx) {
+      const port = units[i]!.ports.power;
+      const blocks = sizing.unitBlocks[i];
+      if (port === null || tree.unreached.has(posKey(port)) || blocks === undefined || blocks <= reach) continue;
+      far.push({ pos: port, idx: i });
+    }
+    if (far.length === 0) continue;
+    far.sort((a, b) => comparePos(a.pos, b.pos));
+    // RUK-2677: a group closes at one Hi-Amp Transformer's estimate — the amps its machines count at the reach limit,
+    // and the amps a bank taking them draws at `F` across the cable from the head out to its farthest port and the
+    // line's length, must stay within its 16 A out and 6 A in. Without GT++ the M2-3
+    // grouping stands: one standard transformer laid and the `transformer_bank` warning for the rest.
+    const est = (i: number): number => Math.ceil(units[i]!.euPerTick / deliveredVolts(voltsOf(T), lossT * reach));
+    const lossF = sizing.cables.get(F)?.cable.cable?.lossPerBlock ?? 0;
+    const oneTransformer = (g: typeof far): boolean => {
+      if (!hiAmp) return true;
+      const sum = g.reduce((s, f) => s + est(f.idx), 0);
+      const blocksF = Math.max(...g.map((f) => Math.abs(f.pos[0] - head.headX))) + l + 1;
+      return sum <= HIAMP_AMPS_OUT
+        && Math.ceil((sum * (voltsOf(T) + emitterLoss(T))) / deliveredVolts(voltsOf(F), lossF * blocksF + (input.supplyLossVolts ?? 0))) <= HIAMP_AMPS_IN;
+    };
+    const groups: Array<typeof far> = [];
+    for (const f of far) {
+      const g = groups[groups.length - 1];
+      if (g !== undefined && (g[0]!.pos[0] >= head.headX) === (f.pos[0] >= head.headX) && Math.abs(f.pos[0] - g[0]!.pos[0]) <= reach - 4
+        && oneTransformer([...g, f])) g.push(f);
+      else groups.push([f]);
+    }
+    const mvCells = new Set<string>();
+    for (const c of head.runs.find((r) => r.tier === F)?.cells ?? []) mvCells.add(posKey(c));
+    for (const c of treeOf.get(F)?.cells ?? []) mvCells.add(posKey(c));
+    // a satellite's five output faces carry `T` power: no machine below `T` may stand beside it (its cell, or the cell
+    // below the transformer), or the step-down tier would overvolt it (gt-mechanics §3.6, spec Fix 4)
+    const lowerMachines = new Set<string>();
+    for (const u of units) { const cell = u.tier < T ? powerCell(u) : null; if (cell !== null) lowerMachines.add(posKey(cell)); }
+    const satCells = new Set<string>();                                                 // RUK-2677: satellites keep their cells and stand apart
+    for (const g of groups) {
+      const xs = g.map((f) => f.pos[0]).sort((a, b) => a - b);
+      const xc = xs[Math.floor((xs.length - 1) / 2)]!;
+      let placed: Satellite | null = null;
+      search:
+      for (let dx = 0; dx < w; dx++) {
+        for (const x of dx === 0 ? [xc] : [xc - dx, xc + dx]) {
+          for (let y = 0; y <= h; y++) {
+            for (let dz = 0; dz < l; dz++) {
+              for (const z of dz === 0 ? [placement.spineZ] : [placement.spineZ - dz, placement.spineZ + dz]) {
+                const cell: Vec3 = [x, y, z];
+                if (!inside(cell) || grid.isTaken(cell) || powerPorts.has(posKey(cell))) continue;
+                // Fix 4: the transformer feeds tier `T` out its west/east/north/south/down faces, so no lower-tier
+                // machine may stand on any of those five neighbours (the cell above is the `F`-tier input, not an output)
+                if (lowerMachines.has(posKey(step(cell, DOWN)))
+                  || [WEST, WEST + 1, 2, 3].some((side) => lowerMachines.has(posKey(step(cell, side))))) continue;
+                const inp: Vec3 = [x, y + 1, z];
+                if (!insideAir(inp) || grid.isTaken(inp) || powerPorts.has(posKey(inp))) continue;
+                let outSide = -1;
+                let output: Vec3 | null = null;
+                for (const side of [WEST, WEST + 1, 2, 3]) {                                      // west, east, north, south
+                  const o = step(cell, side);
+                  if (!inside(o) || grid.isTaken(o) || powerPorts.has(posKey(o))) continue;
+                  if (DIRS.some((_, s2) => mvCells.has(posKey(step(o, s2))))) continue;
+                  outSide = side; output = o; break;
+                }
+                if (output === null) continue;
+                if ([cell, inp, output].some((c) => DIRS.some((_, sd) => satCells.has(posKey(step(c, sd)))))) continue;
+                grid.take(cell); grid.take(inp); grid.take(output);
+                for (const c of [cell, inp, output]) satCells.add(posKey(c));
+                placed = { tier: T, fromTier: F, cell, input: inp, output, outSide, ports: g.map((f) => [...f.pos] as Vec3),
+                  machineIdx: g.map((f) => f.idx), ampsOut: 0, ampsIn: 0, count: 1, hiAmp };
+                break search;
+              }
+            }
+          }
+        }
+      }
+      if (placed === null) return [];
+      satellites.push(placed);
+    }
+  }
+  return satellites;
+}
+
+/** One routing pass (SP-C, spike RUK-351): phase 1 wires the line as today (`satellites` empty), phase 2 wires it around the satellites. */
+interface PowerPhase {
+  grid: Grid; head: Head; trees: Tree[]; sizing: Sizing; landingCells: Vec3[]; machines: MachinePower[];
+  laid: { cells: Map<number, number>; lossEUt: number; tiers: TierLoss[] }; satFail: boolean;
+}
+
+function routePower(input: InternalInput, stages: Stages, fluidCells: ReadonlySet<string>, satellites: readonly Satellite[]): PowerPhase {
+  const { placement } = input;
+  const grid = new Grid(input);
+  for (const s of satellites) { grid.take(s.cell); grid.take(s.input); }
+  const head = planHead(input, stages, grid);
+  const routeWarnings = new WarningList();
+  warnUnderVoltage(placement.units.filter((u) => u.electric), stages.supplyTier, routeWarnings);
+  const satStatus = { fail: false };
+  const trees = growTrees(input, stages, head, fluidCells, grid, routeWarnings, satellites, satStatus);
+  // the cells a power hookup may land on: the supply tier's run (`planHead` lists it first) and tree, kept to the line's
+  // outer boundary; the run unfiltered when its tree shares no boundary cell, so a line always has at least one landing cell
+  const supplyTree = trees.find((t) => t.tier === stages.supplyTier);
+  const supplyCells = [...head.runs[0]!.cells, ...(supplyTree?.cells ?? [])];
+  const onBorder = supplyCells.filter((c) => onBoundary(c, placement.size));
+  const landingCells = uniquePositions(onBorder.length > 0 ? onBorder : head.runs[0]!.cells);
+  const sizing = sizePower(input, stages, head, trees, landingCells, satellites);
+  // RUK-2677: a satellite whose group's ports the wiring never reached drops this pass; the row keeps the phase-1 layout
+  if (satellites.length > 0 && satellites.some((s) => s.machineIdx.some((i) => sizing.unitBlocks[i] === undefined))) satStatus.fail = true;
+  // what reaches each electric machine (RUK-351): the feed tier's volts less its own loss inside the line, plus the
+  // hookup's allowance on the supply tier; a machine runs when those volts times the amps it may draw cover its EU/t
+  const supplyLoss = input.supplyLossVolts ?? 0;
+  const machines = placement.units.filter((u) => u.electric).map((u, i): MachinePower => {
+    const feedTier = Math.min(u.tier, stages.supplyTier);
+    const totalLoss = (sizing.unitLoss[i] ?? 0) + (feedTier === stages.supplyTier ? supplyLoss : 0);
+    const arrivingVolts = voltsOf(feedTier) - totalLoss;
+    const maxAmps = u.multiblock ? 2 : Math.floor((2 * u.euPerTick) / voltsOf(u.tier)) + 1;
+    return { stepId: u.stepId, name: u.name, tier: u.tier, feedTier, euPerTick: u.euPerTick, arrivingVolts, maxAmps,
+      wired: sizing.unitBlocks[i] !== undefined, powered: arrivingVolts > 0 && arrivingVolts * maxAmps >= u.euPerTick };
+  });
+  const headWarnings = new WarningList();
+  const lossWarnings = new WarningList();
+  const laid = layPower(input, head, trees, sizing, grid, headWarnings, lossWarnings, satellites);
+  // which machines the wiring leaves too few volts to run (RUK-2617): one warning per feed tier with such machines,
+  // highest tier first, after that tier's loss warnings
+  for (const tier of unpoweredFeedTiers(machines)) {
+    const ofTier = machines.filter((m) => m.feedTier === tier);
+    const silent = ofTier.filter(starvedByWiring);
+    const byName = new Map<string, number>();
+    for (const m of silent) byName.set(m.name, (byName.get(m.name) ?? 0) + 1);
+    const names = [...byName.entries()].sort((a, b) => compareText(a[0], b[0])).map(([name, count]) => `${count}× ${name}`).join(', ');
+    const worst = Math.min(...silent.map((m) => m.arrivingVolts));
+    lossWarnings.add({ code: 'machine_unpowered',
+      text: `The ${tierName(tier)} wiring cannot run ${fmtInt(silent.length)} of its ${fmtInt(ofTier.length)} machines: ${names}. The farthest gets `
+        + `${fmtRate(Math.max(0, worst))} of ${fmtInt(V[tier]!)} V, too few for its EU/t. Feed them from a nearer transformer or by hand.` });
+  }
+  // the order the plan's tests read: head, then routing, then loss
+  for (const w of [...headWarnings.list, ...routeWarnings.list, ...lossWarnings.list]) grid.warnings.add(w);
+  return { grid, head, trees, sizing, landingCells, machines, laid, satFail: satStatus.fail };
+}
+
+/**
+ * The stages phase 2 lays the head with (RUK-2677): the banks sized for the machines the head's own trees feed — a
+ * satellite group's machines are priced into the satellite, not into the head's bank. Kept to `stages`' shape (one
+ * entry per tier, same order, a tier the head no longer feeds counted as 0), so the runs and bank columns stand where
+ * phase 1 put them.
+ */
+function phase2Stages(electric: readonly PlacedUnit[], satellites: readonly Satellite[], stages: Stages): Stages {
+  const grouped = new Set(satellites.flatMap((s) => s.machineIdx));
+  const near = electric.filter((_, i) => !grouped.has(i));
+  const next = transformerStages(tierGroups(near.map((u) => ({ tier: u.tier, euPerTick: u.euPerTick, lossVolts: 0 }))), stages.supplyTier);
+  const padded: Stage[] = stages.stages.map((s) => {
+    const n = next.stages.find((x) => x.toTier === s.toTier);
+    return n === undefined ? { fromTier: s.fromTier, toTier: s.toTier, count: 0, ampsIn: 0, ampsOut: 0 } : { ...n };
+  });
+  return { supplyTier: stages.supplyTier, stages: padded, supplyAmps: next.supplyAmps, lossEUt: bankLossEUt(padded), under: stages.under };
+}
+
 /**
  * The power head, the cable trees per feed tier and the fluid-pipe trees, on cells inside the line that no unit, mode
  * block, reserved air cell or earlier route uses and that touch no unit run by hand (`handRunSurroundings`). Without
- * `stages` (no electric unit) nothing is wired.
+ * `stages` (no electric unit) nothing is wired. SP-C (spike, RUK-351): the line is routed once as today; satellites
+ * planned from that pass (spec steps 1–3) are laid in a second pass, and the pass with satellites is kept only when
+ * every satellite wires up and every group links — the row else keeps the phase-1 layout.
  */
 export function routeInternal(input: InternalInput): InternalResult {
   const { placement, stages } = input;
-  const grid = new Grid(input);
+  let grid = new Grid(input);
   const fluids = planFluids(input);
   const fluidCells = new Set(fluids.flatMap(fluidCellsOf).map(posKey));
   const powerPorts = new Set(placement.units.flatMap((u) => (u.electric && u.ports.power !== null ? [posKey(u.ports.power)] : [])));
@@ -963,60 +1312,38 @@ export function routeInternal(input: InternalInput): InternalResult {
   let tiers: TierLoss[] = [];
   let supply: SupplyLoss | null = null;
   let keepAway: Vec3[] = [];
+  let satelliteBanks: SatelliteBank[] = [];
   if (stages !== null) {
-    const head = planHead(input, stages, grid);
-    const routeWarnings = new WarningList();
-    warnUnderVoltage(placement.units.filter((u) => u.electric), stages.supplyTier, routeWarnings);
-    const trees = growTrees(input, stages, head, fluidCells, grid, routeWarnings);
-    // the cells a power hookup may land on: the supply tier's run (`planHead` lists it first) and tree, kept to the line's
-    // outer boundary; the run unfiltered when its tree shares no boundary cell, so a line always has at least one landing cell
-    const supplyTree = trees.find((t) => t.tier === stages.supplyTier);
-    const supplyCells = [...head.runs[0]!.cells, ...(supplyTree?.cells ?? [])];
-    const onBorder = supplyCells.filter((c) => onBoundary(c, placement.size));
-    const landingCells = uniquePositions(onBorder.length > 0 ? onBorder : head.runs[0]!.cells);
-    const sizing = sizePower(input, stages, head, trees, landingCells);
-    // what reaches each electric machine (RUK-351): the feed tier's volts less its own loss inside the line, plus the
-    // hookup's allowance on the supply tier; a machine runs when those volts times the amps it may draw cover its EU/t
-    const supplyLoss = input.supplyLossVolts ?? 0;
-    machines = placement.units.filter((u) => u.electric).map((u, i): MachinePower => {
-      const feedTier = Math.min(u.tier, stages.supplyTier);
-      const totalLoss = (sizing.unitLoss[i] ?? 0) + (feedTier === stages.supplyTier ? supplyLoss : 0);
-      const arrivingVolts = voltsOf(feedTier) - totalLoss;
-      const maxAmps = u.multiblock ? 2 : Math.floor((2 * u.euPerTick) / voltsOf(u.tier)) + 1;
-      return { stepId: u.stepId, name: u.name, tier: u.tier, feedTier, euPerTick: u.euPerTick, arrivingVolts, maxAmps,
-        wired: sizing.unitBlocks[i] !== undefined, powered: arrivingVolts > 0 && arrivingVolts * maxAmps >= u.euPerTick };
-    });
-    const headWarnings = new WarningList();
-    const lossWarnings = new WarningList();
-    const laid = layPower(input, head, trees, sizing, grid, headWarnings, lossWarnings);
-    // which machines the wiring leaves too few volts to run (RUK-2617): one warning per feed tier with such machines,
-    // highest tier first, after that tier's loss warnings
-    for (const tier of unpoweredFeedTiers(machines)) {
-      const ofTier = machines.filter((m) => m.feedTier === tier);
-      const silent = ofTier.filter(starvedByWiring);
-      const byName = new Map<string, number>();
-      for (const m of silent) byName.set(m.name, (byName.get(m.name) ?? 0) + 1);
-      const names = [...byName.entries()].sort((a, b) => compareText(a[0], b[0])).map(([name, count]) => `${count}× ${name}`).join(', ');
-      const worst = Math.min(...silent.map((m) => m.arrivingVolts));
-      lossWarnings.add({ code: 'machine_unpowered',
-        text: `The ${tierName(tier)} wiring cannot run ${fmtInt(silent.length)} of its ${fmtInt(ofTier.length)} machines: ${names}. The farthest gets `
-          + `${fmtRate(Math.max(0, worst))} of ${fmtInt(V[tier]!)} V, too few for its EU/t. Feed them from a nearer transformer or by hand.` });
+    let phase = routePower(input, stages, fluidCells, []);
+    const satellites = input.satellites === true && !phase.satFail
+      ? planSatellites(input, stages, phase.head, phase.trees, phase.sizing, phase.grid, powerPorts)
+      : [];
+    if (satellites.length > 0) {
+      const phase2 = routePower(input, phase2Stages(placement.units.filter((u) => u.electric), satellites, stages), fluidCells, satellites);
+      if (!phase2.satFail) {
+        phase = phase2;
+        satelliteBanks = satellites.map((s): SatelliteBank => ({
+          fromTier: s.fromTier, toTier: s.tier, cell: [...s.cell], input: [...s.input], output: [...s.output],
+          machines: [...s.machineIdx].sort((a, b) => a - b), count: s.count, ampsOut: s.ampsOut, ampsIn: s.ampsIn, hiAmp: s.hiAmp,
+        }));
+      }
     }
-    // the order the plan's tests read: head, then routing, then loss
-    for (const w of [...headWarnings.list, ...routeWarnings.list, ...lossWarnings.list]) grid.warnings.add(w);
-    sized = sizing.stages;
-    lossEUt = laid.lossEUt;
-    tiers = laid.tiers;
-    supply = sizing.supply;
-    supplyRun = landingCells;
-    for (const run of head.runs) {
-      const chosen = sizing.cables.get(run.tier);
-      if (chosen !== undefined) cables.push({ tier: run.tier, cable: chosen.cable, cells: laid.cells.get(run.tier) ?? run.cells.length, runs: chosen.runs });
+    grid = phase.grid;
+    sized = phase.sizing.stages;
+    lossEUt = phase.laid.lossEUt;
+    tiers = phase.laid.tiers;
+    supply = phase.sizing.supply;
+    supplyRun = phase.landingCells;
+    machines = phase.machines;
+    for (const run of phase.head.runs) {
+      const chosen = phase.sizing.cables.get(run.tier);
+      if (chosen !== undefined) cables.push({ tier: run.tier, cable: chosen.cable, cells: phase.laid.cells.get(run.tier) ?? run.cells.length, runs: chosen.runs });
     }
-    keepAway = keepAwayCells(input, stages.supplyTier, head, trees, grid);
+    keepAway = keepAwayCells(input, stages.supplyTier, phase.head, phase.trees, grid);
   }
   const pipeAt = new Map<string, StuffKey>();
   const fluidPipes = pipeFluids(input, fluids, fluidCells, powerPorts, pipeAt, grid);
   const covers = pumpCovers(input, fluids, pipeAt, grid);
-  return { blocks: grid.finish(), covers, supplyRun, cables, fluidPipes, warnings: grid.warnings.list, stages: sized, lossEUt, tiers, supply, keepAway, machines };
+  return { blocks: grid.finish(), covers, supplyRun, cables, fluidPipes, warnings: grid.warnings.list, stages: sized, lossEUt, tiers, supply, keepAway, machines,
+    satellites: satelliteBanks };
 }
