@@ -43,6 +43,7 @@ import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } fr
 import type { PathBounds } from './path.ts';
 import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
 import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
+import { unreachableWarning } from './reach.ts';
 import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine, type FinalMeasure } from './score.ts';
 import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
@@ -984,6 +985,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     const lineBox = worldBoxOf(line.size, frame);
     const lineSize = rotatedSize(line.size, frame.rotation);
     const lineBlocks = line.blocks.map((b) => worldBlock(b, frame));
+    const shut = unreachableWarning(line.blocks);
     const kept = areas.map((a) => reservedArea(a, (p) => worldPos(p, frame)));
 
     // stage 8
@@ -1015,7 +1017,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     // without a base the warning that says to pick one comes first (Review Focus 1)
     // the static feeding rules read the line as laid out (architecture §11 entry 51)
     const warnings = dedupeWarnings([
-      ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
+      ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(shut === null ? [] : [shut.warning]), ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
       ...(base === null ? [] : siteWarnings), ...supplyWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
       ...feedingWarnings({ pack, plan, layout: { mode, blocks } }),
     ]);
@@ -1029,6 +1031,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       const reuse = findReuse(pack, plan, scan, base, centre, mode);
       const placed = warnings.flatMap((w) => {
         if (SITE_PINNED.has(w.code)) return [{ code: w.code, text: w.text, pos: centre }];
+        if (w.code === 'machine_unreachable') return shut === null ? [] : [{ code: w.code, text: w.text, pos: worldPos(shut.first, frame) }];
         const at = w.code === 'no_path' ? hooked.noPathAt.get(w.text) ?? centre : null;
         return at === null ? [] : [{ code: w.code, text: w.text, pos: at }];
       });
