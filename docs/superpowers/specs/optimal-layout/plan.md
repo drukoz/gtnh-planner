@@ -202,8 +202,8 @@ The packed shape follows Assumption 7.
 | M3-18 RUK-3038 | the pack loader reads it into `pack.biomes` (`BiomeInfo { id, name, rain }`, `rain` = GT's gate) | — |
 | M3-19 RUK-3039 | `readAreaVoxels` returns `Voxels.biomes` per column (−1 for chunks not available); the layout fixtures take a `biome` | — |
 | M3-20 RUK-3041 | `dryBiomes`: no roof when every read column where the line can stand is dry, decided before `buildLocal`; `Layout.dryBiomes`. No benchmark row moves (its packs have no table) | M3-18, M3-19 |
-| next in M3 | show `dryBiomes` to the user; the user's next export carries the biome table; then M3-V | M3-20 |
-| M3-V | QA verification of the milestone branch | all above |
+| M3-21 RUK-3043 | the 3D tab says why a line has no rain roof: `rainText(layout)`, "No rain roof: it never rains in Desert and Hell, where this line stands." (`Layout.dryBiomes`). The biome table reaches real layouts with the user's next export | M3-20 |
+| M3-V RUK-3044 | QA verification of the milestone branch (`m3-verify.test.ts`): no row worse than M2 on `unpowered`, `routeFailed` or weak tiers; packed kinds only where their mode allows; tiers never touch, nothing starves, no front on its output side; reach matches `machine_unreachable`; no rain exposure under the roof, the roof step last, dry biomes in all 4 modes; packed steps never say "middle row"; the exporter's `BiomeLineTest`. CTO pre-check on `f4ae2fb0b`: all hold. Benchmark against M2 without the roof: direct 1 813 → 1 767 blocks, routed 2 293 → 2 143, AE2 2 187 → 1 962, EnderIO 1 760 → 1 712; with the roof 2 098 / 2 509 / 2 333 / 2 075; loss 10 724 → 10 176, 12 244 → 10 837, 12 244 → 10 407, 10 724 → 10 176 EU/t | all above (M3-21 checked by the CTO at approval) |
 
 Deferred from M3, with the reason: **L and U shapes** and a single row. Nothing has measured them, they need the
 power-head and hookup seams of the contract (R1: `planHead`, `bankRows`, `chooseSite`), and the two measured shapes
