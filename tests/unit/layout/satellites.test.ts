@@ -4,9 +4,12 @@
 // output beside it, and no lower-tier machine on any of its five output faces. Off, the line is exactly today's.
 import { describe, it, expect } from 'vitest';
 import { posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
-import { lossLine, tierContacts } from '../../helpers/power-loss.ts';
+import { machineIdOfLegacy } from '../../../src/shared/ids.ts';
+import { layoutLine } from '../../../src/server/layout/layout.ts';
+import { lossGround, lossLine, lossPlan, lossScan, tierContacts } from '../../helpers/power-loss.ts';
+import { layoutPack, makeProject } from '../../helpers/layout-fixtures.ts';
 import type { InternalResult, SatelliteBank } from '../../../src/server/layout/internal.ts';
-import type { LocalBlock } from '../../../src/server/layout/arrange.ts';
+import type { LocalBlock, Placement } from '../../../src/server/layout/arrange.ts';
 
 type Row = { n: number; mode: 'direct' | 'routed' | 'ae2' | 'enderio'; starved: number };
 // the starved benchmark rows (spike SP-C), the machines each starves with the switch off on this branch (measured: the
@@ -101,4 +104,56 @@ describe('satellite step-down banks', () => {
       expect(JSON.stringify(b.internal.satellites)).toBe(JSON.stringify(a.internal.satellites));
     }, 60_000);
   }
+});
+
+// RUK-2677: one transformer per satellite. Groups close at one GT++ Hi-Amp Transformer's estimate (16 A out, 6 A in),
+// the head bank is sized only for the machines its own trees feed, and the supply amps count every satellite's input.
+const HIAMP_MTE_ID = 878;   // the fixture's LV Hi-Amp Transformer
+
+describe('one transformer per satellite (RUK-2677)', () => {
+  for (const { n, mode } of ROWS) {
+    it(`the ${n}-machine ${mode} line gives every satellite one transformer, no bank warning, no starved machine`, async () => {
+      const { internal, layout } = await lossLine(n, mode, { satellites: true });
+      expect(internal.satellites.length, `${n} ${mode}: satellites laid`).toBeGreaterThan(0);
+      internal.satellites.forEach((s, i) => { expect(s.count, `bank ${i}: one transformer`).toBe(1); });
+      // the head bank's own `transformer_bank` (the M2-3 baseline, on these rows' OFF layout too) is allowed: the
+      // amendment's rule is that an ON row gains no code its OFF row lacks. A satellite's warning says "satellite".
+      expect(layout.warnings.some((w) => w.code === 'transformer_bank' && w.text.includes('satellite')), `${n} ${mode}: satellite bank warning`).toBe(false);
+      expect(starvedByWiring(internal), `${n} ${mode}: starved by wiring`).toBe(0);
+    }, 60_000);
+
+    it(`the ${n}-machine ${mode} line lays the Hi-Amp Transformer on every satellite`, async () => {
+      const { internal } = await lossLine(n, mode, { satellites: true });
+      const laid = internal.blocks.filter((b) => b.satellite !== undefined);
+      expect(laid.length, `${n} ${mode}: one block per satellite`).toBe(internal.satellites.length);
+      laid.forEach((b) => { expect(b.block.mteId, `satellite block at ${posKey(b.pos)}`).toBe(HIAMP_MTE_ID); });
+    }, 60_000);
+  }
+
+  it('the 40-machine ae2 line does not grow the head bank with satellites on', async () => {
+    const on = await lossLine(40, 'ae2', { satellites: true });
+    const off = await lossLine(40, 'ae2');
+    const lvOn = on.internal.stages!.stages.find((s) => s.toTier === 1)!;
+    const lvOff = off.internal.stages!.stages.find((s) => s.toTier === 1)!;
+    expect(lvOn.count).toBeLessThanOrEqual(lvOff.count);
+  }, 60_000);
+
+  it('the 40-machine ae2 supply amps count the head bank and every satellite', async () => {
+    const { internal } = await lossLine(40, 'ae2', { satellites: true });
+    const lv = internal.stages!.stages.find((s) => s.toTier === 1)!;
+    const satIn = internal.satellites.reduce((sum, s) => sum + s.ampsIn, 0);
+    expect(internal.stages!.supplyAmps).toBeGreaterThanOrEqual(lv.ampsIn + satIn);
+  }, 60_000);
+
+  it('the 40-machine direct line still lays satellites with the Hi-Amp Transformer deleted', async () => {
+    const pack = layoutPack();
+    pack.machines.delete(machineIdOfLegacy(HIAMP_MTE_ID));
+    pack.machineByMteId.delete(HIAMP_MTE_ID);
+    const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
+    await layoutLine(pack, lossPlan(40), lossScan('direct'), makeProject({ logistics: 'direct' }),
+      { ...lossGround(), localLine: (line) => { seen.push(line); }, satellites: true });
+    const internal = seen[0]!.internal;
+    expect(internal.satellites.length).toBeGreaterThan(0);
+    expect(starvedByWiring(internal)).toBe(0);   // `transformer_bank` is allowed here: the groups are M2-3's
+  }, 60_000);
 });

@@ -320,6 +320,8 @@ describe('internal routing edge cases', () => {
     const noTransformer = layoutPack();
     noTransformer.machines.delete(machineIdOfLegacy(IDS.TRANSFORMER_LV));
     noTransformer.machineByMteId.delete(IDS.TRANSFORMER_LV);
+    noTransformer.machines.delete(machineIdOfLegacy(878));   // RUK-2677: and the LV Hi-Amp Transformer, so the export has no LV transformer at all
+    noTransformer.machineByMteId.delete(878);
     const a = route(noTransformer, twoStep(), 2).r;
     expect(a.warnings.map((w) => w.code)).toEqual(['cable_amps', 'no_transformer', 'cable_loss_high']);
     expect(a.warnings[1]).toEqual({ code: 'no_transformer', text: 'No LV transformer in this export' });

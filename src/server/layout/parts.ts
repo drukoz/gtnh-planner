@@ -238,6 +238,14 @@ export function pickTransformer(pack: Pack, lowerTier: number): Machine | null {
   return transformers.sort((a, b) => rank(a) - rank(b) || compareMachineId(a.id, b.id))[0] ?? null;
 }
 
+/** The export's Hi-Amp Transformer between `lowerTier` and the tier above, or null when it has none (no GT++). */
+export function pickHiAmpTransformer(pack: Pack, lowerTier: number): Machine | null {
+  const found = allMachineIds(pack).map((id) => machineOf(pack, id))
+    .filter((m): m is Machine => m !== undefined && m.kind === 'transformer' && m.tier === lowerTier
+      && simpleClassName(m.cls) === 'MTETransformerHiAmp');
+  return found.sort((a, b) => compareMachineId(a.id, b.id))[0] ?? null;
+}
+
 // ---- Hatches and buses ----
 
 /** GT's hatch classes the layout places: the planner's six, the muffler, and a steam multiblock's buses and steam hatch (GT++). */
