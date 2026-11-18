@@ -186,7 +186,7 @@ export function directMode(input: ModeInput): ModeResult {
     ...(outputs.length === 0 ? [] : [outputs.length === 1 ? 'an output chest' : `${outputs.length} output chests`])];
   const pipeCells = blocks.filter((b) => b.role === 'pipe').length;
   const drafts: StepDraft[] = [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ${pipeCells}× ${pipe.name} along the middle row so it touches every machine's output side or bus`
+    text: `Lay ${pipeCells}× ${pipe.name} ${placement.packed === true ? 'on the lanes above the machines' : 'along the middle row'} so it touches every machine's output side or bus`
       + `${risers.links.length > 0 ? RISER_WORDS : ''}${chests.length > 0 ? `, with ${joinNames(chests)} at the end` : ''}` },
   ...(hooked?.drafts ?? [])];
 

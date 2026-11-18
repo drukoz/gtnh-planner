@@ -39,7 +39,7 @@ const CHECK_INPUT_SIDE = '; it takes its items through that side, which needs In
 const PLACE_MACERATORS = `Place 2× Basic Macerator ${PLACE_FACES}${CHECK_INPUT_SIDE}`;
 /** A machine setting's words: the state to leave it in, where a Screwdriver switches it, and what else that click does. */
 const FROM_OUTPUT_SIDE = (state: 'allowed' | 'forbidden') => `Input from Output Side ${state}: a newly crafted machine has it on; a Screwdriver `
-  + 'right-click on its middle-row side switches it and the chat names the new state, so leave it where the chat says '
+  + 'right-click on its output side switches it and the chat names the new state, so leave it where the chat says '
   + `"Input from Output Side ${state}" (a sneak-click switches the Input Filter instead, and the click also works a cover on that side)`;
 
 describe('pins', () => {
@@ -344,8 +344,8 @@ describe('layout steps', () => {
     expect(coverText({ face: 'north', item: CONV, settings: { mode: 'import', rate: 1000, unit: 'items/s' } }, nameOf))
       .toBe('Conveyor Module (LV) on the north face: Import, 1,000 items/s');
     // GT 5.09.54: no GUI button, only the Screwdriver, which switches it whatever its state, so the words name the state
-    // to leave it in, never a click to make; and the side to click is the middle-row side, as the front faces the machine
-    // beside it (the review of the EnderIO In / Out fix)
+    // to leave it in, never a click to make; and the side to click is the output side, which the line's logistics meets
+    // (the review of the EnderIO In / Out fix)
     expect(configTexts({ inputFromOutputSide: false })).toEqual([FROM_OUTPUT_SIDE('forbidden')]);
     expect(FROM_OUTPUT_SIDE('allowed')).not.toMatch(/front/);
     expect(configTexts({ patterns: 1, pattern: '1× A → 1× B', blockingMode: false, chips: 'Item Extractor Chip' }))

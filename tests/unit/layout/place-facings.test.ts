@@ -112,6 +112,20 @@ describe('a place step names each machine\'s own faces', () => {
     expect(text).toContain("so while the middle row is still empty right-click such a machine's middle-row side");
   }, 60000);
 
+  it('words the logistics line of a packed line by its lanes', async () => {
+    for (const mode of ['direct', 'enderio'] as const) {
+      const { layout } = await lossLine(10, mode);
+      expect(chosen(layout)).toBe(CandidateKind.Packed);
+      expect(layout.buildSteps.find((s) => s.id === 'layout:logistics:line')!.text).toContain('on the lanes above the machines');
+      for (const s of layout.buildSteps) {
+        expect(s.text).not.toContain('middle row');
+        expect(s.text).not.toContain('middle-row');
+      }
+    }
+    const { layout } = await lossLine(10, 'direct', { packing: false });
+    expect(layout.buildSteps.find((s) => s.id === 'layout:logistics:line')!.text).toContain('along the middle row');
+  }, 60000);
+
   it('a row whose machines all face one way keeps today\'s single sentence and its middle-row check', async () => {
     const { layout } = await lossLine(10, 'direct', { packing: false });
     for (const id of machineSteps(layout)) {

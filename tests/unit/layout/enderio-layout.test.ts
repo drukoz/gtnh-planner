@@ -20,7 +20,7 @@ const placed = (rotation: 0 | 90 | 180 | 270) => makeProject({ logistics: 'ender
  * side: the front faces the machine beside it) switches it and says the new state in chat (a sneaking one switches the
  * Input Filter), and a click on a side also works that side's cover.
  */
-const FROM_OUTPUT_SIDE = 'Input from Output Side allowed: a newly crafted machine has it on; a Screwdriver right-click on its middle-row side '
+const FROM_OUTPUT_SIDE = 'Input from Output Side allowed: a newly crafted machine has it on; a Screwdriver right-click on its output side '
   + 'switches it and the chat names the new state, so leave it where the chat says "Input from Output Side allowed" '
   + '(a sneak-click switches the Input Filter instead, and the click also works a cover on that side)';
 /** What an insert side into a singleblock's output side reminds the builder of, in its conduit step. */

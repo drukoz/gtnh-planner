@@ -626,7 +626,7 @@ function itemLine(input: ModeInput): ItemLine {
   const chestWords = [...(inputChest === null ? [] : ['an input chest']),
     ...(outputSlices.length === 0 ? [] : [outputSlices.length === 1 ? 'an output chest' : `${fmtInt(outputSlices.length)} output chests`])];
   const lineDraft: StepDraft = { id: 'layout:logistics:line', kind: 'logistics', pin: 'site',
-    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} along the middle row so it touches every machine's output side or bus${lineExceptions(placement)}`
+    text: `Lay ${fmtInt(cells.length)}× ${CONDUIT_NAMES.item} ${placement.packed === true ? 'on the lanes above the machines' : 'along the middle row'} so it touches every machine's output side or bus${lineExceptions(placement)}`
       + `${risers.links.length > 0 ? RISER_WORDS : ''}${chestWords.length > 0 ? `, with ${joinNames(chestWords)} at the end` : ''}` };
   const stockDraft: StepDraft | null = hooked !== null ? hooked.draft : inputChest === null ? null
     : { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: `Put the raw inputs in the input chest: ${nameList(plan, pack, inputKeys)}` };
