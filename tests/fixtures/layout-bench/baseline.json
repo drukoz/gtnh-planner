@@ -30,7 +30,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-10",
@@ -63,40 +64,42 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-10",
     "mode": "ae2",
     "size": [
-      3,
-      3,
-      9
+      5,
+      2,
+      10
     ],
-    "total": 44,
-    "cable": 10,
-    "pipe": 6,
+    "total": 53,
+    "cable": 25,
+    "pipe": 1,
     "iface": 10,
     "chip": 0,
-    "transformer": 2,
+    "transformer": 5,
     "chest": 0,
-    "hookup": 18,
-    "lossEUt": 164,
+    "hookup": 17,
+    "lossEUt": 262,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 2,
-        "worstVolts": 126
+        "worstBlocks": 3,
+        "worstVolts": 125
       },
       {
         "tier": 1,
-        "worstBlocks": 6,
-        "worstVolts": 26
+        "worstBlocks": 11,
+        "worstVolts": 21
       }
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-10",
@@ -129,7 +132,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-20",
@@ -162,7 +166,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-20",
@@ -195,25 +200,26 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-20",
     "mode": "ae2",
     "size": [
-      3,
-      3,
-      12
+      5,
+      2,
+      15
     ],
-    "total": 54,
-    "cable": 13,
-    "pipe": 5,
+    "total": 73,
+    "cable": 40,
+    "pipe": 1,
     "iface": 20,
     "chip": 0,
     "transformer": 3,
     "chest": 0,
-    "hookup": 16,
-    "lossEUt": 394,
+    "hookup": 12,
+    "lossEUt": 536,
     "tiers": [
       {
         "tier": 2,
@@ -222,13 +228,14 @@
       },
       {
         "tier": 1,
-        "worstBlocks": 9,
-        "worstVolts": 23
+        "worstBlocks": 15,
+        "worstVolts": 17
       }
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-20",
@@ -261,7 +268,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-40",
@@ -294,7 +302,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-40",
@@ -327,7 +336,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-40",
@@ -360,7 +370,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "loss-40",
@@ -393,7 +404,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-00",
@@ -431,7 +443,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-00",
@@ -469,7 +482,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-00",
@@ -507,7 +521,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-00",
@@ -545,7 +560,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-01",
@@ -573,7 +589,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-01",
@@ -601,7 +618,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-01",
@@ -629,7 +647,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-01",
@@ -657,7 +676,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-02",
@@ -695,7 +715,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-02",
@@ -733,7 +754,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-02",
@@ -771,7 +793,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 2
   },
   {
     "name": "mixed-02",
@@ -809,7 +832,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-03",
@@ -842,7 +866,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-03",
@@ -875,7 +900,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-03",
@@ -908,7 +934,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 2
   },
   {
     "name": "mixed-03",
@@ -941,7 +968,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-04",
@@ -974,7 +1002,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-04",
@@ -1007,7 +1036,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-04",
@@ -1040,7 +1070,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-04",
@@ -1073,7 +1104,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-05",
@@ -1101,7 +1133,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "mixed-05",
@@ -1129,35 +1162,37 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "mixed-05",
     "mode": "ae2",
     "size": [
-      6,
-      3,
-      3
+      7,
+      2,
+      5
     ],
-    "total": 38,
-    "cable": 6,
-    "pipe": 5,
+    "total": 43,
+    "cable": 17,
+    "pipe": 1,
     "iface": 8,
     "chip": 0,
     "transformer": 0,
     "chest": 0,
-    "hookup": 19,
-    "lossEUt": 585,
+    "hookup": 17,
+    "lossEUt": 628,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 4,
-        "worstVolts": 124
+        "worstBlocks": 10,
+        "worstVolts": 118
       }
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "mixed-05",
@@ -1185,7 +1220,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "mixed-06",
@@ -1223,7 +1259,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-06",
@@ -1261,7 +1298,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-06",
@@ -1299,7 +1337,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-06",
@@ -1337,7 +1376,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-07",
@@ -1370,7 +1410,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-07",
@@ -1403,7 +1444,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-07",
@@ -1436,7 +1478,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-07",
@@ -1469,7 +1512,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-08",
@@ -1507,7 +1551,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-08",
@@ -1545,7 +1590,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-08",
@@ -1583,7 +1629,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-08",
@@ -1621,7 +1668,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-09",
@@ -1649,7 +1697,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-09",
@@ -1677,7 +1726,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-09",
@@ -1705,7 +1755,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-09",
@@ -1733,7 +1784,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-10",
@@ -1766,7 +1818,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   },
   {
     "name": "mixed-10",
@@ -1799,7 +1852,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   },
   {
     "name": "mixed-10",
@@ -1832,7 +1886,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   },
   {
     "name": "mixed-10",
@@ -1865,7 +1920,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   },
   {
     "name": "mixed-11",
@@ -1903,7 +1959,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-11",
@@ -1941,7 +1998,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-11",
@@ -1979,7 +2037,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-11",
@@ -2017,7 +2076,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-12",
@@ -2055,7 +2115,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-12",
@@ -2093,7 +2154,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-12",
@@ -2131,7 +2193,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-12",
@@ -2169,7 +2232,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-13",
@@ -2202,7 +2266,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-13",
@@ -2235,7 +2300,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-13",
@@ -2268,7 +2334,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-13",
@@ -2301,7 +2368,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-14",
@@ -2329,7 +2397,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-14",
@@ -2357,7 +2426,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-14",
@@ -2385,7 +2455,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-14",
@@ -2413,7 +2484,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-15",
@@ -2446,7 +2518,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-15",
@@ -2479,7 +2552,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-15",
@@ -2512,7 +2586,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-15",
@@ -2545,7 +2620,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "mixed-16",
@@ -2578,7 +2654,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-16",
@@ -2611,7 +2688,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-16",
@@ -2644,7 +2722,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-16",
@@ -2677,7 +2756,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-17",
@@ -2710,7 +2790,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 1
+    "unpowered": 1,
+    "unreachable": 0
   },
   {
     "name": "mixed-17",
@@ -2743,7 +2824,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 1
+    "unpowered": 1,
+    "unreachable": 0
   },
   {
     "name": "mixed-17",
@@ -2776,7 +2858,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 1
+    "unpowered": 1,
+    "unreachable": 0
   },
   {
     "name": "mixed-17",
@@ -2809,7 +2892,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 1
+    "unpowered": 1,
+    "unreachable": 0
   },
   {
     "name": "mixed-18",
@@ -2837,7 +2921,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-18",
@@ -2865,7 +2950,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-18",
@@ -2893,7 +2979,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 2
   },
   {
     "name": "mixed-18",
@@ -2921,7 +3008,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "mixed-19",
@@ -2954,7 +3042,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-19",
@@ -2987,7 +3076,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-19",
@@ -3020,7 +3110,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "mixed-19",
@@ -3053,7 +3144,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "fluid-00",
@@ -3086,7 +3178,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "fluid-00",
@@ -3119,7 +3212,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "fluid-00",
@@ -3152,7 +3246,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "fluid-00",
@@ -3185,7 +3280,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 2
+    "unpowered": 2,
+    "unreachable": 0
   },
   {
     "name": "fluid-01",
@@ -3223,7 +3319,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-01",
@@ -3261,7 +3358,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-01",
@@ -3299,7 +3397,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-01",
@@ -3337,7 +3436,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-02",
@@ -3370,7 +3470,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 1,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "fluid-02",
@@ -3403,7 +3504,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 1,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "fluid-02",
@@ -3436,7 +3538,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 1,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "fluid-02",
@@ -3469,7 +3572,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 4
+    "unpowered": 4,
+    "unreachable": 0
   },
   {
     "name": "fluid-03",
@@ -3507,7 +3611,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-03",
@@ -3545,7 +3650,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-03",
@@ -3583,7 +3689,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-03",
@@ -3621,7 +3728,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-04",
@@ -3659,7 +3767,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-04",
@@ -3697,7 +3806,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-04",
@@ -3735,7 +3845,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-04",
@@ -3773,7 +3884,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-05",
@@ -3806,7 +3918,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "fluid-05",
@@ -3839,7 +3952,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "fluid-05",
@@ -3872,7 +3986,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "fluid-05",
@@ -3905,7 +4020,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 3
+    "unpowered": 3,
+    "unreachable": 0
   },
   {
     "name": "fluid-06",
@@ -3938,7 +4054,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-06",
@@ -3971,7 +4088,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-06",
@@ -4004,7 +4122,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-06",
@@ -4037,7 +4156,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-07",
@@ -4070,7 +4190,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 1,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-07",
@@ -4103,7 +4224,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 1,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-07",
@@ -4136,7 +4258,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 1,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-07",
@@ -4169,7 +4292,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-08",
@@ -4202,7 +4326,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-08",
@@ -4235,7 +4360,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-08",
@@ -4268,7 +4394,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-08",
@@ -4301,7 +4428,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 0
+    "unpowered": 0,
+    "unreachable": 0
   },
   {
     "name": "fluid-09",
@@ -4329,7 +4457,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   },
   {
     "name": "fluid-09",
@@ -4357,7 +4486,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   },
   {
     "name": "fluid-09",
@@ -4385,7 +4515,8 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   },
   {
     "name": "fluid-09",
@@ -4413,6 +4544,7 @@
     ],
     "weakTiers": [],
     "routeFailed": 0,
-    "unpowered": 5
+    "unpowered": 5,
+    "unreachable": 0
   }
 ]

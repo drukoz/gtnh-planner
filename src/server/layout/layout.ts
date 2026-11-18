@@ -1074,7 +1074,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   let kept = chosen, keptLine = chosenLine;
   if (search.chosen !== search.baseline) {
     const baseline = await finishLine(baselineLine, { ...search, chosen: search.baseline, rejected: search.chosen });
-    if (!finalReplaces(finalMeasure(chosen), finalMeasure(baseline))) { kept = baseline; keptLine = baselineLine; }
+    if (!finalReplaces(finalMeasure(chosen, chosenLine.score.unreachable), finalMeasure(baseline, baselineLine.score.unreachable))) { kept = baseline; keptLine = baselineLine; }
   }
   deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal });
   return kept;

@@ -4,6 +4,9 @@
 // A line may get longer, lossier or weaker-tiered only to power machines it could not run (RUK-2571 plan, Assumption 4):
 // a row offends when its `routeFailed` or its `unpowered` count rises, and its `total`, `lossEUt` and `weakTiers` only
 // while its `unpowered` count stays at the baseline's (RUK-2617).
+// A row may also get longer, lossier or weaker-tiered to reach a machine the baseline shut in (RUK-2877, plan
+// Assumption 4): a row offends when its `unreachable` count rises, and its length, loss and tiers only while it
+// reaches exactly as many machines as the baseline did.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -27,11 +30,13 @@ describe('layout benchmark', () => {
     expect(lengthOf(layout).weakTiers).toEqual([1]);
   }, 30_000);
 
-  it('lays the 40-machine AE2 line packed with no weak tier and no starved machine', async () => {
-    // the packed candidate wins the 40-machine AE2 line (spike SP-G): its short cable runs power every machine
+  it('keeps the 40-machine AE2 line reachable, at one weak tier and one starved machine', async () => {
+    // the packed line powers all 40 machines but shuts 12 of its middle Ts in (spike SP-I, RUK-3016, looks for a
+    // column that does both); the search keeps the stacked line, which reaches every machine and leaves 1 starved.
     const { layout } = await lossLine(40, 'ae2');
-    expect(lengthOf(layout).weakTiers).toEqual([]);
-    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toEqual([]);
+    expect(lengthOf(layout).unreachable).toBe(0);
+    expect(lengthOf(layout).weakTiers).toEqual([1]);
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(1);
   }, 30_000);
 
   it("runs the 40-machine AE2 line's LV wiring with no weak tier once satellites are laid", async () => {
@@ -58,8 +63,10 @@ describe('layout benchmark', () => {
       }
       if (row.routeFailed > base.routeFailed) offenses.push(`${base.name} ${base.mode}: routeFailed ${row.routeFailed} > ${base.routeFailed}`);
       if (row.unpowered > base.unpowered) offenses.push(`${base.name} ${base.mode}: unpowered ${row.unpowered} > ${base.unpowered}`);
-      // a line may only get longer, lossier or weaker while it powers no more machines than the baseline did
-      if (row.unpowered === base.unpowered) {
+      const baseReach = base.unreachable ?? 0;
+      if (row.unreachable > baseReach) offenses.push(`${base.name} ${base.mode}: unreachable ${row.unreachable} > ${baseReach}`);
+      // a line may only get longer, lossier or weaker while it powers and reaches no more machines than the baseline did
+      if (row.unpowered === base.unpowered && row.unreachable === baseReach) {
         if (row.total > base.total) offenses.push(`${base.name} ${base.mode}: total ${row.total} > ${base.total}`);
         if (row.lossEUt > base.lossEUt + 0.01) offenses.push(`${base.name} ${base.mode}: lossEUt ${row.lossEUt} > ${base.lossEUt}`);
         if (row.weakTiers.length > base.weakTiers.length) offenses.push(`${base.name} ${base.mode}: weakTiers ${row.weakTiers.length} > ${base.weakTiers.length}`);

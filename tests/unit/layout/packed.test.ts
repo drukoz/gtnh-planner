@@ -50,17 +50,27 @@ describe('the packed line as a search candidate', () => {
     expect(lengthOf(layout).total).toBe(26);
   }, 60_000);
 
-  it('lays the 40-machine AE2 line packed, each ME Interface wrenched down into its own machine', async () => {
-    const { layout } = await lossLine(40, 'ae2');
+  it('lays a 6-machine AE2 line packed, each ME Interface wrenched down into its own machine', async () => {
+    const { layout } = await lossLine(6, 'ae2');
     expect(layout.search!.candidates[layout.search!.chosen]!.kind).toBe(CandidateKind.Packed);
     const own = layout.blocks.filter((b) => b.hookup === undefined);
     const at = new Map(own.map((b) => [b.pos.join(','), b]));
     const interfaces = own.filter((b) => b.role === 'interface');
-    expect(interfaces).toHaveLength(40);
+    expect(interfaces).toHaveLength(6);
     for (const iface of interfaces) {
       expect(iface.feed?.interface?.targets, `interface at ${iface.pos.join(' ')} wrenched down`).toEqual(['down']);
       const below = at.get(`${iface.pos[0]},${iface.pos[1] - 1},${iface.pos[2]}`);
       expect(below?.role, `the block below the interface at ${iface.pos.join(' ')}`).toBe('machine');
     }
+  }, 60_000);
+
+  it('keeps the 40-machine AE2 line reachable: its packed candidate shuts 12 machines in', async () => {
+    // the packed line powers all 40 but shuts 12 of its middle Ts in (spike SP-I, RUK-3016, looks for a column that
+    // does both); the search keeps the stacked line, which reaches every machine.
+    const { layout } = await lossLine(40, 'ae2');
+    const packed = layout.search!.candidates.find((c) => c.kind === CandidateKind.Packed);
+    expect(packed, 'the packed candidate is laid').toBeDefined();
+    expect(packed!.unreachable, 'its middle T columns shut 12 machines in').toBe(12);
+    expect(layout.search!.candidates[layout.search!.chosen]!.kind, 'the search keeps a line that reaches every machine').toBe(CandidateKind.Stacked);
   }, 60_000);
 });
