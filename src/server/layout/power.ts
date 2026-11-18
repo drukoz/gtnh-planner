@@ -18,6 +18,10 @@ const TICKS_PER_SECOND = 20;
 export const TRANSFORMER_AMPS_OUT = 4;
 export const TRANSFORMER_AMPS_IN = 2;
 
+/** A Hi-Amp Transformer (GT++ `MTETransformerHiAmp`) stepping down in full mode: 16 A out from up to 6 A in (gt-mechanics §3.6). */
+export const HIAMP_AMPS_OUT = 16;
+export const HIAMP_AMPS_IN = 6;
+
 /** A cable run that loses more than this share of its volts is flagged (`cable_loss_high`). */
 export const LOSS_WARN_FRACTION = 0.1;
 
