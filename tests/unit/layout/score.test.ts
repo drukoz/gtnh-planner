@@ -1,10 +1,12 @@
 // RUK-2614: what the wiring leaves each electric machine (the per-machine power report RUK-351 asks for), the score a
-// laid line gets, and the rule that keeps a search candidate from replacing today's line by getting longer or lossier.
+// laid line gets, and the rule that keeps a search candidate from replacing today's line by getting longer or lossier,
+// plus the same rule for a finished layout, hookups and all, as the benchmark measures it (RUK-2877).
 import { describe, it, expect } from 'vitest';
-import type { LineScore } from '../../../src/shared/types/layout.ts';
+import type { LayoutBlock, LayoutLoss, LineScore } from '../../../src/shared/types/layout.ts';
 import type { BlockRef } from '../../../src/shared/types/pack.ts';
 import type { PlanWarning } from '../../../src/shared/types/plan.ts';
-import { compareScore, replacesBaseline, scoreLine } from '../../../src/server/layout/score.ts';
+import { compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine } from '../../../src/server/layout/score.ts';
+import type { FinalMeasure } from '../../../src/server/layout/score.ts';
 import type { LocalBlock } from '../../../src/server/layout/arrange.ts';
 import type { MachinePower } from '../../../src/server/layout/internal.ts';
 import { lossLine } from '../../helpers/power-loss.ts';
@@ -20,6 +22,15 @@ const machine = (powered: boolean): MachinePower => ({
 
 const score = (over: Partial<LineScore> = {}): LineScore => ({
   unwired: 0, handTransformers: 0, unpowered: 0, total: 20, lossEUt: 100, volume: 60, ...over,
+});
+
+const measure = (over: Partial<FinalMeasure> = {}): FinalMeasure => ({
+  unwired: 0, unpowered: 0, total: 20, lossEUt: 100, ...over,
+});
+
+/** A laid block, in the world: `hookup` set when a hookup's run laid it. */
+const lblock = (role: LayoutBlock['role'], hookup?: number): LayoutBlock => ({
+  pos: [0, 0, 0], block: BLOCK, role, label: role, ...(hookup === undefined ? {} : { hookup }),
 });
 
 describe('per-machine power report', () => {
@@ -80,5 +91,24 @@ describe('line score', () => {
     expect(replacesBaseline(score({ total: 18, lossEUt: 120 }), base), 'shorter but lossier, same unpowered').toBe(false);
     expect(replacesBaseline(score({ total: 24, unpowered: base.unpowered - 1 }), base), 'longer but one fewer unpowered').toBe(true);
     expect(replacesBaseline(score({ total: 18, lossEUt: 90, unwired: 1 }), base), 'better score but one more unwired').toBe(false);
+  });
+
+  it('replaces the finished baseline only to power a machine or when no longer and no lossier', () => {
+    const base = measure();
+    expect(finalReplaces(measure({ total: 18, lossEUt: 90 }), base), 'shorter and less lossy').toBe(true);
+    expect(finalReplaces(measure(), base), 'equal everything').toBe(true);
+    expect(finalReplaces(measure({ total: 18, lossEUt: 120 }), base), 'shorter but lossier, same unpowered').toBe(false);
+    expect(finalReplaces(measure({ total: 24, unpowered: base.unpowered - 1 }), base), 'longer but one fewer unpowered').toBe(true);
+    expect(finalReplaces(measure({ total: 18, lossEUt: 90, unwired: 1 }), base), 'one more unwired').toBe(false);
+  });
+
+  it('measures a finished layout as the benchmark does', () => {
+    const loss: LayoutLoss = { tiers: [], hookupEUt: 4, banksEUt: 2, totalEUt: 12, unpowered: 2 };
+    const got = finalMeasure({
+      blocks: [lblock('cable'), lblock('pipe'), lblock('machine'), lblock('cable', 0), lblock('ghost', 0)],
+      warnings: [{ code: 'route_failed', text: 'no path' }, { code: 'cable_loss_high', text: 'lossy' }],
+      loss,
+    });
+    expect(got).toEqual({ unwired: 1, unpowered: 2, total: 3, lossEUt: 12 });
   });
 });
