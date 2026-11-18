@@ -23,8 +23,15 @@ describe('layout benchmark', () => {
 
   it("flags the 40-machine AE2 line's LV wiring as weak", async () => {
     // 53 cable blocks of LV to the farthest macerator leave it 1 V: under half of LV's 32 V
-    const { layout } = await lossLine(40, 'ae2');
+    const { layout } = await lossLine(40, 'ae2', { packing: false });
     expect(lengthOf(layout).weakTiers).toEqual([1]);
+  }, 30_000);
+
+  it('lays the 40-machine AE2 line packed with no weak tier and no starved machine', async () => {
+    // the packed candidate wins the 40-machine AE2 line (spike SP-G): its short cable runs power every machine
+    const { layout } = await lossLine(40, 'ae2');
+    expect(lengthOf(layout).weakTiers).toEqual([]);
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toEqual([]);
   }, 30_000);
 
   it("runs the 40-machine AE2 line's LV wiring with no weak tier once satellites are laid", async () => {

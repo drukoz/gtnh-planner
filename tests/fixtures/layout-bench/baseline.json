@@ -1135,24 +1135,24 @@
     "name": "mixed-05",
     "mode": "ae2",
     "size": [
-      7,
-      2,
-      5
+      6,
+      3,
+      3
     ],
-    "total": 43,
-    "cable": 17,
-    "pipe": 1,
+    "total": 38,
+    "cable": 6,
+    "pipe": 5,
     "iface": 8,
     "chip": 0,
     "transformer": 0,
     "chest": 0,
-    "hookup": 17,
-    "lossEUt": 628,
+    "hookup": 19,
+    "lossEUt": 585,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 10,
-        "worstVolts": 118
+        "worstBlocks": 4,
+        "worstVolts": 124
       }
     ],
     "weakTiers": [],
@@ -1683,24 +1683,24 @@
     "name": "mixed-09",
     "mode": "ae2",
     "size": [
-      6,
-      1,
-      5
+      5,
+      3,
+      3
     ],
     "total": 34,
-    "cable": 12,
-    "pipe": 1,
+    "cable": 5,
+    "pipe": 6,
     "iface": 4,
     "chip": 0,
     "transformer": 0,
     "chest": 0,
-    "hookup": 17,
-    "lossEUt": 381,
+    "hookup": 19,
+    "lossEUt": 362,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 8,
-        "worstVolts": 120
+        "worstBlocks": 3,
+        "worstVolts": 125
       }
     ],
     "weakTiers": [],
@@ -2242,18 +2242,18 @@
     "mode": "ae2",
     "size": [
       7,
-      2,
-      5
+      3,
+      3
     ],
-    "total": 42,
-    "cable": 17,
-    "pipe": 1,
+    "total": 37,
+    "cable": 8,
+    "pipe": 5,
     "iface": 5,
     "chip": 0,
     "transformer": 2,
     "chest": 0,
     "hookup": 19,
-    "lossEUt": 109,
+    "lossEUt": 93,
     "tiers": [
       {
         "tier": 2,
@@ -2262,8 +2262,8 @@
       },
       {
         "tier": 1,
-        "worstBlocks": 7,
-        "worstVolts": 25
+        "worstBlocks": 4,
+        "worstVolts": 28
       }
     ],
     "weakTiers": [],
@@ -2364,23 +2364,23 @@
     "mode": "ae2",
     "size": [
       5,
-      2,
-      5
+      3,
+      3
     ],
-    "total": 35,
-    "cable": 12,
-    "pipe": 1,
+    "total": 34,
+    "cable": 5,
+    "pipe": 5,
     "iface": 5,
     "chip": 0,
     "transformer": 0,
     "chest": 0,
-    "hookup": 17,
-    "lossEUt": 297,
+    "hookup": 19,
+    "lossEUt": 283,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 8,
-        "worstVolts": 120
+        "worstBlocks": 3,
+        "worstVolts": 125
       }
     ],
     "weakTiers": [],

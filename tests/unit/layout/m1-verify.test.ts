@@ -46,7 +46,7 @@ describe('milestone M1 verification', () => {
   }, 120_000);
 
   it('names every machine the warning counts', async () => {
-    const { layout } = await lossLine(40, 'ae2');
+    const { layout } = await lossLine(40, 'ae2', { packing: false });
     const warnings = layout.warnings.filter((w) => w.code === 'machine_unpowered');
     expect(warnings.length).toBeGreaterThan(0);
     let named = 0;
