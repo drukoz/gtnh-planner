@@ -192,7 +192,7 @@ The 40-machine `lossLine(40, 'ae2')` AFTER, head and tail (local cells; `origin 
 ## The failing tests
 
 `npx vitest run tests/unit/layout/layout.test.ts tests/unit/layout/layout-bench.test.ts` with the patch applied: **35
-pass, 1 fails**; adding `tests/unit/layout/packed.test.ts` (new on this tip): **38 pass, 2 fail.** Both failures pin
+pass, 1 fails**; adding `tests/unit/layout/packed.test.ts` (new on this tip): **37 pass, 2 fail** (39 tests). Both failures pin
 the pre-AE2 shape the spike widens; the rest of the suite is green.
 
 - `tests/unit/layout/layout-bench.test.ts > layout benchmark > flags the 40-machine AE2 line's LV wiring as weak` —
