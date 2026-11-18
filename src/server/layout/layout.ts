@@ -301,6 +301,15 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
   return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
 }
 
+/** At most this many swapped lines per line (spike SP-M, RUK-3058): 16 and 32 found nothing 8 did not. */
+const REORDER_SWAP_CAP = 8;
+/** The swap pass lays at most this many machines in total, so a line of n movable machines gets floor(160 / n) swaps (RUK-3057). */
+const REORDER_WORK = 160;
+/** How many swapped lines `reorderBest` may lay for a line of `movable` movable units: none for 0 or for more than 160. */
+export function reorderSwapCap(movable: number): number {
+  return movable === 0 ? 0 : Math.min(REORDER_SWAP_CAP, Math.floor(REORDER_WORK / movable));
+}
+
 /**
  * The line in its own grid, its power head where the line loses least (RUK-121), and the search that chose it (RUK-2571).
  * The line is laid with the head at its west end and, given the stages, again with each of `headSplits` of its units west
@@ -319,12 +328,18 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
  * When `packs` (RUK-2877) the line is laid again packed three machines to a cable cell with the head at the west end, as
  * one last candidate added after all the others, and in AE2 once more laid open (`PackedOpen`, spike SP-I) after it;
  * the baseline is never a packed line.
+ * The best of them (the baseline when there is none) is laid again with machines of one feed tier swapped
+ * (`reorderBest`); the last swap it keeps is returned as `reordered`, not as a finalist, and `layoutLine` keeps its
+ * finished line only when it `finalReplaces` both the finished baseline and the line it would otherwise keep, and is
+ * strictly better than that line (`compareFinal`).
  */
-function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSearch; finalists: number[] } {
+function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSearch; finalists: number[]; reordered: number | null } {
   const west = buildLocalAt(input, 0);
   // every line laid, in the order laid: the west head first, then one per middle-head split, each tagged with its kind
   const lines: LocalLine[] = [west];
   const kinds: Array<Pick<LayoutCandidate, 'kind' | 'westUnits'>> = [{ kind: CandidateKind.WestHead, westUnits: 0 }];
+  // how each laid line was laid (westUnits, stack, packed), parallel to `lines`, so the unit-order search can re-lay the best reordered
+  const lays: Array<{ westUnits: number; stack: boolean; packed: boolean | 'own' | 'open' }> = [{ westUnits: 0, stack: false, packed: false }];
   // today's rule (RUK-121), unchanged, picks the baseline: index 0 (the west head) unless a middle head wins it
   let baseline = 0;
   if (input.stages !== null) {
@@ -342,6 +357,7 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
         const index = lines.length;
         lines.push(line);
         kinds.push({ kind: CandidateKind.MiddleHead, westUnits });
+        lays.push({ westUnits, stack: false, packed: false });
         const hand = handWork(line);
         if (hand.unwired > westHand.unwired || hand.transformers > westHand.transformers) continue;
         const loss = lineLoss(line);
@@ -359,6 +375,7 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
     for (let i = 0, laid = lines.length; i < laid; i++) {
       lines.push(buildLocalAt(input, kinds[i]!.westUnits, true));
       kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
+      lays.push({ westUnits: kinds[i]!.westUnits, stack: true, packed: false });
     }
   }
   // the line packed three machines to a cable cell (RUK-2877), with the head at the west end; the baseline stays one of the lines above
@@ -366,19 +383,83 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
   if (packing !== false) {
     lines.push(buildLocalAt(input, 0, false, packing));
     kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
+    lays.push({ westUnits: 0, stack: false, packed: packing });
   }
   // AE2's packed line again, laid open (spike SP-I, RUK-3016): the closed column above walls its middle machines in
   // on long lines but is the shorter one on short lines, so both are candidates and the score keeps the better
   if (packing === 'own') {
     lines.push(buildLocalAt(input, 0, false, 'open'));
     kinds.push({ kind: CandidateKind.PackedOpen, westUnits: 0 });
+    lays.push({ westUnits: 0, stack: false, packed: 'open' });
   }
-  const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
-  // only a candidate that replaces the baseline (Assumption 4) may take its place: the FINALISTS best such, earliest on a
-  // tie, and the chosen line is the first of them, or the baseline when there are none
-  const finalists = candidates.map((_, i) => i).filter((i) => replacesBaseline(candidates[i]!, candidates[baseline]!))
-    .sort((a, b) => compareScore(candidates[a]!, candidates[b]!) || a - b).slice(0, FINALISTS);
-  return { lines, search: { candidates, chosen: finalists[0] ?? baseline, baseline }, finalists };
+  const rank = (): { candidates: LayoutCandidate[]; finalists: number[] } => {
+    const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+    const finalists = candidates.map((_, i) => i).filter((i) => replacesBaseline(candidates[i]!, candidates[baseline]!))
+      .sort((a, b) => compareScore(candidates[a]!, candidates[b]!) || a - b).slice(0, FINALISTS);
+    return { candidates, finalists };
+  };
+  const { finalists } = rank();
+  const best = finalists[0] ?? baseline;
+  const reordered = reorderBest(input, best, baseline, lines, kinds, lays);
+  const { candidates } = rank();
+  return { lines, search: { candidates, chosen: reordered ?? best, baseline }, finalists, reordered };
+}
+
+/** The feed tier a unit is fed at (`placeUnits`'s `min(tier, supplyTier)`), null when it is not fed (RUK-3057). */
+function feedTierOf(u: Unit, supplyTier: number | undefined): number | null {
+  return supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier);
+}
+
+/**
+ * The unit-order search (RUK-3057, spike SP-M): re-lay the best line (`best`) with its machines reordered within a feed
+ * tier, as extra `Reordered` candidates with the same `westUnits`, `stack` and `packed` as the best line, pushed onto
+ * `lines`/`kinds`/`lays`. It swaps two units of one feed tier (skipping a pair from the same step), keeps a swap only
+ * when the swapped line beats the current best (`compareScore` < 0) and replaces it (`replacesBaseline`), restarts the
+ * scan after each accept, and lays at most `reorderSwapCap` swapped lines. Returns the index of the last accepted line,
+ * or null when it kept none.
+ */
+function reorderBest(input: LocalInput, best: number, baseline: number,
+  lines: LocalLine[], kinds: Array<Pick<LayoutCandidate, 'kind' | 'westUnits'>>,
+  lays: Array<{ westUnits: number; stack: boolean; packed: boolean | 'own' | 'open' }>): number | null {
+  const lay = lays[best]!;
+  const baseScore = lines[baseline]!.score;
+  let kept: number | null = null;
+  const supply = input.stages?.supplyTier;
+  const movable = (u: Unit): boolean => u.electric && u.manual === undefined && feedTierOf(u, supply) !== null;
+  let order: Unit[] = [...input.units];
+  let bestLine = lines[best]!;
+  let laid = 0;
+  let improved = true;
+  const n = order.filter(movable).length;
+  const cap = reorderSwapCap(n);
+  while (improved && laid < cap) {
+    improved = false;
+    for (let i = 0; i < order.length && !improved; i++) {
+      for (let j = i + 1; j < order.length && !improved; j++) {
+        if (laid >= cap) break;
+        const a = order[i]!;
+        const b = order[j]!;
+        if (!movable(a) || !movable(b)) continue;
+        if (feedTierOf(a, supply) !== feedTierOf(b, supply)) continue;
+        if (a.stepId === b.stepId) continue;
+        const swapped = [...order];
+        swapped[i] = b;
+        swapped[j] = a;
+        const line = buildLocalAt({ ...input, units: swapped }, lay.westUnits, lay.stack, lay.packed);
+        laid++;
+        if (compareScore(line.score, bestLine.score) < 0 && replacesBaseline(line.score, bestLine.score) && replacesBaseline(line.score, baseScore)) {
+          order = swapped;
+          bestLine = line;
+          kept = lines.length;
+          lines.push(line);
+          kinds.push({ kind: CandidateKind.Reordered, westUnits: lay.westUnits });
+          lays.push(lay);
+          improved = true;
+        }
+      }
+    }
+  }
+  return kept;
 }
 
 /**
@@ -1157,7 +1238,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
       ...(reserved.length === 0 ? {} : { reserved }),
     };
   };
-  const { lines, search, finalists } = buildLocal({
+  const { lines, search, finalists, reordered } = buildLocal({
     pack, plan, parts, mode, units, stages: provisional, network: logisticsNet,
     satellites: deps.satellites !== false, stacking: deps.stacking !== false, packing: deps.packing !== false, roof: dry === null,
   });
@@ -1166,14 +1247,23 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
   // kept; the search record then names the kept line `chosen` and, when that is not the search's best, the best `rejected`
   const baselineLine = lines[search.baseline]!;
   let keptLine = baselineLine;
-  let kept = await finishLine(baselineLine, finalists.length === 0 ? search : { ...search, chosen: search.baseline, rejected: finalists[0]! });
+  const top = search.chosen;
+  let kept = await finishLine(baselineLine, top === search.baseline ? search : { ...search, chosen: search.baseline, rejected: top });
   const finishedBaseline = finalMeasure(kept, baselineLine.score.unreachable);
   let best: FinalMeasure | null = null;
   for (const i of finalists) {
-    const layout = await finishLine(lines[i]!, { ...search, chosen: i, ...(i === finalists[0] ? {} : { rejected: finalists[0]! }) });
+    const layout = await finishLine(lines[i]!, { ...search, chosen: i, ...(i === top ? {} : { rejected: top }) });
     const measure = finalMeasure(layout, lines[i]!.score.unreachable);
     if (!finalReplaces(measure, finishedBaseline) || (best !== null && compareFinal(measure, best) >= 0)) continue;
     best = measure; kept = layout; keptLine = lines[i]!;
+  }
+  if (reordered !== null) {
+    const layout = await finishLine(lines[reordered]!, { ...search, chosen: reordered });
+    const measure = finalMeasure(layout, lines[reordered]!.score.unreachable);
+    const against = best ?? finishedBaseline;
+    if (finalReplaces(measure, finishedBaseline) && finalReplaces(measure, against) && compareFinal(measure, against) < 0) {
+      kept = layout; keptLine = lines[reordered]!;
+    }
   }
   deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal, shift: [...keptLine.shift] });
   return kept;
