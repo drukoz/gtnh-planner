@@ -4,7 +4,9 @@
 // Full blocks (machines, casings, hatches, transformers, ME Interfaces, chests) close a face. The ground under the
 // line's floor (local y < 0) is solid. Pure.
 
+import { fmtInt } from '../../shared/layout/format.ts';
 import type { Vec3 } from '../../shared/layout/geometry.ts';
+import type { PlanWarning } from '../../shared/types/plan.ts';
 
 /** The roles of the thin blocks a builder can click past (GT cables and pipes, EnderIO conduits, ME glass cable, routed pipes). */
 export const THIN_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'chip_pipe']);
@@ -51,4 +53,24 @@ export function unreachableMachines(blocks: ReadonlyArray<{ pos: Vec3; role: str
     const role = solid.get(key(n));
     return role !== undefined && THIN_ROLES.has(role) && touchesOutside(n);
   })).map((b) => [...b.pos] as Vec3);
+}
+
+/**
+ * The `machine_unreachable` warning for a line laid in its local grid, or null when every machine can be reached. The
+ * shut-in machines are named as in the starved-machine warning (`2× Electric Blast Furnace`: labels grouped by name,
+ * sorted, joined with `, `); `first` is the first of them in block order, where the layout pins the warning.
+ */
+export function unreachableWarning(blocks: ReadonlyArray<{ pos: Vec3; role: string; label: string }>): { warning: PlanWarning; first: Vec3 } | null {
+  const shut = unreachableMachines(blocks);
+  if (shut.length === 0) return null;
+  const key = (p: Vec3): string => `${p[0]},${p[1]},${p[2]}`;
+  const at = new Set(shut.map(key));
+  const byName = new Map<string, number>();
+  for (const b of blocks) if (b.role === 'machine' && at.has(key(b.pos))) byName.set(b.label, (byName.get(b.label) ?? 0) + 1);
+  const names = [...byName.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([name, count]) => `${count}× ${name}`).join(', ');
+  const singular = shut.length === 1;
+  const text = `${fmtInt(shut.length)} ${singular ? 'machine is' : 'machines are'} closed in by the blocks around ${singular ? 'it' : 'them'}, `
+    + `so you cannot reach ${singular ? 'it' : 'them'} once the line is built: ${names}. `
+    + 'Set up each one (circuit, covers, wrench) before you place the blocks beside it.';
+  return { warning: { code: 'machine_unreachable', text }, first: shut[0]! };
 }
