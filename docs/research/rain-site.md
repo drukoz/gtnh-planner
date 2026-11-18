@@ -64,10 +64,21 @@ what our scan and layout already hold for each gate. No code was changed.
   (`src/shared/types/farm.ts:34`, `src/shared/project/apply-op.ts:320`, `src/client/views/SettingsPanel.tsx:790`), the
   resource table's `minecraft:snow`/`minecraft:snowball` overworld keys (`src/server/planner/availability.ts:143`) and
   the word "sky" in a CSS comment (`src/client/styles.css:1790`);
-  `grep -rn -i 'rain' src` → 92 hits: those 70 plus 12 that match inside the word "constraints" — a substring artefact
-  of the looser grep, not a weather fact (`src/client/views/flow-model.ts:256`,
-  `src/client/connections/model.ts:500`, `src/server/db/db.ts:148`, `src/server/layout/feeding/read.ts:14`,
-  `src/server/planner/machine-options.ts:189`);
+  `grep -rn -i 'rain' src` → 92 hits, of which 49 are also hits of the bounded pattern above (the other 21 bounded hits
+  are the words sky/snow/weather/thunder/precip, which contain no "rain" substring and so are not among these 92); the 43
+  hits only this looser substring grep finds are artefacts of the substring match, not weather facts — 12 inside the word
+  "constraints" (`src/client/views/flow-model.ts:256`, `src/client/connections/model.ts:500`, `src/server/db/db.ts:148`,
+  `src/server/layout/feeding/read.ts:14`, `src/server/planner/machine-options.ts:189`), 6 "terrain"
+  (`src/server/layout/layout.ts:55`, `src/server/layout/layout.ts:503`, `src/server/layout/layout.ts:553`,
+  `src/server/layout/layout.ts:567`, `src/server/layout/hookups.ts:106`, `src/server/layout/hookups.ts:308`), 6 "drain"
+  (`src/server/layout/modes/enderio.ts:655`, `src/server/layout/conduits.ts:92`, `src/server/layout/feeding/sim/detect.ts:24`,
+  `src/server/layout/feeding/sim/detect.ts:675`, `src/server/layout/feeding/sim/multi.ts:16`,
+  `src/server/layout/multiblock-rules.ts:23`), 1 "grain" (`src/server/planner/availability.ts:124`, `listAllgrain`), and
+  18 identifier lines whose "rain" has no word boundary so the bounded pattern cannot match them (`rainEUt` at
+  `src/shared/types/layout.ts:251`, `rainOutageSeconds` at `src/shared/types/plan.ts:544` and
+  `src/server/world/context.ts:54`, `RAIN_OUTAGE_SECONDS`/`RAIN_OUTAGE_FRACTION` at `src/server/world/power.ts:35` and
+  `src/server/world/power.ts:38`, `RAIN_CAVEAT` at `src/client/map/FoundPanel.tsx:135`, `rainChecked`/`rainExposures` at
+  `src/server/layout/rain.ts:36` and `src/server/layout/rain.ts:56`) — none a dimension weather fact;
   `grep -rn -i 'hasNoSky\|isSurfaceWorld\|rainTime\|thunderTime\|raining' src tests` → no hits.
 
 **`DimSummary.name` / `keys` in the test fixtures.**
