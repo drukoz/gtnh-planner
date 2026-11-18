@@ -80,8 +80,8 @@ describe('a place step names each machine\'s own faces', () => {
     expect([...words].some((w) => w !== 'up')).toBe(true);
   }, 60000);
 
-  it('an AE2 packed line turns every machine\'s output to its own port, so its steps say up and its top', async () => {
-    const { layout } = await lossLine(10, 'ae2');
+  it('an AE2 packed line (6 machines: RUK-3015 keeps longer AE2 lines unpacked for reach) turns every machine\'s output to its own port, so its steps say up and its top', async () => {
+    const { layout } = await lossLine(6, 'ae2');
     expect(chosen(layout)).toBe(CandidateKind.Packed);
     expect(machineBlocks(layout).every((b) => b.facing === 1)).toBe(true);
     for (const id of machineSteps(layout)) {
