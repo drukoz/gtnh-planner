@@ -94,7 +94,10 @@ runs" (Hi-Amps fit, no parallel runs asked); `m1-verify-panel` "the laid line is
 the two `no bank warning, no starved machine` tests, the stacking-off case and the two 40-machine switch-off cases;
 `head-choice` × 2 on the 40-machine direct/enderio middle-head lines; `packed.test` "packing alone powers the
 40-machine direct line with satellites off". Banks fit, satellites and layouts shift, so every pinned count moves.
-No test fails for overlap, tier contact, starvation or route failure.
+No test fails for overlap, tier contact or route failure. One repin is a starvation count, not an improvement:
+`packed.test`'s *unpacked* 40-machine direct line (`stacking: false, packing: false`) starves 16 machines at
+`SPIKE_BANK=1` instead of 7 (the packed line still starves 0, and the search picks it). Productising H1 must find
+out why before re-pinning that number (CTO review, RUK-2976).
 
 ## What this says
 
