@@ -12,13 +12,13 @@ and the packed candidate loses on that hand work. This spike measures two fixes,
   `ceil(count ÷ placed)` levels high, feeding each stacked row with the two runs' cells at the same (y, z).
   West-end heads only — crossing banks and satellites are out of scope.
 
-`SPIKE_BANK` unset = 0 = today's behaviour. The probe from `spikes/packed-candidate` (packed candidate in
-`buildLocal` for `direct`/`enderio`) is applied on top; `change.patch` is probe + H1 + H2 together.
+`SPIKE_BANK` unset = 0 = today's behaviour. The packed candidate is in the branch now (RUK-2974), so `change.patch`
+is H1 + H2 only, against `origin/feat/optimal-layout-m3` with the packed candidate merged.
 
 ## How to measure
 
 ```sh
-git apply spikes/packed-candidate/probe.patch   # the packed candidate
+git apply spikes/bank-room/change.patch         # H1 + H2 (the packed candidate is in the branch)
 # then, with the spike's temporary test in tests/unit/layout/tmp-spike-bank.test.ts:
 SPIKE_BANK=1 npx vitest run tests/unit/layout/tmp-spike-bank.test.ts   # writes /tmp/bank-spike-1.jsonl
 SPIKE_BANK=2 npx vitest run tests/unit/layout/tmp-spike-bank.test.ts   # + /tmp/bank-spike-2-bank.txt
@@ -45,7 +45,7 @@ still reports. The same 6 `route_failed` and 156 starved machines (baseline benc
 | loss-40 | routed/ae2 | WestHead 5x4x44 235/232 blk 2052 EU/t | unchanged | unchanged |
 | short-64 | direct | Packed 6x2x3 22 blk 1044 EU/t, hand 32 | WestHead 5x1x5 25 blk 1736 EU/t, hand 5 | **WestHead 5x2x5 35 blk 2015 EU/t, hand 0** |
 | short-64 | routed | WestHead 6x2x5 40 blk 1803 EU/t, hand 35 | WestHead 40 blk 1803 EU/t, hand 5 | WestHead 6x2x5 50 blk 2096 EU/t, hand 1 |
-| **all 136 rows** | | 8066 blk, 50375 EU/t, 1125 ms | 7903 blk, 50856 EU/t, 2431 ms | 7943 blk, 52000 EU/t, 3279 ms |
+| **all 136 rows** | | 8066 blk, 50375 EU/t, 1165 ms | 7903 blk, 50856 EU/t, 1198 ms | 7943 blk, 52000 EU/t, 1194 ms |
 
 Every bank-1/bank-2 row has zero overlaps and zero tier contacts, and no row regressed into a route failure.
 
@@ -55,14 +55,14 @@ The bank swap is the whole story: with a bank that fits, the hand-work penalty d
 heads win. loss-20 direct goes 48 → 38 blocks and 580 → 394 EU/t; loss-40 direct 117 → 97 and 1224 → 1167; routed
 and ae2 (which never get a packed candidate) also improve — their WestHead/Stacked banks stop starving, so
 loss-20 routed drops 122 → 76 blocks. Only `loss-40 routed/ae2` are untouched (their 44-long banks already fit),
-and `short-64` (125 amps, Hi-Amp count 8, no head that long) keeps a `Put 5 more` warning at 1.
+and `short-64` (125 amps, Hi-Amp count 10, no head that long) keeps a `Put 5 more` warning at 1.
 
 ### H2 (bank 2)
 
 H2 never fires on the 33 benchmark lines: the Hi-Amp count is ≤ 5 everywhere (`ceil(38 ÷ 16) = 3` for loss-20,
 `≤ 5` for loss-40), and a west head's bank is 5 rows long (packed head: 3), so H1's count always fits on one
 level. It needs a line whose amps outgrow every head — the synthetic `short-64` (2 macerators at 2000 EU/t,
-125 A, Hi-Amp count 8) is the demonstration: at 2 the head is 5x2x5 and lays both levels, no warning —
+125 A, Hi-Amp count 10) is the demonstration: at 2 the head is 5x2x5 and lays both levels, no warning —
 
 ```
 cable        0,0,0 … 0,0,4   2x Annealed Copper (MV supply, level 0)
@@ -83,22 +83,24 @@ the guard works, the bank is blocked.
 
 | switch | failures | what |
 | --- | --- | --- |
-| unset (probe only) | 4 | the probe's known packed-candidate flips: `head-choice` and `satellites` loss-40 direct/enderio |
-| 1 | 16 | those 4 + 12 H1 repins |
-| 2 | 16 | the same 16 — no layout in the suite reaches H2 |
+| unset | 0 | the branch is green; with the switch off the spike changes nothing |
+| 1 | 17 | 17 H1 repins |
+| 2 | 17 | the same 17 — no layout in the suite reaches H2 |
 
-The 12 H1 repins (all "layout got better, numbers pinned to the old layout"):
+The 17 H1 repins (all "layout got better, numbers pinned to the old layout"):
 `layout-bench` loss-10 direct (35 → 29, 252 → 164); `internal.test` "fills the bank column and asks for parallel
 runs" (Hi-Amps fit, no parallel runs asked); `m1-verify-panel` "the laid line is the chosen candidate";
-`satellites` × 8 on the 20-machine routed/ae2 lines (banks fit, satellites and layouts shift) and the stacking-off case;
-the 20-machine `no bank warning, no starved machine` tests keep passing. No test fails for overlap, tier contact,
-starvation or route failure.
+`satellites` × 11 — the 20-machine routed/ae2 satellite layouts, their switch-off cases, the port-orientation tests,
+the two `no bank warning, no starved machine` tests, the stacking-off case and the two 40-machine switch-off cases;
+`head-choice` × 2 on the 40-machine direct/enderio middle-head lines; `packed.test` "packing alone powers the
+40-machine direct line with satellites off". Banks fit, satellites and layouts shift, so every pinned count moves.
+No test fails for overlap, tier contact, starvation or route failure.
 
 ## What this says
 
 H1 is the fix: it deletes the bank-starvation hand work that kept packed heads from winning, on every mode and
 every line with a too-short bank, and costs nothing on lines whose banks fit. It is ready to productise, with:
-the 12 + 4 test repins, the satellites interplay (the 20-machine satellite tests shift and need re-pinning),
+the 17 test repins, the satellites interplay (the 20- and 40-machine satellite tests shift and need re-pinning),
 the `transformer_bank` warning text and `handTransformers` scoring (already carried through `Stage.layCount`),
 and the bench baseline + panel re-pins. Hi-Amp selection is a straight `pickHiAmpTransformer` swap — the
 transformer-loss model (`bankLossEUt`) charges per amp, not per transformer, so counts and kinds do not move it.
@@ -109,7 +111,8 @@ if it is built, should probably stack Hi-Amps the same way, but nothing in the b
 
 ## Files
 
-`change.patch` is the whole prototype (probe + H1 + H2, `git diff` of `src/` and `tests/unit/layout/layout.test.ts`)
-against `origin/feat/optimal-layout-m3`; the temp test is not in it. Verify with
-`git apply --check spikes/bank-room/change.patch` in a clean checkout of that branch. The switch is read in one
-place (`SPIKE_BANK` in `src/server/layout/internal.ts`): 1 turns H1 on, 2 adds H2.
+`change.patch` is the prototype (H1 + H2, `git diff` of `src/` — `internal.ts`, `power.ts` and the one
+`handTransformers` line in `layout.ts`) against `origin/feat/optimal-layout-m3`; the packed candidate is already in
+that branch and the temp test is not in the patch. Verify with `git apply --check spikes/bank-room/change.patch` in a
+clean checkout of that branch. The switch is read in one place (`SPIKE_BANK` in `src/server/layout/internal.ts`):
+1 turns H1 on, 2 adds H2.
