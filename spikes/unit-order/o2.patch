@@ -1,0 +1,193 @@
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index 470265249..78a1b2c7e 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -325,6 +325,8 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
+   // every line laid, in the order laid: the west head first, then one per middle-head split, each tagged with its kind
+   const lines: LocalLine[] = [west];
+   const kinds: Array<Pick<LayoutCandidate, 'kind' | 'westUnits'>> = [{ kind: CandidateKind.WestHead, westUnits: 0 }];
++  // how each laid line was laid (westUnits, stack, packed), parallel to `lines`, so SP-M can re-lay the best reordered
++  const lays: Array<{ westUnits: number; stack: boolean; packed: boolean | 'own' | 'open' }> = [{ westUnits: 0, stack: false, packed: false }];
+   // today's rule (RUK-121), unchanged, picks the baseline: index 0 (the west head) unless a middle head wins it
+   let baseline = 0;
+   if (input.stages !== null) {
+@@ -342,6 +344,7 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
+         const index = lines.length;
+         lines.push(line);
+         kinds.push({ kind: CandidateKind.MiddleHead, westUnits });
++        lays.push({ westUnits, stack: false, packed: false });
+         const hand = handWork(line);
+         if (hand.unwired > westHand.unwired || hand.transformers > westHand.transformers) continue;
+         const loss = lineLoss(line);
+@@ -359,6 +362,7 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
+     for (let i = 0, laid = lines.length; i < laid; i++) {
+       lines.push(buildLocalAt(input, kinds[i]!.westUnits, true));
+       kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
++      lays.push({ westUnits: kinds[i]!.westUnits, stack: true, packed: false });
+     }
+   }
+   // the line packed three machines to a cable cell (RUK-2877), with the head at the west end; the baseline stays one of the lines above
+@@ -366,21 +370,134 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
+   if (packing !== false) {
+     lines.push(buildLocalAt(input, 0, false, packing));
+     kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
++    lays.push({ westUnits: 0, stack: false, packed: packing });
+   }
+   // AE2's packed line again, laid open (spike SP-I, RUK-3016): the closed column above walls its middle machines in
+   // on long lines but is the shorter one on short lines, so both are candidates and the score keeps the better
+   if (packing === 'own') {
+     lines.push(buildLocalAt(input, 0, false, 'open'));
+     kinds.push({ kind: CandidateKind.PackedOpen, westUnits: 0 });
++    lays.push({ westUnits: 0, stack: false, packed: 'open' });
+   }
+-  const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+-  // only a candidate that replaces the baseline (Assumption 4) may take its place: the FINALISTS best such, earliest on a
+-  // tie, and the chosen line is the first of them, or the baseline when there are none
+-  const finalists = candidates.map((_, i) => i).filter((i) => replacesBaseline(candidates[i]!, candidates[baseline]!))
+-    .sort((a, b) => compareScore(candidates[a]!, candidates[b]!) || a - b).slice(0, FINALISTS);
++  const rank = (): { candidates: LayoutCandidate[]; finalists: number[] } => {
++    const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
++    const finalists = candidates.map((_, i) => i).filter((i) => replacesBaseline(candidates[i]!, candidates[baseline]!))
++      .sort((a, b) => compareScore(candidates[a]!, candidates[b]!) || a - b).slice(0, FINALISTS);
++    return { candidates, finalists };
++  };
++  let { candidates, finalists } = rank();
++  // SP-M (spike, RUK-3058): re-lay the best line with its machines reordered within a feed tier, as extra candidates,
++  // then re-rank with the same rule. The baseline index does not change.
++  reorderBest(input, finalists[0] ?? baseline, lines, kinds, lays);
++  ({ candidates, finalists } = rank());
+   return { lines, search: { candidates, chosen: finalists[0] ?? baseline, baseline }, finalists };
+ }
+ 
++/** SP-M (spike, RUK-3058): the feed tier a unit is placed at (`placeUnits`'s `min(tier, supplyTier)`), null when it is not fed. */
++function spmFeedTier(u: Unit, supplyTier: number | undefined): number | null {
++  return supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier);
++}
++
++/**
++ * SP-M (spike, RUK-3058): `units` with each feed tier's electric, non-manual units put in the order `permute` gives
++ * them, every other unit (steam, run by hand) left in its place. Feeding the result to `buildLocalAt` keeps the tier
++ * grouping (`lowestFeedFirst`), so only the order within a tier changes.
++ */
++function spmReorder(units: readonly Unit[], supplyTier: number | undefined, permute: (us: Unit[]) => Unit[]): Unit[] {
++  const slots = new Set<number>();
++  const groups = new Map<number, Unit[]>();
++  for (let i = 0; i < units.length; i++) {
++    const u = units[i]!;
++    if (!u.electric || u.manual !== undefined) continue;
++    slots.add(i);
++    const t = spmFeedTier(u, supplyTier)!;
++    const g = groups.get(t);
++    if (g === undefined) groups.set(t, [u]);
++    else g.push(u);
++  }
++  const ordered = new Map<number, Unit[]>();
++  for (const [t, us] of groups) ordered.set(t, permute(us));
++  const cursor = new Map<number, number>();
++  for (const t of groups.keys()) cursor.set(t, 0);
++  return units.map((u, i) => {
++    if (!slots.has(i)) return u;
++    const t = spmFeedTier(u, supplyTier)!;
++    const g = ordered.get(t)!;
++    const k = cursor.get(t)!;
++    cursor.set(t, k + 1);
++    return g[k]!;
++  });
++}
++
++/** SP-M (spike, RUK-3058) O1: within a feed tier, the hungriest machine first (stable, so ties keep flow order). */
++function spmHungriestFirst(units: readonly Unit[]): Unit[] {
++  return [...units].sort((a, b) => b.euPerTick - a.euPerTick);
++}
++
++/**
++ * SP-M (spike, RUK-3058): the fluids a step takes or makes (its `inputs`/`outputs` keys starting `fluid:`, as
++ * `layout.test.ts`'s `fluidsOf`).
++ */
++function spmFluids(plan: Plan, stepId: string): string[] {
++  const s = plan.steps.find((x) => x.id === stepId);
++  return s === undefined ? [] : [...new Set([...s.inputs, ...s.outputs].map((p) => p.key).filter((k) => k.startsWith('fluid:')))];
++}
++
++/**
++ * SP-M (spike, RUK-3058) O2: within a feed tier, group units whose steps share a fluid (transitively), order the groups
++ * by first appearance and keep flow order inside a group. A unit with no fluid is a group of its own.
++ */
++function spmFluidGroups(plan: Plan) {
++  return (units: readonly Unit[]): Unit[] => {
++    const parent = units.map((_, i) => i);
++    const find = (i: number): number => {
++      while (parent[i] !== i) {
++        parent[i] = parent[parent[i]!]!;
++        i = parent[i]!;
++      }
++      return i;
++    };
++    const fluidTo = new Map<string, number>();
++    units.forEach((u, i) => {
++      for (const f of spmFluids(plan, u.stepId)) {
++        const j = fluidTo.get(f);
++        if (j === undefined) fluidTo.set(f, i);
++        else {
++          const ra = find(j);
++          const rb = find(i);
++          if (ra !== rb) parent[rb] = ra;
++        }
++      }
++    });
++    const clusters = new Map<number, Unit[]>();
++    const first = new Map<number, number>();
++    units.forEach((u, i) => {
++      const r = find(i);
++      const c = clusters.get(r);
++      if (c === undefined) {
++        clusters.set(r, [u]);
++        first.set(r, i);
++      } else c.push(u);
++    });
++    return [...clusters.keys()].sort((a, b) => first.get(a)! - first.get(b)!).flatMap((r) => clusters.get(r)!);
++  };
++}
++
++/**
++ * SP-M (spike, RUK-3058): re-lay the best line (`best`) with its machines reordered within a feed tier, as extra
++ * `Reordered` candidates with the same `westUnits`, `stack` and `packed` as the best line, pushed onto `lines`/`kinds`/`lays`.
++ * O2 (same fluid side by side): one extra line, its units grouped by shared fluid within each tier.
++ */
++function reorderBest(input: LocalInput, best: number,
++  lines: LocalLine[], kinds: Array<Pick<LayoutCandidate, 'kind' | 'westUnits'>>,
++  lays: Array<{ westUnits: number; stack: boolean; packed: boolean | 'own' | 'open' }>): void {
++  const lay = lays[best]!;
++  const reordered = spmReorder(input.units, input.stages?.supplyTier, spmFluidGroups(input.plan));
++  lines.push(buildLocalAt({ ...input, units: reordered }, lay.westUnits, lay.stack, lay.packed));
++  kinds.push({ kind: CandidateKind.Reordered, westUnits: lay.westUnits });
++  lays.push(lay);
++}
++
+ /**
+  * How many of the search's best candidates `layoutLine` finishes and judges with their hookups (RUK-2877). One kept the
+  * packed AE2 column on mixed-05 although the stacked runner-up is a block shorter once both are hooked up; two finds
+diff --git a/src/shared/types/layout.ts b/src/shared/types/layout.ts
+index 5487cf997..0422ee9f5 100644
+--- a/src/shared/types/layout.ts
++++ b/src/shared/types/layout.ts
+@@ -182,7 +182,7 @@ export interface LayoutLoss {
+  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
+  * takes the next number.
+  */
+-export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3, PackedOpen: 4 } as const;
++export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3, PackedOpen: 4, Reordered: 5 } as const;
+ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
+ 
+ /**
+@@ -203,7 +203,9 @@ export interface LineScore {
+  * units west of it) laid with single-block machines stacked two high (RUK-2877). A `Packed` candidate is the line laid
+  * by `placePacked` with the power head at the west end (`westUnits` 0), in direct, EnderIO and AE2 (RUK-2877). A
+  * `PackedOpen` candidate is AE2's packed line laid open (`placePacked` with `open`, spike SP-I, RUK-3016), right after
+- * its `Packed` one: the interfaces stand on the box's outer faces, so no machine is walled in.
++ * its `Packed` one: the interfaces stand on the box's outer faces, so no machine is walled in. A `Reordered` candidate
++ * (spike SP-M, RUK-3058) is the best line laid again with its machines reordered within a feed tier, with the same
++ * `westUnits`, `stack` and `packed` as the line it was reordered from.
+  */
+ export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUnits: number }
+ 
