@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { unitsFromPlan, placeUnits, stepDepths, stepIo, overlaps, compactness, replacedCasings, attachCovers, type LocalBlock } from '../../../src/server/layout/arrange.ts';
+import { unitsFromPlan, placeUnits, stepDepths, stepIo, overlaps, compactness, replacedCasings, attachCovers, tailColumn, type LocalBlock } from '../../../src/server/layout/arrange.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { kitSpec } from '../../helpers/build-fixtures.ts';
@@ -280,5 +280,25 @@ describe('placement: tiers apart, front and output side apart', () => {
     const ebf = placeUnits(unitsFromPlan(layoutPack(), makePlan([ebfStep])).units, { headWidth: 1, portSpacing: 0 });
     expect(ebf.units[0]!.mainFacing).toBeUndefined();
     expect(ebf.blocks.some((b) => b.mainFacing !== undefined)).toBe(false);
+  });
+});
+
+describe('placement contract (RUK-2877)', () => {
+  it('fills spine, tail and powerSide with the spine row, the tail cell and each unit facing', () => {
+    const p = placeUnits(unitsFromPlan(layoutPack(), twoStep()).units, { headWidth: 1, portSpacing: 0 });
+    expect(p.spine).toEqual(Array.from({ length: p.tailX - p.firstX + 1 }, (_, i) => [p.firstX + i, 0, p.spineZ]));
+    expect(p.tail).toEqual({ cell: [p.tailX, 0, p.spineZ], inputSide: 2, outputSide: 3 });
+    for (const u of p.units) expect(u.powerSide).toBe(u.facing);
+    expect(tailColumn(p.tail, 2)).toEqual([p.tailX, 2, p.spineZ]);
+  });
+
+  it('fills the spine from x 0 when units stand west of a middle head', () => {
+    const p = placeUnits(unitsFromPlan(layoutPack(), twoStep()).units, { headWidth: 1, portSpacing: 0, supplyTier: 2, westUnits: 1 });
+    expect(p.firstX).toBe(0);
+    expect(p.headX).toBeGreaterThan(0);
+    expect(p.spine).toEqual(Array.from({ length: p.tailX - p.firstX + 1 }, (_, i) => [p.firstX + i, 0, p.spineZ]));
+    expect(p.tail).toEqual({ cell: [p.tailX, 0, p.spineZ], inputSide: 2, outputSide: 3 });
+    for (const u of p.units) expect(u.powerSide).toBe(u.facing);
+    expect(tailColumn(p.tail, 2)).toEqual([p.tailX, 2, p.spineZ]);
   });
 });
