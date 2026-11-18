@@ -189,12 +189,14 @@ export interface Placement {
   spine: Vec3[];
   /** Where the spine ends and the tail chests hang (`LineTail`). */
   tail: LineTail;
+  /** The line is laid by `placePacked` (RUK-2877): three machines to a cable cell, the item lanes above them, no middle row. */
+  packed?: true;
   /**
    * The packed line is laid for AE2 (`placePacked` with `ownPorts`, spike SP-G): every machine has its own item port — an
    * ME Interface cell above it (`PORT_SPACING.ae2` is 1, so AE2 may not share one) — on the lanes `[x, 1, 0]`, `[x, 1, 2]`
    * and `[x, 2, 1]`. The `ae2` mode then lays its ME network on those lanes, joined at the tail column, and lays no risers.
    */
-  packed?: true;
+  ownPorts?: true;
 }
 
 /**
@@ -1370,7 +1372,7 @@ export function placePacked(units: readonly Unit[], opts: { headWidth: number; s
   blocks.sort((a, b) => comparePos(a.pos, b.pos));
   return { units: placed, size: [tailX + 2, 2, 3], spineZ: 1, headX: 0, firstX, tailX, blocks, reserved: [],
     spine, tail: { cell: [tailX, 1, 2], inputSide: DOWN, outputSide: EAST },
-    ...(opts.ownPorts === true ? { packed: true as const } : {}) };
+    packed: true, ...(opts.ownPorts === true ? { ownPorts: true as const } : {}) };
 }
 
 /**
