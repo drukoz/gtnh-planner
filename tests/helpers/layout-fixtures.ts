@@ -100,6 +100,9 @@ function lineMachines(): Machine[] {
     transformer(IDS.TRANSFORMER_LV, 1, 'Low Voltage Transformer'),
     transformer(IDS.TRANSFORMER_MV, 2, 'Medium Voltage Transformer'),
     transformer(IDS.TRANSFORMER_HV, 3, 'High Voltage Transformer'),
+    // RUK-2677: GT++'s Hi-Amp Transformer (16 A out, 6 A in); `pickTransformer` ranks `MTETransformer` first, so head banks keep the standard one
+    gtMachine(878, 'LV Hi-Amp Transformer', 'transformer.ha.tier.01', 'transformer',
+      'gtPlusPlus.xmod.gregtech.api.metatileentity.implementations.base.MTETransformerHiAmp', { tier: 1 }),
     hatch(IDS.ENERGY_LV, 1, 'LV Energy Hatch', 'hatch.energy.tier.01', 'MTEHatchEnergy'),
     hatch(IDS.ENERGY_MV, 2, 'MV Energy Hatch', 'hatch.energy.tier.02', 'MTEHatchEnergy'),
     hatch(IDS.ENERGY_HV, 3, 'HV Energy Hatch', 'hatch.energy.tier.03', 'MTEHatchEnergy'),
