@@ -23,7 +23,7 @@ export type PartId = 'conveyor_cover' | 'pump_cover' | 'item_filter_cover' | 'ch
   | 'chip_responder' | 'chip_extractor' | 'chip_stock_keeper' | 'me_interface' | 'me_cable' | 'me_export_bus' | 'blank_pattern'
   | 'eio_item_conduit' | 'eio_basic_filter' | 'eio_advanced_filter' | 'eio_big_filter' | 'eio_speed_upgrade'
   | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar'
-  | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card' | 'chip_broadcaster' | 'eio_limited_filter' | 'ae2_locking_card';
+  | 'roof' | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card' | 'chip_broadcaster' | 'eio_limited_filter' | 'ae2_locking_card';
 
 /**
  * `keys` are tried in order against the pack, then `names` (English, ignoring case). `block` is what a placed part
@@ -55,6 +55,8 @@ export const PART_DEFS: Readonly<Record<PartId, PartDef>> = Object.freeze({
   // @32729 is the Component_Filter crafting component, not the cover
   item_filter_cover: partDef('Filtered Conveyor Cover (Export)', `${GT_META_ITEM}@32270`, 'item'),
   chest: partDef('Chest', 'minecraft:chest@0', { id: 'minecraft:chest', meta: 0 }),
+  // the rain roof (RUK-2877, design goal 7): any block that blocks movement shelters a machine (gt-mechanics §3.4a); glass keeps the line in view
+  roof: partDef('Glass', 'minecraft:glass@0', { id: 'minecraft:glass', meta: 0 }),
   pr_junction: partDef('Routed Junction Pipe', `${PR_TRANSPORT}.pipe@1`, partBlockRef('pr_rbasic')),
   pr_interface: partDef('Routed Interface Pipe', `${PR_TRANSPORT}.pipe@2`, partBlockRef('pr_rinterface')),
   pr_request: partDef('Routed Request Pipe', `${PR_TRANSPORT}.pipe@4`, partBlockRef('pr_rrequest'), ['Request Pipe']),
@@ -236,6 +238,14 @@ export function pickTransformer(pack: Pack, lowerTier: number): Machine | null {
   const transformers = allMachineIds(pack).map((id) => machineOf(pack, id))
     .filter((m): m is Machine => m !== undefined && m.kind === 'transformer' && m.tier === lowerTier);
   return transformers.sort((a, b) => rank(a) - rank(b) || compareMachineId(a.id, b.id))[0] ?? null;
+}
+
+/** The export's Hi-Amp Transformer between `lowerTier` and the tier above, or null when it has none (no GT++). */
+export function pickHiAmpTransformer(pack: Pack, lowerTier: number): Machine | null {
+  const found = allMachineIds(pack).map((id) => machineOf(pack, id))
+    .filter((m): m is Machine => m !== undefined && m.kind === 'transformer' && m.tier === lowerTier
+      && simpleClassName(m.cls) === 'MTETransformerHiAmp');
+  return found.sort((a, b) => compareMachineId(a.id, b.id))[0] ?? null;
 }
 
 // ---- Hatches and buses ----

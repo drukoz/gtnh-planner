@@ -11,9 +11,9 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { DYE_NAMES } from '../../shared/layout/enderio.ts';
-import { fmtInt } from '../../shared/layout/format.ts';
+import { fmtInt, joinNames } from '../../shared/layout/format.ts';
 import type { Rgb } from '../../shared/types/assets.ts';
-import type { DyeColor, Layout } from '../../shared/types/layout.ts';
+import { CandidateKind, type DyeColor, type Layout, type LayoutCandidate, type LayoutLoss, type LayoutSearch } from '../../shared/types/layout.ts';
 import type { LogisticsMode } from '../../shared/types/plan.ts';
 import { messageOf } from '../api/client.ts';
 import { Figs } from '../components/Figs.tsx';
@@ -28,7 +28,7 @@ import { createViewer, type Viewer } from '../three/renderer.ts';
 import { blockList, buildScene, hoverText, pickInfo } from '../three/scene-data.ts';
 import type { ProjectViewProps } from './project-tabs.ts';
 
-type Show = { ghosts: boolean; hookups: boolean };
+type Show = { ghosts: boolean; hookups: boolean; roof: boolean };
 type Info = { title: string; lines: string[] };
 
 export interface View3DShellProps {
@@ -112,7 +112,7 @@ export function saveShowLinks(on: boolean, key: string = LINKS_STORAGE_KEY): voi
   }
 }
 
-function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' | 'onShow' | 'showLinks' | 'onShowLinks' | 'focus' | 'onFocus'> & { height: number }): ReactElement {
+function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' | 'onShow' | 'showLinks' | 'onShowLinks' | 'focus' | 'onFocus'> & { height: number; roof: boolean }): ReactElement {
   const { maxLayer, onLayer, show, onShow, showLinks, onShowLinks, height } = props;
   return (
     <div className="row view3d-controls">
@@ -139,6 +139,12 @@ function Controls(props: Pick<View3DShellProps, 'maxLayer' | 'onLayer' | 'show' 
         <input type="checkbox" checked={show.hookups} onChange={(e) => onShow({ ...show, hookups: e.currentTarget.checked })} />
         Hookups
       </label>
+      {props.roof && (
+        <label className="check">
+          <input type="checkbox" checked={show.roof} onChange={(e) => onShow({ ...show, roof: e.currentTarget.checked })} />
+          Roof
+        </label>
+      )}
       <label className="check">
         <input type="checkbox" checked={showLinks} onChange={(e) => onShowLinks(e.currentTarget.checked)} />
         Show connections
@@ -205,6 +211,86 @@ function BlockList(props: { layout: Layout; names: Readonly<Record<string, strin
   );
 }
 
+/**
+ * A layout search candidate in words (RUK-2619): where its power head stands, counting the machines west of a middle
+ * head. A kind this client does not know (a newer server) is 'Other layout'.
+ */
+export function candidateLabel(c: LayoutCandidate): string {
+  if (c.kind === CandidateKind.WestHead) return 'Power head at the west end';
+  if (c.kind === CandidateKind.MiddleHead) return `Power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
+  if (c.kind === CandidateKind.Stacked) {
+    return c.westUnits === 0 ? 'Machines stacked two high, power head at the west end'
+      : `Machines stacked two high, power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
+  }
+  if (c.kind === CandidateKind.Packed) return 'Machines packed three to a cable, power head at the west end';
+  if (c.kind === CandidateKind.PackedOpen) return 'Machines packed three to a cable, interfaces on the outside, power head at the west end';
+  if (c.kind === CandidateKind.Reordered) {
+    return c.westUnits === 0 ? 'Machines reordered within their tier, power head at the west end'
+      : `Machines reordered within their tier, power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
+  }
+  return 'Other layout';
+}
+
+/** Why the line lays no rain roof (RUK-2877, M3-21): every biome around its site is one GregTech never rains on (`Layout.dryBiomes`); `null` otherwise. */
+export function rainText(layout: Layout): string | null {
+  const biomes = layout.dryBiomes;
+  if (biomes === undefined || biomes.length === 0) return null;
+  return `No rain roof: it never rains in ${joinNames(biomes)}, where this line stands.`;
+}
+
+/**
+ * The layout search panel's lines (RUK-2619): what the laid line takes and loses, how many layouts were tried, today's
+ * rule's line beside it when the search kept another, and how many machines its wiring leaves too few volts to run.
+ * The headline loss is the laid line's own wiring (`loss.totalEUt − loss.hookupEUt`), the candidate's estimate when the
+ * layout has no loss; when the two differ a line says the search ranked with each hookup landing where its own wiring
+ * loses least.
+ */
+export function searchText(search: LayoutSearch, loss?: LayoutLoss): string[] {
+  const c = search.candidates[search.chosen];
+  if (c === undefined) return [];
+  const n = search.candidates.length;
+  const b = search.baseline === search.chosen ? undefined : search.candidates[search.baseline];
+  const laid = loss === undefined ? c.lossEUt : loss.totalEUt - loss.hookupEUt;
+  return [
+    `Wiring and logistics: ${fmtInt(c.total)} blocks; its wiring loses ${fmtInt(laid)} EU/t.`,
+    ...(fmtInt(laid) !== fmtInt(c.lossEUt)
+      ? [`The search compared layouts with each one's power hookup landing where its own wiring loses least (${fmtInt(c.lossEUt)} EU/t for this one); the hookup lands where it and the line lose least together.`]
+      : []),
+    ...(n > 1 ? [`${fmtInt(n)} layouts tried; this one is the best that is never worse than today's rule.`] : ['1 layout tried.']),
+    ...(b === undefined ? [] : [`Today's rule would lay ${fmtInt(b.total)} blocks losing ${fmtInt(b.lossEUt)} EU/t (${candidateLabel(b)}).`]),
+    ...(c.unpowered > 0 ? [`${fmtInt(c.unpowered)} machines get too few volts to run: see the warnings below.`] : []),
+  ];
+}
+
+/** What the layout search laid (RUK-2619): the lines above, and every candidate it scored in a table while there is more than one. */
+function SearchPanel(props: { search: LayoutSearch; loss?: LayoutLoss }): ReactElement {
+  const { search, loss } = props;
+  const headingId = useId();
+  return (
+    <section data-testid="layout-search" aria-labelledby={headingId} className="view3d-box">
+      <h3 id={headingId}>Layout search</h3>
+      {searchText(search, loss).map((line, i) => <p key={`${i}|${line}`} className="small">{line}</p>)}
+      {search.candidates.length > 1 && (
+        <table className="cost-table">
+          <thead>
+            <tr><th scope="col">Layout</th><th scope="col">Blocks</th><th scope="col">Loss EU/t</th><th scope="col">Can't run</th></tr>
+          </thead>
+          <tbody>
+            {search.candidates.map((c, i) => (
+              <tr key={`${i}|${c.kind}|${c.westUnits}|${c.total}`} aria-current={i === search.chosen ? 'true' : undefined}>
+                <td>{`${candidateLabel(c)}${i === search.chosen ? ' (laid)' : ''}`}</td>
+                <td>{fmtInt(c.total)}</td>
+                <td>{fmtInt(c.lossEUt)}</td>
+                <td>{fmtInt(c.unpowered)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 function Warnings(props: { layout: Layout }): ReactElement | null {
   const { warnings } = props.layout;
   if (warnings.length === 0) return null;
@@ -221,15 +307,17 @@ function Warnings(props: { layout: Layout }): ReactElement | null {
 /**
  * The tab without the viewer: what is happening (an error, laying out, beside a skeleton of the scene while the first layout is on its way
  * and a scene can be drawn, no WebGL2, nothing to build, only farms to build, which have no blocks), the canvas with
- * the hover label over it, the layer slider and the Ghosts, Hookups and Show connections toggles (with what the drawn
- * links are while they show), and beside them the clicked block's or link's details (where they show without
- * scrolling), the side list and the layout's warnings below it. Without WebGL2 only the side list and the warnings show.
+ * the hover label over it, the layer slider and the Ghosts, Hookups, Roof (shown when the line has a rain roof,
+ * RUK-2877) and Show connections toggles (with what the drawn links are while they show), and beside them the clicked
+ * block's or link's details (where they show without scrolling), the side list, the layout search's score (while the
+ * layout carries one) and the layout's warnings below it. Without WebGL2 only the side list and the warnings show.
  */
 export function View3DShell(props: View3DShellProps): ReactElement {
   const { layout, loading, error, webgl, hover, info, canvas, names } = props;
   const blocks = layout !== null && layout.blocks.length > 0;
   const warned = layout !== null && layout.warnings.length > 0;
   const farmsOnly = layout !== null && layout.status !== 'empty' && !blocks && (layout.reserved?.length ?? 0) > 0;
+  const rain = layout !== null ? rainText(layout) : null;
   return (
     <div className="view3d" data-testid="view3d">
       {error !== null && <p className="error">{error}</p>}
@@ -247,8 +335,10 @@ export function View3DShell(props: View3DShellProps): ReactElement {
                 {hover !== null && <p data-testid="view3d-hover" className="view3d-hover"><Figs text={hover} /></p>}
               </div>
               <Controls maxLayer={props.maxLayer} onLayer={props.onLayer} show={props.show} onShow={props.onShow} showLinks={props.showLinks}
-                onShowLinks={props.onShowLinks} height={layout.size[1]} {...(props.onFocus === undefined ? {} : { focus: props.focus === true, onFocus: props.onFocus })} />
+                onShowLinks={props.onShowLinks} height={layout.size[1]} roof={layout.blocks.some((b) => b.role === 'roof')}
+                {...(props.onFocus === undefined ? {} : { focus: props.focus === true, onFocus: props.onFocus })} />
               <p className="muted small">Drag to turn, right-drag to pan, scroll to zoom; click a block for its details.</p>
+              {rain !== null && <p data-testid="view3d-rain" className="muted small">{rain}</p>}
               {props.showLinks && props.linksNote != null && (
                 <p data-testid="view3d-links" className="muted small">{props.linksNote}</p>
               )}
@@ -258,6 +348,7 @@ export function View3DShell(props: View3DShellProps): ReactElement {
           <div className="view3d-side">
             {info !== null && <BlockInfo info={info} />}
             {blocks && <BlockList layout={layout} names={names} />}
+            {layout.search !== undefined && <SearchPanel search={layout.search} loss={layout.loss} />}
             <Warnings layout={layout} />
           </div>
         </div>
@@ -334,7 +425,7 @@ export default function View3D(props: ProjectViewProps): ReactElement {
   const { layout } = line;
   const [webgl] = useState(webgl2Available);
   const [maxLayer, setMaxLayer] = useState<number | null>(null);
-  const [show, setShow] = useState<Show>({ ghosts: true, hookups: true });
+  const [show, setShow] = useState<Show>({ ghosts: true, hookups: true, roof: true });
   const [showLinks, setShowLinks] = useState(() => loadShowLinks());
   const [focus, setFocus] = useState(() => loadShowLinks(FOCUS_STORAGE_KEY));
   const [hover, setHover] = useState<string | null>(null);

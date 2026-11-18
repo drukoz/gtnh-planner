@@ -1,6 +1,6 @@
 // Block access to a world's region files (world-format §3): an LRU-cached chunk reader on a `RegionStore`, and the
 // voxel reader of a bounding box that the base viewer and the planner's structure matching use. Only `Level.Sections`
-// of a chunk is decoded; tile entities, entities and biomes are never built.
+// and the biome array of a chunk are decoded; tile entities and entities are never built.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import { UNKNOWN_INDEX, type BBox, type Voxels } from '../../shared/types/world.
 import type { WorldFiles } from './files.ts';
 import { parseNbt, type NbtCompound } from './nbt.ts';
 import { chunkIndex, chunkPayload, inflateChunk, regionChunkRefs, regionOfChunk, regionPathOf, REGION_HEADER_BYTES, type RegionChunkRef } from './region.ts';
-import { decodeSection, sectionIndex, type DecodedSection } from './sections.ts';
+import { biomeAt, decodeSection, sectionIndex, type DecodedSection } from './sections.ts';
 import { createPalette, GT_MACHINE_BLOCK, refAt } from './tiles.ts';
 
 export interface RegionStore { readRegion(dim: number, rx: number, rz: number): Promise<Uint8Array | null> }
@@ -33,7 +33,10 @@ export function regionStoreFromDir(regionsDir: string): RegionStore {
   };
 }
 
-export interface DecodedChunk { cx: number; cz: number; sections: Array<DecodedSection | null> /* length 16, by section Y */ }
+export interface DecodedChunk {
+  cx: number; cz: number; sections: Array<DecodedSection | null> /* length 16, by section Y */;
+  biomes: Int32Array   /* 256 entries, index ((z & 15) << 4) | (x & 15); −1 where the chunk has no biome */
+}
 
 export interface BlockReader {
   /** Null when the chunk is not available (no region, absent from it, or unreadable). */
@@ -51,7 +54,7 @@ function isCompound(v: unknown): v is NbtCompound {
   return typeof v === 'object' && v !== null && !(v instanceof Uint8Array) && !(v instanceof Int32Array) && !Array.isArray(v);
 }
 
-/** The decoded sections of a chunk's NBT, or null when it has no `Level` compound; a bad `Y` leaves that section out. */
+/** The decoded sections and biomes of a chunk's NBT, or null when it has no `Level` compound; a bad `Y` leaves that section out. */
 function decodeChunk(nbt: NbtCompound, cx: number, cz: number): DecodedChunk | null {
   const level = nbt.Level;
   if (!isCompound(level)) return null;
@@ -63,7 +66,9 @@ function decodeChunk(nbt: NbtCompound, cx: number, cz: number): DecodedChunk | n
       sections[s.Y] = decodeSection(s);
     }
   }
-  return { cx, cz, sections };
+  const biomes = new Int32Array(256);
+  for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) biomes[(z << 4) | x] = biomeAt(level, x, z);
+  return { cx, cz, sections, biomes };
 }
 
 /** Evicts the oldest entry of `map` beyond `max`; a hit is re-inserted by the callers to stay young. */
@@ -172,6 +177,7 @@ export async function readAreaVoxels(input: AreaInput, dim: number, bbox: BBox):
   const blocks = new Uint32Array(size[0] * size[1] * size[2]);
   const seen = new Map<number, number>();   // id·65536 + meta → palette index, for blocks that carry no position data
   const layer = size[0] * size[2];
+  const biomes = new Int32Array(layer).fill(-1);
   for (let cz = bbox.minZ >> 4; cz <= bbox.maxZ >> 4; cz++) {
     for (let cx = bbox.minX >> 4; cx <= bbox.maxX >> 4; cx++) {
       const chunk = await reader.chunk(dim, cx, cz);
@@ -180,6 +186,7 @@ export async function readAreaVoxels(input: AreaInput, dim: number, bbox: BBox):
       for (let z = z0; z <= z1; z++) {
         for (let x = x0; x <= x1; x++) {
           const column = (z - bbox.minZ) * size[0] + (x - bbox.minX);
+          if (chunk !== null) biomes[column] = chunk.biomes[((z & 15) << 4) | (x & 15)]!;
           for (let y = bbox.minY; y <= bbox.maxY; y++) {
             const at = (y - bbox.minY) * layer + column;
             if (chunk === null) { blocks[at] = UNKNOWN_INDEX; continue; }
@@ -206,5 +213,5 @@ export async function readAreaVoxels(input: AreaInput, dim: number, bbox: BBox):
       await yieldToLoop();
     }
   }
-  return { origin: [bbox.minX, bbox.minY, bbox.minZ], size, blocks, palette: palette.refs };
+  return { origin: [bbox.minX, bbox.minY, bbox.minZ], size, blocks, palette: palette.refs, biomes };
 }

@@ -69,10 +69,12 @@ export interface ModeResult {
 // ---- Dispatch ----
 
 /**
- * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed and AE2 may not.
+ * How far apart units' item ports must be in each mode (Task 5 `placeUnits`): direct may share, routed may not.
+ * AE2 may sit in every column (spacing 1) because M2-1 gives each ME Interface a Wrench target at its own machine,
+ * so an interface touching two machines no longer pushes into both.
  * EnderIO may share too: each face of a conduit is set on its own, so the N and S machines may share a spine cell.
  */
-export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 2, enderio: 0 });
+export const PORT_SPACING: Readonly<Record<LogisticsMode, 0 | 1 | 2>> = Object.freeze({ direct: 0, routed: 1, ae2: 1, enderio: 0 });
 
 /**
  * The mode's line. Every mode but machine to machine (add-on 15's) also says how to run its hand-run machines and what
@@ -225,15 +227,17 @@ export function itemPorts(placement: Placement): ItemPort[] {
 /**
  * The spine's columns up to the item ports above it (a bus GT takes only higher up, research hatch-rules.md): per column
  * with such a port, the cells from the one above the spine up to the highest port, sorted by x, then y; `cells` are
- * those no unit has a port on, `ports` the rest; `links` join each column from the spine up.
+ * those no unit has a port on, `ports` the rest; `links` join each column from the spine up. A port that is itself a
+ * spine cell needs no riser.
  */
 export function itemRisers(placement: Placement): { cells: Vec3[]; ports: Vec3[]; links: Array<[Vec3, Vec3]> } {
   const { spineZ } = placement;
   const top = new Map<number, number>();
   const portKeys = new Set<string>();
+  const onSpine = new Set(placement.spine.map(posKey));
   for (const u of placement.units) {
     for (const p of u.ports.items) {
-      if (p[1] <= 0) continue;
+      if (p[1] <= 0 || onSpine.has(posKey(p))) continue;
       top.set(p[0], Math.max(top.get(p[0]) ?? 0, p[1]));
       portKeys.add(posKey(p));
     }

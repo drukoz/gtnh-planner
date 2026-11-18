@@ -4,7 +4,7 @@ import { unitsFromPlan, placeUnits, type LocalBlock, type Unit } from '../../../
 import { hookupAllowanceVolts, tierGroups, transformerStages, deliveredVolts } from '../../../src/server/layout/power.ts';
 import { resolveParts } from '../../../src/server/layout/parts.ts';
 import { layoutPack, makePlan, IDS } from '../../helpers/layout-fixtures.ts';
-import { tierContacts } from '../../helpers/power-loss.ts';
+import { tierContacts, lossLine } from '../../helpers/power-loss.ts';
 import { V } from '../../../src/shared/gt/tiers.ts';
 import { machineIdOfLegacy } from '../../../src/shared/ids.ts';
 import { DIRS, posKey, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
@@ -282,6 +282,8 @@ describe('internal routing edge cases', () => {
 
   it('fills the bank column and asks for parallel runs when one cable or column is not enough', () => {
     const pack = layoutPack();
+    pack.machines.delete(machineIdOfLegacy(878));   // RUK-2976: no LV Hi-Amp Transformer, so the bank lays standard ones
+    pack.machineByMteId.delete(878);
     const { placement, r } = route(pack, makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1, euPerTick: 672 }]), 2);
     expect(placement.size[2]).toBe(4);
     expect(r.blocks.filter((b) => b.role === 'transformer').map((b) => [b.pos, b.connections])).toEqual(
@@ -299,6 +301,23 @@ describe('internal routing edge cases', () => {
     const ebf = route(pack, makePlan([{ id: 'b', mteId: IDS.EBF, count: 1, euPerTick: 480 }]), 2);
     expect([ebf.placement.size[2], ebf.placement.spineZ]).toEqual([6, 4]);
     expect(ebf.r.blocks.filter((b) => b.role === 'transformer').map((b) => b.pos[2])).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('lays Hi-Amp Transformers where the standard bank does not fit', () => {
+    const { placement, r } = route(layoutPack(), makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 1, euPerTick: 672 }]), 2);
+    expect(placement.size).toEqual([5, 1, 4]);
+    // RUK-2976: the 7 standard LV transformers the amps need do not fit the bank, and 2 Hi-Amps do (7 A out of 2 × 16,
+    // 24 A in of 2 × 6), so the bank lays 2 Hi-Amps and asks for nothing by hand.
+    expect(r.blocks.filter((b) => b.role === 'transformer').map((b) => [b.pos, b.label, b.block.mteId, b.facing, b.connections])).toEqual([
+      [[1, 0, 1], 'LV Hi-Amp Transformer', 878, 4, (1 << 4) | (1 << 5)],
+      [[1, 0, 2], 'LV Hi-Amp Transformer', 878, 4, (1 << 4) | (1 << 5)],
+    ]);
+    expect(r.warnings).toEqual([
+      { code: 'cable_amps', text: 'No cable carries 7 A at MV: run 4 parallel 2x Annealed Copper Cable lines' },
+      { code: 'cable_amps', text: 'No cable carries 24 A at LV: run 6 parallel 4x Tin Cable lines' },
+      { code: 'cable_loss_high', text: `The LV wiring inside the line loses 4 of 32 V over 4 blocks of 4x Tin Cable — about 96 EU/t. ${LV_REMEDY}` },
+    ]);
+    expect(reachesRun(r.blocks, placement.units[0]!.ports.power!, 2)).toBe(true);
   });
 
   it("keeps one fluid's pipe off the cells another fluid connects to", () => {
@@ -320,6 +339,8 @@ describe('internal routing edge cases', () => {
     const noTransformer = layoutPack();
     noTransformer.machines.delete(machineIdOfLegacy(IDS.TRANSFORMER_LV));
     noTransformer.machineByMteId.delete(IDS.TRANSFORMER_LV);
+    noTransformer.machines.delete(machineIdOfLegacy(878));   // RUK-2677: and the LV Hi-Amp Transformer, so the export has no LV transformer at all
+    noTransformer.machineByMteId.delete(878);
     const a = route(noTransformer, twoStep(), 2).r;
     expect(a.warnings.map((w) => w.code)).toEqual(['cable_amps', 'no_transformer', 'cable_loss_high']);
     expect(a.warnings[1]).toEqual({ code: 'no_transformer', text: 'No LV transformer in this export' });
@@ -519,4 +540,27 @@ describe('supply landing cells on the line boundary', () => {
     expect(first.length).toBeGreaterThan(1);
     expect(second).toEqual(first);                                                                   // deterministic
   });
+});
+
+// RUK-2617: a tier whose wiring leaves machines too few volts to run says which machines they are.
+describe('machine_unpowered: the machines a tier\'s wiring cannot run', () => {
+  it('warns which LV machines the 40-machine AE2 line cannot run', async () => {
+    // 53 LV cable blocks to the farthest macerator leave it 1 V, and 30 EU/t at 2 A needs 15 V
+    const { layout } = await lossLine(40, 'ae2', { packing: false });
+    const unpowered = layout.warnings.filter((w) => w.code === 'machine_unpowered');
+    expect(unpowered).toHaveLength(1);
+    expect(unpowered[0]!.text.startsWith('The LV wiring cannot run ')).toBe(true);
+    expect(unpowered[0]!.text).toContain('Basic Macerator');
+  }, 30_000);
+
+  it('runs every LV machine the 40-machine AE2 line lays with satellites', async () => {
+    // satellites step down beside the far machines (RUK-2679): the same line with them on warns of no starved machine
+    const { layout } = await lossLine(40, 'ae2', { satellites: true });
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(0);
+  }, 30_000);
+
+  it('raises no machine_unpowered warning when every machine runs', async () => {
+    const { layout } = await lossLine(10, 'direct');
+    expect(layout.warnings.map((w) => w.code)).not.toContain('machine_unpowered');
+  }, 30_000);
 });

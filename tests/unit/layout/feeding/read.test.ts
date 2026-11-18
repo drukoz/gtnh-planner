@@ -7,6 +7,7 @@ import type { RoutedNet, Ae2Net, EioNet, GtPipeNet, BasicNode, BenchNode, FeedMo
 import type { FeedBlock, FeedConduitFilter } from '../../../../src/server/layout/feeding/contract.ts';
 import { PART_KEYS } from '../../../../src/server/layout/feeding/facts.ts';
 import { OPPOSITE, posKey, rotateFace, type Vec3 } from '../../../../src/shared/layout/geometry.ts';
+import type { Face } from '../../../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../../../src/shared/types/layout.ts';
 import type { PlanFlow } from '../../../../src/shared/types/plan.ts';
 import { busSlots } from '../../../../src/server/layout/parts.ts';
@@ -99,12 +100,12 @@ describe('readLine', () => {
     const m = readLine({ pack, plan, layout: await layLegacy(pack, plan, 'ae2') });
     const nets = m.networks.filter((n): n is Ae2Net => n.kind === 'ae2');
     expect(nets).toHaveLength(1);
-    expect(nets[0]!.interfaces.map((i) => i.id)).toEqual(['3,0,2', '5,0,2', '7,0,2']);
+    expect(nets[0]!.interfaces.map((i) => i.id)).toEqual(['3,0,2', '4,0,2', '5,0,2']);
     const last = nets[0]!.interfaces[2]!;
-    expect(last.targets).toEqual([{ node: '7,0,1', side: 3 }]);
+    expect(last.targets).toEqual([{ node: '5,0,1', side: 3 }]);
     expect(last.spec).toEqual({ patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: false, lock: 'none' });
-    expect(m.covers).toContainEqual({ host: '7,0,1', side: 3, kind: 'conveyor', export: true, allowInput: true, op: { tickRate: 100, stacks: 1, items: 16 } });
-    expect(unknownsAt(m, 'ae2_pattern_text')).toEqual([[3, 64, 2], [5, 64, 2], [7, 64, 2]]);
+    expect(m.covers).toContainEqual({ host: '5,0,1', side: 3, kind: 'conveyor', export: true, allowInput: true, op: { tickRate: 100, stacks: 1, items: 16 } });
+    expect(unknownsAt(m, 'ae2_pattern_text')).toEqual([[3, 64, 2], [4, 64, 2], [5, 64, 2]]);
     expect(m.nodes.filter((n) => n.kind === 'chest')).toEqual([]);
   });
 
@@ -164,7 +165,7 @@ describe('readLine', () => {
         expect(layout.rotation).toBe(rotation);
         if (mode === 'ae2') {
           // the world face toward the assembler, as the writer turns it with the line
-          const iface = layout.blocks.find((b) => b.role === 'interface' && posKey(fromWorld(b.pos, layout)) === '7,0,2')! as FeedBlock;
+          const iface = layout.blocks.find((b) => b.role === 'interface' && posKey(fromWorld(b.pos, layout)) === '5,0,2')! as FeedBlock;
           iface.feed = { interface: { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: false,
             targets: [rotateFace('north', rotation)] } };
         }
@@ -172,9 +173,9 @@ describe('readLine', () => {
         for (const n of m.nodes) expect(fromWorld(n.pos, layout)).toEqual(n.local);
         if (mode === 'ae2') {
           const net = m.networks.find((n): n is Ae2Net => n.kind === 'ae2')!;
-          expect(net.interfaces.find((i) => i.id === '7,0,2')!.targets).toEqual([{ node: '7,0,1', side: 3 }]);
+          expect(net.interfaces.find((i) => i.id === '5,0,2')!.targets).toEqual([{ node: '5,0,1', side: 3 }]);
           // its pattern text is still on the block: the structured config wins
-          expect(m.unknowns.filter((u) => u.code === 'text_ignored').map((u) => fromWorld(u.pos!, layout))).toEqual([[7, 0, 2]]);
+          expect(m.unknowns.filter((u) => u.code === 'text_ignored').map((u) => fromWorld(u.pos!, layout))).toEqual([[5, 0, 2]]);
         }
         views.push(localView(m));
       }
@@ -275,7 +276,7 @@ describe('readLine', () => {
     const net = m.networks.find((n): n is Ae2Net => n.kind === 'ae2')!;
     expect(net.exportBuses).toEqual([{ id: '3,1,1', label: 'ME Export Bus at 3 65 1', keys: ['t:a@0'], amount: 1, target: { node: '3,0,1', side: 1 } }]);
     expect(unknownsAt(m, 'export_bus_text')).toEqual([[3, 65, 1]]);
-    expect(net.interfaces.map((i) => i.id)).toEqual(['3,0,2', '5,0,2', '7,0,2']);
+    expect(net.interfaces.map((i) => i.id)).toEqual(['3,0,2', '4,0,2', '5,0,2']);
   });
 
   it('skips a machine whose step the plan lacks', async () => {
@@ -510,11 +511,11 @@ describe('readLine', () => {
     const bus = (pos: Vec3, more: Partial<FeedBlock>): FeedBlock => ({
       pos, block: { id: 'appliedenergistics2:item.ItemMultiPart', meta: 260 }, role: 'interface', label: 'ME Export Bus', ...more,
     });
-    layout.blocks.push(bus([5, 65, 3], { facing: 0, feed: { exportBus: { keys: ['t:x@0'], cards: 2 } } }), bus([3, 66, 1], { config: { exportFilter: 'Alpha and Nothing Known' } }));
+    layout.blocks.push(bus([4, 65, 3], { facing: 0, feed: { exportBus: { keys: ['t:x@0'], cards: 2 } } }), bus([3, 66, 1], { config: { exportFilter: 'Alpha and Nothing Known' } }));
     const m = readLine({ pack, plan, layout });
     expect(m.networks.find((n): n is Ae2Net => n.kind === 'ae2')!.exportBuses).toEqual([
       { id: '3,2,1', label: 'ME Export Bus at 3 66 1', keys: ['t:a@0'], amount: 1, target: null },
-      { id: '5,1,3', label: 'ME Export Bus at 5 65 3', keys: ['t:x@0'], amount: 32, target: { node: '5,0,3', side: 1 } },
+      { id: '4,1,3', label: 'ME Export Bus at 4 65 3', keys: ['t:x@0'], amount: 32, target: { node: '4,0,3', side: 1 } },
     ]);
     expect(['export_bus_text', 'text_unread', 'export_target_unknown'].map((code) => unknownsAt(m, code))).toEqual([[[3, 66, 1]], [[3, 66, 1]], [[3, 66, 1]]]);
   });
@@ -554,10 +555,10 @@ describe('readLine', () => {
   it('reads the structured patterns of an AE2 line as main lays it', async () => {
     const { pack, plan } = chain2();
     const m = readLine({ pack, plan, layout: await layFeed(pack, plan, 'ae2') });
-    const makeEx = { patterns: [{ inputs: [{ key: 't:a@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true };
+    const makeEx = (target: Face) => ({ patterns: [{ inputs: [{ key: 't:a@0', amount: 1 }], outputs: [{ key: 't:x@0', amount: 1 }] }], blocking: true, targets: [target] });
     expect(ae2Net(m).interfaces.map((i) => [i.id, i.targets, i.spec])).toEqual([
-      ['3,0,2', [{ node: '3,0,1', side: 3 }], makeEx], ['5,0,2', [{ node: '5,0,3', side: 2 }], makeEx],
-      ['7,0,2', [{ node: '7,0,1', side: 3 }], { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: true }],
+      ['3,0,2', [{ node: '3,0,1', side: 3 }], makeEx('north')], ['4,0,2', [{ node: '4,0,3', side: 2 }], makeEx('south')],
+      ['5,0,2', [{ node: '5,0,1', side: 3 }], { patterns: [{ inputs: [{ key: 't:x@0', amount: 1 }], outputs: [{ key: 't:y@0', amount: 1 }] }], blocking: true, targets: ['north'] }],
     ]);
     expect(m.unknowns).toEqual([]);
   });
@@ -589,31 +590,31 @@ describe('readLine', () => {
     const layout = await layFeed(pack, plan, 'ae2');
     const m = readLine({ pack, plan, layout });
     // an AE2 part on the spine's cable, facing the extractor, its filter the extractor's input; no card moves 1 item an operation
-    expect(ae2Net(m).exportBuses).toEqual([{ id: '3,0,2', label: 'ME Export Bus at 3 64 2', keys: ['t:x@0'], amount: 1, target: { node: '3,0,3', side: 2 } }]);
+    expect(ae2Net(m).exportBuses).toEqual([{ id: '2,0,2', label: 'ME Export Bus at 2 64 2', keys: ['t:x@0'], amount: 1, target: { node: '2,0,3', side: 2 } }]);
     expect(ae2Net(m).interfaces.map((i) => i.id)).toEqual(['1,0,2']);
     // the bus is no unknown cover: only the extractor's own fluid cover is left unread
-    expect(unknownsAt(m, 'cover_unknown')).toEqual([[3, 64, 3]]);
+    expect(unknownsAt(m, 'cover_unknown')).toEqual([[2, 64, 3]]);
     // its Acceleration Cards set what it moves an operation
-    const cable = blockAt(layout, [3, 64, 2]);
+    const cable = blockAt(layout, [2, 64, 2]);
     cable.feed = { exportBus: { keys: ['t:x@0'], cards: 2 } };
     expect(ae2Net(readLine({ pack, plan, layout })).exportBuses[0]!.amount).toBe(32);
     // without the feed, the bus cover's own filter and cards
     delete cable.feed;
     cable.covers![0]!.settings = { mode: 'me_export', accelerationCards: 3 };
-    expect(ae2Net(readLine({ pack, plan, layout })).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'], amount: 64, target: { node: '3,0,3', side: 2 } })]);
+    expect(ae2Net(readLine({ pack, plan, layout })).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'], amount: 64, target: { node: '2,0,3', side: 2 } })]);
     // a text filter beside the bus cover is ignored, as it is beside feed.exportBus
     expect(cable.config).toBeUndefined();
     cable.config = { exportFilter: 'Alpha' };
     const texted = readLine({ pack, plan, layout });
     expect(ae2Net(texted).exportBuses).toEqual([expect.objectContaining({ keys: ['t:x@0'] })]);
     expect(texted.unknowns.filter((u) => u.code === 'text_ignored' || u.code === 'export_bus_text').map((u) => [u.code, u.pos, u.text]))
-      .toEqual([['text_ignored', [3, 64, 2], 'ME Export Bus at 3 64 2: its structured filter is read, and its text "Alpha" is ignored']]);
+      .toEqual([['text_ignored', [2, 64, 2], 'ME Export Bus at 2 64 2: its structured filter is read, and its text "Alpha" is ignored']]);
     delete cable.config;
     // a bus that faces no inventory feeds nothing the checker knows
     cable.covers![0]!.face = 'up';
     const lost = readLine({ pack, plan, layout });
     expect(ae2Net(lost).exportBuses[0]!.target).toBeNull();
-    expect(unknownsAt(lost, 'export_target_unknown')).toEqual([[3, 64, 2]]);
+    expect(unknownsAt(lost, 'export_target_unknown')).toEqual([[2, 64, 2]]);
   });
 
   it('reads an export bus in front of an input bus in the local frame', async () => {

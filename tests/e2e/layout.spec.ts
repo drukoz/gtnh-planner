@@ -71,6 +71,13 @@ test('plan a line, see it on the map, move it, follow a pin and look at it in 3D
 
   await page.getByRole('tab', { name: '3D' }).click();
   await expect(page.getByTestId('block-list')).toContainText('Basic Bending Machine ×2');
+  // RUK-2621: the layout search panel (RUK-2619) shows on the 3D tab and agrees with the API's layout.search
+  const search = page.getByTestId('layout-search');
+  await expect(search.getByRole('heading', { name: 'Layout search' })).toBeVisible();
+  await expect(search).toContainText(/Wiring and logistics: \d+ blocks?/);
+  await expect(search).toContainText(/\d+ layouts? tried[.;]/);
+  expect(Number(/(\d+) layouts? tried[.;]/.exec((await search.textContent())!)![1])).toBe((await layoutOf()).search.candidates.length);
+  await search.screenshot({ path: '/Volumes/Storage/paperclip/cto-scratch/RUK-2621/layout-search.png' });
   await page.waitForFunction(() => {
     const c = document.querySelector<HTMLCanvasElement>('[data-testid=view3d-canvas] canvas');
     const gl = c?.getContext('webgl2');

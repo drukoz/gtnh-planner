@@ -138,7 +138,9 @@ describe('middle power head', () => {
       expect(east.length).toBe(12);
       for (const u of mid.placement.units) {
         const run = runX(SUPPLY_TIER, fedTier(u.tier), mid.placement.headX);
-        expect(reaches(mid.internal.blocks, u.ports.power!, (p) => p[0] === run && p[1] === 0), u.name).toBe(true);
+        // a satellite bank's output cell of the unit's feed tier ends its cable too (RUK-2678)
+        const ends = new Set(mid.internal.satellites.filter((s) => s.toTier === fedTier(u.tier)).map((s) => posKey(s.output)));
+        expect(reaches(mid.internal.blocks, u.ports.power!, (p) => (p[0] === run && p[1] === 0) || ends.has(posKey(p))), u.name).toBe(true);
       }
       expect(spineOf(mid)).toEqual([]);
       expect(brokenRuns(mid)).toEqual([]);
@@ -149,8 +151,8 @@ describe('middle power head', () => {
     const westHead = line(lossPlan(20), 0, 'ae2');
     const mid = line(lossPlan(20), 8, 'ae2');
     const lvWorst = (r: ReturnType<typeof line>): number => r.internal.tiers.find((t) => t.tier === 1)!.worstBlocks;
-    expect(lvWorst(westHead)).toBe(44);
-    expect(lvWorst(mid)).toBe(30);
+    expect(lvWorst(westHead)).toBe(25);
+    expect(lvWorst(mid)).toBe(22);
     expect(lvWorst(mid)).toBeLessThan(lvWorst(westHead));
   });
 

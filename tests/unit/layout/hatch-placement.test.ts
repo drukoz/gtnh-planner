@@ -72,8 +72,9 @@ describe('a line whose tallest unit is an EBF', () => {
     expect(step(muffler!.pos, muffler!.facing!)[1]).toBe(layout.origin[1] + layout.size[1] - 1);
     const text = (l: Layout, id: string) => l.buildSteps.find((s) => s.id === id)!.text;
     expect(text(layout, 'layout:site')).toContain('(5 high)');
-    expect(text(layout, 'layout:roof')).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, '
-      + 'and a Muffler Hatch needs the block it faces kept empty');
+    // the EBF's own casings keep the rain off its energy hatch, so the line lays no roof and has no roof step (RUK-2877)
+    expect(layout.blocks.filter((b) => b.role === 'roof')).toEqual([]);
+    expect(layout.buildSteps.some((s) => s.id === 'layout:roof')).toBe(false);
     expect(text(layout, 'layout:place:e')).toMatch(/; keep the block above its Muffler Hatch empty, or GregTech stops the machine \(a muffler needs air to vent\)$/);
     // a block where the muffler's air goes, at a spot the group chose: the check finds it in the way
     const scan = makeScan({ base: { center: [20, 64, 20], bbox: { minX: 16, minY: 64, minZ: 16, maxX: 24, maxY: 65, maxZ: 24 } } });

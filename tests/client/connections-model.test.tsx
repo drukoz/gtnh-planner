@@ -40,7 +40,7 @@ describe('the Connections graph', () => {
     expect(g.nodes.find((n) => n.id === 'step:a')!.faces).toEqual([
       { id: 'step:a#cover:0,64,0:south', title: 'Basic Macerator, south face', lines: ['Conveyor Module (LV) on the south face: Export, allow input, 1 items/s'] },
       { id: 'step:a#config:0,64,0', title: 'Basic Macerator settings', lines: ['Input Filter on', 'Input from Output Side allowed: a newly crafted '
-        + 'machine has it on; a Screwdriver right-click on its middle-row side switches it and the chat names the new state, so leave it where the '
+        + 'machine has it on; a Screwdriver right-click on its output side switches it and the chat names the new state, so leave it where the '
         + 'chat says "Input from Output Side allowed" (a sneak-click switches the Input Filter instead, and the click also works a cover on that side)'] }]);
     expect(g.nodes.find((n) => n.id === 'chest:2,64,2')!.faces).toEqual([
       { id: 'chest:2,64,2#cover:2,64,1:south', title: 'Tin Item Pipe, south face', lines: ['Filtered Conveyor Cover (Export) on the south face: whitelist Titanium Ingot'] }]);

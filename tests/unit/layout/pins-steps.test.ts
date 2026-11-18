@@ -39,7 +39,7 @@ const CHECK_INPUT_SIDE = '; it takes its items through that side, which needs In
 const PLACE_MACERATORS = `Place 2× Basic Macerator ${PLACE_FACES}${CHECK_INPUT_SIDE}`;
 /** A machine setting's words: the state to leave it in, where a Screwdriver switches it, and what else that click does. */
 const FROM_OUTPUT_SIDE = (state: 'allowed' | 'forbidden') => `Input from Output Side ${state}: a newly crafted machine has it on; a Screwdriver `
-  + 'right-click on its middle-row side switches it and the chat names the new state, so leave it where the chat says '
+  + 'right-click on its output side switches it and the chat names the new state, so leave it where the chat says '
   + `"Input from Output Side ${state}" (a sneak-click switches the Input Filter instead, and the click also works a cover on that side)`;
 
 describe('pins', () => {
@@ -178,20 +178,54 @@ describe('layout steps', () => {
       power: { cable: '2x Annealed Copper Cable', blocks: 12, amps: 2, tier: 2, arrivingVolts: 116 }, supplyTier: 2,
       drafts: [{ id: 'layout:logistics:line', kind: 'logistics', pin: 'site', text: 'Lay pipe' }, { id: 'layout:configure:s1', kind: 'configure', pin: null, text: 'Set covers' }] }));
     expect(steps.map((s) => [s.order, s.id, s.kind, s.pin])).toEqual([
-      [1, 'layout:site', 'place', 1], [2, 'layout:roof', 'place', 1], [3, 'layout:place:s1', 'place', 1], [4, 'layout:place:s2', 'place', 1],
-      [5, 'layout:power:stage:1', 'power', 2], [6, 'layout:power:wire:2', 'power', 1], [7, 'layout:power:wire:1', 'power', 1],
-      [8, 'layout:power:hookup', 'power', 2], [9, 'layout:logistics:line', 'logistics', 1], [10, 'layout:configure:s1', 'configure', undefined],
-      [11, 'layout:test', 'test', 1]]);
+      [1, 'layout:site', 'place', 1], [2, 'layout:place:s1', 'place', 1], [3, 'layout:place:s2', 'place', 1],
+      [4, 'layout:power:stage:1', 'power', 2], [5, 'layout:power:wire:2', 'power', 1], [6, 'layout:power:wire:1', 'power', 1],
+      [7, 'layout:power:hookup', 'power', 2], [8, 'layout:logistics:line', 'logistics', 1], [9, 'layout:configure:s1', 'configure', undefined],
+      [10, 'layout:test', 'test', 1]]);
     expect(steps[0]!.text).toBe('Clear a 6×5 spot at pin 1 (1 high) and keep a 1-block path around it; dig 2 and fill 0 blocks to level it');
     // final review: a basic machine's front and output side are two faces (GT's mMainFacing and mFacing); GT never lets
     // the front face up or down, sets it with a sneaking wrench click and the output side with a plain one
-    expect(steps[2]!.text).toBe(PLACE_MACERATORS);
-    expect(steps[4]!.text).toBe('Place 1× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
+    expect(steps[1]!.text).toBe(PLACE_MACERATORS);
+    expect(steps[3]!.text).toBe('Place 1× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
     // final review C2: GT joins a cable to the block it is placed against, so the wire steps say to keep tiers apart
-    expect([steps[5]!.text, steps[6]!.text]).toEqual([
+    expect([steps[4]!.text, steps[5]!.text]).toEqual([
       'Wire the MV machines with 2x Annealed Copper Cable (8 blocks); connect only the drawn sides, and never let the MV cables touch the LV cables',
       'Wire the LV machines with 2x Tin Cable (7 blocks); connect only the drawn sides, and never let the MV cables touch the LV cables']);
-    expect(steps[7]!.text).toBe('Run 12× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 2 A at MV, arriving at 116 V');
+    expect(steps[6]!.text).toBe('Run 12× 2x Annealed Copper Cable from the tap at pin 2 to the line: up to 2 A at MV, arriving at 116 V');
+  });
+
+  // RUK-2668: satellite step-down banks laid along the line get one build step per tier they step down to
+  it('adds one satellite step per step-down tier right after the head stage, and no step without satellites', () => {
+    const pack = layoutPack();
+    const plan = makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 2 }, { id: 's2', mteId: IDS.ASSEMBLER, count: 1, tier: 2, euPerTick: 120 }]);
+    const placement = placeUnits(unitsFromPlan(pack, plan).units, { headWidth: 3, portSpacing: 0 });
+    const pins = makePins({ dim: 0, site: { center: [5, 64, 5], text: 's' }, power: { pos: [0, 64, 0], text: 'p' }, logistics: null, reuse: [], warnings: [] });
+    const parts = { pins, site: { dig: 2, fill: 0 }, units: placement.units,
+      stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 1, ampsOut: 2 }],
+      cables: [{ tier: 2, cable: '2x Annealed Copper Cable', cells: 8 }, { tier: 1, cable: '2x Tin Cable', cells: 7 }],
+      power: { cable: '2x Annealed Copper Cable', blocks: 12, amps: 2, tier: 2, arrivingVolts: 116 }, supplyTier: 2 };
+    const today = ['layout:site', 'layout:place:s1', 'layout:place:s2',
+      'layout:power:stage:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test'];
+    // two satellites of one tier feeding 5 + 4 machines: n = 2, m = 9; each lays GT++'s Hi-Amp Transformer (RUK-2677)
+    const HIAMP = { transformer: 'LV Hi-Amp Transformer', hiAmp: true };
+    const steps = layoutSteps(base({ ...parts,
+      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 5, ...HIAMP }, { fromTier: 2, toTier: 1, count: 1, machines: 4, ...HIAMP }] }));
+    expect(steps.map((s) => s.id)).toEqual(['layout:site', 'layout:place:s1', 'layout:place:s2',
+      'layout:power:stage:1', 'layout:power:satellites:1', 'layout:power:wire:2', 'layout:power:wire:1', 'layout:power:hookup', 'layout:test']);
+    const sat = steps.find((s) => s.id === 'layout:power:satellites:1')!;
+    expect(sat.kind).toBe('power');
+    expect(sat.pin).toBe(1);
+    expect(sat.text).toBe('Place 2× LV Hi-Amp Transformer out along the line where the view marks them, one beside each group of far LV machines '
+      + '(9 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it'
+      + '. Leave it in full mode; a screwdriver toggles half mode, which halves its amps');
+    // without GT++ a satellite lays the plain transformer, which has no half mode: the step names it and adds no mode sentence
+    const plain = layoutSteps(base({ ...parts, satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 3, transformer: 'Low Voltage Transformer', hiAmp: false }] }))
+      .find((s) => s.id === 'layout:power:satellites:1')!;
+    expect(plain.text).toBe('Place 1× Low Voltage Transformer out along the line where the view marks them, one beside each group of far LV machines '
+      + '(3 machines in all): turn each one\'s front (input) up with a Wrench, into the MV cable above it; it feeds the LV cable beside it');
+    // no satellites, empty or absent: the step ids are the same as today
+    expect(layoutSteps(base({ ...parts, satellites: [] })).map((s) => s.id)).toEqual(today);
+    expect(layoutSteps(base(parts)).map((s) => s.id)).toEqual(today);
   });
 
   it('puts the front of a machine with a fluid port toward the power head too, and a one-tier line has no tier rule', () => {
@@ -210,7 +244,7 @@ describe('layout steps', () => {
     const place = (rotation: 0 | 90 | 180 | 270) => layoutSteps(base({ units: placement.units, rotation })).filter((s) => s.kind === 'place').map((s) => s.text);
     // local west turns north → east → south → west by 90° each
     for (const [rotation, side] of [[0, 'west'], [90, 'north'], [180, 'east'], [270, 'south']] as const) {
-      expect(place(rotation).slice(2), String(rotation)).toEqual([
+      expect(place(rotation).slice(1), String(rotation)).toEqual([
         `Place 2× Basic Macerator ${PLACE_FACES.replaceAll('west', side)}${CHECK_INPUT_SIDE}`,
         `Place 1× Basic Fluid Extractor ${PLACE_FACES.replaceAll('west', side)}`]);                 // takes only fluids: no check
     }
@@ -230,7 +264,7 @@ describe('layout steps', () => {
       label: 'Ender Fluid Conduit', conduits: [{ kind: 'liquid_ender', item: 'EnderIO:itemLiquidConduit@2', connections: 0, faces: [insert
         ? { face: 'north', mode: 'insert', target, insert: { color: 'red', filter: { whitelist: true, keys: ['fluid:water'] }, rate: 1, outputSide: true } }
         : { face: 'north', mode: 'extract', target, extract: { color: 'red', filter: { whitelist: true, keys: ['fluid:water'] }, rate: 1, roundRobin: false, redstone: 'ignore' } }] }] });
-    const place = (blocks: LayoutBlock[]) => layoutSteps(base({ units: placement.units, blocks })).filter((s) => s.kind === 'place').map((s) => s.text).slice(2);
+    const place = (blocks: LayoutBlock[]) => layoutSteps(base({ units: placement.units, blocks })).filter((s) => s.kind === 'place').map((s) => s.text).slice(1);
     const [s1, x] = [machine(1, 's1', 'Basic Macerator', IDS.MACERATOR), machine(2, 'x', 'Basic Fluid Extractor', IDS.EXTRACTOR)];
     expect(place([s1, x, conduit(1, 'Basic Macerator', true), conduit(2, 'Basic Fluid Extractor', true)])).toEqual([
       `Place 1× Basic Macerator ${PLACE_FACES}${CHECK_INPUT_SIDE.replace('its items', 'its items and fluids')}`,
@@ -251,8 +285,8 @@ describe('layout steps', () => {
       + 'hatches: Input Bus (ULV), Output Bus (LV), MV Energy Hatch, Maintenance Hatch, Input Hatch (LV), Muffler Hatch (LV); '
       + 'keep the block above its Muffler Hatch empty, or GregTech stops the machine (a muffler needs air to vent)');
     expect(steps[0]!.text).toBe('Clear a 5×7 spot (5 high) and keep a 1-block path around it');
-    expect(steps[1]!.text).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, and a Muffler Hatch '
-      + 'needs the block it faces kept empty');
+    // no roof blocks in the input: no roof step (RUK-2877)
+    expect(steps.some((s) => s.id === 'layout:roof')).toBe(false);
     expect(steps.every((s) => s.pin === undefined)).toBe(true);
     expect(steps.find((s) => s.id === 'layout:power:hookup')!.text).toBe('No power network found: feed the line from your own MV supply (see the power suggestions)');
     expect(layoutSteps(base({ status: 'empty', reuse: [{ stepId: 's1', name: 'Basic Macerator', count: 1, positions: [[1, 64, 1]] }] })).map((s) => s.id))
@@ -264,12 +298,15 @@ describe('layout steps', () => {
     const plan = makePlan([{ id: 'e', mteId: IDS.EBF, count: 1, tier: 2, euPerTick: 120, inputs: [['t:dust@0', 1]], outputs: [['t:ingot@0', 1]] },
       { id: 's', mteId: STEAM, count: 1, euPerTick: 4, inputs: [['t:ingot@0', 1]], outputs: [['t:out_s@0', 1]] }]);
     const { units } = placeUnits(unitsFromPlan(primitivePack(), plan, { primitive: true }).units, { headWidth: 1, portSpacing: 0 });
-    const roof = (only: readonly string[]) => layoutSteps(base({ status: 'no-world', size: [6, 5, 7], supplyTier: 2,
+    // two roof blocks the layout laid one block above the line's 5-high space (size 6: the roof's layer counts in it)
+    const GLASS = (x: number): LayoutBlock => ({ pos: [x, 69, 1], block: { id: 'minecraft:glass', meta: 0 }, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' });
+    const roof = (only: readonly string[]) => layoutSteps(base({ status: 'no-world', size: [6, 6, 7], supplyTier: 2, blocks: [GLASS(1), GLASS(2)],
       units: units.filter((u) => only.includes(u.stepId)) })).find((s) => s.id === 'layout:roof')!.text;
-    const STEAM_ROOF = 'each steam machine vents its steam through its top: keep the block above it open and roof above it';
-    expect(roof(['e', 's'])).toBe('Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, a Muffler Hatch '
-      + `needs the block it faces kept empty, and ${STEAM_ROOF}`);
-    expect(roof(['s'])).toBe(`Roof the line over its 5-high space: GT machines left in the rain can catch fire or explode, and ${STEAM_ROOF}`);
+    const ROOF = 'Roof the line last, once everything under it is placed and set: lay 2× Glass in one layer one block above its 5-high space, '
+      + 'where the view marks them, to keep the rain off its machines, transformers and energy hatches (GT machines left in the rain can catch fire or explode)';
+    const STEAM_ROOF = 'keep the block above each steam machine open: it vents its steam through its top';
+    expect(roof(['e', 's'])).toBe(`${ROOF}; keep the block each Muffler Hatch faces empty, and ${STEAM_ROOF}`);
+    expect(roof(['s'])).toBe(`${ROOF}; ${STEAM_ROOF}`);
   });
 
   it('bomFromBlocks groups cables as power and covers as logistics', () => {
@@ -310,8 +347,8 @@ describe('layout steps', () => {
     expect(coverText({ face: 'north', item: CONV, settings: { mode: 'import', rate: 1000, unit: 'items/s' } }, nameOf))
       .toBe('Conveyor Module (LV) on the north face: Import, 1,000 items/s');
     // GT 5.09.54: no GUI button, only the Screwdriver, which switches it whatever its state, so the words name the state
-    // to leave it in, never a click to make; and the side to click is the middle-row side, as the front faces the machine
-    // beside it (the review of the EnderIO In / Out fix)
+    // to leave it in, never a click to make; and the side to click is the output side, which the line's logistics meets
+    // (the review of the EnderIO In / Out fix)
     expect(configTexts({ inputFromOutputSide: false })).toEqual([FROM_OUTPUT_SIDE('forbidden')]);
     expect(FROM_OUTPUT_SIDE('allowed')).not.toMatch(/front/);
     expect(configTexts({ patterns: 1, pattern: '1× A → 1× B', blockingMode: false, chips: 'Item Extractor Chip' }))
@@ -365,5 +402,41 @@ describe('layout steps', () => {
     const bare = layoutSteps(base({ ...parts, units: placement.units }));
     expect(assignBuildSteps(blocks, bare, parts, hookups).map((b) => b.buildStep)).toEqual(['layout:place:s1', undefined, 'layout:power:stage:1',
       'layout:power:wire:1', undefined, undefined, undefined, 'layout:logistics:fluid:fluid:oxygen', undefined, undefined, undefined, 'layout:power:wire:1']);
+  });
+
+  // RUK-2668: a satellite transformer shares the head bank's label, so its `satellite` index picks the satellite step
+  it('gives a satellite transformer the satellite step and a head-bank transformer its stage', () => {
+    const parts = {
+      stages: [{ fromTier: 2, toTier: 1, count: 1, ampsIn: 1, ampsOut: 2 }], transformerName: () => 'Low Voltage Transformer',
+      cables: [{ tier: 1, cable: '2x Tin Cable', cells: 3 }], fluids: [],
+      satellites: [{ fromTier: 2, toTier: 1, count: 1, machines: 3, transformer: 'Low Voltage Transformer', hiAmp: false }],
+    };
+    const steps = layoutSteps(base({ ...parts }));
+    const blocks: LayoutBlock[] = [
+      { pos: [0, 70, 0], block: GT(IDS.TRANSFORMER_LV), role: 'transformer', label: 'Low Voltage Transformer', satellite: 0 },
+      { pos: [1, 70, 0], block: GT(IDS.TRANSFORMER_LV), role: 'transformer', label: 'Low Voltage Transformer' },
+    ];
+    expect(assignBuildSteps(blocks, steps, parts, []).map((b) => b.buildStep)).toEqual(['layout:power:satellites:1', 'layout:power:stage:1']);
+  });
+
+  // RUK-3045: the head-bank step names the Hi-Amp Transformers the bank lays, with its laid count, and owns those blocks
+  it('names a Hi-Amp head bank by the block it lays, with its laid count, and gives that block the stage', () => {
+    const parts = {
+      stages: [{ fromTier: 2, toTier: 1, count: 10, ampsIn: 3, ampsOut: 40, layCount: 3, hiAmp: true, transformer: 'LV Hi-Amp Transformer' }],
+      transformerName: () => 'Low Voltage Transformer',
+      cables: [{ tier: 1, cable: '2x Tin Cable', cells: 3 }], fluids: [], satellites: [],
+    };
+    const steps = layoutSteps(base({ ...parts }));
+    expect(steps.find((s) => s.id === 'layout:power:stage:1')!.text).toBe(
+      'Place 3× LV Hi-Amp Transformer between the MV and LV cables, front (input) toward MV. Leave them in full mode; '
+      + 'a screwdriver toggles half mode, which halves their amps');
+    const blocks: LayoutBlock[] = [
+      { pos: [0, 70, 0], block: GT(IDS.TRANSFORMER_LV), role: 'transformer', label: 'LV Hi-Amp Transformer' },
+    ];
+    expect(assignBuildSteps(blocks, steps, parts, []).map((b) => b.buildStep)).toEqual(['layout:power:stage:1']);
+    // a plain stage is worded as before: no laid-count override, no mode sentence
+    const plain = { ...parts, stages: [{ fromTier: 2, toTier: 1, count: 2, ampsIn: 1, ampsOut: 2 }] };
+    expect(layoutSteps(base({ ...plain })).find((s) => s.id === 'layout:power:stage:1')!.text).toBe(
+      'Place 2× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
   });
 });

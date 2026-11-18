@@ -17,15 +17,19 @@ const BUDGET: Readonly<Record<string, number>> = {
 
 const GT_VOLTS = (tier: number): number => 8 * 4 ** tier;   // ULV 8, LV 32, MV 128
 
-/** Hops by which the machine's port cable reaches its tier's run column walking only that tier's connected cables; null when unwired. */
-function hopsToRun(blocks: { pos: Vec3; role: string; label: string; connections?: number }[], from: Vec3, label: string, x: number): number | null {
+/**
+ * Hops by which the machine's port cable reaches its tier's run column (or one of `ends`: a satellite bank's output
+ * cell of that tier, RUK-2678) walking only that tier's connected cables; null when unwired.
+ */
+function hopsToRun(blocks: { pos: Vec3; role: string; label: string; connections?: number }[], from: Vec3, label: string, x: number,
+  ends: ReadonlySet<string> = new Set()): number | null {
   const cables = new Map(blocks.filter((b) => b.role === 'cable' && b.label === label).map((b) => [posKey(b.pos), b]));
   const seen = new Set<string>([posKey(from)]);
   let queue: Vec3[] = [from];
   for (let hops = 0; queue.length > 0; hops++) {
     const next: Vec3[] = [];
     for (const p of queue) {
-      if (p[0] === x && p[1] === 0) return hops;
+      if ((p[0] === x && p[1] === 0) || ends.has(posKey(p))) return hops;
       const b = cables.get(posKey(p));
       if (b === undefined) continue;
       for (let s = 0; s < DIRS.length; s++) {
@@ -71,7 +75,8 @@ describe('loss lines stay wired', () => {
           const feedTier = Math.min(u.tier, SUPPLY_TIER);
           const entry = internal.cables.find((c) => c.tier === feedTier);
           expect(entry, `${u.name}: no ${feedTier}-tier cable run`).toBeDefined();
-          const hops = hopsToRun(internal.blocks, u.ports.power!, entry!.cable.name, runX(SUPPLY_TIER, feedTier, placement.headX));
+          const ends = new Set(internal.satellites.filter((s) => s.toTier === feedTier).map((s) => posKey(s.output)));
+          const hops = hopsToRun(internal.blocks, u.ports.power!, entry!.cable.name, runX(SUPPLY_TIER, feedTier, placement.headX), ends);
           expect(hops, `${u.name}: port cable does not reach the ${feedTier}-tier run`).not.toBeNull();
           const amps = Math.ceil(u.euPerTick / deliveredVolts(GT_VOLTS(feedTier), 0));
           const volts = deliveredVolts(GT_VOLTS(feedTier), amps * hops! * (entry!.cable.cable?.lossPerBlock ?? 0));

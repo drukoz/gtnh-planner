@@ -77,12 +77,12 @@ export function coverText(cover: CoverSpec, nameOf: (k: StuffKey) => string): st
  * output side or the front switches it whatever it was and names the new state in chat (`gt.interact.desc.
  * input_from_output_on`/`_off`), a sneaking one switches the Input Filter instead, and the click also works the cover
  * on the side clicked (`BaseMetaTileEntity.onRightclick`, on that side itself, never the wrench grid's). The words name
- * the side a builder can reach: every mode turns such a machine's output side to the middle row, and its front faces the
- * machine beside it along the row.
+ * the output side, the side the line's logistics meets: a packed machine's output side faces up or along the item lanes
+ * (RUK-2877), so no words can name a row side.
  */
 function inputFromOutputSideText(allowed: boolean): string {
   const state = `Input from Output Side ${allowed ? 'allowed' : 'forbidden'}`;
-  return `${state}: a newly crafted machine has it on; a Screwdriver right-click on its middle-row side switches it and the chat names the new `
+  return `${state}: a newly crafted machine has it on; a Screwdriver right-click on its output side switches it and the chat names the new `
     + `state, so leave it where the chat says "${state}" (a sneak-click switches the Input Filter instead, and the click also works a cover on `
     + 'that side)';
 }
@@ -199,6 +199,9 @@ function interfaceTexts(spec: InterfaceSpec, nameOf: (k: StuffKey) => string): s
   lines.push(`blocking mode ${spec.blocking ? 'on' : 'off'}`);
   if (spec.smartBlocking === true) lines.push('smart blocking on');
   if (spec.lock === 'until_result') lines.push('Locking Card, Lock Crafting: Until crafting result is returned');
+  if (spec.targets !== undefined && spec.targets.length > 0) {
+    lines.push(`Wrench: point it at its ${spec.targets.join(' and ')} side, so it pushes only into the block there`);
+  }
   return lines;
 }
 

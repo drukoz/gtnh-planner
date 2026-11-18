@@ -29,6 +29,9 @@
 // - electric: only for a non-wildcard item that is an IC2 IElectricItem with a finite maxCharge > 0.
 // - Crop table: adds no line to items.jsonl.gz, so an export with it has the items and recipe ids of one without it;
 //   an item the item table lacks is written inline in the crop line (CropItemRef).
+// - Biome table: one line per biome id, the raw fields of Minecraft's BiomeGenBase (biomeID, biomeName, rainfall,
+//   getEnableSnow(), canSpawnLightningBolt()) and nothing else: the planner computes GT's own rain gate from them
+//   (gt-mechanics §3.4a), the exporter never judges a biome.
 // - Markers: EXPORT_OK or EXPORT_FAILED is written after every other file is closed.
 // - Format versions: the loader reads /1 (every export written before /2) and /2. /2 adds the manifest's
 //   mcVersion and loader, and an optional ns on a machine line (the namespace of a machine a later adapter
@@ -80,6 +83,8 @@ export interface StructureLine {
 export interface MaterialLine { name: string; dn?: string | null; rgba: [number, number, number, number]; iconSet: string; byproducts: string[]; oreMultiplier?: number; byproductMultiplier?: number }
 export interface OreMaterialLine { key: string; family: 'gt' | 'bw' | 'gtpp'; name: string; id?: number; dn?: string | null; rgba?: [number, number, number, number]; iconSet?: string; byproducts: string[]; parts: Partial<Record<OrePart, number>> }
 export interface DimensionLine { id: number | null; provider?: string | null; name: string; display?: string | null; mod?: string | null; ore?: { type: string; veinChance?: number; voidMinable: boolean }; body?: string | null; airIntake?: string | null }
+/** One biome of the biome table: Minecraft's BiomeGenBase biomeID, biomeName, rainfall, getEnableSnow(), canSpawnLightningBolt(). */
+export interface BiomeLine { id: number; name: string; rainfall: number; snow: boolean; lightning: boolean }
 export interface CelestialLine { name: string; display?: string | null; kind: 'star' | 'planet' | 'moon' | 'satellite'; parent?: string | null; tier: number; dim?: number | null; reachable: boolean }
 export interface OreVeinLine { name: string; weight: number; density: number; size: number; dims: string[]; yByDim: Record<string, [number, number]>; primary: string; secondary: string; between: string; sporadic: string; stoneSpecific: boolean }
 export interface SmallOreLine { name: string; amount: number; y: [number, number]; dims: string[]; material: string }
@@ -121,6 +126,7 @@ export interface ExportLineTypes {
   dimensions: DimensionLine; celestial: CelestialLine; oreVeins: OreVeinLine; smallOres: SmallOreLine;
   undergroundFluids: UndergroundFluidLine; voidMiner: VoidMinerLine; gasSiphon: GasSiphonLine; spacePump: SpacePumpLine; spaceAsteroids: SpaceAsteroidLine;
   crops: CropLine;
+  biomes: BiomeLine;
 }
 export type ExportFileKey = keyof ExportLineTypes;
 export const EXPORT_FILES: { readonly manifest: 'manifest.json' } & { readonly [K in ExportFileKey]: string } = {
@@ -133,9 +139,13 @@ export const EXPORT_FILES: { readonly manifest: 'manifest.json' } & { readonly [
   undergroundFluids: 'underground-fluids.jsonl.gz', voidMiner: 'void-miner.jsonl.gz', gasSiphon: 'gas-siphon.jsonl.gz',
   spacePump: 'space-pump.jsonl.gz', spaceAsteroids: 'space-asteroids.jsonl.gz',
   crops: 'crops.jsonl.gz',
+  biomes: 'biomes.jsonl.gz',
 };
-/** Files an export may lack: the crop table comes only from exporter 0.5.0 on (self-contained from 0.5.1), and only with CropsNH installed. */
-export const OPTIONAL_EXPORT_FILES: readonly ExportFileKey[] = ['structures', 'crops'];
+/**
+ * Files an export may lack: the crop table comes only from exporter 0.5.0 on (self-contained from 0.5.1), and only with
+ * CropsNH installed; the biome table comes only from exporters built after the loader learned to read it (RUK-3038).
+ */
+export const OPTIONAL_EXPORT_FILES: readonly ExportFileKey[] = ['structures', 'crops', 'biomes'];
 
 export interface ManifestFile {
   format: ExportFormat; exportId: string; exporterVersion: string; exportedAt: string; packVersion: string; gtVersion: string;

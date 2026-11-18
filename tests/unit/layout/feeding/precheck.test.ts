@@ -261,7 +261,7 @@ describe('precheckFeeding', () => {
     expect(push[0]!.text).toBe('Basic Macerator at 1 64 1 runs 2 recipes in Project Red: it reruns its last recipe while that recipe\'s output waits, so Why can starve');
     const ae2 = await run('ae2');
     expect(ae2.map(brief)).toEqual(['feed_pool_starve risk - Basic Macerator at 1 64 1']);
-    expect(ae2[0]!.text).toBe("Basic Macerator at 1 64 1 runs 2 recipes and ME Interface (Basic Macerator) at 1 64 2 has blocking mode off: it mixes the recipes' sets");
+    expect(ae2[0]!.text).toBe("Basic Macerator at 1 64 1 runs 2 recipes and ME Interface (Basic Macerator) at 1 65 1 has blocking mode off: it mixes the recipes' sets");
     // blocking mode on pushes one recipe's set at a time into an empty machine: nothing to say
     expect(await run('ae2', true)).toEqual([]);
     // an interface that holds no pattern is never pushed into, so it mixes nothing (main lays one on a multiblock's second input
@@ -272,11 +272,13 @@ describe('precheckFeeding', () => {
   it('flags an interface touching two inventories', async () => {
     const { pack, plan } = chain2();
     const layout = await layFeed(pack, plan, 'ae2');
-    layout.blocks.push({ pos: [7, 65, 2], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest', tail: { side: 'output', keys: [] } });
+    layout.blocks.push({ pos: [5, 65, 2], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest', tail: { side: 'output', keys: [] } });
+    // an interface without a Wrench target pushes into every neighbour (R12)
+    delete layout.blocks.find((b) => posKey(b.pos) === posKey([5, 64, 2]))!.feed!.interface!.targets;
     const findings = precheckFeeding(readLine({ pack, plan, layout }), pack);
-    expect(findings.map(brief)).toEqual(['feed_leak risk - Advanced Assembler at 7 64 1']);
+    expect(findings.map(brief)).toEqual(['feed_leak risk - Advanced Assembler at 5 64 1']);
     expect(findings[0]!.text).toBe(
-      "ME Interface (Advanced Assembler) at 7 64 2 pushes into 2 inventories (Chest at 7 65 2 and Advanced Assembler at 7 64 1): its pattern's items can reach the wrong one");
+      "ME Interface (Advanced Assembler) at 5 64 2 pushes into 2 inventories (Chest at 5 65 2 and Advanced Assembler at 5 64 1): its pattern's items can reach the wrong one");
   });
 });
 
@@ -648,6 +650,8 @@ describe('precheckFeeding, the other branches', () => {
     const { pack, plan } = ebfLine();
     const layout = await layFeed(pack, plan, 'ae2');
     layout.blocks.push({ pos: [3, 65, 4], block: { id: 'minecraft:chest', meta: 0 }, role: 'chest', label: 'Chest', tail: { side: 'output', keys: [] } });
+    // an interface without a Wrench target pushes into every neighbour (R12)
+    delete layout.blocks.find((b) => posKey(b.pos) === posKey([3, 64, 4]))!.feed!.interface!.targets;
     const m = readLine({ pack, plan, layout });
     const leaks = precheckFeeding(m, pack).filter((f) => f.code === 'feed_leak');
     expect(leaks.map(brief)).toEqual(['feed_leak risk - Electric Blast Furnace at 2 64 3']);

@@ -20,7 +20,7 @@ export const PIN_COLORS: Readonly<Record<Pin['kind'], string>> = {
 };
 export const ROLE_COLORS: Readonly<Record<BlockRole, string>> = {
   machine: '#90caf9', casing: '#b0bec5', hatch: '#a1887f', cable: '#616161', transformer: '#8e24aa', pipe: '#ffb300', cover: '#ffffff',
-  interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)',
+  interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)', roof: '#b3e5fc',
 };
 /** The mark on a configured block: one with covers, settings (§11.14), conduit faces, or chips and patterns (§11 entry 51). */
 export const CONFIGURED_COLOR = '#ffffff';
@@ -35,10 +35,11 @@ export type Shape =
 export type Drag = { from: { x: number; z: number }; to: { x: number; z: number } };
 
 /**
- * A column of the line takes the colour of the first of these roles it holds. No layout places a `cover` block (a
- * cover is data on its host block), so it only stands last in case one ever does.
+ * A column of the line takes the colour of the first of these roles it holds, so a roofed column shows what is under
+ * the roof. A `roof` (RUK-2877) is drawn over the line, so it colours a column only where nothing stands under it;
+ * no layout places a `cover` block (a cover is data on its host block), so it only stands last in case one ever does.
  */
-const ROLE_PRIORITY: readonly BlockRole[] = ['machine', 'hatch', 'casing', 'transformer', 'chest', 'interface', 'chip_pipe', 'pipe', 'cable', 'cover'];
+const ROLE_PRIORITY: readonly BlockRole[] = ['machine', 'hatch', 'casing', 'transformer', 'chest', 'interface', 'chip_pipe', 'pipe', 'cable', 'cover', 'roof'];
 const OUTLINE_COLOR = '#ffffff';
 const OUTLINE_WIDTH = 2;
 const ARROW_COLOR = '#ffffff';

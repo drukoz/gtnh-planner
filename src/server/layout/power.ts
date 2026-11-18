@@ -15,8 +15,12 @@ import { RAIN_OUTAGE_FRACTION, solarBoilerOf, turbineSteamForFull } from '../wor
 
 const TICKS_PER_SECOND = 20;
 /** A step-down transformer gives at most 4 A on its output faces and takes at most 2 A on its front (gt-mechanics §3.6). */
-const TRANSFORMER_AMPS_OUT = 4;
-const TRANSFORMER_AMPS_IN = 2;
+export const TRANSFORMER_AMPS_OUT = 4;
+export const TRANSFORMER_AMPS_IN = 2;
+
+/** A Hi-Amp Transformer (GT++ `MTETransformerHiAmp`) stepping down in full mode: 16 A out from up to 6 A in (gt-mechanics §3.6). */
+export const HIAMP_AMPS_OUT = 16;
+export const HIAMP_AMPS_IN = 6;
 
 /** A cable run that loses more than this share of its volts is flagged (`cable_loss_high`). */
 export const LOSS_WARN_FRACTION = 0.1;
@@ -28,7 +32,7 @@ function voltsOf(tier: number): number {
 }
 
 /** EU an emitter of tier `t` pays per amp on top of the volts it sends (gt-mechanics §3.2). */
-function emitterLoss(tier: number): number {
+export function emitterLoss(tier: number): number {
   return 2 ** Math.max(0, tier - 1);
 }
 
@@ -70,8 +74,12 @@ export function tierGroups(units: ReadonlyArray<{ tier: number; euPerTick: numbe
   return [...byTier.values()].sort((a, b) => b.tier - a.tier);
 }
 
-/** A bank of `count` step-down transformers from `fromTier` to `toTier` = `fromTier − 1`. */
-export interface Stage { fromTier: number; toTier: number; count: number; ampsIn: number; ampsOut: number }
+/**
+ * A bank of `count` step-down transformers from `fromTier` to `toTier` = `fromTier − 1`. On the sized stages,
+ * `layCount` is the transformers the bank lays, fewer than `count` when Hi-Amp Transformers do the job (RUK-2976);
+ * `count`, the standard transformers the amps need, still sizes the amps. `hiAmp`: the bank lays Hi-Amp Transformers.
+ */
+export interface Stage { fromTier: number; toTier: number; count: number; ampsIn: number; ampsOut: number; layCount?: number; hiAmp?: boolean }
 /** `under`: groups above the supply tier, fed the supply voltage (the caller warns). */
 export interface Stages { supplyTier: number; stages: Stage[] /* from the supply downwards */; supplyAmps: number; lossEUt: number; under: TierGroup[] }
 

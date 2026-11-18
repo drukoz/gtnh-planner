@@ -156,6 +156,8 @@ export interface CropCard {
   drops: Array<{ key: StuffKey; chance: number; stackSize: number }>;
   likedBiomes: string[]; soils: StuffKey[]; requirements: string[] /* empty = none */; seed: StuffKey | null; minSeedBedTier: number;
 }
+/** A biome of the export's biome table. `rain`: GT's rain gate, rainfall > 0 && (lightning || snow) (gt-mechanics §3.4a). */
+export interface BiomeInfo { id: number; name: string; rain: boolean }
 /**
  * `machines` also holds the pseudo machines `mc:crafting_table` (map 'crafting') and `mc:furnace` (map 'furnace'), not
  * `mc:hand`; `machinesByMap` includes them and the 'assemblyline' pseudo map.
@@ -175,4 +177,6 @@ export interface Pack {
   warnings?: string[];
   // optional addition (add-on 17): the crop table, in CropsNH's registration order; absent when the export has none
   crops?: CropCard[];
+  // optional addition (RUK-3038): the biome table, sorted by id; absent when the export has no biome table
+  biomes?: BiomeInfo[];
 }

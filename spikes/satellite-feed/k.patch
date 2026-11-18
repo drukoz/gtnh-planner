@@ -1,0 +1,80 @@
+diff --git a/src/server/layout/internal.ts b/src/server/layout/internal.ts
+index f23c9120b..ed4475e88 100644
+--- a/src/server/layout/internal.ts
++++ b/src/server/layout/internal.ts
+@@ -365,6 +365,9 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly
+   const { placement } = input;
+   const [w, h, l] = placement.size;
+   const supply = stages.supplyTier;
++  // SP-K (spike, RUK-3027): 1 keeps every other tier's tree off a satellite's supply input and its rim, 2 = K1 with
++  // two more planes above a packed line, 3 plans satellites clear of the tier trees (in `planSatellites`). Unset: today's routing.
++  const spk = Number(process.env.SPK ?? 0);
+   const electric = placement.units.filter((u) => u.electric);
+   const portsByTier = new Map<number, Port[]>();
+   const portTier = new Map<string, number>();
+@@ -388,7 +391,7 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly
+   const crossing = placement.headX > 0;
+   // satellites feed their inputs off the supply tree, and a supply cable may not touch the tier trees below: with satellites
+   // the line's top opens one lane more so that feed has a plane of its own above the highest tier tree
+-  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - (crossing ? 1 : 2)) + (satellites.length > 0 ? 2 : 0), l - 1] };
++  const bounds: PathBounds = { min: [0, 0, 0], max: [w - 1, h + 1 + 2 * Math.max(0, head.runs.length - (crossing ? 1 : 2)) + (satellites.length > 0 ? 2 + (spk === 2 && placement.packed === true ? 2 : 0) : 0), l - 1] };
+   const unwired = (unit: PlacedUnit) => {
+     warnings.add({ code: 'route_failed', stepId: unit.stepId, text: `Could not wire ${unit.name} inside the line — connect it by hand` });
+   };
+@@ -426,6 +429,20 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly
+     // Fix 4: the satellite transformer is one tier's block; no other tier's cable may touch it (its own tree and its
+     // supply input are grown separately), so every satellite's cell joins the cells this tier's cables must not touch
+     for (const s of satellites) avoid.add(posKey(s.cell));
++    // SP-K1 (spike, RUK-3027): a satellite's supply input keeps its plane: a tree of any tier other than the
++    // satellite's supply tier may not stand on the input cell or one of its six neighbours (the satellite's own cell
++    // excepted), so the supply feed grown from that tier's run can always reach the input
++    const satFeed = new Set<string>();
++    if (spk === 1 || spk === 2) {
++      for (const s of satellites) {
++        if (s.fromTier === run.tier) continue;
++        satFeed.add(posKey(s.input));
++        for (let side = 0; side < 6; side++) {
++          const n = step(s.input, side);
++          if (posKey(n) !== posKey(s.cell)) satFeed.add(posKey(n));
++        }
++      }
++    }
+     const opts: PathOptions = {
+       bounds,
+       // a z leg running along the lanes (y >= 2) walls the lane above off from the taller trees to come, so price it
+@@ -434,6 +451,7 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly
+       ...(crossing ? { laneWallCost: 4, laneFloorY: 2 + 2 * lane, midPlaneCost: 16 } : {}),
+       passable: (p) => {
+         const key = posKey(p);
++        if (satFeed.has(key)) return false;
+         const tier = portTier.get(key);
+         if (grid.isTaken(p) || keepOff.has(key) || bankCells.has(key) || (tier !== undefined && tier !== run.tier)) return false;
+         const sends = onBank.get(key);
+@@ -1137,6 +1155,8 @@ function planSatellites(input: InternalInput, stages: Stages, head: Head, trees:
+   const supply = stages.supplyTier;
+   const units = placement.units.filter((u) => u.electric);
+   const treeOf = new Map(trees.map((t) => [t.tier, t]));
++  // SP-K (spike, RUK-3027): 3 plans each satellite clear of the phase-1 trees of tiers other than its supply tier
++  const spk = Number(process.env.SPK ?? 0);
+   const inside = (p: Vec3): boolean => p[0] >= 0 && p[0] < w && p[1] >= 0 && p[1] <= h && p[2] >= 0 && p[2] < l;
+   const insideAir = (p: Vec3): boolean => p[0] >= 0 && p[0] < w && p[1] >= 1 && p[1] <= h + 1 && p[2] >= 0 && p[2] < l;
+   const satellites: Satellite[] = [];
+@@ -1193,6 +1213,10 @@ function planSatellites(input: InternalInput, stages: Stages, head: Head, trees:
+     const lowerMachines = new Set<string>();
+     for (const u of units) { const cell = u.tier < T ? powerCell(u) : null; if (cell !== null) lowerMachines.add(posKey(cell)); }
+     const satCells = new Set<string>();                                                 // RUK-2677: satellites keep their cells and stand apart
++    // SP-K3 (spike, RUK-3027): the satellite's supply input keeps its plane: skip a cell whose input's neighbours
++    // (other than the cell itself) hold a phase-1 tree's cell of a tier other than the satellite's supply tier
++    const otherTreeCells = new Set<string>();
++    if (spk >= 3) for (const t of trees) { if (t.tier === F) continue; for (const c of t.cells) otherTreeCells.add(posKey(c)); }
+     for (const g of groups) {
+       const xs = g.map((f) => f.pos[0]).sort((a, b) => a - b);
+       const xc = xs[Math.floor((xs.length - 1) / 2)]!;
+@@ -1211,6 +1235,7 @@ function planSatellites(input: InternalInput, stages: Stages, head: Head, trees:
+                   || [WEST, WEST + 1, 2, 3].some((side) => lowerMachines.has(posKey(step(cell, side))))) continue;
+                 const inp: Vec3 = [x, y + 1, z];
+                 if (!insideAir(inp) || grid.isTaken(inp) || powerPorts.has(posKey(inp))) continue;
++                if (spk >= 3 && DIRS.some((_, side) => { const nk = posKey(step(inp, side)); return nk !== posKey(cell) && otherTreeCells.has(nk); })) continue;
+                 let outSide = -1;
+                 let output: Vec3 | null = null;
+                 for (const side of [WEST, WEST + 1, 2, 3]) {                                      // west, east, north, south

@@ -93,7 +93,7 @@ describe('the Auto Workbench in a line', () => {
     const { pack, r } = laid('ae2');
     const iface = r.blocks.find((b) => b.label === 'ME Interface (Auto Workbench (MV))')!;
     expect(iface.feed).toEqual({ interface: { patterns: [{ inputs: [{ key: A, amount: 2 }, { key: B, amount: 2 }, { key: C, amount: 2 }, { key: D, amount: 1 }],
-      outputs: [{ key: R, amount: 1 }] }], blocking: false, lock: 'until_result' } });
+      outputs: [{ key: R, amount: 1 }] }], blocking: false, lock: 'until_result', targets: ['south'] } });
     // it pushes its result into the interface itself: no conveyor cover
     expect(r.covers.filter((c) => c.cover.item === 'gregtech:gt.metaitem.01@32630').map((c) => c.pos)).toHaveLength(1);
     expect(r.extraParts).toEqual([

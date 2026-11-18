@@ -13,6 +13,9 @@ import { webgl2Available } from '../../src/client/views/View3D.tsx';
 import type { TextureDeps } from '../../src/client/three/load-textures.ts';
 import { layerKey, regionRect, type BlockFaces, type Rect, type Rgb, type TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
+// RUK-2619: the layout search panel
+import { candidateLabel, searchText, rainText } from '../../src/client/views/View3D.tsx';
+import { CandidateKind, type LayoutCandidate, type LayoutSearch } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 // the user's requirements of 2026-10-19, item 3 (b): Show connections, remembered in this browser
 import { LINKS_STORAGE_KEY, loadShowLinks, saveShowLinks } from '../../src/client/views/View3D.tsx';
@@ -24,7 +27,7 @@ import { connectionSpans, connectionsGraph, spanDetails } from '../../src/client
 import { connLayout, connPlan } from './connections-fixture.ts';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
-  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
+  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true, roof: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
   showLinks={false} onShowLinks={() => {}} {...over} />);
 
 describe('3D tab', () => {
@@ -33,6 +36,29 @@ describe('3D tab', () => {
     for (const text of ['data-testid="block-list"', 'Basic Macerator ×1', 'Power: 1 block from pin 2', 'Size: 3×2×2', 'aria-label="Layer"', 'All layers', 'Ghosts', 'Hookups'])
       expect(html).toContain(text);
     expect(shell({ maxLayer: 0 })).toContain('Layers 1–1 of 2');
+  });
+
+  it('shows the Roof switch only where the line has a rain roof (RUK-2877)', () => {
+    expect(shell()).not.toContain('>Roof<');
+    const roofed: Layout = { ...sampleLayout, blocks: [...sampleLayout.blocks,
+      { pos: [10, 65, 20], block: { id: 'minecraft:glass', meta: 0 }, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' }] };
+    const html = shell({ layout: roofed, showLinks: true, linksNote: '3 connections drawn' });
+    expect(html).toContain('<label class="check"><input type="checkbox" checked=""/>Roof</label>');
+    expect(html.match(/<label class="check">/g)).toHaveLength(5);   // the layer slider, Ghosts, Hookups, Roof, Show connections
+  });
+
+  it('says why a line lays no rain roof (RUK-2877, M3-21)', () => {
+    expect(rainText(sampleLayout)).toBeNull();
+    expect(rainText({ ...sampleLayout, dryBiomes: [] })).toBeNull();
+    expect(rainText({ ...sampleLayout, dryBiomes: ['Desert'] })).toBe('No rain roof: it never rains in Desert, where this line stands.');
+    expect(rainText({ ...sampleLayout, dryBiomes: ['Desert', 'Hell'] })).toBe('No rain roof: it never rains in Desert and Hell, where this line stands.');
+  });
+
+  it('shows the no-rain-roof line only where the site is dry (RUK-2877, M3-21)', () => {
+    const dry = shell({ layout: { ...sampleLayout, dryBiomes: ['Desert'] } });
+    expect(dry).toContain('data-testid="view3d-rain"');
+    expect(dry).toContain('No rain roof: it never rains in Desert, where this line stands.');
+    expect(shell()).not.toContain('view3d-rain');
   });
 
   it('explains itself without WebGL2, while loading and when there is nothing to build', () => {
@@ -406,5 +432,77 @@ describe('3D tab: the details box title of a picked link (ruling P2-R15)', () =>
     expect(shell({ info: details })).toContain(
       '<section data-testid="view3d-info" aria-live="polite" class="view3d-box view3d-details"><h3>Titanium Dust <span class="fig">60</span>/min · Red</h3>');
     expect(shell({ info: { title: 'Input Bus (LV)', lines: [] } })).toContain('<h3>Input Bus (LV)</h3>');
+  });
+});
+
+// RUK-2619: the layout search panel — what the laid line takes and loses, how many layouts were tried, and today's
+// rule's line beside it when the search kept another. Hand-made searches, as the server only fills `search` from M1-3.
+describe('layout search panel', () => {
+  const cand = (over: Partial<LayoutCandidate> = {}): LayoutCandidate => ({
+    kind: CandidateKind.WestHead, westUnits: 0, unwired: 0, handTransformers: 0, unpowered: 0, total: 0, lossEUt: 0, volume: 0, ...over,
+  });
+  const laid = (search: LayoutSearch): Layout => ({ ...sampleLayout, search });
+
+  it('shows nothing without a search', () => {
+    expect(shell()).not.toContain('data-testid="layout-search"');
+  });
+
+  it('says the blocks, the loss and that one layout was tried', () => {
+    const html = shell({ layout: laid({ candidates: [cand({ total: 35, lossEUt: 252.4, volume: 45 })], chosen: 0, baseline: 0 }) });
+    expect(html).toContain('data-testid="layout-search"');
+    expect(html).toContain('Wiring and logistics: 35 blocks; its wiring loses 252 EU/t.');
+    expect(html).toContain('1 layout tried.');
+    expect(html).not.toContain('<table');
+  });
+
+  it('shows today\'s line beside the chosen one', () => {
+    const html = shell({ layout: laid({
+      candidates: [cand({ total: 99 }), cand({ kind: CandidateKind.MiddleHead, westUnits: 10, total: 95 }), cand({ kind: CandidateKind.MiddleHead, westUnits: 12, total: 97 })],
+      chosen: 1, baseline: 0,
+    }) });
+    expect(html).toContain('3 layouts tried');
+    expect(html).toContain('Today&#x27;s rule would lay 99 blocks');
+    expect(html).toContain('Power head in the middle, 10 machines west of it (laid)');
+    expect(html).toContain('aria-current="true"');
+    expect(html).toContain('Power head in the middle, 12 machines west of it');
+    expect(html.match(/<td>/g)).toHaveLength(12);                                        // three rows of the four cells each
+    expect(html.indexOf('data-testid="block-list"')).toBeLessThan(html.indexOf('data-testid="layout-search"'));
+  });
+
+  it('names the stacked layouts (RUK-2877)', () => {
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 0 })).toBe('Machines stacked two high, power head at the west end');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 12 })).toBe('Machines stacked two high, power head in the middle, 12 machines west of it');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.PackedOpen, westUnits: 0 })).toBe('Machines packed three to a cable, interfaces on the outside, power head at the west end');
+  });
+
+  it('names the packed layout (RUK-2877)', () => {
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Packed, westUnits: 0 })).toBe('Machines packed three to a cable, power head at the west end');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Reordered, westUnits: 0 })).toBe('Machines reordered within their tier, power head at the west end');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Reordered, westUnits: 12 })).toBe('Machines reordered within their tier, power head in the middle, 12 machines west of it');
+  });
+
+  it('names an unknown kind', () => {
+    expect(candidateLabel({ ...cand(), kind: 7 as unknown as CandidateKind })).toBe('Other layout');
+  });
+
+  it('says how many machines cannot run', () => {
+    const html = shell({ layout: laid({ candidates: [cand({ total: 40, lossEUt: 12, unpowered: 4 })], chosen: 0, baseline: 0 }) });
+    expect(html).toContain('4 machines get too few volts to run');
+    expect(searchText({ candidates: [cand({ unpowered: 4 })], chosen: 0, baseline: 0 }).at(-1)).toContain('see the warnings below.');
+  });
+
+  it('reports the laid line\'s loss when the hookup lands elsewhere', () => {
+    const html = shell({ layout: { ...laid({ candidates: [cand({ total: 35, lossEUt: 457 })], chosen: 0, baseline: 0 }), loss: { tiers: [], hookupEUt: 30, banksEUt: 0, totalEUt: 503 } } });
+    expect(html).toContain('its wiring loses 473 EU/t.');
+    expect(html).toContain('(457 EU/t for this one)');
+  });
+
+  it('says nothing more when the estimate is the laid loss', () => {
+    const html = shell({ layout: { ...laid({ candidates: [cand({ total: 35, lossEUt: 457 })], chosen: 0, baseline: 0 }), loss: { tiers: [], hookupEUt: 30, banksEUt: 0, totalEUt: 487 } } });
+    expect(html).toContain('its wiring loses 457 EU/t.');
+    expect(html).not.toContain('The search compared layouts');
+    const lines = searchText({ candidates: [cand({ lossEUt: 457 })], chosen: 0, baseline: 0 }, { tiers: [], hookupEUt: 30, banksEUt: 0, totalEUt: 503 });
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('473');
   });
 });

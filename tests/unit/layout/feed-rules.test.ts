@@ -227,6 +227,8 @@ describe('static feeding rules', () => {
       // a chest beside the interface: the interface pushes into it too
       const above = { pos: [iface.pos[0], iface.pos[1] + 1, iface.pos[2]] as [number, number, number], block: { id: 'minecraft:chest', meta: 0 },
         role: 'chest' as const, label: 'Chest' };
+      // an interface without a Wrench target pushes into every neighbour (R12)
+      delete iface.feed!.interface!.targets;
       expect(warn({ ...layout, blocks: [...layout.blocks, above] })).toEqual([{ code: 'feed_leak', stepId: 'm',
         text: `${at(iface)} pushes into 2 inventories (${at(m)} and ${at(above)}): its pattern's items can reach the wrong one` }]);
     });
