@@ -353,30 +353,30 @@
     "name": "loss-40",
     "mode": "ae2",
     "size": [
-      5,
+      7,
       6,
-      25
+      19
     ],
-    "total": 200,
-    "cable": 119,
-    "pipe": 1,
+    "total": 148,
+    "cable": 62,
+    "pipe": 10,
     "iface": 40,
     "chip": 0,
     "transformer": 6,
     "chest": 0,
-    "roof": 26,
-    "hookup": 14,
-    "lossEUt": 1300,
+    "roof": 30,
+    "hookup": 6,
+    "lossEUt": 1170,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 31,
-        "worstVolts": 97
+        "worstBlocks": 27,
+        "worstVolts": 101
       },
       {
         "tier": 1,
-        "worstBlocks": 14,
-        "worstVolts": 18
+        "worstBlocks": 15,
+        "worstVolts": 17
       }
     ],
     "weakTiers": [],
