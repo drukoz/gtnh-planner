@@ -40,4 +40,21 @@ describe('rain roof', () => {
     const { layout } = await lossLine(10, 'direct');
     expect(layout.bom).toContainEqual(expect.objectContaining({ key: 'minecraft:glass@0', amount: 16, why: 'rain roof' }));
   }, 120000);
+
+  it('puts the roof step last, naming the glass the line lays', async () => {
+    const { layout } = await lossLine(10, 'direct');
+    const roof = layout.blocks.filter((b) => b.role === 'roof');
+    expect(roof.length).toBe(16);
+    expect(layout.buildSteps.at(-1)!.id).toBe('layout:test');
+    const roofStep = layout.buildSteps.at(-2)!;
+    expect(roofStep).toMatchObject({ id: 'layout:roof', kind: 'place' });
+    expect(roofStep.text).toBe('Roof the line last, once everything under it is placed and set: lay 16× Glass in one layer one block '
+      + 'above its 2-high space, where the view marks them, to keep the rain off its machines, transformers and energy hatches '
+      + '(GT machines left in the rain can catch fire or explode)');
+    expect(roofStep.text).toContain(`${roof.length}× ${roof[0]!.label}`);
+    for (const s of layout.buildSteps) {
+      if (s.id === 'layout:roof' || s.id === 'layout:test') continue;
+      expect(s.order, s.id).toBeLessThan(roofStep.order);
+    }
+  }, 120000);
 });
