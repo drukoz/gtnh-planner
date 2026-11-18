@@ -5,7 +5,7 @@ Parent: RUK-2900 (M3 optimal layout), on top of spike SP-E (`spikes/shared-cable
 A packed line (SP-E) stacks machines three deep on one cable lane. This spike lays its **item logistics**: the two
 lanes `[x, 1, 0]` and `[x, 1, 2]` run `firstX … tailX`, join at `[tailX, 1, 1]`, and end at the tail cell
 `[tailX, 1, 2]` — the south lane's end cell, on the box's face — with the input chest below it at `[tailX, 0, 2]` and
-output chest *i* east of the rising tail column at `[tailX + 1, 2 + i, 2]`. The prototype is `change.patch` next to
+output chest *i* east of the rising tail column at `[tailX + 1, 1 + i, 2]`. The prototype is `change.patch` next to
 this file; it **includes SP-E's lines** (`placePacked`, `packedLine`, `PlacedUnit.powerSide`, the `SPIKE_PACKED`
 switch) and applies to a clean tree on its own. `src/` in the committed tree is untouched.
 
@@ -106,7 +106,7 @@ cable (the SP-E lane) and the modes' per-unit risers and long hookups fall far m
 The line exports at `origin 19,64,16`, `rotation 270`, so world cells are rotated; cells below are the placement's
 **local** cells, and a block's `connections` bits are the rotated (world) bits.
 `tail={"cell":[7,1,2],"inputSide":0,"outputSide":5}`,
-`spine` = `[3,1,0]…[7,1,0]`, `[7,1,1]`, `[7,1,2]`, `[7,1,2]…[3,1,2]`.
+`spine` = `[3,1,0]…[7,1,0]`, `[7,1,1]`, `[7,1,2]…[3,1,2]`.
 
 First two columns (local x 3…4):
 
