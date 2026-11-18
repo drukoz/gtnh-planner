@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { CandidateKind } from '../../../src/shared/types/layout.ts';
 import { headSplits } from '../../../src/server/layout/layout.ts';
 import { replacesBaseline } from '../../../src/server/layout/score.ts';
+import { lengthOf } from '../../helpers/layout-bench.ts';
 import { lossLine } from '../../helpers/power-loss.ts';
 
 const COUNTS = [10, 20, 40] as const;
@@ -77,9 +78,22 @@ describe('the layout search', () => {
       for (const mode of MODES) {
         const { layout, placement } = await lossLine(n, mode);
         const { candidates, chosen, baseline, rejected } = layout.search!;
-        expect(rejected === undefined || chosen === baseline, `${n} ${mode}: a rejected candidate leaves the baseline chosen`).toBe(true);
+        expect(rejected === undefined || rejected !== chosen, `${n} ${mode}: a rejected candidate is not the one laid`).toBe(true);
         expect(placement.headX === 0, `${n} ${mode}: the head of the line laid`).toBe(candidates[chosen]!.westUnits === 0);
       }
     }
+  }, 60_000);
+
+  it('keeps the runner-up when it is shorter once hooked up', async () => {
+    // RUK-2877 (spike `spikes/reach-ae2-promote/`): the search ranks the stacked line best on its in-line score, and
+    // that is 78 blocks once hooked up; the packed runner-up is 55, so layoutLine keeps the packed line and the search
+    // names the stacked one `rejected`
+    const { layout } = await lossLine(40, 'direct');
+    const { candidates, chosen, baseline, rejected } = layout.search!;
+    expect(rejected, 'the search ranked a line best and its finished layout lost').toBeDefined();
+    expect(candidates[rejected!]!.kind, 'the rejected line is the stacked one').toBe(CandidateKind.Stacked);
+    expect(candidates[chosen]!.kind, 'the kept line is the packed runner-up').toBe(CandidateKind.Packed);
+    expect(chosen !== baseline, 'the kept line is not the baseline').toBe(true);
+    expect(lengthOf(layout).total, 'the packed line with its hookups').toBe(55);
   }, 60_000);
 });
