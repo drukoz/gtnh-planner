@@ -85,4 +85,19 @@ describe('machine-to-machine mode', () => {
         + "tap hands the raw inputs to the input chest alone and stops while the chest is full (on Green, every face's default, it would go on "
         + 'filling your other storages)' });
   });
+
+  it('lays the pipe along placement.spine and hangs the chests off placement.tail (RUK-2877)', () => {
+    const s = setup();
+    const p = s.placement;
+    // the same spine reversed, ending on the first cell; the tail on that cell, input chest west, outputs up
+    const placement = { ...p, spine: [...p.spine].reverse(), tail: { cell: [...p.spine[0]!] as [number, number, number], inputSide: 4, outputSide: 1 } };
+    const r = buildMode('direct', { ...s, placement, network: null });
+    // the pipe is exactly the spine (the plan has one final output, so no tail column cell is added)
+    expect(r.blocks.filter((b) => b.role === 'pipe').map((b) => b.pos)).toEqual([[1, 0, 2], [2, 0, 2], [3, 0, 2]]);
+    expect(r.blocks.filter((b) => b.role === 'chest').map((b) => [b.pos, b.label]))
+      .toEqual([[[0, 0, 2], 'Chest (input)'], [[1, 1, 2], 'Chest (output)']]);
+    expect(r.covers.find((c) => c.cover.settings.mode === 'import')).toMatchObject({ pos: [1, 0, 2], cover: { face: 'west' } });
+    expect(r.covers.find((c) => c.cover.item === FILTER)).toEqual(
+      { pos: [1, 0, 2], cover: { face: 'up', item: FILTER, settings: { mode: 'whitelist' }, filter: ['t:out_s2@0'] } });
+  });
 });
