@@ -22,7 +22,10 @@ import type { Stage } from './power.ts';
 
 export interface StepsInput {
   status: LayoutStatus; pins: readonly Pin[]; size: Vec3 /* world */; site: { dig: number; fill: number } | null;
-  units: readonly PlacedUnit[]; stages: readonly Stage[]; transformerName: (toTier: number) => string;
+  units: readonly PlacedUnit[];
+  /** Each stage's `transformer` is the name of the block its bank lays (the Hi-Amp Transformer when `hiAmp`); absent, `transformerName(toTier)`. */
+  stages: ReadonlyArray<Stage & { transformer?: string }>;
+  transformerName: (toTier: number) => string;
   cables: ReadonlyArray<{ tier: number; cable: string; cells: number }>;
   power: { cable: string; blocks: number; amps: number; tier: number; arrivingVolts: number; upgrade?: { cable: string } /* Task 9 `blocked` */ } | null;
   supplyTier: number | null;
@@ -347,7 +350,7 @@ function powerSteps(input: StepsInput, sitePin: number | undefined, powerPin: nu
   for (const s of [...input.stages].sort((a, b) => b.fromTier - a.fromTier)) {
     const from = tierName(s.fromTier), to = tierName(s.toTier);
     out.push(draft(`layout:power:stage:${s.toTier}`, 'power', powerPin,
-      `Place ${fmtInt(s.count)}× ${input.transformerName(s.toTier)} between the ${from} and ${to} cables, front (input) toward ${from}`));
+      `Place ${fmtInt(s.layCount ?? s.count)}× ${s.transformer ?? input.transformerName(s.toTier)} between the ${from} and ${to} cables, front (input) toward ${from}${s.hiAmp === true ? '. Leave them in full mode; a screwdriver toggles half mode, which halves their amps' : ''}`));
   }
   // satellite step-down banks (RUK-2668): one step per tier they step down to, highest first, right after the head stages
   const byToTier = new Map<number, { fromTier: number; n: number; m: number; transformer: string; hiAmp: boolean }>();
@@ -555,7 +558,7 @@ export function assignBuildSteps(blocks: readonly LayoutBlock[], steps: readonly
         const sat = input.satellites?.[b.satellite];
         candidates.push(sat === undefined ? undefined : `layout:power:satellites:${sat.toTier}`);
       }
-      const stage = input.stages.find((s) => input.transformerName(s.toTier) === b.label);
+      const stage = input.stages.find((s) => (s.transformer ?? input.transformerName(s.toTier)) === b.label);
       candidates.push(stage === undefined ? undefined : `layout:power:stage:${stage.toTier}`);
     }
     if (b.role === 'cable') {

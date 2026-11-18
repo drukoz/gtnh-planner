@@ -418,4 +418,25 @@ describe('layout steps', () => {
     ];
     expect(assignBuildSteps(blocks, steps, parts, []).map((b) => b.buildStep)).toEqual(['layout:power:satellites:1', 'layout:power:stage:1']);
   });
+
+  // RUK-3045: the head-bank step names the Hi-Amp Transformers the bank lays, with its laid count, and owns those blocks
+  it('names a Hi-Amp head bank by the block it lays, with its laid count, and gives that block the stage', () => {
+    const parts = {
+      stages: [{ fromTier: 2, toTier: 1, count: 10, ampsIn: 3, ampsOut: 40, layCount: 3, hiAmp: true, transformer: 'LV Hi-Amp Transformer' }],
+      transformerName: () => 'Low Voltage Transformer',
+      cables: [{ tier: 1, cable: '2x Tin Cable', cells: 3 }], fluids: [], satellites: [],
+    };
+    const steps = layoutSteps(base({ ...parts }));
+    expect(steps.find((s) => s.id === 'layout:power:stage:1')!.text).toBe(
+      'Place 3× LV Hi-Amp Transformer between the MV and LV cables, front (input) toward MV. Leave them in full mode; '
+      + 'a screwdriver toggles half mode, which halves their amps');
+    const blocks: LayoutBlock[] = [
+      { pos: [0, 70, 0], block: GT(IDS.TRANSFORMER_LV), role: 'transformer', label: 'LV Hi-Amp Transformer' },
+    ];
+    expect(assignBuildSteps(blocks, steps, parts, []).map((b) => b.buildStep)).toEqual(['layout:power:stage:1']);
+    // a plain stage is worded as before: no laid-count override, no mode sentence
+    const plain = { ...parts, stages: [{ fromTier: 2, toTier: 1, count: 2, ampsIn: 1, ampsOut: 2 }] };
+    expect(layoutSteps(base({ ...plain })).find((s) => s.id === 'layout:power:stage:1')!.text).toBe(
+      'Place 2× Low Voltage Transformer between the MV and LV cables, front (input) toward MV');
+  });
 });
