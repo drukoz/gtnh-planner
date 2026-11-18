@@ -8,6 +8,7 @@ import type { Layout, LineScore } from '../../shared/types/layout.ts';
 import type { Vec3 } from '../../shared/layout/geometry.ts';
 import type { LocalBlock } from './arrange.ts';
 import type { MachinePower } from './internal.ts';
+import { V } from '../../shared/gt/tiers.ts';
 import { unreachableMachines } from './reach.ts';
 
 /** The roles whose blocks count in a line's length (the S1 benchmark's `total`; EnderIO conduits are `pipe`). */
@@ -58,13 +59,17 @@ export function replacesBaseline(candidate: LineScore, baseline: LineScore): boo
     || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt);
 }
 
-/** What the benchmark measures of a finished layout (lengthOf): its connections left by hand, unpowered machines, length with its hookups, and loss; and its machines out of reach, from its local line's score. */
-export interface FinalMeasure { unwired: number; unpowered: number; unreachable: number; total: number; lossEUt: number }
+/**
+ * What the benchmark measures of a finished layout (lengthOf): its connections left by hand, unpowered machines, length
+ * with its hookups, loss, and weak tiers; and its machines out of reach, from its local line's score.
+ */
+export interface FinalMeasure { unwired: number; unpowered: number; unreachable: number; total: number; lossEUt: number; weakTiers: number }
 
 /**
  * Measure a finished layout the way the S1 benchmark does (`lengthOf`): the `route_failed` warnings, the machines its
  * wiring leaves too few volts to run, the length as its own `LENGTH_ROLES` blocks plus every hookup block, ghosts
- * excluded, and the EU/t `Layout.loss` counts.
+ * excluded, the EU/t `Layout.loss` counts, and its weak tiers: the tiers of `Layout.loss` whose farthest machine gets
+ * under half the tier's volts (the benchmark's `weakTiers`, RUK-2877).
  */
 export function finalMeasure(layout: Pick<Layout, 'blocks' | 'warnings' | 'loss'>, unreachable: number): FinalMeasure {
   const own = layout.blocks.filter((b) => b.hookup === undefined && b.role !== 'ghost');
@@ -75,12 +80,27 @@ export function finalMeasure(layout: Pick<Layout, 'blocks' | 'warnings' | 'loss'
     total: own.filter((b) => LENGTH_ROLES.has(b.role)).length
       + layout.blocks.filter((b) => b.hookup !== undefined && b.role !== 'ghost').length,
     lossEUt: layout.loss?.totalEUt ?? 0,
+    weakTiers: (layout.loss?.tiers ?? []).filter((t) => t.worstVolts * 2 < V[t.tier]!).length,
   };
 }
 
-/** True when a finished candidate may replace the finished baseline: no more unwired, no more out of reach, and fewer unpowered, fewer out of reach, or as many of both and no longer and no lossier. */
+/**
+ * True when a finished candidate may replace the finished baseline: no more unwired, no more out of reach, no more weak
+ * tiers unless it powers more machines (RUK-2877), and fewer unpowered, fewer out of reach, or as many of both and no
+ * longer and no lossier.
+ */
 export function finalReplaces(candidate: FinalMeasure, baseline: FinalMeasure): boolean {
   return candidate.unwired <= baseline.unwired && candidate.unreachable <= baseline.unreachable
+    && (candidate.weakTiers <= baseline.weakTiers || candidate.unpowered < baseline.unpowered)
     && (candidate.unpowered < baseline.unpowered || candidate.unreachable < baseline.unreachable
       || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt));
+}
+
+/**
+ * Compare two finished layouts as `layoutLine` ranks its finalists (RUK-2877): the first field that differs decides,
+ * lower first, in the search's order (`compareScore`) — unwired, out of reach, unpowered, length with the hookups, loss;
+ * 0 when all are equal.
+ */
+export function compareFinal(a: FinalMeasure, b: FinalMeasure): number {
+  return a.unwired - b.unwired || a.unreachable - b.unreachable || a.unpowered - b.unpowered || a.total - b.total || a.lossEUt - b.lossEUt;
 }
