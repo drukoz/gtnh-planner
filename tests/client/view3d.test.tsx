@@ -477,6 +477,8 @@ describe('layout search panel', () => {
 
   it('names the packed layout (RUK-2877)', () => {
     expect(candidateLabel({ ...cand(), kind: CandidateKind.Packed, westUnits: 0 })).toBe('Machines packed three to a cable, power head at the west end');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Reordered, westUnits: 0 })).toBe('Machines reordered within their tier, power head at the west end');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Reordered, westUnits: 12 })).toBe('Machines reordered within their tier, power head in the middle, 12 machines west of it');
   });
 
   it('names an unknown kind', () => {
