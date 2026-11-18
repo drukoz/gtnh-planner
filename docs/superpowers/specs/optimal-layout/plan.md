@@ -134,9 +134,12 @@ The packed shape follows Assumption 7.
 | M3-1 RUK-2899 | the finished layout judges the finalists: when the search keeps another line, `layoutLine` finishes the baseline too and keeps the chosen line only if it is no worse with its hookups (`finalReplaces`). Changes no row today | — |
 | M3-2 RUK-2901 | stacking as a candidate: a stacked twin of every head candidate (`CandidateKind.Stacked = 2`); baseline lowered on 52 rows | M3-1 |
 | SP-F RUK-2900 | spike: the packed shape with its pipes, conduits, tail chests and hookups laid for real in direct and EnderIO, one-feed-tier lines; writes down the `Placement` fields the modes need (`spine` cells, `tail` cell and sides) | — |
-| M3-3… | the placement contract, specced from SP-F's patch: `Placement.spine`/`tail`/`powerSide` filled identically by `placeUnits` (identical rows), then each mode lays along them | SP-F |
-| M3-P | the packed shape as a candidate in direct and EnderIO | M3-1, M3-3… |
-| SP-G | spike: a packed column for routed and AE2 with a cell per port (T's port on top) | SP-F |
+| M3-3 RUK-2945 | the placement contract: `Placement.spine` (item spine cells in lay order), `Placement.tail` (`LineTail`: cell, input side, output side; `tailColumn`) and `PlacedUnit.powerSide`, filled by `placeUnits` with today's geometry; the power code reads `powerSide`; `itemRisers` skips a port on the spine. Changes no row | SP-F |
+| M3-4 RUK-2946 | the direct mode lays along `spine`/`tail`, no packed branch. Changes no row | M3-3 |
+| M3-5 RUK-2947 | EnderIO's `itemLine` lays along `spine`/`tail`, no packed branch. Changes no row | M3-3 |
+| M3-P1 RUK-2948 | `packedLine` and `placePacked` (SP-E/SP-F geometry, tail on the box's south face), not yet called | M3-3 |
+| M3-P2 | the packed line as a scored candidate in direct and EnderIO (`CandidateKind.Packed = 3`), one feed tier, west head only; baseline lowered; a two-output tail column laid and tested. Specced after its blockers merge, from a probe of which tests it re-pins | M3-4, M3-5, M3-P1 |
+| SP-G | spike: a packed column for routed and AE2 with a cell per port (T's port on top) | M3-P1 |
 | later in M3 | build-step words from each unit's own facing (`steps.ts`); reach and rain cover counted in the score (goals 3, 7) | the shapes they describe |
 | M3-V | QA verification of the milestone branch | all above |
 
