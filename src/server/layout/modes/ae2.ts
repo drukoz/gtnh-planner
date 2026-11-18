@@ -412,7 +412,7 @@ const PACKED_LANES: ReadonlyArray<readonly [number, number]> = [[1, 0], [1, 2], 
  * The ME spine `[firstX … tailX] × (y 0, z spineZ)`: interfaces with their patterns, or cable with an export bus in front
  * of a machine that makes only fluids, cable between and up the spine's column to an interface above it (`itemRisers`),
  * output covers on the machines. Nothing when no placed unit moves items.
-  * On a packed line (`Placement.ownPorts`, spike SP-G) the interfaces are the cells of `PACKED_LANES`, one per machine, each
+ * On a packed line (`Placement.ownPorts`, spike SP-G) the interfaces are the cells of `PACKED_LANES`, one per machine, each
  * wrenched down into it, and the ME cable fills the rest of those lanes and joins them at the tail column. The port is the
  * south lane's tail cell, on the box's face (`Placement.tail`), because a hookup goes round the box's columns
  * (`hookups.ts`). Every Wrench target is the interface's one machine, so no interface pushes into two.

@@ -309,13 +309,13 @@ function placeSteps(units: readonly PlacedUnit[], sitePin: number | undefined, r
         } else g.n += 1;
       }
       const faces = groups.length === 1
-        ? singleblockFaces(groups[0]!.front, groups[0]!.outWhere, groups[0]!.outClick)
-        : `each turned as the 3D view shows it: ${joinNames(groups.map((g) => `${fmtInt(g.n)} with the output side facing ${g.outWhere} and the front facing ${g.front}`))}. `
+        ? ` ${singleblockFaces(groups[0]!.front, groups[0]!.outWhere, groups[0]!.outClick)}`
+        : `, each turned as the 3D view shows it: ${joinNames(groups.map((g) => `${fmtInt(g.n)} with the output side facing ${g.outWhere} and the front facing ${g.front}`))}. `
           + 'For each, with a Wrench, sneak-right-click the side its front faces to make that the front '
           + '(where a neighbour covers that side, click the edge of the wrench grid toward it), then right-click the side its output faces '
           + 'to make that the output side';
       return draft(`layout:place:${stepId}`, 'place', sitePin,
-        `Place ${fmtInt(n)}× ${u.name} ${faces}${check}${runs}`);
+        `Place ${fmtInt(n)}× ${u.name}${faces}${check}${runs}`);
     }
     const labels = hatchLabels(u);
     const hatches = labels.length === 0 ? '' : `; hatches: ${labels.join(', ')}`;

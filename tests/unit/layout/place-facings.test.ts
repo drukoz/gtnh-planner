@@ -69,7 +69,7 @@ describe('a place step names each machine\'s own faces', () => {
         const g = groups[0]!;
         expect(text).toContain(`then right-click ${g.out === 'up' ? 'its top' : `its ${g.out} side`} to make that the output side`);
       } else {
-        expect(text).toContain('each turned as the 3D view shows it: ');
+        expect(text).toContain(`, each turned as the 3D view shows it: `);
         for (const g of groups) expect(text).toContain(fragment(g));
         expect(text).toContain('the side its output faces to make that the output side');
       }
@@ -104,9 +104,9 @@ describe('a place step names each machine\'s own faces', () => {
     expect([...new Set(groups.map((g) => g.front))].sort()).toEqual(['north', 'south']);
     const text = placeText(layout, 's2');
     const n = groups.reduce((t, g) => t + g.n, 0);
-    expect(text.startsWith(`Place ${fmtInt(n)}× `)).toBe(true);
     expect(n).toBe(10);
-    expect(text).toContain('each turned as the 3D view shows it: ');
+    const name = layout.blocks.find((b) => b.role === 'machine' && b.hookup === undefined && b.stepId === 's2')!.label;
+    expect(text.startsWith(`Place ${fmtInt(n)}× ${name}, each turned as the 3D view shows it: `)).toBe(true);
     for (const g of groups) expect(text).toContain(fragment(g));
     expect(text).toContain('the side its output faces to make that the output side');
     expect(text).toContain("so while the middle row is still empty right-click such a machine's middle-row side");
