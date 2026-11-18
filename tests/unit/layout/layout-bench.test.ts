@@ -30,13 +30,13 @@ describe('layout benchmark', () => {
     expect(lengthOf(layout).weakTiers).toEqual([1]);
   }, 30_000);
 
-  it('keeps the 40-machine AE2 line reachable, at one weak tier and one starved machine', async () => {
-    // the packed line powers all 40 machines but shuts 12 of its middle Ts in (spike SP-I, RUK-3016, looks for a
-    // column that does both); the search keeps the stacked line, which reaches every machine and leaves 1 starved.
+  it('keeps the 40-machine AE2 line packed open: every machine reachable and powered, at one weak tier', async () => {
+    // the open packed column (spike SP-I, RUK-3016) reaches and powers all 40 machines; satellites beside a packed box
+    // are spike SP-J, so the line keeps its one weak LV tier.
     const { layout } = await lossLine(40, 'ae2');
     expect(lengthOf(layout).unreachable).toBe(0);
     expect(lengthOf(layout).weakTiers).toEqual([1]);
-    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(1);
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(0);
   }, 30_000);
 
   it("runs the 40-machine AE2 line's LV wiring with no weak tier once satellites are laid", async () => {

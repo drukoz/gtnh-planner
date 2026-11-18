@@ -449,6 +449,7 @@ describe('layout search panel', () => {
   it('names the stacked layouts (RUK-2877)', () => {
     expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 0 })).toBe('Machines stacked two high, power head at the west end');
     expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 12 })).toBe('Machines stacked two high, power head in the middle, 12 machines west of it');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.PackedOpen, westUnits: 0 })).toBe('Machines packed three to a cable, interfaces on the outside, power head at the west end');
   });
 
   it('names the packed layout (RUK-2877)', () => {
