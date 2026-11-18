@@ -25,11 +25,10 @@ import { lossLine, tierContacts } from '../../helpers/power-loss.ts';
 
 const MODES: readonly LogisticsMode[] = ['direct', 'routed', 'ae2', 'enderio'];
 const KIND: Record<number, string> = { [CandidateKind.WestHead]: 'WestHead', [CandidateKind.MiddleHead]: 'MiddleHead',
-  [CandidateKind.Stacked]: 'Stacked', [CandidateKind.Packed]: 'Packed', [CandidateKind.PackedOpen]: 'PackedOpen' };
+  [CandidateKind.Stacked]: 'Stacked', [CandidateKind.Packed]: 'Packed', [CandidateKind.PackedOpen]: 'PackedOpen',
+  [CandidateKind.Reordered]: 'Reordered' };
 const M2_BASELINE = fileURLToPath(new URL('../../fixtures/layout-bench/baseline-m2.json', import.meta.url));
 const m2Rows = (): LengthReport[] => JSON.parse(readFileSync(M2_BASELINE, 'utf8')) as LengthReport[];
-// the benchmark rows whose machines the builder cannot reach today (M3-11): 2 Electric Blast Furnace controllers each
-const SHUT_IN = ['mixed-02 ae2', 'mixed-03 ae2', 'mixed-18 ae2'];
 const DESERT: BiomeInfo[] = [{ id: 2, name: 'Desert', rain: false }];
 const PLAINS: BiomeInfo[] = [{ id: 1, name: 'Plains', rain: true }];
 
@@ -163,11 +162,15 @@ describe('milestone M3 verification', () => {
       const labels = own.filter((b) => b.role === 'machine' && at.has(b.pos.join(','))).map((b) => b.label);
       shutRows.push(`${where}: ${shut.length} × ${[...new Set(labels)].join(', ')}`);
       expect(warned.length, `${where}: one machine_unreachable warning`).toBe(1);
-      expect(warned[0]!.text, `${where}: the warning names the shut-in machines`).toContain(`${shut.length} machines are closed in`);
+      expect(warned[0]!.text, `${where}: the warning names the shut-in machines`)
+        .toContain(shut.length === 1 ? '1 machine is closed in' : `${shut.length} machines are closed in`);
       expect(warned[0]!.text, `${where}: the warning names them by label`).toContain(labels[0]!);
     }
     expect(fails, fails.join('\n')).toEqual([]);
-    expect(shutRows.sort(), `rows with shut-in machines:\n${shutRows.join('\n')}`).toEqual(SHUT_IN.map((n) => `${n}: 2 × Electric Blast Furnace`).sort());
+    expect(shutRows.sort(), `rows with shut-in machines:\n${shutRows.join('\n')}`).toEqual([
+      'mixed-02 ae2: 1 × Electric Blast Furnace', 'mixed-03 ae2: 2 × Electric Blast Furnace',
+      'mixed-18 ae2: 1 × Electric Blast Furnace',
+    ]);
   });
 
   it('promise 5: the rain roof covers every block GT rains on, and the step names its count', () => {
