@@ -4,6 +4,9 @@
 // A line may get longer, lossier or weaker-tiered only to power machines it could not run (RUK-2571 plan, Assumption 4):
 // a row offends when its `routeFailed` or its `unpowered` count rises, and its `total`, `lossEUt` and `weakTiers` only
 // while its `unpowered` count stays at the baseline's (RUK-2617).
+// A row may also get longer, lossier or weaker-tiered to reach a machine the baseline shut in (RUK-2877, plan
+// Assumption 4): a row offends when its `unreachable` count rises, and its length, loss and tiers only while it
+// reaches exactly as many machines as the baseline did.
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -18,13 +21,23 @@ describe('layout benchmark', () => {
   it('measures the 10-machine direct loss line', async () => {
     const { layout } = await lossLine(10, 'direct');
     const report = lengthOf(layout);
-    expect([report.total, report.cable, report.pipe, report.hookup, report.weakTiers]).toEqual([35, 20, 6, 9, []]);
+    expect([report.total, report.cable, report.pipe, report.hookup, report.weakTiers]).toEqual([45, 10, 11, 8, []]);
+    expect(report.roof).toBe(16);
   }, 30_000);
 
   it("flags the 40-machine AE2 line's LV wiring as weak", async () => {
     // 53 cable blocks of LV to the farthest macerator leave it 1 V: under half of LV's 32 V
-    const { layout } = await lossLine(40, 'ae2');
+    const { layout } = await lossLine(40, 'ae2', { packing: false });
     expect(lengthOf(layout).weakTiers).toEqual([1]);
+  }, 30_000);
+
+  it('keeps the 40-machine AE2 line packed open: every machine reachable and powered, at one weak tier', async () => {
+    // the open packed column (spike SP-I, RUK-3016) reaches and powers all 40 machines; satellites beside a packed box
+    // are spike SP-J, so the line keeps its one weak LV tier.
+    const { layout } = await lossLine(40, 'ae2');
+    expect(lengthOf(layout).unreachable).toBe(0);
+    expect(lengthOf(layout).weakTiers).toEqual([1]);
+    expect(layout.warnings.filter((w) => w.code === 'machine_unpowered')).toHaveLength(0);
   }, 30_000);
 
   it("runs the 40-machine AE2 line's LV wiring with no weak tier once satellites are laid", async () => {
@@ -51,8 +64,10 @@ describe('layout benchmark', () => {
       }
       if (row.routeFailed > base.routeFailed) offenses.push(`${base.name} ${base.mode}: routeFailed ${row.routeFailed} > ${base.routeFailed}`);
       if (row.unpowered > base.unpowered) offenses.push(`${base.name} ${base.mode}: unpowered ${row.unpowered} > ${base.unpowered}`);
-      // a line may only get longer, lossier or weaker while it powers no more machines than the baseline did
-      if (row.unpowered === base.unpowered) {
+      const baseReach = base.unreachable ?? 0;
+      if (row.unreachable > baseReach) offenses.push(`${base.name} ${base.mode}: unreachable ${row.unreachable} > ${baseReach}`);
+      // a line may only get longer, lossier or weaker while it powers and reaches no more machines than the baseline did
+      if (row.unpowered === base.unpowered && row.unreachable === baseReach) {
         if (row.total > base.total) offenses.push(`${base.name} ${base.mode}: total ${row.total} > ${base.total}`);
         if (row.lossEUt > base.lossEUt + 0.01) offenses.push(`${base.name} ${base.mode}: lossEUt ${row.lossEUt} > ${base.lossEUt}`);
         if (row.weakTiers.length > base.weakTiers.length) offenses.push(`${base.name} ${base.mode}: weakTiers ${row.weakTiers.length} > ${base.weakTiers.length}`);

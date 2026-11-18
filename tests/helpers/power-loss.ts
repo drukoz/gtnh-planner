@@ -8,7 +8,7 @@
 import { DIRS, posKey, step } from '../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 import type { LogisticsMode, Plan } from '../../src/shared/types/plan.ts';
-import type { Pack, Machine } from '../../src/shared/types/pack.ts';
+import type { Pack, Machine, BiomeInfo } from '../../src/shared/types/pack.ts';
 import type { WorldScan } from '../../src/shared/types/world.ts';
 import { layoutLine, type LayoutDeps } from '../../src/server/layout/layout.ts';
 import { type LocalBlock, type Placement } from '../../src/server/layout/arrange.ts';
@@ -69,11 +69,14 @@ export function lossScan(mode: LogisticsMode): WorldScan {
   });
 }
 
-/** Flat stone under the whole site, with the scanned macerator and the power tap's cable standing on it. */
-export function lossGround(): LayoutDeps {
+/**
+ * Flat stone under the whole site, with the scanned macerator and the power tap's cable standing on it.
+ * With `biome`, every column gets that biome id (RUK-3041); without it the ground carries no biome table.
+ */
+export function lossGround(biome?: number): LayoutDeps {
   const gt = (mteId: number) => ({ id: 'gregtech:gt.blockmachines', meta: 0, mteId });
   return { readArea: areaReader(flatVoxels({
-    origin: [-160, 50, -160], size: [400, 30, 400], groundY: 63,
+    origin: [-160, 50, -160], size: [400, 30, 400], groundY: 63, ...(biome === undefined ? {} : { biome }),
     boxes: [{ from: [40, 64, 20], to: [40, 64, 20], block: gt(IDS.MACERATOR) },
       { from: [16, 64, 30], to: [16, 64, 30], block: gt(IDS.ANNEALED_2X) }],
   })) };
@@ -87,14 +90,17 @@ export const SUPPLY_TIER = 2;
  * route the layout was built from, as `layoutLine` chose them (`LayoutDeps.localLine`) (the wiring checks below read
  * the local grid, where the ports and runs live).
  */
-export async function lossLine(n: number, mode: LogisticsMode, opts: { satellites?: boolean } = {}): Promise<{
+export async function lossLine(n: number, mode: LogisticsMode, opts: {
+  satellites?: boolean; stacking?: boolean; packing?: boolean; biomes?: BiomeInfo[]; biome?: number;
+} = {}): Promise<{
   layout: Layout; plan: Plan; placement: Placement; internal: InternalResult; pack: Pack;
 }> {
-  const pack = layoutPack();
+  const base = layoutPack();
+  const pack = opts.biomes === undefined ? base : { ...base, biomes: opts.biomes };
   const plan = lossPlan(n);
   const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
   const layout = await layoutLine(pack, plan, lossScan(mode), makeProject({ logistics: mode }), {
-    ...lossGround(), localLine: (line) => { seen.push(line); }, satellites: opts.satellites === true,
+    ...lossGround(opts.biome), localLine: (line) => { seen.push(line); }, satellites: opts.satellites === true, stacking: opts.stacking !== false, packing: opts.packing !== false,
   });
   const local = seen[0];
   if (local === undefined) throw new Error(`the ${n}-machine ${mode} line laid nothing of its own`);
@@ -115,7 +121,7 @@ export function overlaps(blocks: readonly LayoutBlock[]): string[] {
 export function tierContacts(blocks: LocalBlock[], cables: Array<{ tier: number; cable: Machine }>, placement: Placement): string[] {
   const tierOf = new Map(cables.map((c) => [c.cable.name, c.tier]));
   const at = new Map(blocks.map((b) => [posKey(b.pos), b]));
-  const machines = new Map(placement.units.filter((u) => u.ports.power !== null).map((u) => [posKey(step(u.ports.power!, u.facing)), u]));
+  const machines = new Map(placement.units.filter((u) => u.ports.power !== null).map((u) => [posKey(step(u.ports.power!, u.powerSide)), u]));
   const out: string[] = [];
   for (const b of blocks) {
     if (b.role !== 'cable') continue;

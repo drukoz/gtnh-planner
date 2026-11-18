@@ -1,0 +1,195 @@
+diff --git a/src/server/layout/arrange.ts b/src/server/layout/arrange.ts
+index a8aa14183..e4edabe93 100644
+--- a/src/server/layout/arrange.ts
++++ b/src/server/layout/arrange.ts
+@@ -1055,7 +1055,18 @@ function flipSide(side: number): number {
+   return side === WEST ? EAST : side === EAST ? WEST : side;
+ }
+ 
+-interface PlacedSlot { u: Unit; row: Row; x: number }
++/** A slot a unit was placed in: its row, its column along the row and the block layer it stands on. */
++interface PlacedSlot { u: Unit; row: Row; x: number; y: 0 | 1 }
++
++/**
++ * SP-D (RUK-2878, spike): a unit that may stand on top of another one in the same column. A 1×1×1 singleblock with no
++ * fluids (its top is free: `unitPorts` puts a fluid port there), nothing run by hand, vented, benched or multiblock.
++ */
++function stackable(u: Unit): boolean {
++  return !u.multiblock && u.manual === undefined && u.vent !== true && u.bench === undefined
++    && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0
++    && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1;
++}
+ 
+ /**
+  * One side of the power head: `ordered` units placed in local columns from 0 outward (local 0 touches the head), in the
+@@ -1064,13 +1075,18 @@ interface PlacedSlot { u: Unit; row: Row; x: number }
+  * to the shorter row (N on a tie), one column apart from a multiblock neighbour, and moves on until its item ports are
+  * `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell; 2: not even neighbouring) and every
+  * cell it keeps beside its columns (a side port, a muffler's air) is free.
++ * SP-D (RUK-2878, spike): a stackable unit (`stackable`) standing right after a stackable unit of the same feed tier in
++ * the same row goes on top of it at y 1, in its column, and takes no column of its own.
+  */
+ function placeSide(ordered: readonly Unit[], opts: {
+-  portSpacing: 0 | 1 | 2; feedTier: (u: Unit) => number | null; headTier: number | null; supplyTier?: number;
++  portSpacing: 0 | 1 | 2; feedTier: (u: Unit) => number | null; headTier: number | null; supplyTier?: number; stack?: boolean;
+ }): { slots: PlacedSlot[]; reach: Record<Row, number> } {
+   const { portSpacing, feedTier, headTier, supplyTier } = opts;
+   const cursor: Record<Row, number> = { N: 0, S: 0 };
+   const previous: Record<Row, Unit | null> = { N: null, S: null };
++  // SP-D (RUK-2878, spike): the last slot of each row, and the columns of a row that already carry a machine on top.
++  const lastSlot: Record<Row, PlacedSlot | null> = { N: null, S: null };
++  const topped = new Set<string>();
+   /** The feed tier the next unit of a row stands beside: the head's run, the previous unit's, or none (a steam unit). */
+   const besideTier: Record<Row, number | null> = { N: headTier, S: headTier };
+   const claimed = new Set<number>();
+@@ -1092,6 +1108,17 @@ function placeSide(ordered: readonly Unit[], opts: {
+   const slots: PlacedSlot[] = [];
+   for (const u of ordered) {
+     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
++    // SP-D (RUK-2878, spike): a stackable unit stands on the row's last one when that one is on the floor, still free,
++    // stackable itself and fed at the same tier. Its item port is at y 1, a different cell from the lower one's, so it
++    // takes no `portSpacing` test, and the row's cursor, kept cells and reach stay where the lower one left them.
++    const below = lastSlot[row];
++    const under = below === null ? '' : `${row}:${below.x}`;
++    if (opts.stack === true && below !== null && below.y === 0 && !topped.has(under) && stackable(u) && stackable(below.u) && feedTier(u) === feedTier(below.u)) {
++      topped.add(under);
++      lastSlot[row] = { u, row, x: below.x, y: 1 };
++      slots.push({ u, row, x: below.x, y: 1 });
++      continue;
++    }
+     const before = previous[row];
+     const tier = feedTier(u);
+     const otherTier = tier !== null && besideTier[row] !== null && tier !== besideTier[row];
+@@ -1107,7 +1134,8 @@ function placeSide(ordered: readonly Unit[], opts: {
+     reach[row] = own.reduce((r, p) => Math.max(r, p[0] + 1), cursor[row]);
+     previous[row] = u;
+     besideTier[row] = tier;
+-    slots.push({ u, row, x });
++    slots.push({ u, row, x, y: 0 });
++    lastSlot[row] = { u, row, x, y: 0 };
+   }
+   return { slots, reach };
+ }
+@@ -1135,7 +1163,7 @@ function placeSide(ordered: readonly Unit[], opts: {
+  * above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe` waits while a cover or a block with a hit box is
+  * there) and the one behind it (its steam inlet) kept empty.
+  */
+-export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number; westUnits?: number }): Placement {
++export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number; westUnits?: number; stack?: boolean }): Placement {
+   const { headWidth, portSpacing, supplyTier } = opts;
+   const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
+   const nonManual = lowestFeedFirst(units.filter((u) => u.manual === undefined), feedTier);
+@@ -1147,8 +1175,8 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
+   // west of it, mirrored, facing its west face; the units run by hand stay last, east of it, near the tail chests
+   const split = supplyTier !== undefined && headWidth > 0 ? Math.min(Math.max(0, Math.floor(opts.westUnits ?? 0)), nonManual.length) : 0;
+   // the head's west face is its supply run, its east face the lowest fed tier's run
+-  const west = placeSide(nonManual.slice(0, split), { portSpacing, feedTier, headTier: supplyTier ?? headTier, supplyTier });
+-  const east = placeSide([...nonManual.slice(split), ...handUnits], { portSpacing, feedTier, headTier, supplyTier });
++  const west = placeSide(nonManual.slice(0, split), { portSpacing, feedTier, headTier: supplyTier ?? headTier, supplyTier, stack: opts.stack });
++  const east = placeSide([...nonManual.slice(split), ...handUnits], { portSpacing, feedTier, headTier, supplyTier, stack: opts.stack });
+   const headX = split === 0 ? 0 : Math.max(west.reach.N, west.reach.S);
+   const deepest = (row: Row) => [...west.slots, ...east.slots].reduce((d, s) => (s.row === row ? Math.max(d, s.u.size[2] + standOff(s.u)) : d), 0);
+   const dN = deepest('N'), dS = deepest('S');
+@@ -1170,9 +1198,10 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
+     fluidFaces: p.fluidFaces.map((f) => ({ pos: pos(f.pos), side: flip(f.side) })),
+   });
+   const emit = (sideSlots: readonly PlacedSlot[], mapX: (x: number) => number, flip: (s: number) => number): void => {
+-    for (const { u, row, x } of sideSlots) {
++    for (const { u, row, x, y } of sideSlots) {
+       const toSpine = towardSpine(row);
+-      const pos = (p: Vec3): Vec3 => [mapX(p[0]), p[1], p[2]];
++      // a stacked slot's cells land one block layer above the row's floor
++      const pos = (p: Vec3): Vec3 => [mapX(p[0]), p[1] + y, p[2]];
+       // a singleblock's output side faces the spine (its covers and inputs go there), its front toward the head (GT keeps
+       // the two apart; on the west side the head lies east); a venting steam unit's output side faces up; a bench has
+       // only its front, turned away from the spine, so its back, its output face, meets the spine
+@@ -1215,7 +1244,9 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
+   blocks.sort((a, b) => comparePos(a.pos, b.pos));
+   reserved.sort(comparePos);
+   // the box holds every cell kept empty too (a steam vent above a singleblock), so the site checks it is clear
+-  const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1));
++  // SP-D (RUK-2878, spike): and every cell of a machine stacked on another one (`emit` shifts a stacked slot's cells up)
++  const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1),
++    blocks.reduce((h, b) => Math.max(h, b.pos[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1)));
+   const size: Vec3 = [tailX + 1, height, dN + dS + 3];
+   return { units: placed, size, spineZ, headX, firstX: split === 0 ? headWidth : 0, tailX, blocks, reserved };
+ }
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index b2de8f9e1..57f0eb66a 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -295,7 +295,7 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
+  * the line laid before RUK-121. The chosen line is that baseline, and only a candidate that `replacesBaseline`s it (the
+  * best such, earliest on a tie) takes its place.
+  */
+-function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch } {
++function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLine; search: LayoutSearch } {
+   const west = buildLocalAt(input, 0);
+   // every line laid, in the order laid: the west head first, then one per middle-head split, each tagged with its kind
+   const lines: LocalLine[] = [west];
+@@ -328,6 +328,13 @@ function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch
+       if (middleLoss <= (1 - MIDDLE_HEAD_MIN_CUT) * westLoss) baseline = middleIndex;
+     }
+   }
++  const laid = kinds.length;
++  for (let i = 0; i < (process.env.PROBE_NOSTACK === "1" ? 0 : laid); i++) {
++    const w = kinds[i]!.westUnits;
++    lines.push(buildLocalAt(input, w, true));
++    kinds.push({ kind: 2 as CandidateKind, westUnits: w });
++  }
++  if (process.env.PROBE_LOG) { (globalThis as any).__probe ??= []; (globalThis as any).__probe.push(lines.map((l, i) => ({ k: kinds[i]!.kind, w: kinds[i]!.westUnits, s: l.score, warn: l.warnings.map((x) => x.code).sort() }))); }
+   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+   // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
+   let chosen = baseline;
+@@ -335,7 +342,7 @@ function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch
+     if (!replacesBaseline(candidates[i]!, candidates[baseline]!)) continue;
+     if (compareScore(candidates[i]!, candidates[chosen]!) < 0) chosen = i;
+   }
+-  return { line: lines[chosen]!, search: { candidates, chosen, baseline } };
++  return { line: lines[chosen]!, baselineLine: lines[baseline]!, search: { candidates, chosen, baseline } };
+ }
+ 
+ /**
+@@ -346,10 +353,10 @@ function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch
+  * cells its multiblocks need kept empty as well as its blocks.
+  * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
+  */
+-function buildLocalAt(input: LocalInput, westUnits: number): LocalLine {
++function buildLocalAt(input: LocalInput, westUnits: number, stack = false): LocalLine {
+   const { pack, plan, parts, mode, units, stages, network } = input;
+   const placement = placeUnits(units, {
+-    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits,
++    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+   });
+   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
+   // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
+@@ -899,8 +906,8 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+   }
+ 
+   // stage 5; from here on the stages are the ones sized for the volts every machine gets
+-  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites !== false });
+-  deps.localLine?.({ placement: line.placement, internal: line.internal });
++  const { line: chosenLine, baselineLine, search: chosenSearch } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites !== false });
++  const finishWith = async (line: LocalLine, search: LayoutSearch): Promise<Layout> => {
+   const { stages } = line;
+   // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
+   const areas = farmAreas(plan, line.size);
+@@ -1015,4 +1022,18 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+     ...(replaced.length === 0 ? {} : { replaced }),
+     ...(reserved.length === 0 ? {} : { reserved }),
+   };
++  };
++  const first = await finishWith(chosenLine, chosenSearch);
++  if (chosenSearch.chosen === chosenSearch.baseline || process.env.PROBE_NOFINAL === '1') { deps.localLine?.({ placement: chosenLine.placement, internal: chosenLine.internal }); return first; }
++  const base0 = await finishWith(baselineLine, { ...chosenSearch, chosen: chosenSearch.baseline });
++  const m = (l: Layout) => ({
++    total: l.blocks.filter((b) => b.role !== 'ghost' && (b.hookup !== undefined || ['cable', 'pipe', 'interface', 'chip_pipe'].includes(b.role))).length,
++    loss: l.loss?.totalEUt ?? 0, unpowered: l.loss?.unpowered ?? 0, unwired: l.warnings.filter((w) => w.code === 'route_failed').length,
++  });
++  const c = m(first), b = m(base0);
++  const keep = c.unwired <= b.unwired && (c.unpowered < b.unpowered || (c.unpowered === b.unpowered && c.total <= b.total && c.loss <= b.loss));
++  (globalThis as any).__final ??= []; (globalThis as any).__final.push({ keep, c, b });
++  const kept = keep ? chosenLine : baselineLine;
++  deps.localLine?.({ placement: kept.placement, internal: kept.internal });
++  return keep ? first : base0;
+ }

@@ -255,6 +255,21 @@ describe('the line on the map: the rules in detail', () => {
     expect(shapes.at(-1)?.kind).toBe('dot');   // marks are drawn last
   });
 
+  it('colours a roofed column by the block under the roof, and a roof-only column by the roof (RUK-2877)', () => {
+    const glass = { id: 'minecraft:glass', meta: 0 };
+    const roofed: Layout = { ...layout, size: [3, 2, 2], blocks: [...layout.blocks,
+      { pos: [10, 65, 20], block: glass, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' },      // over the macerator
+      { pos: [12, 64, 21], block: glass, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' }] };   // a column with nothing under it
+    const shapes = overlayShapes(roofed, view, null, []);
+    expect(shapes.filter((s) => s.kind === 'rect' && s.fill !== null)).toEqual([
+      { kind: 'rect', x: 200, y: 200, w: 4, h: 4, fill: '#90caf9', stroke: null, dash: [] },
+      { kind: 'rect', x: 204, y: 200, w: 4, h: 4, fill: '#90caf9', stroke: null, dash: [] },
+      { kind: 'rect', x: 200, y: 204, w: 4, h: 4, fill: '#ffb300', stroke: null, dash: [] },
+      { kind: 'rect', x: 208, y: 204, w: 4, h: 4, fill: '#b3e5fc', stroke: null, dash: [] }]);
+    // a roof-only column never falls out of ROLE_PRIORITY and is drawn with no colour at all
+    expect(shapes.filter((s) => s.kind === 'rect').map((s) => String('fill' in s ? s.fill : 'shape'))).not.toContain('undefined');
+  });
+
   it('draws each hookup in its network colour and arrows only between two different steps', () => {
     const tap = { pos: [8, 64, 21] as [number, number, number], dim: 0, networkId: 'n' };
     const hooked: Layout = { ...layout, hookups: [

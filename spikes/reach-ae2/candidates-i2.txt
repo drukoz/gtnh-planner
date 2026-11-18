@@ -1,0 +1,54 @@
+# AE2 packed candidates, reach variant i2
+
+## loss-10 ae2  chosen=6(packed) baseline=0(west) rejected=undefined
+| i | kind | w | unwired | unreach | hand | unpow | total | lossEUt | volume |
+| 0 | west | 0 | 0 | 0 | 0 | 0 | 40 | 248 | 70 |
+| 1 | middle | 2 | 0 | 0 | 0 | 0 | 61 | 230 | 225 |
+| 2 | middle | 4 | 0 | 0 | 0 | 1 | 61 | 261 | 225 |
+| 3 | stacked | 0 | 0 | 0 | 0 | 0 | 36 | 208 | 100 |
+| 4 | stacked | 2 | 0 | 0 | 0 | 1 | 59 | 229 | 180 |
+| 5 | stacked | 4 | 0 | 0 | 0 | 1 | 58 | 253 | 180 |
+| 6 | packed | 0 | 0 | 0 | 0 | 0 | 34 | 142 | 135 |
+bench: total=52 lossEUt=196 weak=[] unpowered=0 size=5x3x9
+
+## loss-20 ae2  chosen=10(packed) baseline=2(middle) rejected=undefined
+| i | kind | w | unwired | unreach | hand | unpow | total | lossEUt | volume |
+| 0 | west | 0 | 0 | 0 | 0 | 7 | 70 | 947 | 120 |
+| 1 | middle | 4 | 0 | 0 | 1 | 4 | 91 | 705 | 375 |
+| 2 | middle | 6 | 0 | 0 | 0 | 0 | 118 | 549 | 625 |
+| 3 | middle | 8 | 0 | 0 | 1 | 4 | 91 | 671 | 375 |
+| 4 | middle | 10 | 0 | 0 | 1 | 5 | 91 | 742 | 375 |
+| 5 | stacked | 0 | 0 | 0 | 0 | 0 | 61 | 464 | 150 |
+| 6 | stacked | 4 | 0 | 0 | 1 | 1 | 83 | 495 | 255 |
+| 7 | stacked | 6 | 0 | 0 | 1 | 3 | 82 | 580 | 255 |
+| 8 | stacked | 8 | 0 | 0 | 1 | 3 | 82 | 584 | 255 |
+| 9 | stacked | 10 | 0 | 0 | 1 | 5 | 82 | 744 | 255 |
+| 10 | packed | 0 | 0 | 0 | 0 | 0 | 46 | 298 | 180 |
+bench: total=61 lossEUt=394 weak=[] unpowered=0 size=5x3x12
+
+## loss-40 ae2  chosen=10(packed) baseline=0(west) rejected=undefined
+| i | kind | w | unwired | unreach | hand | unpow | total | lossEUt | volume |
+| 0 | west | 0 | 0 | 0 | 0 | 0 | 199 | 1527 | 880 |
+| 1 | middle | 10 | 0 | 0 | 15 | 22 | 151 | 7770 | 675 |
+| 2 | middle | 12 | 0 | 0 | 12 | 22 | 151 | 5836 | 675 |
+| 3 | middle | 16 | 0 | 0 | 9 | 22 | 151 | 4106 | 675 |
+| 4 | middle | 20 | 0 | 0 | 10 | 22 | 151 | 5041 | 675 |
+| 5 | stacked | 0 | 0 | 0 | 2 | 17 | 111 | 2102 | 250 |
+| 6 | stacked | 10 | 0 | 0 | 4 | 11 | 132 | 1585 | 405 |
+| 7 | stacked | 12 | 0 | 0 | 4 | 10 | 132 | 1513 | 405 |
+| 8 | stacked | 16 | 0 | 0 | 5 | 12 | 132 | 1704 | 405 |
+| 9 | stacked | 20 | 0 | 0 | 5 | 14 | 132 | 2066 | 405 |
+| 10 | packed | 0 | 0 | 0 | 0 | 0 | 74 | 966 | 285 |
+bench: total=82 lossEUt=1062 weak=[1] unpowered=0 size=5x3x19
+
+## mixed-05 ae2  chosen=6(packed) baseline=0(west) rejected=undefined
+| i | kind | w | unwired | unreach | hand | unpow | total | lossEUt | volume |
+| 0 | west | 0 | 0 | 0 | 0 | 4 | 29 | 163 | 50 |
+| 1 | middle | 2 | 0 | 0 | 0 | 4 | 31 | 156 | 100 |
+| 2 | middle | 4 | 0 | 0 | 0 | 4 | 31 | 150 | 100 |
+| 3 | stacked | 0 | 0 | 0 | 0 | 4 | 26 | 124 | 70 |
+| 4 | stacked | 2 | 0 | 0 | 0 | 4 | 29 | 158 | 80 |
+| 5 | stacked | 4 | 0 | 0 | 0 | 4 | 29 | 119 | 80 |
+| 6 | packed | 0 | 0 | 0 | 0 | 4 | 25 | 72 | 90 |
+bench: total=44 lossEUt=585 weak=[] unpowered=4 size=6x3x5
+

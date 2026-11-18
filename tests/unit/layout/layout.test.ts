@@ -4,7 +4,7 @@ import { overlaps, type Placement } from '../../../src/server/layout/arrange.ts'
 import { supplyRunLoss, type InternalResult } from '../../../src/server/layout/internal.ts';
 import { ae2IdleEUt, resolveParts } from '../../../src/server/layout/parts.ts';
 import { tierName } from '../../../src/shared/gt/tiers.ts';
-import { OPPOSITE, rotateFacing, step } from '../../../src/shared/layout/geometry.ts';
+import { OPPOSITE, rotateFacing, step, type Vec3 } from '../../../src/shared/layout/geometry.ts';
 import type { Layout, LayoutBlock } from '../../../src/shared/types/layout.ts';
 import type { Pack } from '../../../src/shared/types/pack.ts';
 import type { Plan, PlanFlow } from '../../../src/shared/types/plan.ts';
@@ -160,7 +160,7 @@ describe('layoutLine: the power landing cell', () => {
 
   it('lands a long line\'s hookup in the middle of the run, not at its far end', async () => {
     const pack = layoutPack(), plan = twentyLV();
-    const seen: Array<{ placement: Placement; internal: InternalResult }> = [];
+    const seen: Array<{ placement: Placement; internal: InternalResult; shift: Vec3 }> = [];
     const layout = await layoutLine(pack, plan, lvScan(), project(), { ...lvGround(), localLine: (line) => { seen.push(line); } });
     expect([layout.status, layout.hookups.find((h) => h.kind === 'power')!.found]).toEqual(['ok', true]);
     const run = layout.blocks.filter((b) => b.role === 'cable' && b.hookup === undefined && b.label === '4x Tin Cable');
@@ -172,11 +172,12 @@ describe('layoutLine: the power landing cell', () => {
     // the route the old code priced (the run's first cell) is measured with the same loss formula: `buildLocal`'s
     // internal route, mirrored, prices every landing cell, and the hookup loss is amps × blocks × lossPerBlock
     const r = seen[0]!.internal;
-    // every landing cell is a cell of the run; a head in the middle also has run cells inside the line, which are none
-    const runCells = new Set(run.map((b) => key(b.pos.map((v, i) => v - layout.origin[i]!))));
+    // every landing cell is a cell of the run; a head in the middle also has run cells inside the line, which are none;
+    // the internal route speaks the placement's local cells, so the world cells lose the frame's roof-shift too
+    const runCells = new Set(run.map((b) => key(b.pos.map((v, i) => v - layout.origin[i]! - seen[0]!.shift[i]!))));
     expect(r.supplyRun.filter((c) => !runCells.has(key(c)))).toEqual([]);
     const losses = r.supplyRun.map((_, i) => supplyRunLoss(r.supply, i).lossEUt);
-    const local = landed.pos.map((v, i) => v - layout.origin[i]!) as [number, number, number];
+    const local = landed.pos.map((v, i) => v - layout.origin[i]! - seen[0]!.shift[i]!) as [number, number, number];
     const chosen = r.supplyRun.findIndex((c) => key(c) === key(local));
     expect(chosen).toBeGreaterThan(-1);
     const amps = r.stages!.supplyAmps;
@@ -328,11 +329,11 @@ describe('layoutLine: the final review', () => {
     const hill = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [55, 64, 20], rotation: 0 } }),
       ground([{ from: [50, 64, 15], to: [65, 70, 30], block: STONE }]));
     expect([hill.origin, hill.warnings.filter((w) => w.code.startsWith('placement'))]).toEqual([[55, 64, 20],
-      [{ code: 'placement_blocked', text: '105 blocks are in the way at the chosen spot' }]]);
+      [{ code: 'placement_blocked', text: '140 blocks are in the way at the chosen spot' }]]);
     const edge = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [66, 64, 20], rotation: 0 } }), ground());
     expect(edge.warnings).toContainEqual({ code: 'placement_unchecked',
-      text: '60 blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building' });
-    expect(edge.pins.some((p) => p.kind === 'warning' && p.text.startsWith('60 blocks at the chosen spot'))).toBe(true);
+      text: '75 blocks at the chosen spot were not scanned, so they could not be checked: look there in game before building' });
+    expect(edge.pins.some((p) => p.kind === 'warning' && p.text.startsWith('75 blocks at the chosen spot'))).toBe(true);
     // a placement kept from another base (or dragged off the map) is not used
     const far = await layoutLine(layoutPack(), twoStep(), scan(), makeProject({ placement: { origin: [600, 64, 20], rotation: 0 } }), ground());
     const auto = await layoutLine(layoutPack(), twoStep(), scan(), makeProject(), ground());
@@ -383,7 +384,7 @@ describe('layoutLine: mixed-tier lines', () => {
 
   /**
    * What is wrong with the line's power, as text: every "Could not wire" warning; every singleblock machine without a cable
-   * of its feed tier (`min(tier, supply)`) joined to the power input behind it; every cable beside a cable of another tier,
+   * of its feed tier (`min(tier, supply)`) joined to it through a face other than its front; every cable beside a cable of another tier,
    * a machine or energy hatch of a lower tier, or a transformer it does not belong to (one joins its own tier and the next).
    */
   function powerProblems(layout: Layout, plan: Plan, pack: Pack, supply: number): string[] {
@@ -393,9 +394,14 @@ describe('layoutLine: mixed-tier lines', () => {
     const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not wire')).map((w) => w.text);
     for (const m of placed) {
       if (m.role !== 'machine' || m.mainFacing === undefined) continue;
-      const port = at.get(key(step(m.pos, OPPOSITE[m.facing!]!)));
       const feed = Math.min(stepTier.get(m.stepId!)!, supply);
-      if (port?.role !== 'cable' || tierOf(layout, port) !== feed || ((port.connections ?? 0) & (1 << m.facing!)) === 0) {
+      // GT takes energy through any face but the front (gt-mechanics: isInputFacing): a cable of the feed tier on such a face, linked into the machine
+      const fed = [0, 1, 2, 3, 4, 5].some((side) => {
+        if (side === m.mainFacing) return false;
+        const port = at.get(key(step(m.pos, side)));
+        return port?.role === 'cable' && tierOf(layout, port) === feed && ((port.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0;
+      });
+      if (!fed) {
         out.push(`${m.label} at ${key(m.pos)} has no ${tierName(feed)} cable at its power input`);
       }
     }

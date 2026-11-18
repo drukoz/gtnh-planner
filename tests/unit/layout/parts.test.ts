@@ -34,7 +34,8 @@ describe('parts', () => {
     expect(parts.item_filter_cover).toMatchObject({ key: 'gregtech:gt.metaitem.01@32270', name: 'Filtered Conveyor Cover (Export)' });
     expect(parts.eio_item_conduit.block).toEqual({ id: 'conduit:item', meta: 0 });
     // plan 12 Task 6 adds an Auto Workbench's caps: the Item Broadcaster Chip, the Limited Item Filter and the Locking Card
-    expect(Object.keys(PART_DEFS)).toHaveLength(30);
+    expect(Object.keys(PART_DEFS)).toHaveLength(31);
+    expect(parts.roof).toMatchObject({ key: 'minecraft:glass@0', name: 'Glass', found: true });
     expect([parts.chip_broadcaster, parts.eio_limited_filter, parts.ae2_locking_card].map((p) => [p.key, p.name, p.found])).toEqual([
       ['ProjRed|Transportation:projectred.transportation.routingchip@5', 'Item Broadcaster Chip', true],
       ['EnderIO:itemLimitedItemFilter@0', 'Limited Item Filter', true], ['appliedenergistics2:item.ItemMultiMaterial@65', 'Locking Card', true]]);

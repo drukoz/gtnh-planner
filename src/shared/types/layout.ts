@@ -13,7 +13,7 @@ import type { BomLine, BuildStep, LogisticsMode, PlanContext, PlanWarning, Power
 import type { TapPoint } from './world.ts';
 
 /** No task emits a `cover` block: a cover is a `CoverSpec` on the block it sits on (§11.14). */
-export type BlockRole = 'machine' | 'casing' | 'hatch' | 'cable' | 'transformer' | 'pipe' | 'cover' | 'interface' | 'chip_pipe' | 'chest' | 'ghost';
+export type BlockRole = 'machine' | 'casing' | 'hatch' | 'cable' | 'transformer' | 'pipe' | 'cover' | 'interface' | 'chip_pipe' | 'chest' | 'ghost' | 'roof';
 
 /** A cover on one face of its host block (§11.14). */
 export interface CoverSpec {
@@ -182,7 +182,7 @@ export interface LayoutLoss {
  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
  * takes the next number.
  */
-export const CandidateKind = { WestHead: 0, MiddleHead: 1 } as const;
+export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3, PackedOpen: 4 } as const;
 export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
 
 /**
@@ -193,12 +193,17 @@ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
  * higher), and its bounding volume.
  */
 export interface LineScore {
-  unwired: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
+  unwired: number; unreachable: number; handTransformers: number; unpowered: number; total: number; lossEUt: number; volume: number;
 }
 
 /**
  * One line the layout search laid and scored: its kind, how many units stood west of a middle power head (0 for the west
- * end), and its score, whose `lossEUt` is the search's estimate; the laid line's `Layout.loss` can be higher.
+ * end), and its score, whose `lossEUt` is the search's estimate; the laid line's `Layout.loss` can be higher. A
+ * `Stacked` candidate is a head candidate (the west head when `westUnits` is 0, else a middle head with `westUnits`
+ * units west of it) laid with single-block machines stacked two high (RUK-2877). A `Packed` candidate is the line laid
+ * by `placePacked` with the power head at the west end (`westUnits` 0), in direct, EnderIO and AE2 (RUK-2877). A
+ * `PackedOpen` candidate is AE2's packed line laid open (`placePacked` with `open`, spike SP-I, RUK-3016), right after
+ * its `Packed` one: the interfaces stand on the box's outer faces, so no machine is walled in.
  */
 export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUnits: number }
 
@@ -206,7 +211,14 @@ export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUn
  * How the layout chose its line (RUK-2571): every candidate laid, in the order tried; `chosen` the index of the one laid
  * out; `baseline` the index of the line today's rule picks, which the chosen line is never worse than.
  */
-export interface LayoutSearch { candidates: LayoutCandidate[]; chosen: number; baseline: number }
+export interface LayoutSearch {
+  candidates: LayoutCandidate[]; chosen: number; baseline: number;
+  /**
+   * The candidate the search ranked best when its finished layout, with its hookups, lost: to the baseline's, or to the
+   * runner-up's, which was laid instead (RUK-2877); absent when the search's best was laid.
+   */
+  rejected?: number;
+}
 
 export interface Layout {
   dim: number; origin: [number, number, number]; size: [number, number, number]; rotation: 0 | 90 | 180 | 270; mode: LogisticsMode;
@@ -217,6 +229,8 @@ export interface Layout {
   power?: PowerSummary;
   /** What the line's cables lose, tier by tier, and the total that counts into `power` (RUK-116). */
   loss?: LayoutLoss;
+  /** The biomes the line stands among, when none of them rains (GT's rain gate, gt-mechanics §3.4a): the line lays no rain roof. Absent when it does, or when the pack or the world cannot tell. */
+  dryBiomes?: string[];
   /** Structure casings that hatches replace. */
   replaced?: BomLine[];
   // optional addition

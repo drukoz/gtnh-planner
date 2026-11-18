@@ -1,10 +1,12 @@
 // RUK-2614: what the wiring leaves each electric machine (the per-machine power report RUK-351 asks for), the score a
-// laid line gets, and the rule that keeps a search candidate from replacing today's line by getting longer or lossier.
+// laid line gets, and the rule that keeps a search candidate from replacing today's line by getting longer or lossier,
+// plus the same rule for a finished layout, hookups and all, as the benchmark measures it (RUK-2877).
 import { describe, it, expect } from 'vitest';
-import type { LineScore } from '../../../src/shared/types/layout.ts';
+import type { LayoutBlock, LayoutLoss, LineScore, TierLoss } from '../../../src/shared/types/layout.ts';
 import type { BlockRef } from '../../../src/shared/types/pack.ts';
 import type { PlanWarning } from '../../../src/shared/types/plan.ts';
-import { compareScore, replacesBaseline, scoreLine } from '../../../src/server/layout/score.ts';
+import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine } from '../../../src/server/layout/score.ts';
+import type { FinalMeasure } from '../../../src/server/layout/score.ts';
 import type { LocalBlock } from '../../../src/server/layout/arrange.ts';
 import type { MachinePower } from '../../../src/server/layout/internal.ts';
 import { lossLine } from '../../helpers/power-loss.ts';
@@ -19,7 +21,21 @@ const machine = (powered: boolean): MachinePower => ({
 });
 
 const score = (over: Partial<LineScore> = {}): LineScore => ({
-  unwired: 0, handTransformers: 0, unpowered: 0, total: 20, lossEUt: 100, volume: 60, ...over,
+  unwired: 0, unreachable: 0, handTransformers: 0, unpowered: 0, total: 20, lossEUt: 100, volume: 60, ...over,
+});
+
+const measure = (over: Partial<FinalMeasure> = {}): FinalMeasure => ({
+  unwired: 0, unpowered: 0, unreachable: 0, total: 20, lossEUt: 100, weakTiers: 0, ...over,
+});
+
+/** One tier's loss entry, for a `LayoutLoss` the tests hand `finalMeasure`. */
+const tierLoss = (tier: number, worstVolts: number): TierLoss => ({
+  tier, cable: 'gregtech:gt.blockcables', lossPerBlock: 1, worstBlocks: 5, worstVolts, lossEUt: 5,
+});
+
+/** A laid block, in the world: `hookup` set when a hookup's run laid it. */
+const lblock = (role: LayoutBlock['role'], hookup?: number): LayoutBlock => ({
+  pos: [0, 0, 0], block: BLOCK, role, label: role, ...(hookup === undefined ? {} : { hookup }),
 });
 
 describe('per-machine power report', () => {
@@ -35,7 +51,7 @@ describe('per-machine power report', () => {
   }, 30_000);
 
   it("reports the far macerators of the 40-machine AE2 loss line as unpowered", async () => {
-    const { layout, internal } = await lossLine(40, 'ae2');
+    const { layout, internal } = await lossLine(40, 'ae2', { packing: false });
     const dark = internal.machines.filter((m) => !m.powered);
     expect(dark.length, 'at least one unpowered macerator').toBeGreaterThan(0);
     expect(Math.min(...dark.map((m) => m.arrivingVolts)), 'the farthest gets under the 15 V it needs').toBeLessThan(15);
@@ -63,7 +79,7 @@ describe('line score', () => {
       warnings, machines: [machine(true), machine(false)],
       handTransformers: 0, lossEUt: 42, size: [2, 3, 4],
     });
-    expect(got).toEqual({ unwired: 1, handTransformers: 0, unpowered: 1, total: 3, lossEUt: 42, volume: 24 });
+    expect(got).toEqual({ unwired: 1, unreachable: 0, handTransformers: 0, unpowered: 1, total: 3, lossEUt: 42, volume: 24 });
   });
 
   it('compares scores field by field', () => {
@@ -80,5 +96,92 @@ describe('line score', () => {
     expect(replacesBaseline(score({ total: 18, lossEUt: 120 }), base), 'shorter but lossier, same unpowered').toBe(false);
     expect(replacesBaseline(score({ total: 24, unpowered: base.unpowered - 1 }), base), 'longer but one fewer unpowered').toBe(true);
     expect(replacesBaseline(score({ total: 18, lossEUt: 90, unwired: 1 }), base), 'better score but one more unwired').toBe(false);
+  });
+
+  it('replaces the finished baseline only to power a machine or when no longer and no lossier', () => {
+    const base = measure();
+    expect(finalReplaces(measure({ total: 18, lossEUt: 90 }), base), 'shorter and less lossy').toBe(true);
+    expect(finalReplaces(measure(), base), 'equal everything').toBe(true);
+    expect(finalReplaces(measure({ total: 18, lossEUt: 120 }), base), 'shorter but lossier, same unpowered').toBe(false);
+    expect(finalReplaces(measure({ total: 24, unpowered: base.unpowered - 1 }), base), 'longer but one fewer unpowered').toBe(true);
+    expect(finalReplaces(measure({ total: 18, lossEUt: 90, unwired: 1 }), base), 'one more unwired').toBe(false);
+  });
+
+  it('refuses a finished line with one more weak tier unless it powers more machines', () => {
+    const base = measure();
+    expect(finalReplaces(measure({ weakTiers: 1, total: 18, lossEUt: 90 }), base), 'one more weak tier, shorter and less lossy').toBe(false);
+    expect(finalReplaces(measure({ weakTiers: 1, unpowered: 0 }), measure({ unpowered: 2 })), 'one more weak tier, but it powers two more machines').toBe(true);
+  });
+
+  it('measures a finished layout as the benchmark does', () => {
+    const loss: LayoutLoss = { tiers: [], hookupEUt: 4, banksEUt: 2, totalEUt: 12, unpowered: 2 };
+    const got = finalMeasure({
+      blocks: [lblock('cable'), lblock('pipe'), lblock('machine'), lblock('cable', 0), lblock('ghost', 0)],
+      warnings: [{ code: 'route_failed', text: 'no path' }, { code: 'cable_loss_high', text: 'lossy' }],
+      loss,
+    }, 0);
+    expect(got).toEqual({ unwired: 1, unpowered: 2, unreachable: 0, total: 3, lossEUt: 12, weakTiers: 0 });
+  });
+
+  it('counts the weak tiers of a finished layout', () => {
+    // a tier is weak when its farthest machine gets under half the tier's volts: LV is 32 V, so 15 V is weak and 16 V is not
+    const blocks = [lblock('cable')];
+    const weak = finalMeasure({
+      blocks, warnings: [],
+      loss: { tiers: [tierLoss(1, 15), tierLoss(2, 126)], hookupEUt: 0, banksEUt: 0, totalEUt: 12 },
+    }, 0);
+    expect(weak.weakTiers, 'LV reaches 15 V (under 16), MV reaches 126 of its 128 V').toBe(1);
+    const none = finalMeasure({
+      blocks, warnings: [],
+      loss: { tiers: [tierLoss(1, 16)], hookupEUt: 0, banksEUt: 0, totalEUt: 12 },
+    }, 0);
+    expect(none.weakTiers, '16 V is half of 32 V, not under it').toBe(0);
+  });
+});
+
+describe('the finished order (RUK-2877)', () => {
+  it('compares finished layouts field by field, the search order', () => {
+    expect(compareFinal(measure({ unwired: 0, unreachable: 1 }), measure({ unwired: 1, unreachable: 0 })), 'one fewer unwired beats one fewer unreachable').toBeLessThan(0);
+    expect(compareFinal(measure({ unreachable: 0, unpowered: 1 }), measure({ unreachable: 1, unpowered: 0 })), 'one fewer unreachable beats one fewer unpowered').toBeLessThan(0);
+    expect(compareFinal(measure({ unpowered: 0, total: 30 }), measure({ unpowered: 1, total: 20 })), 'one fewer unpowered beats 10 fewer blocks').toBeLessThan(0);
+    expect(compareFinal(measure({ total: 19, lossEUt: 200 }), measure({ total: 20, lossEUt: 100 })), '1 fewer block beats 100 less EU/t').toBeLessThan(0);
+    expect(compareFinal(measure(), measure()), 'all equal').toBe(0);
+  });
+});
+
+describe('the score order (RUK-2976)', () => {
+  const s = (o: Partial<LineScore>): LineScore => ({ unwired: 0, unreachable: 0, handTransformers: 0, unpowered: 0, total: 50, lossEUt: 100, volume: 100, ...o });
+
+  it('ranks starved machines above hand-placed transformers, and buildable lines above both', () => {
+    expect(compareScore(s({ handTransformers: 4, unpowered: 7 }), s({ handTransformers: 2, unpowered: 16 })), 'fewer starved wins').toBeLessThan(0);
+    expect(compareScore(s({ handTransformers: 0, unpowered: 3 }), s({ handTransformers: 1, unpowered: 0 })), 'buildable first').toBeLessThan(0);
+    expect(compareScore(s({ handTransformers: 2, unpowered: 7 }), s({ handTransformers: 4, unpowered: 7, total: 10 })), 'the count decides before length').toBeLessThan(0);
+  });
+
+  it('refuses a candidate that hands the bank to the user where today does not', () => {
+    expect(replacesBaseline(s({ handTransformers: 4, unpowered: 7 }), s({ handTransformers: 2, unpowered: 16 }))).toBe(true);
+    expect(replacesBaseline(s({ handTransformers: 1, unpowered: 0 }), s({ handTransformers: 0, unpowered: 3 }))).toBe(false);
+    expect(replacesBaseline(s({ handTransformers: 4, unpowered: 7, total: 10 }), s({ handTransformers: 2, unpowered: 7 }))).toBe(false);
+  });
+});
+
+describe('reach in the score (RUK-2877)', () => {
+  it('ranks a line that shuts a machine in after one that reaches, even when it starves and hand-builds fewer', () => {
+    expect(compareScore(score({ unreachable: 1, unpowered: 0, handTransformers: 0 }), score({ unreachable: 0, unpowered: 5, handTransformers: 3 })),
+      '1 unreachable ranks after 0').toBeGreaterThan(0);
+  });
+
+  it('refuses a candidate that shuts in more machines than the baseline, even when better on everything else', () => {
+    const base = score({ unreachable: 0 });
+    expect(replacesBaseline(score({ unreachable: 1, total: 18, lossEUt: 90 }), base), 'one more unreachable, shorter and less lossy').toBe(false);
+  });
+
+  it('lets a candidate that shuts in fewer machines replace the baseline even when longer and lossier', () => {
+    expect(replacesBaseline(score({ unreachable: 0, total: 30, lossEUt: 200 }), score({ unreachable: 2 })), 'one fewer unreachable, longer and lossier').toBe(true);
+  });
+
+  it('gives the finished baseline the same two answers', () => {
+    expect(finalReplaces(measure({ unreachable: 1, total: 18, lossEUt: 90 }), measure()), 'one more unreachable, shorter and less lossy').toBe(false);
+    expect(finalReplaces(measure({ unreachable: 0, total: 30, lossEUt: 200 }), measure({ unreachable: 2 })), 'one fewer unreachable, longer and lossier').toBe(true);
   });
 });

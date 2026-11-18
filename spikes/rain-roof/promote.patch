@@ -1,0 +1,316 @@
+diff --git a/src/client/map/layout-overlay.ts b/src/client/map/layout-overlay.ts
+index da4678650..af74e19dc 100644
+--- a/src/client/map/layout-overlay.ts
++++ b/src/client/map/layout-overlay.ts
+@@ -20,7 +20,7 @@ export const PIN_COLORS: Readonly<Record<Pin['kind'], string>> = {
+ };
+ export const ROLE_COLORS: Readonly<Record<BlockRole, string>> = {
+   machine: '#90caf9', casing: '#b0bec5', hatch: '#a1887f', cable: '#616161', transformer: '#8e24aa', pipe: '#ffb300', cover: '#ffffff',
+-  interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)',
++  interface: '#7e57c2', chip_pipe: '#ff7043', chest: '#ffca28', ghost: 'rgba(255,255,255,0.25)', roof: '#b3e5fc',
+ };
+ /** The mark on a configured block: one with covers, settings (§11.14), conduit faces, or chips and patterns (§11 entry 51). */
+ export const CONFIGURED_COLOR = '#ffffff';
+diff --git a/src/client/three/link-geometry.ts b/src/client/three/link-geometry.ts
+index a690525bc..fe72d41a0 100644
+--- a/src/client/three/link-geometry.ts
++++ b/src/client/three/link-geometry.ts
+@@ -209,7 +209,7 @@ export function solidColumns(layout: Layout): SolidColumns {
+   const tops = new Map<string, number>();
+   const [ox, oy, oz] = layout.origin;
+   for (const b of layout.blocks) {
+-    if (b.role === 'ghost' || THIN_ROLES.has(b.role)) continue;
++    if (b.role === 'ghost' || b.role === 'roof' || THIN_ROLES.has(b.role)) continue;
+     const key = `${b.pos[0] - ox},${b.pos[2] - oz}`;
+     tops.set(key, Math.max(tops.get(key) ?? -Infinity, b.pos[1] - oy + 1));
+   }
+diff --git a/src/client/three/scene-data.ts b/src/client/three/scene-data.ts
+index b270aa6e6..126833499 100644
+--- a/src/client/three/scene-data.ts
++++ b/src/client/three/scene-data.ts
+@@ -36,7 +36,7 @@ export type ShapeKind = 'cube' | 'core' | 'arm' | 'plate' | 'hub';
+ export const ROLE_FALLBACK: Readonly<Record<BlockRole, Rgb>> = {
+   machine: [...KIND_COLORS.basic], hatch: [...KIND_COLORS.hatch], casing: [...KIND_COLORS.casing], transformer: [...KIND_COLORS.transformer],
+   cable: [...KIND_COLORS.cable], pipe: [...KIND_COLORS.item_pipe],
+-  cover: [220, 220, 220], interface: [126, 87, 194], chip_pipe: [255, 112, 67], chest: [160, 110, 50], ghost: [200, 200, 200],
++  cover: [220, 220, 220], interface: [126, 87, 194], chip_pipe: [255, 112, 67], chest: [160, 110, 50], ghost: [200, 200, 200], roof: [179, 229, 252],
+ };
+ 
+ /** The roles drawn as a core with arms instead of a cube. */
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index 22dad00f9..94c435ba6 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -46,6 +46,7 @@ import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Sta
+ import { unreachableWarning } from './reach.ts';
+ import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine, type FinalMeasure } from './score.ts';
+ import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
++import { RoofRule, rainChecked, rainExposures, roofCells } from './rain.ts';
+ import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
+ 
+ // ---- Types ----
+@@ -66,7 +67,7 @@ export interface LayoutDeps {
+    * chose them (RUK-121), the kept finalist's or the baseline's once the finished layouts are judged (RUK-2877) —
+    * so a test reads the line the layout was built from instead of laying it again by hand.
+    */
+-  localLine?: (line: { placement: Placement; internal: InternalResult }) => void;
++  localLine?: (line: { placement: Placement; internal: InternalResult; shift: Vec3 }) => void;
+ }
+ 
+ /** Where a line without a scan or base is drawn. */
+@@ -241,6 +242,11 @@ interface LocalLine {
+   size: Vec3;
+   /** Mode, then routing warnings. */
+   warnings: PlanWarning[];
++  /**
++   * How far the line's box reaches west (x) and north (z) of local 0, 0 or 1 each: the rain roof's cover over an outward
++   * side of the west or north edge stands in the column beyond it (RUK-2877, design goal 7). `size` includes it.
++   */
++  shift: Vec3;
+   /** How good this line is as the search ranks it (RUK-2571, Assumption 3): hand work, unpowered machines, length, loss, volume. */
+   score: LineScore;
+ }
+@@ -428,9 +434,16 @@ function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packe
+   // machine's vent), so the site, its clearance and obstruction checks and the steps' height keep that cell free too (GT
+   // stops a machine whose muffler has no air in front: MTEHatchMuffler.polluteEnvironment; a steam machine waits while
+   // its vent is blocked: MTEBasicMachineBronze.allowToCheckRecipe)
+-  const top = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
++  const top0 = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
++  // the rain roof (RUK-2877, SP-R): one block over each exposed face of a block GT rains on, one above the tallest block
++  const roof = roofCells(blocks, rainExposures(blocks, rainChecked(blocks, placement.units)), placement.reserved, 1 + top0, RoofRule.Flat);
++  for (const pos of roof) blocks.push({ pos, block: { ...parts.roof.block }, role: 'roof', label: parts.roof.name, item: parts.roof.key });
++  const top = roof.length > 0 ? top0 + 1 : top0;
++  const [pw, , pl] = placement.size;
++  const shift: Vec3 = [roof.some((p) => p[0] < 0) ? 1 : 0, 0, roof.some((p) => p[2] < 0) ? 1 : 0];
++  const size: Vec3 = [shift[0] + pw + (roof.some((p) => p[0] >= pw) ? 1 : 0), 1 + top, shift[2] + pl + (roof.some((p) => p[2] >= pl) ? 1 : 0)];
+   const line: Omit<LocalLine, 'score'> = {
+-    placement, mode: modeResult, internal, stages: internal.stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
++    placement, mode: modeResult, internal, stages: internal.stages, blocks, size, shift,
+     warnings: [...modeResult.warnings, ...internal.warnings],
+   };
+   return {
+@@ -502,12 +515,14 @@ async function chooseSite(input: {
+   if (line !== null && line.stages !== null) {
+     // the hookup lands on the supply run: beside the spine's row at the line's west end, or at the north end of a head
+     // in the middle of the line (RUK-121), whose run reaches both long sides
+-    ports.power = line.placement.headX === 0 ? [-1, 0, line.placement.spineZ] : [line.placement.headX, 0, -1];
++    const [sx, , sz] = line.shift;
++    ports.power = line.placement.headX === 0 ? [sx - 1, 0, sz + line.placement.spineZ] : [sx + line.placement.headX, 0, sz - 1];
+     const tap = powerTaps === null ? null : nearestTap(powerTaps, base.center);
+     if (tap !== null) taps.power = [...tap.pos];
+   }
+   if (line !== null && line.mode.logisticsPort !== null) {
+-    ports.logistics = outsideNeighbour(line.mode.logisticsPort, line.size);
++    const p = line.mode.logisticsPort;
++    ports.logistics = outsideNeighbour([p[0] + line.shift[0], p[1], p[2] + line.shift[2]], line.size);
+     const tap = logisticsNet === null ? null : nearestTap(logisticsNet.taps, base.center);
+     if (tap !== null) taps.logistics = [...tap.pos];
+   }
+@@ -564,15 +579,15 @@ async function chooseSite(input: {
+  * line's with the areas kept for its farms (`farmExtent`, add-on 17), which then turn with it as one box. The line
+  * stands at the box's local min corner either way.
+  */
+-interface Frame { origin: Vec3; rotation: Rotation; size: Vec3 }
++interface Frame { origin: Vec3; rotation: Rotation; size: Vec3; shift: Vec3 }
+ 
+ /** The frame of a box of `size` at the chosen site, or at `DEFAULT_ORIGIN` unturned without one. */
+-function frameAt(site: Site | null, size: Vec3): Frame {
+-  return site === null ? { origin: [...DEFAULT_ORIGIN], rotation: 0, size } : { origin: [...site.origin], rotation: site.rotation, size };
++function frameAt(site: Site | null, size: Vec3, shift: Vec3 = [0, 0, 0]): Frame {
++  return site === null ? { origin: [...DEFAULT_ORIGIN], rotation: 0, size, shift } : { origin: [...site.origin], rotation: site.rotation, size, shift };
+ }
+ 
+ function worldPos(p: Vec3, f: Frame): Vec3 {
+-  return toWorld(p, f.origin, f.rotation, f.size);
++  return toWorld([p[0] + f.shift[0], p[1] + f.shift[1], p[2] + f.shift[2]], f.origin, f.rotation, f.size);
+ }
+ 
+ /** The cover turned with its block; its settings and filter copied unchanged. */
+@@ -592,8 +607,11 @@ function worldConduit(c: ConduitSpec, r: Rotation): ConduitSpec {
+ 
+ /** The world box, inclusive, of the local box of `size` at the frame's local min corner: the line's own box. */
+ function worldBoxOf(size: Vec3, f: Frame): PathBounds {
+-  const a = worldPos([0, 0, 0], f);
+-  const b = worldPos([size[0] - 1, size[1] - 1, size[2] - 1], f);
++  return cornersBox(worldPos([-f.shift[0], -f.shift[1], -f.shift[2]], f), worldPos([size[0] - 1 - f.shift[0], size[1] - 1 - f.shift[1], size[2] - 1 - f.shift[2]], f));
++}
++
++/** The world box, inclusive, between two opposite corners. */
++function cornersBox(a: Vec3, b: Vec3): PathBounds {
+   return {
+     min: [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.min(a[2], b[2])],
+     max: [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.max(a[2], b[2])],
+@@ -722,7 +740,9 @@ function buildHookups(input: {
+   const taken = new Set(lineBlocks.map((b) => posKey(b.pos)));
+   // a hookup must never fill a cell a multiblock needs empty
+   const routeLine = new Set([...taken, ...line.placement.reserved.map((p) => posKey(worldPos(p, frame)))]);
+-  const box = worldBoxOf(line.size, frame);
++  // the hookups keep out of the line's own cells: its placement's box, not the roof's overhang beyond it, whose blocks
++  // are in `taken` like every other line block (RUK-2877)
++  const box = cornersBox(worldPos([0, 0, 0], frame), worldPos([line.placement.size[0] - 1, line.size[1] - 1, line.placement.size[2] - 1], frame));
+   const lineKeepAway = line.internal.keepAway.map((p) => posKey(worldPos(p, frame)));
+   const out: Hookups = { hookups: [], blocks: [], power: null, logistics: null, warnings: [], noPathAt: new Map() };
+   const taps: LayoutTap[] = [];
+@@ -967,8 +987,10 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+   const finishLine = async (line: LocalLine, search: LayoutSearch): Promise<Layout> => {
+     const { stages } = line;
+     // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
+-    const areas = farmAreas(plan, line.size);
+-    const extent = farmExtent(line.size, areas);
++    // farm areas stand east of the line's whole box (its roof's overhang included), in the line's local cells
++    const boxAreas = farmAreas(plan, line.size);
++    const extent = farmExtent(line.size, boxAreas);
++    const areas = boxAreas.map((a) => ({ ...a, local: [a.local[0] - line.shift[0], a.local[1], a.local[2] - line.shift[2]] as Vec3 }));
+     const replaced = replacedCasings(units);
+     const supplyWarnings: PlanWarning[] = stages === null || powerNet === null || supply === null || !supply.other ? [] : [{ code: 'power_tap_tier',
+       text: `The ${tierName(powerNet.voltageTier)} network has no ${tierName(powerNet.voltageTier)} cable to tap: the line is fed at `
+@@ -977,7 +999,7 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+     // stages 6–7: the site is found for the line and its farms' areas together, which turn with it as one box
+     const chosen = base === null ? null
+       : await chooseSite({ scan, project, base, line, size: extent, powerTaps: supply?.taps ?? null, logisticsNet, deps });
+-    const frame = frameAt(chosen?.site ?? null, extent);
++    const frame = frameAt(chosen?.site ?? null, extent, line.shift);
+     const vox = chosen?.vox ?? null;
+     const siteWarnings = chosen?.warnings ?? worldWarnings;
+     const worldSize = rotatedSize(extent, frame.rotation);
+@@ -1101,6 +1123,6 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+     if (!finalReplaces(measure, finishedBaseline) || (best !== null && compareFinal(measure, best) >= 0)) continue;
+     best = measure; kept = layout; keptLine = lines[i]!;
+   }
+-  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal });
++  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal, shift: [...keptLine.shift] });
+   return kept;
+ }
+diff --git a/src/server/layout/parts.ts b/src/server/layout/parts.ts
+index 51a3934ba..629a17e92 100644
+--- a/src/server/layout/parts.ts
++++ b/src/server/layout/parts.ts
+@@ -23,7 +23,7 @@ export type PartId = 'conveyor_cover' | 'pump_cover' | 'item_filter_cover' | 'ch
+   | 'chip_responder' | 'chip_extractor' | 'chip_stock_keeper' | 'me_interface' | 'me_cable' | 'me_export_bus' | 'blank_pattern'
+   | 'eio_item_conduit' | 'eio_basic_filter' | 'eio_advanced_filter' | 'eio_big_filter' | 'eio_speed_upgrade'
+   | 'eio_fluid_ender' | 'eio_fluid_crystalline' | 'eio_fluid_pink_slime' | 'eio_fluid_melodic' | 'eio_fluid_stellar'
+-  | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card' | 'chip_broadcaster' | 'eio_limited_filter' | 'ae2_locking_card';
++  | 'roof' | 'chip_terminator' | 'ae2_capacity_card' | 'ae2_acceleration_card' | 'chip_broadcaster' | 'eio_limited_filter' | 'ae2_locking_card';
+ 
+ /**
+  * `keys` are tried in order against the pack, then `names` (English, ignoring case). `block` is what a placed part
+@@ -55,6 +55,8 @@ export const PART_DEFS: Readonly<Record<PartId, PartDef>> = Object.freeze({
+   // @32729 is the Component_Filter crafting component, not the cover
+   item_filter_cover: partDef('Filtered Conveyor Cover (Export)', `${GT_META_ITEM}@32270`, 'item'),
+   chest: partDef('Chest', 'minecraft:chest@0', { id: 'minecraft:chest', meta: 0 }),
++  // the rain roof (RUK-2877, design goal 7): any block that blocks movement shelters a machine (gt-mechanics §3.4a); glass keeps the line in view
++  roof: partDef('Glass', 'minecraft:glass@0', { id: 'minecraft:glass', meta: 0 }),
+   pr_junction: partDef('Routed Junction Pipe', `${PR_TRANSPORT}.pipe@1`, partBlockRef('pr_rbasic')),
+   pr_interface: partDef('Routed Interface Pipe', `${PR_TRANSPORT}.pipe@2`, partBlockRef('pr_rinterface')),
+   pr_request: partDef('Routed Request Pipe', `${PR_TRANSPORT}.pipe@4`, partBlockRef('pr_rrequest'), ['Request Pipe']),
+diff --git a/src/server/layout/score.ts b/src/server/layout/score.ts
+index 1bb7ca4aa..b5aa3bb8a 100644
+--- a/src/server/layout/score.ts
++++ b/src/server/layout/score.ts
+@@ -12,7 +12,7 @@ import { V } from '../../shared/gt/tiers.ts';
+ import { unreachableMachines } from './reach.ts';
+ 
+ /** The roles whose blocks count in a line's length (the S1 benchmark's `total`; EnderIO conduits are `pipe`). */
+-export const LENGTH_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'interface', 'chip_pipe']);
++export const LENGTH_ROLES: ReadonlySet<string> = new Set(['cable', 'pipe', 'interface', 'chip_pipe', 'roof']);
+ 
+ /**
+  * Score a laid line (RUK-2571, plan Assumption 3): the connections left to make by hand (the `route_failed` warnings),
+diff --git a/src/server/layout/steps.ts b/src/server/layout/steps.ts
+index c89efb315..04939d0b5 100644
+--- a/src/server/layout/steps.ts
++++ b/src/server/layout/steps.ts
+@@ -493,7 +493,7 @@ export function layoutSteps(input: StepsInput): BuildStep[] {
+       ? `; dig ${fmtInt(input.site.dig)} and fill ${fmtInt(input.site.fill)} blocks to level it` : '';
+     steps.push(draft('layout:site', 'place', sitePin,
+       `Clear a ${fmtInt(w)}×${fmtInt(l)} spot${spotWhere(sitePin, input.farms ?? [])} (${fmtInt(h)} high) and keep a 1-block path around it${level}`));
+-    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, input.size[1])));
++    steps.push(draft('layout:roof', 'place', sitePin, roofText(input.units, input.size[1] - (input.blocks.some((b) => b.role === 'roof') ? 1 : 0))));
+     steps.push(...placeSteps(input.units, sitePin, input.rotation, input.packed === true, fluidsThroughOutputSide(input.blocks), input.stepName ?? ((id) => id)));
+   }
+   steps.push(...farmSteps(input.farms ?? []));
+@@ -566,6 +566,7 @@ export function assignBuildSteps(blocks: readonly LayoutBlock[], steps: readonly
+     }
+     if (b.conduits !== undefined && b.conduits.length > 0 && b.conduits.every((c) => c.kind !== 'item')) candidates.push('layout:logistics:fluids');
+     if (LINE_ROLES.has(b.role)) candidates.push('layout:logistics:line');
++    if (b.role === 'roof') candidates.push('layout:roof');
+     return candidates.find(has);
+   };
+   return blocks.map((b): LayoutBlock => {
+@@ -586,6 +587,7 @@ const BLOCK_PARTS: Partial<Readonly<Record<BlockRole, { why: string; hookupWhy?:
+   interface: { why: 'logistics parts', hookupWhy: 'logistics hookup', group: 'logistics' },
+   chip_pipe: { why: 'logistics parts', hookupWhy: 'logistics hookup', group: 'logistics' },
+   chest: { why: 'chests', group: 'logistics' },
++  roof: { why: 'rain roof', group: 'one-off' },
+ };
+ 
+ /**
+diff --git a/src/shared/types/layout.ts b/src/shared/types/layout.ts
+index 3b49b8292..ac4cc5487 100644
+--- a/src/shared/types/layout.ts
++++ b/src/shared/types/layout.ts
+@@ -13,7 +13,7 @@ import type { BomLine, BuildStep, LogisticsMode, PlanContext, PlanWarning, Power
+ import type { TapPoint } from './world.ts';
+ 
+ /** No task emits a `cover` block: a cover is a `CoverSpec` on the block it sits on (§11.14). */
+-export type BlockRole = 'machine' | 'casing' | 'hatch' | 'cable' | 'transformer' | 'pipe' | 'cover' | 'interface' | 'chip_pipe' | 'chest' | 'ghost';
++export type BlockRole = 'machine' | 'casing' | 'hatch' | 'cable' | 'transformer' | 'pipe' | 'cover' | 'interface' | 'chip_pipe' | 'chest' | 'ghost' | 'roof';
+ 
+ /** A cover on one face of its host block (§11.14). */
+ export interface CoverSpec {
+diff --git a/tests/helpers/layout-bench.ts b/tests/helpers/layout-bench.ts
+index f46395e27..ec7a12c25 100644
+--- a/tests/helpers/layout-bench.ts
++++ b/tests/helpers/layout-bench.ts
+@@ -41,6 +41,8 @@ export interface LengthReport {
+   transformer: number;
+   /** The line's own chests: reported, not counted in `total`. */
+   chest: number;
++  /** The rain roof's blocks over the line (RUK-2877, design goal 7): counted in `total`. */
++  roof: number;
+   /** Every block belonging to a hookup (its power run and its logistics runs), ghosts excluded. */
+   hookup: number;
+   /** EU/t the power need counts, read off `Layout.loss.totalEUt` (0 when the layout reports no loss). */
+@@ -76,14 +78,16 @@ export function lengthOf(layout: Layout): LengthMeasure {
+   const pipe = countRole(own, 'pipe');
+   const iface = countRole(own, 'interface');
+   const chip = countRole(own, 'chip_pipe');
++  const roof = countRole(own, 'roof');
+   const tiers = (layout.loss?.tiers ?? []).map((t) => ({ tier: t.tier, worstBlocks: t.worstBlocks, worstVolts: t.worstVolts }));
+   return {
+     mode: layout.mode,
+     size: layout.size,
+-    total: cable + pipe + iface + chip + hookup,
++    total: cable + pipe + iface + chip + roof + hookup,
+     cable, pipe, iface, chip,
+     transformer: countRole(own, 'transformer'),
+     chest: countRole(own, 'chest'),
++    roof,
+     hookup,
+     lossEUt: layout.loss?.totalEUt ?? 0,
+     tiers,
+diff --git a/tests/helpers/layout-fixtures.ts b/tests/helpers/layout-fixtures.ts
+index 22d11cacf..d6a7c6fb0 100644
+--- a/tests/helpers/layout-fixtures.ts
++++ b/tests/helpers/layout-fixtures.ts
+@@ -163,6 +163,7 @@ const PART_ITEMS: ReadonlyArray<readonly [ItemKey, string]> = [
+   ['gregtech:gt.metaitem.01@32611', 'Electric Pump (MV)'],
+   ['gregtech:gt.metaitem.01@32270', 'Filtered Conveyor Cover (Export)'],
+   ['minecraft:chest@0', 'Chest'],
++  ['minecraft:glass@0', 'Glass'],
+   ['EnderIO:itemItemConduit@0', 'Item Conduit'],
+   ['EnderIO:itemBasicFilterUpgrade@0', 'Basic Item Filter'],
+   ['EnderIO:itemBasicFilterUpgrade@1', 'Advanced Item Filter'],
+diff --git a/tests/helpers/scene-checks.ts b/tests/helpers/scene-checks.ts
+index 370b8352e..86c4cfe2f 100644
+--- a/tests/helpers/scene-checks.ts
++++ b/tests/helpers/scene-checks.ts
+@@ -170,7 +170,7 @@ export interface SpotLike { cell: Vec3; side: number; face: string | null; at?:
+  * of a line's own) inside a block the 3D view draws whole, one line per link: its edge, how many, and which blocks.
+  */
+ export function arcsThroughBlocks(layout: Layout, links: ReadonlyArray<{ span: { edge: string }; path: Vec3[] }>): string[] {
+-  const solid = new Map(layout.blocks.filter((b) => b.role !== 'ghost' && !THIN.has(b.role))
++  const solid = new Map(layout.blocks.filter((b) => b.role !== 'ghost' && b.role !== 'roof' && !THIN.has(b.role))
+     .map((b) => [posKey([b.pos[0] - layout.origin[0], b.pos[1] - layout.origin[1], b.pos[2] - layout.origin[2]]), b.label]));
+   return links.flatMap((l) => {
+     const hits = new Set<string>();

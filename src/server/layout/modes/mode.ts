@@ -227,15 +227,17 @@ export function itemPorts(placement: Placement): ItemPort[] {
 /**
  * The spine's columns up to the item ports above it (a bus GT takes only higher up, research hatch-rules.md): per column
  * with such a port, the cells from the one above the spine up to the highest port, sorted by x, then y; `cells` are
- * those no unit has a port on, `ports` the rest; `links` join each column from the spine up.
+ * those no unit has a port on, `ports` the rest; `links` join each column from the spine up. A port that is itself a
+ * spine cell needs no riser.
  */
 export function itemRisers(placement: Placement): { cells: Vec3[]; ports: Vec3[]; links: Array<[Vec3, Vec3]> } {
   const { spineZ } = placement;
   const top = new Map<number, number>();
   const portKeys = new Set<string>();
+  const onSpine = new Set(placement.spine.map(posKey));
   for (const u of placement.units) {
     for (const p of u.ports.items) {
-      if (p[1] <= 0) continue;
+      if (p[1] <= 0 || onSpine.has(posKey(p))) continue;
       top.set(p[0], Math.max(top.get(p[0]) ?? 0, p[1]));
       portKeys.add(posKey(p));
     }

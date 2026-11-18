@@ -68,6 +68,7 @@ describe('sampleExportSpec', () => {
       recipesCrafting: 4, recipesFurnace: 3, machines: 6, structures: 1, materials: 4, oreMaterials: 3, dimensions: 7,
       celestial: 5, oreVeins: 2, smallOres: 1, undergroundFluids: 2, voidMiner: 2, gasSiphon: 1, spacePump: 1, spaceAsteroids: 1,
       crops: 0,
+      biomes: 0,
     });
   });
 

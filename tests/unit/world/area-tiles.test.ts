@@ -9,8 +9,8 @@ import type { BlockRef } from '../../../src/shared/types/pack.ts';
 import { UNKNOWN_BLOCK, UNKNOWN_INDEX } from '../../../src/shared/types/world.ts';
 import { DEFAULT_BLOCK_IDS, makeWorld } from '../../helpers/make-world.ts';
 
-// World: chunk (0,0) EID with stone at y=60 (x 0..15, z 0..15) and gt.blockmachines meta 0 at (1,61,0);
-//        chunk (-1,-1) legacy with stone at y=10 (x -16..-1, z -16..-1). Nothing else exists.
+// World: chunk (0,0) EID (biome 1) with stone at y=60 (x 0..15, z 0..15) and gt.blockmachines meta 0 at (1,61,0);
+//        chunk (-1,-1) legacy (biome 2) with stone at y=10 (x -16..-1, z -16..-1). Nothing else exists.
 const mteAt: MteLookup = (d, x, y, z) => (d === 0 && x === 1 && y === 61 && z === 0 ? 2002 : undefined);
 const AIR: BlockRef = { id: 'minecraft:air', meta: 0 };
 const STONE: BlockRef = { id: 'minecraft:stone', meta: 0 };
@@ -22,7 +22,7 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'gp-area-'));
   ({ worldDir } = await makeWorld(dir, { dims: { 0: [
     { cx: 0, cz: 0, fill: [{ from: [0, 60, 0], to: [15, 60, 15], block: 'minecraft:stone' }, { from: [1, 61, 0], to: [1, 61, 0], block: GT_MACHINE_BLOCK }] },
-    { cx: -1, cz: -1, format: 'legacy', fill: [{ from: [-16, 10, -16], to: [-1, 10, -1], block: 'minecraft:stone' }] },
+    { cx: -1, cz: -1, format: 'legacy', biome: 2, fill: [{ from: [-16, 10, -16], to: [-1, 10, -1], block: 'minecraft:stone' }] },
   ] } }));
   const blockNames = new Map(Object.entries(DEFAULT_BLOCK_IDS).map(([name, id]) => [id, name]));
   input = { reader: createBlockReader(regionStoreFromFiles(await openDirWorld(worldDir))), blockNames, mteAt };
@@ -57,6 +57,15 @@ describe('readAreaVoxels', () => {
     expect(at(0, 60, 0)).toEqual({ id: 'minecraft:stone', meta: 0 });
     expect(at(-1, 60, -1)).toEqual({ id: 'minecraft:air', meta: 0 });
     expect([at(-1, 60, 0), at(0, 60, -1)]).toEqual([UNKNOWN_BLOCK, UNKNOWN_BLOCK]);
+  });
+
+  it('reads the biome of every column, −1 where the chunk is not available', async () => {
+    const v = await readAreaVoxels(input, 0, { minX: -2, minY: 59, minZ: -1, maxX: 1, maxY: 61, maxZ: 0 });
+    const biome = (x: number, z: number) => v.biomes![(z - -1) * v.size[0] + (x - -2)];
+    expect(v.biomes!.length).toBe(8);
+    expect(biome(-1, -1)).toBe(2);                              // legacy `Biomes` of chunk (-1,-1)
+    expect([biome(0, 0), biome(1, 0)]).toEqual([1, 1]);         // EID `Biomes16v2` of chunk (0,0)
+    expect([biome(-1, 0), biome(0, -1)]).toEqual([-1, -1]);     // chunks (-1,0) and (0,-1) do not exist
   });
 
   it('refuses areas above MAX_AREA_VOXELS', async () => {

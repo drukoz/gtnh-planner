@@ -14,7 +14,7 @@ import type { TextureDeps } from '../../src/client/three/load-textures.ts';
 import { layerKey, regionRect, type BlockFaces, type Rect, type Rgb, type TextureLayer } from '../../src/shared/types/assets.ts';
 import type { Layout, LayoutBlock } from '../../src/shared/types/layout.ts';
 // RUK-2619: the layout search panel
-import { candidateLabel, searchText } from '../../src/client/views/View3D.tsx';
+import { candidateLabel, searchText, rainText } from '../../src/client/views/View3D.tsx';
 import { CandidateKind, type LayoutCandidate, type LayoutSearch } from '../../src/shared/types/layout.ts';
 import { CONV } from './layout-fixture.ts';
 // the user's requirements of 2026-10-19, item 3 (b): Show connections, remembered in this browser
@@ -27,7 +27,7 @@ import { connectionSpans, connectionsGraph, spanDetails } from '../../src/client
 import { connLayout, connPlan } from './connections-fixture.ts';
 
 const shell = (over: Partial<View3DShellProps> = {}) => renderToStaticMarkup(<View3DShell layout={sampleLayout} loading={false} error={null} webgl
-  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
+  maxLayer={null} onLayer={() => {}} show={{ ghosts: true, hookups: true, roof: true }} onShow={() => {}} hover={null} info={null} canvas={<canvas />}
   showLinks={false} onShowLinks={() => {}} {...over} />);
 
 describe('3D tab', () => {
@@ -36,6 +36,29 @@ describe('3D tab', () => {
     for (const text of ['data-testid="block-list"', 'Basic Macerator ×1', 'Power: 1 block from pin 2', 'Size: 3×2×2', 'aria-label="Layer"', 'All layers', 'Ghosts', 'Hookups'])
       expect(html).toContain(text);
     expect(shell({ maxLayer: 0 })).toContain('Layers 1–1 of 2');
+  });
+
+  it('shows the Roof switch only where the line has a rain roof (RUK-2877)', () => {
+    expect(shell()).not.toContain('>Roof<');
+    const roofed: Layout = { ...sampleLayout, blocks: [...sampleLayout.blocks,
+      { pos: [10, 65, 20], block: { id: 'minecraft:glass', meta: 0 }, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' }] };
+    const html = shell({ layout: roofed, showLinks: true, linksNote: '3 connections drawn' });
+    expect(html).toContain('<label class="check"><input type="checkbox" checked=""/>Roof</label>');
+    expect(html.match(/<label class="check">/g)).toHaveLength(5);   // the layer slider, Ghosts, Hookups, Roof, Show connections
+  });
+
+  it('says why a line lays no rain roof (RUK-2877, M3-21)', () => {
+    expect(rainText(sampleLayout)).toBeNull();
+    expect(rainText({ ...sampleLayout, dryBiomes: [] })).toBeNull();
+    expect(rainText({ ...sampleLayout, dryBiomes: ['Desert'] })).toBe('No rain roof: it never rains in Desert, where this line stands.');
+    expect(rainText({ ...sampleLayout, dryBiomes: ['Desert', 'Hell'] })).toBe('No rain roof: it never rains in Desert and Hell, where this line stands.');
+  });
+
+  it('shows the no-rain-roof line only where the site is dry (RUK-2877, M3-21)', () => {
+    const dry = shell({ layout: { ...sampleLayout, dryBiomes: ['Desert'] } });
+    expect(dry).toContain('data-testid="view3d-rain"');
+    expect(dry).toContain('No rain roof: it never rains in Desert, where this line stands.');
+    expect(shell()).not.toContain('view3d-rain');
   });
 
   it('explains itself without WebGL2, while loading and when there is nothing to build', () => {
@@ -444,6 +467,16 @@ describe('layout search panel', () => {
     expect(html).toContain('Power head in the middle, 12 machines west of it');
     expect(html.match(/<td>/g)).toHaveLength(12);                                        // three rows of the four cells each
     expect(html.indexOf('data-testid="block-list"')).toBeLessThan(html.indexOf('data-testid="layout-search"'));
+  });
+
+  it('names the stacked layouts (RUK-2877)', () => {
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 0 })).toBe('Machines stacked two high, power head at the west end');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Stacked, westUnits: 12 })).toBe('Machines stacked two high, power head in the middle, 12 machines west of it');
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.PackedOpen, westUnits: 0 })).toBe('Machines packed three to a cable, interfaces on the outside, power head at the west end');
+  });
+
+  it('names the packed layout (RUK-2877)', () => {
+    expect(candidateLabel({ ...cand(), kind: CandidateKind.Packed, westUnits: 0 })).toBe('Machines packed three to a cable, power head at the west end');
   });
 
   it('names an unknown kind', () => {

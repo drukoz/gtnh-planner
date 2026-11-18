@@ -58,7 +58,12 @@ export type BBox = Base['bbox'];
  * A block area: `blocks[(y·size[2] + z)·size[0] + x]` is the palette index of the block at `origin + [x, y, z]`.
  * Every palette starts with air (`AIR_INDEX`) and `UNKNOWN_BLOCK` (`UNKNOWN_INDEX`, for blocks that were not scanned).
  */
-export interface Voxels { origin: [number, number, number]; size: [number, number, number]; blocks: Uint32Array; palette: BlockRef[] }
+export interface Voxels {
+  origin: [number, number, number]; size: [number, number, number]; blocks: Uint32Array; palette: BlockRef[];
+  /** The biome id of each column of the box: index (z − origin[2]) · size[0] + (x − origin[0]); −1 where the chunk is
+   *  not available or has no biome for that column. `readAreaVoxels` always sets it; a hand-made area may leave it out. */
+  biomes?: Int32Array;
+}
 
 export const AIR_INDEX = 0;
 export const UNKNOWN_INDEX = 1;

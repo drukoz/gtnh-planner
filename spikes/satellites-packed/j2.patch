@@ -1,0 +1,120 @@
+diff --git a/src/server/layout/arrange.ts b/src/server/layout/arrange.ts
+index fc3c675..8b4b49b 100644
+--- a/src/server/layout/arrange.ts
++++ b/src/server/layout/arrange.ts
+@@ -203,6 +203,11 @@ export interface Placement {
+    * `[x, 2, 2]`, and the cable lane between the machines at `[x, 0, 2]`, so no machine is walled in. Set with `ownPorts`.
+    */
+   open?: true;
++  /**
++   * SP-J2: the box stands one cell north of a free row (`placePacked` with `satRow`); the box, its lanes and its tail all
++   * sit at `z + satRow`, and every mode laying cells on the box shifts its lane `z` by the same amount.
++   */
++  satRow?: number;
+ }
+ 
+ /**
+@@ -1353,12 +1358,14 @@ const PACKED_SLOTS_AE2_OPEN: ReadonlyArray<{ cell: Vec3; facing: number; mainFac
+  * port is its own cell above it, `[x, 1, 0]`, `[x, 1, 2]` and `[x, 2, 1]`, so T's interface stands one cell higher and
+  * the box is one cell taller (`[x, 2, 1]` is a laid block, so `buildLocalAt` counts it); `packed` tells the mode.
+  */
+-export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number; ownPorts?: boolean; open?: boolean }): Placement {
++export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number; ownPorts?: boolean; open?: boolean; satRow?: boolean }): Placement {
+   const { headWidth } = opts;
+   const open = opts.open === true;
++  // SP-J2: one free row at z 0 beside the box; the box itself, its lanes and its tail all shift one cell north
++  const z0 = opts.satRow === true ? 1 : 0;
+   const slots = open ? PACKED_SLOTS_AE2_OPEN : opts.ownPorts === true ? PACKED_SLOTS_AE2 : PACKED_SLOTS;
+   // the open column is one cell wider on each side, so its cable lane sits at z 2; every other packed column keeps it at z 1
+-  const laneZ = open ? 2 : 1;
++  const laneZ = (open ? 2 : 1) + z0;
+   const feedTier = (u: Unit): number | null => (opts.supplyTier === undefined || !u.electric ? null : Math.min(u.tier, opts.supplyTier));
+   const ordered = lowestFeedFirst(units, feedTier);
+   const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
+@@ -1374,14 +1381,14 @@ export function placePacked(units: readonly Unit[], opts: { headWidth: number; s
+       slot = 0;
+     }
+     const s = slots[slot]!;
+-    const cell: Vec3 = [colX + s.cell[0], s.cell[1], s.cell[2]];
++    const cell: Vec3 = [colX + s.cell[0], s.cell[1], s.cell[2] + z0];
+     const machine = u.cells.find((c) => c.role === 'machine') ?? u.cells[0]!;
+     blocks.push({ pos: [...cell], block: { ...machine.block }, role: 'machine', facing: s.facing, mainFacing: s.mainFacing,
+       stepId: u.stepId, ...(u.stepIds === undefined ? {} : { stepIds: [...u.stepIds] }), label: machine.label,
+       ...(machine.item === undefined ? {} : { item: machine.item }) });
+     placed.push({ ...u, row: 'N', at: [...cell], facing: s.facing, mainFacing: s.mainFacing, powerSide: s.powerSide,
+       ports: {
+-        power: u.electric ? [colX, 0, laneZ] : null, items: [[colX + s.items[0], s.items[1], s.items[2]]],
++        power: u.electric ? [colX, 0, laneZ] : null, items: [[colX + s.items[0], s.items[1], s.items[2] + z0]],
+         fluidIn: [], fluidOut: [], fluidInSides: [], fluidOutSides: [],
+         itemFaces: u.io.itemOut ? [{ pos: [...cell], side: s.facing }] : [], fluidFaces: [],
+       } });
+@@ -1392,13 +1399,13 @@ export function placePacked(units: readonly Unit[], opts: { headWidth: number; s
+   // (the open column's lanes are in the machines' row, y 0, and its south lane at z 4)
+   const laneY = open ? 0 : 1;
+   const spine: Vec3[] = [];
+-  for (let x = firstX; x <= tailX; x++) spine.push([x, laneY, 0]);
++  for (let x = firstX; x <= tailX; x++) spine.push([x, laneY, z0]);
+   spine.push([tailX, laneY, laneZ]);
+-  for (let x = tailX; x >= firstX; x--) spine.push([x, laneY, open ? 4 : 2]);
++  for (let x = tailX; x >= firstX; x--) spine.push([x, laneY, (open ? 4 : 2) + z0]);
+   blocks.sort((a, b) => comparePos(a.pos, b.pos));
+-  return { units: placed, size: [tailX + 2, 2, open ? 5 : 3], spineZ: laneZ, headX: 0, firstX, tailX, blocks, reserved: [],
+-    spine, tail: { cell: [tailX, 1, open ? 4 : 2], inputSide: DOWN, outputSide: EAST },
+-    packed: true, ...(opts.ownPorts === true || open ? { ownPorts: true as const } : {}), ...(open ? { open: true as const } : {}) };
++  return { units: placed, size: [tailX + 2, 2, (open ? 5 : 3) + z0], spineZ: laneZ, headX: 0, firstX, tailX, blocks, reserved: [],
++    spine, tail: { cell: [tailX, 1, (open ? 4 : 2) + z0], inputSide: DOWN, outputSide: EAST },
++    packed: true, ...(opts.ownPorts === true || open ? { ownPorts: true as const } : {}), ...(open ? { open: true as const } : {}), ...(z0 > 0 ? { satRow: z0 } : {}) };
+ }
+ 
+ /**
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index 43013aa..bd007a1 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -410,7 +410,7 @@ function packs(input: LocalInput): boolean | 'own' {
+ function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed: boolean | 'own' | 'open' = false): LocalLine {
+   const { pack, plan, parts, mode, units, stages, network } = input;
+   const placement = packed !== false
+-    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : packed === 'open' ? { ownPorts: true, open: true } : {}) })
++    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : packed === 'open' ? { ownPorts: true, open: true } : {}), ...(process.env.SPJ2_SATROW === '1' ? { satRow: true } : {}) })
+     : placeUnits(units, {
+         headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+       });
+diff --git a/src/server/layout/modes/ae2.ts b/src/server/layout/modes/ae2.ts
+index 9d495da..df317b4 100644
+--- a/src/server/layout/modes/ae2.ts
++++ b/src/server/layout/modes/ae2.ts
+@@ -579,25 +579,26 @@ export function ae2Mode(input: ModeInput): ModeResult {
+     // (`PORT_SPACING.ae2` 1 puts interfaces side by side there), and cable fills every lane cell no interface stands in.
+     // The open column (spike SP-I, RUK-3016) joins its lanes through a bridge cell of the tail column and lifts the port
+     // cell one above the south lane's tail, so the input chest has a floor cell under it.
+-    const join: Vec3 = open ? [tailX, 0, 2] : [tailX, 1, 1];
++    const dz = placement.satRow ?? 0;
++    const join: Vec3 = open ? [tailX, 0, 2 + dz] : [tailX, 1, 1 + dz];
+     const lanes = open ? PACKED_LANES_OPEN : PACKED_LANES;
+     for (const [i, [y, z]] of lanes.entries()) {
+       for (let x = firstX; x <= tailX; x++) {
+-        const cell: Vec3 = [x, y, z];
++        const cell: Vec3 = [x, y, z + dz];
+         if (!portCells.has(posKey(cell))) blocks.push(cable(cell));
+-        if (x > firstX) links.push([[x - 1, y, z], cell]);
++        if (x > firstX) links.push([[x - 1, y, z + dz], cell]);
+       }
+       if (open) {
+         const [by, bz] = PACKED_BRIDGE_OPEN[i]!;
+-        const bridge: Vec3 = [tailX, by, bz];
++        const bridge: Vec3 = [tailX, by, bz + dz];
+         blocks.push(cable(bridge));
+-        links.push([join, bridge], [bridge, [tailX, y, z]]);
+-      } else links.push([join, [tailX, y, z]]);
++        links.push([join, bridge], [bridge, [tailX, y, z + dz]]);
++      } else links.push([join, [tailX, y, z + dz]]);
+     }
+     blocks.push(cable(join));
+     if (open) {
+       blocks.push(cable(placement.tail.cell));
+-      links.push([[tailX, 0, 4], placement.tail.cell]);
++      links.push([[tailX, 0, 4 + dz], placement.tail.cell]);
+     }
+   } else {
+     for (let x = firstX; x <= tailX; x++) {

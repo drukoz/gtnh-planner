@@ -30,6 +30,8 @@ export interface ChunkSpec {
   oreTes?: number;
   /** Writes a payload whose length overflows the region file (region-write.ts). */
   corrupt?: boolean;
+  /** The biome id of every column (default `BIOME`); in `Biomes16v2` for EID chunks, in `Biomes` for legacy ones. */
+  biome?: number;
 }
 
 export interface WorldSpec {
@@ -187,9 +189,10 @@ function oreFillers(spec: ChunkSpec): Tag[] {
 export function chunkNbt(spec: ChunkSpec, ids: Readonly<Record<string, number>>): Buffer {
   const legacy = spec.format === 'legacy';
   const sections = [...fillSections(spec, ids)].sort(([a], [b]) => a - b).map(([y, s]) => (legacy ? legacySection(y, s) : eidSection(y, s)));
+  const biome = spec.biome ?? BIOME;
   const biomes: Record<string, Tag> = legacy
-    ? { Biomes: bytes(new Uint8Array(256).fill(BIOME)) }
-    : { Biomes16v2: bytes(Uint8Array.from({ length: 512 }, (_, i) => (i & 1 ? 0 : BIOME))) };   // little-endian u16
+    ? { Biomes: bytes(new Uint8Array(256).fill(biome)) }
+    : { Biomes16v2: bytes(Uint8Array.from({ length: 512 }, (_, i) => (i & 1 ? 0 : biome))) };   // little-endian u16
   const level = comp({
     V: byte(1), LastUpdate: long(0n), TerrainPopulated: byte(1), LightPopulated: byte(1), HeightMap: ints(new Array<number>(256).fill(0)),
     Sections: compounds(sections),

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { unitsFromPlan, placeUnits, stepDepths, stepIo, overlaps, compactness, replacedCasings, attachCovers, type LocalBlock } from '../../../src/server/layout/arrange.ts';
+import { unitsFromPlan, placeUnits, packedLine, placePacked, stepDepths, stepIo, overlaps, compactness, replacedCasings, attachCovers, tailColumn, type LocalBlock } from '../../../src/server/layout/arrange.ts';
+import { step, OPPOSITE } from '../../../src/shared/layout/geometry.ts';
 import { emptyContext, planLine } from '../../../src/server/planner/plan.ts';
 import { defaultSettings } from '../../../src/shared/project/apply-op.ts';
 import { kitSpec } from '../../helpers/build-fixtures.ts';
@@ -181,6 +182,49 @@ describe('placement', () => {
     expect(p.reserved).toEqual([[3, 1, 4], [3, 2, 4], [3, 4, 4]]);
     expect(compactness(p)).toBeCloseTo(42 / 10, 5);
   });
+
+  it('stacks a single-block machine on the one before it only with stack on', () => {
+    // RUK-2877: a stackable machine standing right after a stackable one of the same feed tier in the same row stands on
+    // it, in its column. A row tie goes north, so the fifth machine is the one that stacks the south row. With stack
+    // off every machine keeps a column of its own and the placement is exactly today's
+    const { units } = unitsFromPlan(layoutPack(), makePlan([{ id: 'm', mteId: IDS.MACERATOR, count: 5 }]));
+    const on = placeUnits(units, { headWidth: 1, portSpacing: 0, stack: true });
+    expect(on.units.map((u) => [u.row, u.at[0], u.at[1], u.at[2]]))
+      .toEqual([['N', 1, 0, 1], ['S', 1, 0, 3], ['N', 1, 1, 1], ['N', 2, 0, 1], ['S', 1, 1, 3]]);
+    const stacked = on.units.filter((u) => u.at[1] === 1);
+    expect(stacked).toHaveLength(2);
+    for (const u of stacked) {
+      expect(on.units.some((b) => b.at[1] === 0 && b.row === u.row && b.at[0] === u.at[0]), 'its lower machine').toBe(true);
+    }
+    expect(on.size[1]).toBe(2);
+    const off = placeUnits(units, { headWidth: 1, portSpacing: 0, stack: false });
+    const today = placeUnits(units, { headWidth: 1, portSpacing: 0 });
+    expect(off.units.every((u) => u.at[1] === 0)).toBe(true);
+    expect(off.units.map((u) => [u.row, u.at])).toEqual(today.units.map((u) => [u.row, u.at]));
+  });
+
+  it('never stacks a machine with fluids or a multiblock', () => {
+    // a fluid machine's top carries its fluid port (its `unitPorts`), and a multiblock is no floor: neither is ever
+    // under a stacked machine, and neither ever stands on one (RUK-2877)
+    const { units } = unitsFromPlan(layoutPack(), makePlan([
+      { id: 'w', mteId: IDS.MACERATOR, count: 1, inputs: [['fluid:water', 100]] },
+      { id: 'm', mteId: IDS.MACERATOR, count: 3 },
+    ]));
+    expect(units[0]!.io.fluidIn.length).toBeGreaterThan(0);
+    const p = placeUnits(units, { headWidth: 1, portSpacing: 0, stack: true });
+    // the machine behind the fluid one keeps its own column, and the fourth stacks the plain machine of the south row
+    expect(p.units.map((u) => [u.stepId, u.at[0], u.at[1], u.at[2]]))
+      .toEqual([['w', 1, 0, 1], ['m', 1, 0, 3], ['m', 2, 0, 1], ['m', 1, 1, 3]]);
+    const w = p.units.find((u) => u.stepId === 'w')!;
+    expect(w.at[1]).toBe(0);
+    expect(p.units.some((u) => u.at[1] === 1 && u.row === w.row && u.at[0] === w.at[0]), 'nothing on the fluid machine').toBe(false);
+    const multi = placeUnits(unitsFromPlan(layoutPack(), makePlan([ebfStep, { id: 'm', mteId: IDS.MACERATOR, count: 2 }])).units,
+      { headWidth: 1, portSpacing: 0, stack: true });
+    const ebf = multi.units.find((u) => u.multiblock)!;
+    expect(ebf.at[1]).toBe(0);
+    // nothing stands on the EBF's cells (its five columns of the row it faces the spine from)
+    expect(multi.units.some((u) => u.at[1] === 1 && u.row === ebf.row && Math.abs(u.at[0] - ebf.at[0]) < ebf.size[0]), 'nothing on the EBF').toBe(false);
+  });
 });
 
 // Final review C2 and the GT facings.
@@ -237,5 +281,61 @@ describe('placement: tiers apart, front and output side apart', () => {
     const ebf = placeUnits(unitsFromPlan(layoutPack(), makePlan([ebfStep])).units, { headWidth: 1, portSpacing: 0 });
     expect(ebf.units[0]!.mainFacing).toBeUndefined();
     expect(ebf.blocks.some((b) => b.mainFacing !== undefined)).toBe(false);
+  });
+});
+
+describe('placement contract (RUK-2877)', () => {
+  it('fills spine, tail and powerSide with the spine row, the tail cell and each unit facing', () => {
+    const p = placeUnits(unitsFromPlan(layoutPack(), twoStep()).units, { headWidth: 1, portSpacing: 0 });
+    expect(p.spine).toEqual(Array.from({ length: p.tailX - p.firstX + 1 }, (_, i) => [p.firstX + i, 0, p.spineZ]));
+    expect(p.tail).toEqual({ cell: [p.tailX, 0, p.spineZ], inputSide: 2, outputSide: 3 });
+    for (const u of p.units) expect(u.powerSide).toBe(u.facing);
+    expect(tailColumn(p.tail, 2)).toEqual([p.tailX, 2, p.spineZ]);
+  });
+
+  it('fills the spine from x 0 when units stand west of a middle head', () => {
+    const p = placeUnits(unitsFromPlan(layoutPack(), twoStep()).units, { headWidth: 1, portSpacing: 0, supplyTier: 2, westUnits: 1 });
+    expect(p.firstX).toBe(0);
+    expect(p.headX).toBeGreaterThan(0);
+    expect(p.spine).toEqual(Array.from({ length: p.tailX - p.firstX + 1 }, (_, i) => [p.firstX + i, 0, p.spineZ]));
+    expect(p.tail).toEqual({ cell: [p.tailX, 0, p.spineZ], inputSide: 2, outputSide: 3 });
+    for (const u of p.units) expect(u.powerSide).toBe(u.facing);
+    expect(tailColumn(p.tail, 2)).toEqual([p.tailX, 2, p.spineZ]);
+  });
+});
+
+describe('packed placement (RUK-2877)', () => {
+  it('places three machines per cable cell', () => {
+    const units = unitsFromPlan(layoutPack(), makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 6 }])).units;
+    expect(packedLine(units)).toBe(true);
+    const p = placePacked(units, { headWidth: 1 });
+    expect(p.units.map((u) => [u.at, u.facing, u.mainFacing, u.powerSide])).toEqual([
+      [[1, 0, 0], 1, 2, 2], [[1, 0, 2], 1, 3, 3], [[1, 1, 1], 3, 2, 1],
+      [[2, 0, 0], 1, 2, 2], [[2, 0, 2], 1, 3, 3], [[2, 1, 1], 3, 2, 1]]);
+    for (const u of p.units) {
+      expect(u.ports.power).toEqual([u.at[0], 0, 1]);
+      expect(step(u.ports.power!, u.powerSide)).toEqual(u.at);
+      expect(step(u.ports.items[0]!, OPPOSITE[u.facing]!)).toEqual(u.at);
+    }
+    expect([p.firstX, p.tailX, p.spineZ]).toEqual([1, 3, 1]);
+    expect(p.size).toEqual([5, 2, 3]);
+    expect(p.spine).toEqual([[1, 1, 0], [2, 1, 0], [3, 1, 0], [3, 1, 1], [3, 1, 2], [2, 1, 2], [1, 1, 2]]);
+    expect(p.tail).toEqual({ cell: [3, 1, 2], inputSide: 0, outputSide: 5 });
+    const spine = new Set(p.spine.map((c) => c.join(',')));
+    for (const u of p.units) expect(spine.has(u.ports.items[0]!.join(',')), 'item port on the spine').toBe(true);
+    expect(p.units.some((u) => spine.has(u.at.join(','))), 'no machine on the spine').toBe(false);
+  });
+
+  it('starts a new column after three units', () => {
+    const units = unitsFromPlan(layoutPack(), makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 7 }])).units;
+    const p = placePacked(units, { headWidth: 1 });
+    expect(p.units[6]!.at).toEqual([3, 0, 0]);
+    expect(p.tailX).toBe(4);
+    expect(p.spine.length).toBe(2 * (4 - 1 + 1) + 1);
+  });
+
+  it('packs only plain single-block machines with no fluids', () => {
+    expect(packedLine(unitsFromPlan(layoutPack(), makePlan([ebfStep])).units)).toBe(false);
+    expect(packedLine(unitsFromPlan(layoutPack(), makePlan([{ id: 's1', mteId: IDS.MACERATOR, count: 6 }])).units)).toBe(true);
   });
 });

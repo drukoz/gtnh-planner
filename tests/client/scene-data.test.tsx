@@ -29,12 +29,26 @@ describe('3D scene data', () => {
     expect(scene.size).toEqual([3, 2, 2]);
   });
 
-  it('hides layers above the slider, ghosts and hookups on demand', () => {
-    const inst = (block: number, y: number, ghost = false): SceneInstance => ({ block, shape: 'cube', pos: [0, y, 0], side: -1, tiles: [0, 0, 0, 0, 0, 0], ghost });
-    const all = { ghosts: true, hookups: true };
+  it('hides layers above the slider, ghosts, the rain roof and hookups on demand', () => {
+    const inst = (block: number, y: number, ghost = false, roof?: true): SceneInstance =>
+      ({ block, shape: 'cube', pos: [0, y, 0], side: -1, tiles: [0, 0, 0, 0, 0, 0], ghost, ...(roof === undefined ? {} : { roof }) });
+    const all = { ghosts: true, hookups: true, roof: true };
     expect([visible(inst(0, 1), 0, all, layout), visible(inst(0, 1), 1, all, layout), visible(inst(0, 1), null, all, layout)]).toEqual([false, true, true]);
-    expect(visible(inst(3, 0, true), null, { ghosts: false, hookups: true }, layout)).toBe(false);
-    expect(visible(inst(4, 1), null, { ghosts: true, hookups: false }, layout)).toBe(false);
+    expect(visible(inst(3, 0, true), null, { ghosts: false, hookups: true, roof: true }, layout)).toBe(false);
+    expect(visible(inst(4, 1), null, { ghosts: true, hookups: false, roof: true }, layout)).toBe(false);
+    // RUK-2877: the Roof switch hides the rain roof alone, and a ghost shows with the roof hidden
+    expect(visible(inst(1, 1, false, true), null, { ghosts: true, hookups: true, roof: true }, layout)).toBe(true);
+    expect(visible(inst(1, 1, false, true), null, { ghosts: true, hookups: true, roof: false }, layout)).toBe(false);
+    expect(visible(inst(3, 0, true), null, { ghosts: true, hookups: true, roof: false }, layout)).toBe(true);
+  });
+
+  it('marks the instances of a rain-roof block roof, and only them (RUK-2877)', () => {
+    const roofed: Layout = { ...layout, blocks: [...layout.blocks,
+      { pos: [10, 65, 20], block: { id: 'minecraft:glass', meta: 0 }, role: 'roof', label: 'Glass', item: 'minecraft:glass@0' }] };
+    const scene = buildScene(roofed, faces, icons, covers);
+    const roof = scene.instances.filter((i) => i.block === layout.blocks.length);
+    expect(roof.map((i) => [i.shape, i.pos, i.roof])).toEqual([['cube', [0, 1, 0], true]]);
+    expect(scene.instances.filter((i) => i.block !== layout.blocks.length).every((i) => i.roof === undefined)).toBe(true);
   });
 
   it('lists the blocks to place, the hookups and the size', () => {
@@ -96,7 +110,7 @@ describe('3D scene data: tiles', () => {
   it('names the plain colour of every role', () => {
     expect(ROLE_FALLBACK).toEqual({ machine: [96, 125, 139], hatch: [121, 85, 72], casing: [158, 158, 158], transformer: [142, 36, 170],
       cable: [66, 66, 66], pipe: [255, 179, 0], cover: [220, 220, 220], interface: [126, 87, 194], chip_pipe: [255, 112, 67],
-      chest: [160, 110, 50], ghost: [200, 200, 200] });
+      chest: [160, 110, 50], ghost: [200, 200, 200], roof: [179, 229, 252] });
   });
 
   it('shows the front texture on the side the machine faces, whatever the facing', () => {
@@ -168,7 +182,7 @@ describe('3D scene data: tiles', () => {
 describe('3D scene data: layers, list and click info', () => {
   it('hides a cover plate with its host', () => {
     const plate: SceneInstance = { block: 4, shape: 'plate', pos: [0, 0, 0], side: 1, tiles: [0, 0, 0, 0, 0, 0], ghost: false };
-    expect([visible(plate, null, { ghosts: true, hookups: false }, layout), visible(plate, null, { ghosts: true, hookups: true }, layout)]).toEqual([false, true]);
+    expect([visible(plate, null, { ghosts: true, hookups: false, roof: true }, layout), visible(plate, null, { ghosts: true, hookups: true, roof: true }, layout)]).toEqual([false, true]);
   });
 
   it('groups equal labels, counts every cover and counts only the blocks a hookup lays', () => {

@@ -157,6 +157,12 @@ export interface PlacedUnit extends Unit {
   mainFacing?: number;
   /** A singleblock's output side where it does not face the spine: up (1) for a venting steam singleblock (`Unit.vent`). */
   outputSide?: number;
+  /**
+   * The side from `ports.power` into the unit (a singleblock, or a multiblock's energy hatch): `facing` on today's rows,
+   * where the power cell lies behind the unit's spine side. A packed line (RUK-2877) hangs three machines off one cable
+   * cell, so there it is north, south or up.
+   */
+  powerSide: number;
   ports: UnitPorts;
 }
 
@@ -176,6 +182,39 @@ export interface Placement {
    * by hand, between it and the spine (`Unit.manual`).
    */
   reserved: Vec3[];
+  /**
+   * The item spine's cells in lay order, each joined to the next (RUK-2877 placement contract): `[x, 0, spineZ]` for
+   * x = `firstX` … `tailX` on today's rows. A mode lays its item pipe or conduit along these cells.
+   */
+  spine: Vec3[];
+  /** Where the spine ends and the tail chests hang (`LineTail`). */
+  tail: LineTail;
+  /** The line is laid by `placePacked` (RUK-2877): three machines to a cable cell, the item lanes above them, no middle row. */
+  packed?: true;
+  /**
+   * The packed line is laid for AE2 (`placePacked` with `ownPorts`, spike SP-G): every machine has its own item port — an
+   * ME Interface cell above it (`PORT_SPACING.ae2` is 1, so AE2 may not share one) — on the lanes `[x, 1, 0]`, `[x, 1, 2]`
+   * and `[x, 2, 1]`. The `ae2` mode then lays its ME network on those lanes, joined at the tail column, and lays no risers.
+   */
+  ownPorts?: true;
+  /**
+   * The AE2 packed column is laid open (`placePacked` with `open`, spike SP-I, RUK-3016): A's and B's interfaces stand
+   * in the machines' own row on the box's north and south faces, `[x, 0, 0]` and `[x, 0, 4]`, T's above it at
+   * `[x, 2, 2]`, and the cable lane between the machines at `[x, 0, 2]`, so no machine is walled in. Set with `ownPorts`.
+   */
+  open?: true;
+}
+
+/**
+ * A line's tail (RUK-2877 placement contract). `cell` is the spine's last cell; the input chest stands off its
+ * `inputSide`; output chest i stands off the `outputSide` of the tail column's cell i (`tailColumn`), i cells above
+ * `cell`. Today's rows: `[tailX, 0, spineZ]`, north, south.
+ */
+export interface LineTail { cell: Vec3; inputSide: number; outputSide: number }
+
+/** Cell `i` of a line's tail column: `i` cells above `tail.cell` (0 is the tail cell itself). */
+export function tailColumn(tail: LineTail, i: number): Vec3 {
+  return [tail.cell[0], tail.cell[1] + i, tail.cell[2]];
 }
 
 // ---- Small helpers ----
@@ -1055,7 +1094,18 @@ function flipSide(side: number): number {
   return side === WEST ? EAST : side === EAST ? WEST : side;
 }
 
-interface PlacedSlot { u: Unit; row: Row; x: number }
+/** A slot a unit was placed in: its row, its column along the row and the block layer it stands on. */
+interface PlacedSlot { u: Unit; row: Row; x: number; y: 0 | 1 }
+
+/**
+ * A unit that may stand on top of another one in the same column, or carry one: a 1×1×1 singleblock with no fluids
+ * (its top is free: `unitPorts` puts a fluid port there), not run by hand, vented, benched or multiblock.
+ */
+export function stackable(u: Unit): boolean {
+  return !u.multiblock && u.manual === undefined && u.vent !== true && u.bench === undefined
+    && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0
+    && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1;
+}
 
 /**
  * One side of the power head: `ordered` units placed in local columns from 0 outward (local 0 touches the head), in the
@@ -1064,13 +1114,18 @@ interface PlacedSlot { u: Unit; row: Row; x: number }
  * to the shorter row (N on a tie), one column apart from a multiblock neighbour, and moves on until its item ports are
  * `portSpacing` cells apart from every earlier unit's (0: may share; 1: own cell; 2: not even neighbouring) and every
  * cell it keeps beside its columns (a side port, a muffler's air) is free.
+ * With `stack` (RUK-2877, geometry from spike SP-D): a stackable unit (`stackable`) standing right after a stackable
+ * unit of the same feed tier in the same row goes on top of it at y 1, in its column, and takes no column of its own.
  */
 function placeSide(ordered: readonly Unit[], opts: {
-  portSpacing: 0 | 1 | 2; feedTier: (u: Unit) => number | null; headTier: number | null; supplyTier?: number;
+  portSpacing: 0 | 1 | 2; feedTier: (u: Unit) => number | null; headTier: number | null; supplyTier?: number; stack?: boolean;
 }): { slots: PlacedSlot[]; reach: Record<Row, number> } {
   const { portSpacing, feedTier, headTier, supplyTier } = opts;
   const cursor: Record<Row, number> = { N: 0, S: 0 };
   const previous: Record<Row, Unit | null> = { N: null, S: null };
+  // the last slot of each row, and the columns of a row that already carry a machine on top (RUK-2877)
+  const lastSlot: Record<Row, PlacedSlot | null> = { N: null, S: null };
+  const topped = new Set<string>();
   /** The feed tier the next unit of a row stands beside: the head's run, the previous unit's, or none (a steam unit). */
   const besideTier: Record<Row, number | null> = { N: headTier, S: headTier };
   const claimed = new Set<number>();
@@ -1092,6 +1147,17 @@ function placeSide(ordered: readonly Unit[], opts: {
   const slots: PlacedSlot[] = [];
   for (const u of ordered) {
     const row: Row = cursor.N <= cursor.S ? 'N' : 'S';
+    // a stackable unit stands on the row's last one when that one is on the floor, still free, stackable itself and fed
+    // at the same tier (RUK-2877). Its item port is at y 1, a different cell from the lower one's, so it takes no
+    // `portSpacing` test, and the row's cursor, kept cells and reach stay where the lower one left them.
+    const below = lastSlot[row];
+    const under = below === null ? '' : `${row}:${below.x}`;
+    if (opts.stack === true && below !== null && below.y === 0 && !topped.has(under) && stackable(u) && stackable(below.u) && feedTier(u) === feedTier(below.u)) {
+      topped.add(under);
+      lastSlot[row] = { u, row, x: below.x, y: 1 };
+      slots.push({ u, row, x: below.x, y: 1 });
+      continue;
+    }
     const before = previous[row];
     const tier = feedTier(u);
     const otherTier = tier !== null && besideTier[row] !== null && tier !== besideTier[row];
@@ -1107,7 +1173,8 @@ function placeSide(ordered: readonly Unit[], opts: {
     reach[row] = own.reduce((r, p) => Math.max(r, p[0] + 1), cursor[row]);
     previous[row] = u;
     besideTier[row] = tier;
-    slots.push({ u, row, x });
+    slots.push({ u, row, x, y: 0 });
+    lastSlot[row] = { u, row, x, y: 0 };
   }
   return { slots, reach };
 }
@@ -1135,7 +1202,7 @@ function placeSide(ordered: readonly Unit[], opts: {
  * above it (its vent: GT's `MTEBasicMachineBronze.allowToCheckRecipe` waits while a cover or a block with a hit box is
  * there) and the one behind it (its steam inlet) kept empty.
  */
-export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number; westUnits?: number }): Placement {
+export function placeUnits(units: readonly Unit[], opts: { headWidth: number; portSpacing: 0 | 1 | 2; supplyTier?: number; westUnits?: number; stack?: boolean }): Placement {
   const { headWidth, portSpacing, supplyTier } = opts;
   const feedTier = (u: Unit): number | null => (supplyTier === undefined || !u.electric ? null : Math.min(u.tier, supplyTier));
   const nonManual = lowestFeedFirst(units.filter((u) => u.manual === undefined), feedTier);
@@ -1147,8 +1214,8 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   // west of it, mirrored, facing its west face; the units run by hand stay last, east of it, near the tail chests
   const split = supplyTier !== undefined && headWidth > 0 ? Math.min(Math.max(0, Math.floor(opts.westUnits ?? 0)), nonManual.length) : 0;
   // the head's west face is its supply run, its east face the lowest fed tier's run
-  const west = placeSide(nonManual.slice(0, split), { portSpacing, feedTier, headTier: supplyTier ?? headTier, supplyTier });
-  const east = placeSide([...nonManual.slice(split), ...handUnits], { portSpacing, feedTier, headTier, supplyTier });
+  const west = placeSide(nonManual.slice(0, split), { portSpacing, feedTier, headTier: supplyTier ?? headTier, supplyTier, stack: opts.stack });
+  const east = placeSide([...nonManual.slice(split), ...handUnits], { portSpacing, feedTier, headTier, supplyTier, stack: opts.stack });
   const headX = split === 0 ? 0 : Math.max(west.reach.N, west.reach.S);
   const deepest = (row: Row) => [...west.slots, ...east.slots].reduce((d, s) => (s.row === row ? Math.max(d, s.u.size[2] + standOff(s.u)) : d), 0);
   const dN = deepest('N'), dS = deepest('S');
@@ -1170,9 +1237,10 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
     fluidFaces: p.fluidFaces.map((f) => ({ pos: pos(f.pos), side: flip(f.side) })),
   });
   const emit = (sideSlots: readonly PlacedSlot[], mapX: (x: number) => number, flip: (s: number) => number): void => {
-    for (const { u, row, x } of sideSlots) {
+    for (const { u, row, x, y } of sideSlots) {
       const toSpine = towardSpine(row);
-      const pos = (p: Vec3): Vec3 => [mapX(p[0]), p[1], p[2]];
+      // a stacked slot's cells land one block layer above the row's floor
+      const pos = (p: Vec3): Vec3 => [mapX(p[0]), p[1] + y, p[2]];
       // a singleblock's output side faces the spine (its covers and inputs go there), its front toward the head (GT keeps
       // the two apart; on the west side the head lies east); a venting steam unit's output side faces up; a bench has
       // only its front, turned away from the spine, so its back, its output face, meets the spine
@@ -1205,7 +1273,7 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
       const off = standOff(u);
       const at: Vec3 = pos(row === 'S' ? [x, 0, spineZ + 1 + off] : [x, 0, spineZ - u.size[2] - off]);
       placed.push({
-        ...u, row, at, facing: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ...(u.vent === true ? { outputSide: UP } : {}),
+        ...u, row, at, facing: toSpine, powerSide: toSpine, ...(mainFacing === undefined ? {} : { mainFacing }), ...(u.vent === true ? { outputSide: UP } : {}),
         ports: mapPorts(unitPorts(u, row, x, spineZ), pos, flip),
       });
     }
@@ -1214,10 +1282,123 @@ export function placeUnits(units: readonly Unit[], opts: { headWidth: number; po
   emit(east.slots, (x) => headX + headWidth + x, (s) => s);
   blocks.sort((a, b) => comparePos(a.pos, b.pos));
   reserved.sort(comparePos);
-  // the box holds every cell kept empty too (a steam vent above a singleblock), so the site checks it is clear
-  const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1));
+  // the box holds every cell kept empty too (a steam vent above a singleblock), so the site checks it is clear, and
+  // every cell of a machine stacked on another one (`emit` shifts a stacked slot's cells up)
+  const height = reserved.reduce((h, p) => Math.max(h, p[1] + 1),
+    blocks.reduce((h, b) => Math.max(h, b.pos[1] + 1), units.reduce((h, u) => Math.max(h, u.size[1]), 1)));
   const size: Vec3 = [tailX + 1, height, dN + dS + 3];
-  return { units: placed, size, spineZ, headX, firstX: split === 0 ? headWidth : 0, tailX, blocks, reserved };
+  const firstX = split === 0 ? headWidth : 0;
+  const spine: Vec3[] = [];
+  for (let x = firstX; x <= tailX; x++) spine.push([x, 0, spineZ]);
+  return { units: placed, size, spineZ, headX, firstX, tailX, blocks, reserved, spine,
+    tail: { cell: [tailX, 0, spineZ], inputSide: NORTH, outputSide: SOUTH } };
+}
+
+/** Whether a line can be laid packed (RUK-2877, `placePacked`): every unit a 1×1×1 singleblock, none run by hand,
+ * none venting, no workbench, and no unit takes or makes a fluid. */
+export function packedLine(units: readonly Unit[]): boolean {
+  return units.length > 0 && units.every((u) => !u.multiblock && u.manual === undefined && u.vent !== true && u.bench === undefined
+    && u.io.fluidIn.length === 0 && u.io.fluidOut.length === 0 && u.size[0] === 1 && u.size[1] === 1 && u.size[2] === 1);
+}
+
+/** The three slots of a packed column and their faces (`placePacked`): B and T share the item port `[x, 1, 2]`. */
+const PACKED_SLOTS: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
+  { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
+  { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
+  { cell: [0, 1, 1], facing: SOUTH, mainFacing: NORTH, powerSide: UP, items: [0, 1, 2] },
+];
+
+/**
+ * The three slots of a packed column laid for AE2 (`placePacked` with `ownPorts`, spike SP-G): AE2 may not share an item
+ * port (`PORT_SPACING.ae2` is 1), so each machine has its own cell above it, and the Wrench points that interface down
+ * into its machine — a full-block ME Interface pushes into every neighbour unless wrenched (machine-feeding §…:
+ * `feed.interface.targets`). T's output side moves from south to up, so it pushes into its own interface and not into
+ * B's; A's and B's interfaces touch T, and their Wrench targets keep them from pushing into it.
+ */
+const PACKED_SLOTS_AE2: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
+  { cell: [0, 0, 0], facing: UP, mainFacing: NORTH, powerSide: NORTH, items: [0, 1, 0] },
+  { cell: [0, 0, 2], facing: UP, mainFacing: SOUTH, powerSide: SOUTH, items: [0, 1, 2] },
+  { cell: [0, 1, 1], facing: UP, mainFacing: NORTH, powerSide: UP, items: [0, 2, 1] },
+];
+
+/**
+ * The three slots of the open packed AE2 column (`placePacked` with `open`, spike SP-I, RUK-3016): A at `[x, 0, 1]`
+ * outputs north into its interface at `[x, 0, 0]`, B at `[x, 0, 3]` outputs south into its interface at `[x, 0, 4]`,
+ * and T at `[x, 1, 2]` outputs up into its interface at `[x, 2, 2]`; all three take power from the cable lane at
+ * `[x, 0, 2]`. No machine is walled in: nothing is laid in `[x, 1, 0]`, `[x, 1, 1]`, `[x, 1, 3]` or `[x, 1, 4]`, so A's
+ * and B's tops and T's north and south faces touch air (`reach.ts`). GT never lets a front be the output side
+ * (`setMainFacing`, gt-mechanics "Front and output side"), so A's and B's fronts face along the row toward the head
+ * (west), as on today's rows; T's faces north, into the air above A.
+ */
+const PACKED_SLOTS_AE2_OPEN: ReadonlyArray<{ cell: Vec3; facing: number; mainFacing: number; powerSide: number; items: Vec3 }> = [
+  { cell: [0, 0, 1], facing: NORTH, mainFacing: WEST, powerSide: NORTH, items: [0, 0, 0] },
+  { cell: [0, 0, 3], facing: SOUTH, mainFacing: WEST, powerSide: SOUTH, items: [0, 0, 4] },
+  { cell: [0, 1, 2], facing: UP, mainFacing: NORTH, powerSide: UP, items: [0, 2, 2] },
+];
+
+/**
+ * A packed line (RUK-2877, plan Assumption 7; spikes SP-E and SP-F). One cable lane at `[x, 0, 1]` carries one cable
+ * cell per column, and three machines hang off every cell: A at `[x, 0, 0]` (front north, output up), B at `[x, 0, 2]`
+ * (front south, output up) and T at `[x, 1, 1]` (front north, output south), each with its power port on the lane
+ * cell and `powerSide` the side from that cell into it. The units fill A, B, T in each column in feed-tier order
+ * (`lowestFeedFirst`); a unit fed at another tier starts a new column with one empty column between, so two tiers'
+ * lanes never touch. The first column is `firstX` (= `headWidth`) on the head's own feed tier, `firstX + 1` on any
+ * other. The item lanes `[x, 1, 0]` and `[x, 1, 2]` run `firstX … tailX`, join at `[tailX, 1, 1]` and end at the
+ * tail cell `[tailX, 1, 2]`, on the box's south face, because a hookup goes round the box's columns (`hookups.ts`)
+ * and could not reach a chest under the join cell. `spine` lists the lanes in lay order (north lane west→east, the
+ * join, south lane east→west); the input chest hangs below the tail cell and output chest i east of tail column cell
+ * i. `spineZ` is 1; the box is `[tailX + 2, 2, 3]` (the output chests stand at `tailX + 1`; `buildLocalAt` counts the
+ * rising tail column's height from the laid blocks).
+ * `ownPorts` (spike SP-G) lays the column for AE2 (`PACKED_SLOTS_AE2`): T's output side is up and every machine's item
+ * port is its own cell above it, `[x, 1, 0]`, `[x, 1, 2]` and `[x, 2, 1]`, so T's interface stands one cell higher and
+ * the box is one cell taller (`[x, 2, 1]` is a laid block, so `buildLocalAt` counts it); `packed` tells the mode.
+ */
+export function placePacked(units: readonly Unit[], opts: { headWidth: number; supplyTier?: number; ownPorts?: boolean; open?: boolean }): Placement {
+  const { headWidth } = opts;
+  const open = opts.open === true;
+  const slots = open ? PACKED_SLOTS_AE2_OPEN : opts.ownPorts === true ? PACKED_SLOTS_AE2 : PACKED_SLOTS;
+  // the open column is one cell wider on each side, so its cable lane sits at z 2; every other packed column keeps it at z 1
+  const laneZ = open ? 2 : 1;
+  const feedTier = (u: Unit): number | null => (opts.supplyTier === undefined || !u.electric ? null : Math.min(u.tier, opts.supplyTier));
+  const ordered = lowestFeedFirst(units, feedTier);
+  const feeds = ordered.map(feedTier).filter((t): t is number => t !== null);
+  const headTier = headWidth > 0 && feeds.length > 0 ? Math.min(...feeds) : null;
+  const firstX = headWidth;
+  const placed: PlacedUnit[] = [];
+  const blocks: LocalBlock[] = [];
+  let colX = -1, slot = 3, lastX = -1, prevTier: number | null | undefined;
+  for (const u of ordered) {
+    const tier = feedTier(u);
+    if (slot >= 3) {
+      colX = lastX < 0 ? (tier === headTier ? firstX : firstX + 1) : lastX + (tier === prevTier ? 1 : 2);
+      slot = 0;
+    }
+    const s = slots[slot]!;
+    const cell: Vec3 = [colX + s.cell[0], s.cell[1], s.cell[2]];
+    const machine = u.cells.find((c) => c.role === 'machine') ?? u.cells[0]!;
+    blocks.push({ pos: [...cell], block: { ...machine.block }, role: 'machine', facing: s.facing, mainFacing: s.mainFacing,
+      stepId: u.stepId, ...(u.stepIds === undefined ? {} : { stepIds: [...u.stepIds] }), label: machine.label,
+      ...(machine.item === undefined ? {} : { item: machine.item }) });
+    placed.push({ ...u, row: 'N', at: [...cell], facing: s.facing, mainFacing: s.mainFacing, powerSide: s.powerSide,
+      ports: {
+        power: u.electric ? [colX, 0, laneZ] : null, items: [[colX + s.items[0], s.items[1], s.items[2]]],
+        fluidIn: [], fluidOut: [], fluidInSides: [], fluidOutSides: [],
+        itemFaces: u.io.itemOut ? [{ pos: [...cell], side: s.facing }] : [], fluidFaces: [],
+      } });
+    lastX = colX; prevTier = tier; slot += 1;
+  }
+  const tailX = lastX + 1;
+  // the lanes and their join, in lay order: the north lane west→east, the join, the south lane east→west
+  // (the open column's lanes are in the machines' row, y 0, and its south lane at z 4)
+  const laneY = open ? 0 : 1;
+  const spine: Vec3[] = [];
+  for (let x = firstX; x <= tailX; x++) spine.push([x, laneY, 0]);
+  spine.push([tailX, laneY, laneZ]);
+  for (let x = tailX; x >= firstX; x--) spine.push([x, laneY, open ? 4 : 2]);
+  blocks.sort((a, b) => comparePos(a.pos, b.pos));
+  return { units: placed, size: [tailX + 2, 2, open ? 5 : 3], spineZ: laneZ, headX: 0, firstX, tailX, blocks, reserved: [],
+    spine, tail: { cell: [tailX, 1, open ? 4 : 2], inputSide: DOWN, outputSide: EAST },
+    packed: true, ...(opts.ownPorts === true || open ? { ownPorts: true as const } : {}), ...(open ? { open: true as const } : {}) };
 }
 
 /**

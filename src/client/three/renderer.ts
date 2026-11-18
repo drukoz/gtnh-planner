@@ -1,5 +1,5 @@
 // The three.js viewer of the 3D tab (Plan 5 Task 15; spec §3.8, web-stack §8): the scene's tiles as the layers of one
-// DataArrayTexture, one InstancedMesh per shape, ghost and hookup group, a ShaderMaterial that picks each face's tile
+// DataArrayTexture, one InstancedMesh per shape, ghost, hookup and roof group, a ShaderMaterial that picks each face's tile
 // from per-instance attributes (never `glslVersion: GLSL3`: three already compiles a ShaderMaterial as GLSL ES 3.00
 // under WebGL2), orbit controls around the line's box, the layer slider as a uniform and picking by raycast. Show
 // connections (the user's requirements of 2026-10-19, item 3 (b)) adds the Connections links as one more mesh, all of
@@ -71,7 +71,8 @@ export type ViewerPick = { kind: 'block'; block: number } | { kind: 'link'; inde
 export interface Viewer {
   /** Shows layers 0 … `n` only; `null` shows all. */
   setMaxLayer(n: number | null): void;
-  setShow(show: { ghosts: boolean; hookups: boolean }): void;
+  /** Draws the ghosts, the hookup blocks and the rain roof (RUK-2877) as the three switches ask. */
+  setShow(show: { ghosts: boolean; hookups: boolean; roof: boolean }): void;
   /** Draws these links over the line (all in one mesh), or none; a picked link is let go. */
   setLinks(links: LinkGeometry | null): void;
   /** Marks link `index` of the drawn links (a white tube, a frame on each of its faces), or none. */
@@ -135,16 +136,17 @@ function uAlongZOnTopAndBottom(box: BoxGeometry): BoxGeometry {
   return box;
 }
 
-/** The instances one mesh draws: one shape, ghosts or not, blocks of a hookup or not. */
-interface Group { shape: ShapeKind; ghost: boolean; hookup: boolean; instances: SceneInstance[] }
+/** The instances one mesh draws: one shape, ghosts or not, blocks of a hookup or not, blocks of the rain roof or not. */
+interface Group { shape: ShapeKind; ghost: boolean; hookup: boolean; roof: boolean; instances: SceneInstance[] }
 
 function groupsOf(scene: SceneData, layout: Layout): Group[] {
   const groups = new Map<string, Group>();
   for (const inst of scene.instances) {
     const hookup = layout.blocks[inst.block]?.hookup !== undefined;
-    const key = `${inst.shape}|${inst.ghost}|${hookup}`;
+    const roof = inst.roof === true;
+    const key = `${inst.shape}|${inst.ghost}|${hookup}|${roof}`;
     const group = groups.get(key);
-    if (group === undefined) groups.set(key, { shape: inst.shape, ghost: inst.ghost, hookup, instances: [inst] });
+    if (group === undefined) groups.set(key, { shape: inst.shape, ghost: inst.ghost, hookup, roof, instances: [inst] });
     else group.instances.push(inst);
   }
   return [...groups.values()];
@@ -237,7 +239,8 @@ export function createViewer(
   });
 
   const scene3 = new Scene();
-  const meshes = groupsOf(scene, layout).map((group) => ({ group, mesh: meshOf(group, group.ghost ? faint : solid, layerCount) }));
+  // the rain roof is drawn as faint as a ghost, with the same material
+  const meshes = groupsOf(scene, layout).map((group) => ({ group, mesh: meshOf(group, group.ghost || group.roof ? faint : solid, layerCount) }));
   for (const { mesh } of meshes) scene3.add(mesh);
   const groupOf = new Map<Object3D, Group>(meshes.map(({ group, mesh }) => [mesh, group]));
 
@@ -251,7 +254,7 @@ export function createViewer(
   controls.update();
 
   let maxLayer: number | null = null;
-  let show = { ghosts: true, hookups: true };
+  let show = { ghosts: true, hookups: true, roof: true };
   let disposed = false;
   const raycaster = new Raycaster();
   const pointer = new Vector2();
@@ -311,8 +314,8 @@ export function createViewer(
       render();
     },
     setShow(next) {
-      show = { ghosts: next.ghosts, hookups: next.hookups };
-      for (const { group, mesh } of meshes) mesh.visible = (!group.ghost || show.ghosts) && (!group.hookup || show.hookups);
+      show = { ghosts: next.ghosts, hookups: next.hookups, roof: next.roof };
+      for (const { group, mesh } of meshes) mesh.visible = (!group.ghost || show.ghosts) && (!group.hookup || show.hookups) && (!group.roof || show.roof);
       render();
     },
     setLinks(next) {
@@ -357,6 +360,7 @@ export function createViewer(
       for (const hit of raycaster.intersectObjects(shown, false)) {
         const inst = hit.instanceId === undefined ? undefined : groupOf.get(hit.object)?.instances[hit.instanceId];
         if (inst === undefined || !visible(inst, maxLayer, show, layout)) continue;
+        if (inst.roof === true) continue;   // the rain roof (RUK-2877) is never picked: the pointer sees through it
         block ??= inst.block;   // the nearest one still drawn
         if (!inst.ghost) {
           wall = hit.distance;

@@ -68,6 +68,21 @@ describe('EnderIO mode — items', () => {
       { id: 'layout:logistics:inputs', kind: 'logistics', pin: 'site', text: 'Put the raw inputs in the input chest: Raw Input' }]);
   });
 
+  it('lays the conduit along placement.spine and hangs the chests off placement.tail (RUK-2877)', () => {
+    const s = setup();
+    // the spine one cell longer, its tail on the new cell, the input chest east of it and the output chest above it;
+    // this placement is not a real line, it only proves the mode follows the contract
+    const placement = { ...s.placement, spine: [...s.placement.spine, [4, 0, 2] as [number, number, number]],
+      tail: { cell: [4, 0, 2] as [number, number, number], inputSide: 5, outputSide: 1 } };
+    const r = buildMode('enderio', { ...s, placement, network: null });
+    expect(r.blocks.filter((b) => b.conduits !== undefined).map((b) => b.pos)).toEqual([[1, 0, 2], [2, 0, 2], [3, 0, 2], [4, 0, 2]]);
+    expect(r.blocks.filter((b) => b.role === 'chest').map((b) => [b.pos, b.label])).toEqual([
+      [[4, 1, 2], 'Chest (output)'], [[5, 0, 2], 'Chest (input)']]);
+    const faceAt = (pos: [number, number, number], target: string) => faces(r).find((f) => posKey(f.pos) === posKey(pos) && f.target === target)!;
+    expect(faceAt([4, 0, 2], 'Chest (input)')).toMatchObject({ face: 'east', mode: 'extract', target: 'Chest (input)' });
+    expect(faceAt([4, 0, 2], 'Chest (output)')).toMatchObject({ face: 'up', mode: 'insert', target: 'Chest (output)' });
+  });
+
   it('feeds the input chest from an EnderIO item network on a channel of its own, so the tap stops when the chest is full', () => {
     const network = makeScan({ logistics: [{ kind: 'enderio', taps: [[0, 64, 0]] }] }).logistics[0]!;
     const r = buildMode('enderio', { ...setup(), network });

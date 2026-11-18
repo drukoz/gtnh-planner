@@ -19,6 +19,7 @@ import java.util.function.Supplier;
 
 import net.minecraft.item.ItemStack;
 import net.minecraft.world.WorldProvider;
+import net.minecraft.world.biome.BiomeGenBase;
 import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidStack;
@@ -55,9 +56,10 @@ import toxiceverglades.dimension.DimensionEverglades;
 
 /**
  * Where materials come from (materials-availability.md §1, §2, §8.5): dimensions, Galacticraft bodies, ore veins,
- * small ores, underground fluids, void-miner drops, gas siphons, the space pump and space-mining asteroids. Each part
- * writes its own file inside its own catch, so a part that fails is a warning {@code worldgen <part>: <error>} and an
- * empty (or partial) file, never a missing one. Nothing here needs a loaded world: providers come from
+ * small ores, underground fluids, void-miner drops, gas siphons, the space pump, space-mining asteroids, and the
+ * biomes whose weather GregTech's rain check skips (gt-mechanics.md §3.4a). Each part writes its own file inside its
+ * own catch, so a part that fails is a warning {@code worldgen <part>: <error>} and an empty (or partial) file, never
+ * a missing one. Nothing here needs a loaded world: providers come from
  * {@link DimensionManager#createProviderFor(int)}, never {@code getProvider}. Galacticraft is reached only through
  * {@link Reflect}, by class names in strings, each member by its exact name and type ({@link Galacticraft}).
  */
@@ -89,6 +91,7 @@ public final class WorldgenSection implements ExportSection {
         part(ctx, "gasSiphon", w -> writeGasSiphon(w, ctx));
         part(ctx, "spacePump", w -> writeSpacePump(w, ctx));
         part(ctx, "spaceAsteroids", w -> writeSpaceAsteroids(w, ctx));
+        part(ctx, "biomes", w -> writeBiomes(w, ctx));
     }
 
     /** Opens the part's file first, so it exists whatever the part does; a part that throws becomes a warning. */
@@ -706,6 +709,32 @@ public final class WorldgenSection implements ExportSection {
                 w.end();
             } catch (Throwable t) {
                 ctx.warn("worldgen spaceAsteroids: " + a.asteroidName + ": " + t);
+            }
+        }
+    }
+
+    // ---- biomes ------------------------------------------------------------------------------------------------
+
+    /**
+     * Every registered biome, as {@code getBiomeGenArray} lists it (index order, the unused ids null): the raw fields
+     * GregTech's rain check reads ({@code gt-mechanics.md} §3.4a), which the planner works out for itself. The array is
+     * indexed by id, but a mod can register a biome under an id that is not its index, so each id is written once and
+     * the later entry of a repeated id is dropped. A biome that cannot be read is a warning, not a lost line.
+     */
+    private static void writeBiomes(JsonlWriter w, ExportContext ctx) throws IOException {
+        Set<Integer> written = new HashSet<>();
+        for (BiomeGenBase b : BiomeGenBase.getBiomeGenArray()) {
+            if (b == null) continue;
+            int id = b.biomeID;
+            if (!written.add(id)) continue;
+            try {
+                String name = b.biomeName;
+                if (name == null || name.isEmpty()) name = "Biome " + id;
+                JsonWriter j = w.begin();
+                BiomeLine.write(j, id, name, b.rainfall, b.getEnableSnow(), b.canSpawnLightningBolt());
+                w.end();
+            } catch (Throwable t) {
+                ctx.warn("worldgen biomes: biome " + id + ": " + t);
             }
         }
     }

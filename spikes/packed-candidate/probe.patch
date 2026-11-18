@@ -1,0 +1,74 @@
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index cd99d95f5..6d1650e6c 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -30,7 +30,7 @@ import { emptyContext } from '../planner/plan.ts';
+ import { contextFromScan } from '../world/context.ts';
+ import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
+ import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
+-import { addedBlocks, attachCovers, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
++import { addedBlocks, attachCovers, packedLine, placePacked, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
+ import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
+ import { feedingWarnings } from './feed-rules.ts';
+ import {
+@@ -344,6 +344,14 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+       kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
+     }
+   }
++  if (process.env.PROBE_PACKED !== '0' && (input.mode === 'direct' || input.mode === 'enderio') && packedLine(input.units)) {
++    const sup = input.stages?.supplyTier;
++    const tiers = new Set(input.units.filter((u) => u.electric).map((u) => (sup === undefined ? -1 : Math.min(u.tier, sup))));
++    if (tiers.size <= 1) {
++      lines.push(buildLocalAt(input, 0, false, true));
++      kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
++    }
++  }
+   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+   // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
+   let chosen = baseline;
+@@ -363,9 +371,9 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+  * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
+  * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
+  */
+-function buildLocalAt(input: LocalInput, westUnits: number, stack = false): LocalLine {
++function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed = false): LocalLine {
+   const { pack, plan, parts, mode, units, stages, network } = input;
+-  const placement = placeUnits(units, {
++  const placement = packed ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }) }) : placeUnits(units, {
+     headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+   });
+   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
+diff --git a/src/shared/types/layout.ts b/src/shared/types/layout.ts
+index 3e50bc441..c832ae1af 100644
+--- a/src/shared/types/layout.ts
++++ b/src/shared/types/layout.ts
+@@ -182,7 +182,7 @@ export interface LayoutLoss {
+  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
+  * takes the next number.
+  */
+-export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2 } as const;
++export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3 } as const;
+ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
+ 
+ /**
+diff --git a/tests/unit/layout/layout.test.ts b/tests/unit/layout/layout.test.ts
+index 775f691c2..7fe07a717 100644
+--- a/tests/unit/layout/layout.test.ts
++++ b/tests/unit/layout/layout.test.ts
+@@ -393,9 +393,14 @@ describe('layoutLine: mixed-tier lines', () => {
+     const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not wire')).map((w) => w.text);
+     for (const m of placed) {
+       if (m.role !== 'machine' || m.mainFacing === undefined) continue;
+-      const port = at.get(key(step(m.pos, OPPOSITE[m.facing!]!)));
+       const feed = Math.min(stepTier.get(m.stepId!)!, supply);
+-      if (port?.role !== 'cable' || tierOf(layout, port) !== feed || ((port.connections ?? 0) & (1 << m.facing!)) === 0) {
++      // GT takes energy through any face but the front (gt-mechanics §…: isInputFacing): a cable of the feed tier on such a face, linked into the machine
++      const fed = [0, 1, 2, 3, 4, 5].some((side) => {
++        if (side === m.mainFacing) return false;
++        const port = at.get(key(step(m.pos, side)));
++        return port?.role === 'cable' && tierOf(layout, port) === feed && ((port.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0;
++      });
++      if (!fed) {
+         out.push(`${m.label} at ${key(m.pos)} has no ${tierName(feed)} cable at its power input`);
+       }
+     }

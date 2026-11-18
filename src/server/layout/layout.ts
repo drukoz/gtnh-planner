@@ -30,7 +30,7 @@ import { emptyContext } from '../planner/plan.ts';
 import { contextFromScan } from '../world/context.ts';
 import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
 import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
-import { addedBlocks, attachCovers, placeUnits, replacedCasings, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
+import { addedBlocks, attachCovers, packedLine, placePacked, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
 import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
 import { feedingWarnings } from './feed-rules.ts';
 import {
@@ -43,8 +43,10 @@ import { ae2IdleEUt, COVER_RATES, pickTransformer, resolveParts, type Parts } fr
 import type { PathBounds } from './path.ts';
 import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
 import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
-import { compareScore, replacesBaseline, scoreLine } from './score.ts';
+import { unreachableWarning } from './reach.ts';
+import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine, type FinalMeasure } from './score.ts';
 import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
+import { RoofRule, dryBiomes, rainChecked, rainExposures, roofCells } from './rain.ts';
 import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
 
 // ---- Types ----
@@ -56,11 +58,16 @@ export interface LayoutDeps {
   maxPathNodes?: number;
   /** Lay satellite step-down banks (RUK-2668); default true, false keeps a long line's far machines on the head (tests of the starved-line warnings). */
   satellites?: boolean;
+  /** Lay a stacked twin of every head candidate (RUK-2877); default true, false lays the line as before stacking (tests that pin it). */
+  stacking?: boolean;
+  /** Lay a packed candidate (RUK-2877, `placePacked`) in direct, EnderIO and AE2 (with its own ports, spike SP-G); default true, false lays the line as before packing (tests that pin it). */
+  packing?: boolean;
   /**
-   * Tests only: called once with the line's own placement and internal route as `buildLocal` chose them (RUK-121), so a
-   * test reads the line the layout was built from instead of laying it again by hand.
+   * Tests only: called once, with the line of the layout returned — its placement and internal route as `buildLocal`
+   * chose them (RUK-121), the kept finalist's or the baseline's once the finished layouts are judged (RUK-2877) —
+   * so a test reads the line the layout was built from instead of laying it again by hand.
    */
-  localLine?: (line: { placement: Placement; internal: InternalResult }) => void;
+  localLine?: (line: { placement: Placement; internal: InternalResult; shift: Vec3 }) => void;
 }
 
 /** Where a line without a scan or base is drawn. */
@@ -235,6 +242,11 @@ interface LocalLine {
   size: Vec3;
   /** Mode, then routing warnings. */
   warnings: PlanWarning[];
+  /**
+   * How far the line's box reaches west (x) and north (z) of local 0, 0 or 1 each: the rain roof's cover over an outward
+   * side of the west or north edge stands in the column beyond it (RUK-2877, design goal 7). `size` includes it.
+   */
+  shift: Vec3;
   /** How good this line is as the search ranks it (RUK-2571, Assumption 3): hand work, unpowered machines, length, loss, volume. */
   score: LineScore;
 }
@@ -244,6 +256,10 @@ interface LocalInput {
   pack: Pack; plan: Plan; parts: Parts; mode: LogisticsMode; units: readonly Unit[]; stages: Stages | null;
   network: LogisticsNetwork | null;
   satellites?: boolean;
+  stacking: boolean;
+  packing: boolean;
+  /** Lay the rain roof (RUK-3041): false when every biome the line can stand among never rains (GT's rain gate). */
+  roof: boolean;
 }
 
 /**
@@ -280,7 +296,7 @@ function lineLoss(line: Omit<LocalLine, 'score'>): number {
  * block, so its `count` joins `needed` too (RUK-2679), and only the extra beyond the one block it lays is hand work.
  */
 function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transformers: number } {
-  const needed = (line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0) + line.internal.satellites.reduce((n, s) => n + s.count, 0);
+  const needed = (line.stages?.stages.reduce((n, s) => n + (s.layCount ?? s.count), 0) ?? 0) + line.internal.satellites.reduce((n, s) => n + s.count, 0);
   const placed = line.internal.blocks.filter((b) => b.role === 'transformer').length;
   return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
 }
@@ -293,9 +309,18 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
  * others the one with the least loss (fewer units west on a tie) is kept when its `lineLoss` is at most (1 −
  * `MIDDLE_HEAD_MIN_CUT`) of the west-end line's, which must lose something; otherwise it is the west-end line, exactly
  * the line laid before RUK-121. The chosen line is that baseline, and only a candidate that `replacesBaseline`s it (the
- * best such, earliest on a tie) takes its place.
+ * best such, earliest on a tie) takes its place. `finalists` are the `FINALISTS` best candidates that replace the
+ * baseline, best first (earliest on a tie), so the chosen line is the first of them, or the baseline when there are
+ * none. `layoutLine` then finishes the baseline and every finalist, and keeps the best finished finalist that
+ * `finalReplaces`s the finished baseline (`compareFinal`), else the baseline (RUK-2877): the search scores a line
+ * without its hookup, which can turn a winner into a loser and the runner-up into the best.
+ * With `stacking` (RUK-2877) every head candidate is also laid with single-block machines stacked two high, as an
+ * extra candidate; today's rule's baseline is always one of the unstacked lines.
+ * When `packs` (RUK-2877) the line is laid again packed three machines to a cable cell with the head at the west end, as
+ * one last candidate added after all the others, and in AE2 once more laid open (`PackedOpen`, spike SP-I) after it;
+ * the baseline is never a packed line.
  */
-function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch } {
+function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSearch; finalists: number[] } {
   const west = buildLocalAt(input, 0);
   // every line laid, in the order laid: the west head first, then one per middle-head split, each tagged with its kind
   const lines: LocalLine[] = [west];
@@ -328,14 +353,54 @@ function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch 
       if (middleLoss <= (1 - MIDDLE_HEAD_MIN_CUT) * westLoss) baseline = middleIndex;
     }
   }
-  const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
-  // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
-  let chosen = baseline;
-  for (let i = 0; i < candidates.length; i++) {
-    if (!replacesBaseline(candidates[i]!, candidates[baseline]!)) continue;
-    if (compareScore(candidates[i]!, candidates[chosen]!) < 0) chosen = i;
+  // the head candidates laid again with single-block machines stacked two high (RUK-2877); a line with fewer than two
+  // stackable machines stacks nothing, and the baseline above is always one of the unstacked lines laid before this
+  if (input.stacking && input.units.filter(stackable).length >= 2) {
+    for (let i = 0, laid = lines.length; i < laid; i++) {
+      lines.push(buildLocalAt(input, kinds[i]!.westUnits, true));
+      kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
+    }
   }
-  return { line: lines[chosen]!, search: { candidates, chosen, baseline } };
+  // the line packed three machines to a cable cell (RUK-2877), with the head at the west end; the baseline stays one of the lines above
+  const packing = packs(input);
+  if (packing !== false) {
+    lines.push(buildLocalAt(input, 0, false, packing));
+    kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
+  }
+  // AE2's packed line again, laid open (spike SP-I, RUK-3016): the closed column above walls its middle machines in
+  // on long lines but is the shorter one on short lines, so both are candidates and the score keeps the better
+  if (packing === 'own') {
+    lines.push(buildLocalAt(input, 0, false, 'open'));
+    kinds.push({ kind: CandidateKind.PackedOpen, westUnits: 0 });
+  }
+  const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+  // only a candidate that replaces the baseline (Assumption 4) may take its place: the FINALISTS best such, earliest on a
+  // tie, and the chosen line is the first of them, or the baseline when there are none
+  const finalists = candidates.map((_, i) => i).filter((i) => replacesBaseline(candidates[i]!, candidates[baseline]!))
+    .sort((a, b) => compareScore(candidates[a]!, candidates[b]!) || a - b).slice(0, FINALISTS);
+  return { lines, search: { candidates, chosen: finalists[0] ?? baseline, baseline }, finalists };
+}
+
+/**
+ * How many of the search's best candidates `layoutLine` finishes and judges with their hookups (RUK-2877). One kept the
+ * packed AE2 column on mixed-05 although the stacked runner-up is a block shorter once both are hooked up; two finds
+ * it, and more changes no benchmark row (spike RUK-3016 follow-up, `spikes/reach-ae2-promote/`).
+ */
+const FINALISTS = 2;
+
+/**
+ * How `buildLocal` lays a packed candidate (RUK-2877), false when it lays none: in direct, EnderIO and AE2 (routed is
+ * out; a packed column's B and T share one item port, which `PORT_SPACING` forbids there), when every unit can be
+ * packed (`packedLine`) and every electric unit is fed at the same tier (`min(tier, supply)`): a second tier's lane
+ * could not get past the first's.
+ * AE2 packs with `'own'` (spike SP-G): `PORT_SPACING.ae2` is 1, so AE2 may not share the B/T item port and the packed
+ * column gives every machine its own ME Interface cell above it (`placePacked` with `ownPorts`).
+ */
+function packs(input: LocalInput): boolean | 'own' {
+  if (!input.packing || (input.mode !== 'direct' && input.mode !== 'enderio' && input.mode !== 'ae2') || !packedLine(input.units)) return false;
+  const supply = input.stages?.supplyTier;
+  if (new Set(input.units.filter((u) => u.electric).map((u) => (supply === undefined ? -1 : Math.min(u.tier, supply)))).size > 1) return false;
+  return input.mode === 'ae2' ? 'own' : true;
 }
 
 /**
@@ -345,12 +410,19 @@ function buildLocal(input: LocalInput): { line: LocalLine; search: LayoutSearch 
  * that already lost up to the hookup's allowance (spec §3.5 never overload a cable). The line's height counts the air
  * cells its multiblocks need kept empty as well as its blocks.
  * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
+ * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
+ * `packed` lays the whole line packed three machines to a cable cell (`placePacked`, RUK-2877), ignoring `westUnits` and
+ * `stack`; `'own'` gives every machine its own item port, the AE2 column with one ME Interface per machine
+ * (`placePacked` with `ownPorts`, spike SP-G); `'open'` lays that column with its interfaces on the box's outer faces
+ * (`placePacked` with `open`, spike SP-I).
  */
-function buildLocalAt(input: LocalInput, westUnits: number): LocalLine {
+function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed: boolean | 'own' | 'open' = false): LocalLine {
   const { pack, plan, parts, mode, units, stages, network } = input;
-  const placement = placeUnits(units, {
-    headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits,
-  });
+  const placement = packed !== false
+    ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }), ...(packed === 'own' ? { ownPorts: true } : packed === 'open' ? { ownPorts: true, open: true } : {}) })
+    : placeUnits(units, {
+        headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+      });
   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
   // a mode that lays its own fluid network (EnderIO's ender fluid conduits) gets no GT fluid pipes or pump covers
   const internal = routeInternal({
@@ -364,9 +436,19 @@ function buildLocalAt(input: LocalInput, westUnits: number): LocalLine {
   // machine's vent), so the site, its clearance and obstruction checks and the steps' height keep that cell free too (GT
   // stops a machine whose muffler has no air in front: MTEHatchMuffler.polluteEnvironment; a steam machine waits while
   // its vent is blocked: MTEBasicMachineBronze.allowToCheckRecipe)
-  const top = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
+  const top0 = placement.reserved.reduce((y, p) => Math.max(y, p[1]), blocks.reduce((y, b) => Math.max(y, b.pos[1]), 0));
+  // the rain roof (RUK-2877, SP-R): one block over each exposed face of a block GT rains on, one above the tallest block,
+  // and none at all when the line stands where GT never rains (RUK-3041, GT's rain gate: `input.roof` false)
+  const roof = input.roof
+    ? roofCells(blocks, rainExposures(blocks, rainChecked(blocks, placement.units)), placement.reserved, 1 + top0, RoofRule.Flat)
+    : [];
+  for (const pos of roof) blocks.push({ pos, block: { ...parts.roof.block }, role: 'roof', label: parts.roof.name, item: parts.roof.key });
+  const top = roof.length > 0 ? top0 + 1 : top0;
+  const [pw, , pl] = placement.size;
+  const shift: Vec3 = [roof.some((p) => p[0] < 0) ? 1 : 0, 0, roof.some((p) => p[2] < 0) ? 1 : 0];
+  const size: Vec3 = [shift[0] + pw + (roof.some((p) => p[0] >= pw) ? 1 : 0), 1 + top, shift[2] + pl + (roof.some((p) => p[2] >= pl) ? 1 : 0)];
   const line: Omit<LocalLine, 'score'> = {
-    placement, mode: modeResult, internal, stages: internal.stages, blocks, size: [placement.size[0], 1 + top, placement.size[2]],
+    placement, mode: modeResult, internal, stages: internal.stages, blocks, size, shift,
     warnings: [...modeResult.warnings, ...internal.warnings],
   };
   return {
@@ -438,12 +520,14 @@ async function chooseSite(input: {
   if (line !== null && line.stages !== null) {
     // the hookup lands on the supply run: beside the spine's row at the line's west end, or at the north end of a head
     // in the middle of the line (RUK-121), whose run reaches both long sides
-    ports.power = line.placement.headX === 0 ? [-1, 0, line.placement.spineZ] : [line.placement.headX, 0, -1];
+    const [sx, , sz] = line.shift;
+    ports.power = line.placement.headX === 0 ? [sx - 1, 0, sz + line.placement.spineZ] : [sx + line.placement.headX, 0, sz - 1];
     const tap = powerTaps === null ? null : nearestTap(powerTaps, base.center);
     if (tap !== null) taps.power = [...tap.pos];
   }
   if (line !== null && line.mode.logisticsPort !== null) {
-    ports.logistics = outsideNeighbour(line.mode.logisticsPort, line.size);
+    const p = line.mode.logisticsPort;
+    ports.logistics = outsideNeighbour([p[0] + line.shift[0], p[1], p[2] + line.shift[2]], line.size);
     const tap = logisticsNet === null ? null : nearestTap(logisticsNet.taps, base.center);
     if (tap !== null) taps.logistics = [...tap.pos];
   }
@@ -493,6 +577,46 @@ async function chooseSite(input: {
   return { site, vox, warnings };
 }
 
+/**
+ * The biomes a site of this layout can land among, when GT never rains in any of them (GT's rain gate, gt-mechanics
+ * §3.4a; RUK-3041): the names `dryBiomes` finds in the biome table for the one-layer voxel read over the columns any
+ * site of this layout can reach, or `null` (the roof stays). The columns are where a site can stand, mirroring how
+ * `chooseSite` builds its search box: with no dragged placement, the x/z of `siteSearchBox` grown to the nearest taps
+ * (its x/z does not depend on the footprint); with one, the whole `MAX_SITE_SPAN` square around the base centre that
+ * `withinReach` allows. A `RangeError` from the read keeps the roof, as `chooseSite` treats it; any other error is
+ * rethrown. No base, no biome table, or no read means the roof stays.
+ */
+async function dryAround(input: {
+  pack: Pack; scan: WorldScan; project: Project; base: Base; supply: { taps: readonly LayoutTap[] } | null;
+  logisticsNet: LogisticsNetwork | null; deps: LayoutDeps;
+}): Promise<string[] | null> {
+  const { pack, scan, project, base, supply, logisticsNet, deps } = input;
+  if (pack.biomes === undefined || pack.biomes.length === 0 || deps.readArea === undefined) return null;
+  const floorY = baseFloorY(scan, base);
+  const y = Math.min(Math.max(floorY, 0), 255); // one layer, as `chooseSite` keeps a read's y inside the world
+  let box: BBox;
+  if (project.placement === null) {
+    const taps: Vec3[] = [];
+    const power = supply === null ? null : nearestTap(supply.taps, base.center);
+    if (power !== null) taps.push([...power.pos]);
+    const logistics = logisticsNet === null ? null : nearestTap(logisticsNet.taps, base.center);
+    if (logistics !== null) taps.push([...logistics.pos]);
+    const b = siteSearchBox(base, floorY, { w: 1, h: 1, l: 1 }, taps);
+    box = { minX: b.minX, minY: y, minZ: b.minZ, maxX: b.maxX, maxY: y, maxZ: b.maxZ };
+  } else {
+    const [cx, , cz] = base.center;
+    const half = MAX_SITE_SPAN / 2;
+    box = { minX: cx - half, minY: y, minZ: cz - half, maxX: cx + half - 1, maxY: y, maxZ: cz + half - 1 };
+  }
+  let vox: Voxels | null = null;
+  try {
+    vox = await deps.readArea(base.dim, box);
+  } catch (e) {
+    if (!(e instanceof RangeError)) throw e;
+  }
+  return vox === null ? null : dryBiomes(pack.biomes, vox);
+}
+
 // ---- To the world (stage 7) ----
 
 /**
@@ -500,15 +624,15 @@ async function chooseSite(input: {
  * line's with the areas kept for its farms (`farmExtent`, add-on 17), which then turn with it as one box. The line
  * stands at the box's local min corner either way.
  */
-interface Frame { origin: Vec3; rotation: Rotation; size: Vec3 }
+interface Frame { origin: Vec3; rotation: Rotation; size: Vec3; shift: Vec3 }
 
 /** The frame of a box of `size` at the chosen site, or at `DEFAULT_ORIGIN` unturned without one. */
-function frameAt(site: Site | null, size: Vec3): Frame {
-  return site === null ? { origin: [...DEFAULT_ORIGIN], rotation: 0, size } : { origin: [...site.origin], rotation: site.rotation, size };
+function frameAt(site: Site | null, size: Vec3, shift: Vec3 = [0, 0, 0]): Frame {
+  return site === null ? { origin: [...DEFAULT_ORIGIN], rotation: 0, size, shift } : { origin: [...site.origin], rotation: site.rotation, size, shift };
 }
 
 function worldPos(p: Vec3, f: Frame): Vec3 {
-  return toWorld(p, f.origin, f.rotation, f.size);
+  return toWorld([p[0] + f.shift[0], p[1] + f.shift[1], p[2] + f.shift[2]], f.origin, f.rotation, f.size);
 }
 
 /** The cover turned with its block; its settings and filter copied unchanged. */
@@ -528,8 +652,11 @@ function worldConduit(c: ConduitSpec, r: Rotation): ConduitSpec {
 
 /** The world box, inclusive, of the local box of `size` at the frame's local min corner: the line's own box. */
 function worldBoxOf(size: Vec3, f: Frame): PathBounds {
-  const a = worldPos([0, 0, 0], f);
-  const b = worldPos([size[0] - 1, size[1] - 1, size[2] - 1], f);
+  return cornersBox(worldPos([-f.shift[0], -f.shift[1], -f.shift[2]], f), worldPos([size[0] - 1 - f.shift[0], size[1] - 1 - f.shift[1], size[2] - 1 - f.shift[2]], f));
+}
+
+/** The world box, inclusive, between two opposite corners. */
+function cornersBox(a: Vec3, b: Vec3): PathBounds {
   return {
     min: [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.min(a[2], b[2])],
     max: [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.max(a[2], b[2])],
@@ -658,7 +785,9 @@ function buildHookups(input: {
   const taken = new Set(lineBlocks.map((b) => posKey(b.pos)));
   // a hookup must never fill a cell a multiblock needs empty
   const routeLine = new Set([...taken, ...line.placement.reserved.map((p) => posKey(worldPos(p, frame)))]);
-  const box = worldBoxOf(line.size, frame);
+  // the hookups keep out of the line's own cells: its placement's box, not the roof's overhang beyond it, whose blocks
+  // are in `taken` like every other line block (RUK-2877)
+  const box = cornersBox(worldPos([0, 0, 0], frame), worldPos([line.placement.size[0] - 1, line.size[1] - 1, line.placement.size[2] - 1], frame));
   const lineKeepAway = line.internal.keepAway.map((p) => posKey(worldPos(p, frame)));
   const out: Hookups = { hookups: [], blocks: [], power: null, logistics: null, warnings: [], noPathAt: new Map() };
   const taps: LayoutTap[] = [];
@@ -898,121 +1027,153 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
     };
   }
 
+  // GT's rain gate (gt-mechanics §3.4a, RUK-3041): when the pack has a biome table and every biome a site of this
+  // layout can land among never rains, the line lays no rain roof. Decided before the search, so every candidate is
+  // scored without the roof; `null` keeps it. A layout of owned machines only (the block above) never reads biomes.
+  const dry = base === null ? null : await dryAround({ pack, scan, project, base, supply, logisticsNet, deps });
+
   // stage 5; from here on the stages are the ones sized for the volts every machine gets
-  const { line, search } = buildLocal({ pack, plan, parts, mode, units, stages: provisional, network: logisticsNet, satellites: deps.satellites !== false });
-  deps.localLine?.({ placement: line.placement, internal: line.internal });
-  const { stages } = line;
-  // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
-  const areas = farmAreas(plan, line.size);
-  const extent = farmExtent(line.size, areas);
-  const replaced = replacedCasings(units);
-  const supplyWarnings: PlanWarning[] = stages === null || powerNet === null || supply === null || !supply.other ? [] : [{ code: 'power_tap_tier',
-    text: `The ${tierName(powerNet.voltageTier)} network has no ${tierName(powerNet.voltageTier)} cable to tap: the line is fed at `
-      + `${tierName(supplyTier)} from a cable behind one of its transformers` }];
+  /** Stages 6–11 of one candidate line: its site, hookups, loss, pins, parts and build steps, as a finished layout. */
+  const finishLine = async (line: LocalLine, search: LayoutSearch): Promise<Layout> => {
+    const { stages } = line;
+    // the areas kept for the plan's new farms beside the line, and the box the line and its areas take (add-on 17)
+    // farm areas stand east of the line's whole box (its roof's overhang included), in the line's local cells
+    const boxAreas = farmAreas(plan, line.size);
+    const extent = farmExtent(line.size, boxAreas);
+    const areas = boxAreas.map((a) => ({ ...a, local: [a.local[0] - line.shift[0], a.local[1], a.local[2] - line.shift[2]] as Vec3 }));
+    const replaced = replacedCasings(units);
+    const supplyWarnings: PlanWarning[] = stages === null || powerNet === null || supply === null || !supply.other ? [] : [{ code: 'power_tap_tier',
+      text: `The ${tierName(powerNet.voltageTier)} network has no ${tierName(powerNet.voltageTier)} cable to tap: the line is fed at `
+        + `${tierName(supplyTier)} from a cable behind one of its transformers` }];
 
-  // stages 6–7: the site is found for the line and its farms' areas together, which turn with it as one box
-  const chosen = base === null ? null
-    : await chooseSite({ scan, project, base, line, size: extent, powerTaps: supply?.taps ?? null, logisticsNet, deps });
-  const frame = frameAt(chosen?.site ?? null, extent);
-  const vox = chosen?.vox ?? null;
-  const siteWarnings = chosen?.warnings ?? worldWarnings;
-  const worldSize = rotatedSize(extent, frame.rotation);
-  // the line's own box and size in the world: its site pin, its roof and its blocks' step ids go by them
-  const lineBox = worldBoxOf(line.size, frame);
-  const lineSize = rotatedSize(line.size, frame.rotation);
-  const lineBlocks = line.blocks.map((b) => worldBlock(b, frame));
-  const kept = areas.map((a) => reservedArea(a, (p) => worldPos(p, frame)));
+    // stages 6–7: the site is found for the line and its farms' areas together, which turn with it as one box
+    const chosen = base === null ? null
+      : await chooseSite({ scan, project, base, line, size: extent, powerTaps: supply?.taps ?? null, logisticsNet, deps });
+    const frame = frameAt(chosen?.site ?? null, extent, line.shift);
+    const vox = chosen?.vox ?? null;
+    const siteWarnings = chosen?.warnings ?? worldWarnings;
+    const worldSize = rotatedSize(extent, frame.rotation);
+    // the line's own box and size in the world: its site pin, its roof and its blocks' step ids go by them
+    const lineBox = worldBoxOf(line.size, frame);
+    const lineSize = rotatedSize(line.size, frame.rotation);
+    const lineBlocks = line.blocks.map((b) => worldBlock(b, frame));
+    const shut = unreachableWarning(line.blocks);
+    const kept = areas.map((a) => reservedArea(a, (p) => worldPos(p, frame)));
 
-  // stage 8
-  const hooked = base === null ? null : buildHookups({
-    pack, parts, scan, dim, line, frame, vox, lineBlocks, supplyTier, powerNet, powerTaps: supply?.taps ?? [], logisticsNet, maxNodes: deps.maxPathNodes,
-    areas: kept.map(areaBounds),
-  });
-  const blocks = [...lineBlocks, ...(hooked?.blocks ?? [])].sort(compareBlocks);
-  const idle = ae2IdleEUt(blocks, parts);
-  const need = withIdleDraw(plan.power, idle);
-  // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
-  const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
-  // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
-  const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
-  // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
-  // highest tier, so the list stays tier descending
-  const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
-  const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
-  const banksEUt = stages?.lossEUt ?? 0;
-  // the machines whose wiring leaves them too few volts to run (RUK-351); counted only when there are any
-  const unpowered = line.internal.machines.filter((m) => !m.powered).length;
-  const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt, ...(unpowered > 0 ? { unpowered } : {}) };
-  const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
-
-  // stages 10–11 (parts and warnings first: the warning pins come from them)
-  // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
-  const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...parallelRunParts(line.internal.cables),
-    ...(hooked?.power == null ? [] : parallelHookupParts(hooked.power.build)), ...addedBlocks(units), ...(fit?.optional ?? [])]);
-  // without a base the warning that says to pick one comes first (Review Focus 1)
-  // the static feeding rules read the line as laid out (architecture §11 entry 51)
-  const warnings = dedupeWarnings([
-    ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
-    ...(base === null ? [] : siteWarnings), ...supplyWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
-    ...feedingWarnings({ pack, plan, layout: { mode, blocks } }),
-  ]);
-
-  // stage 9
-  let finish: Finish;
-  if (base === null || chosen === null || hooked === null) {
-    finish = { status: 'no-world', pins: null, reuse: [], site: null, power: null, supplyTier: null, logistics: null };
-  } else {
-    const centre: Vec3 = [lineBox.min[0] + Math.floor(lineSize[0] / 2), frame.origin[1], lineBox.min[2] + Math.floor(lineSize[2] / 2)];
-    const reuse = findReuse(pack, plan, scan, base, centre, mode);
-    const placed = warnings.flatMap((w) => {
-      if (SITE_PINNED.has(w.code)) return [{ code: w.code, text: w.text, pos: centre }];
-      const at = w.code === 'no_path' ? hooked.noPathAt.get(w.text) ?? centre : null;
-      return at === null ? [] : [{ code: w.code, text: w.text, pos: at }];
+    // stage 8
+    const hooked = base === null ? null : buildHookups({
+      pack, parts, scan, dim, line, frame, vox, lineBlocks, supplyTier, powerNet, powerTaps: supply?.taps ?? [], logisticsNet, maxNodes: deps.maxPathNodes,
+      areas: kept.map(areaBounds),
     });
-    const { power, logistics } = hooked;
-    finish = {
-      status: 'ok', reuse, site: { dig: chosen.site.dig, fill: chosen.site.fill },
-      pins: {
-        dim, site: { center: centre, text: siteText(lineSize) },
-        power: power === null || stages === null ? null : { pos: [...power.tap.pos], text: powerText(power.tap, stages.supplyAmps) },
-        logistics: logistics === null ? null : { pos: [...logistics.tap.pos], text: logisticsText(logistics.network.kind) },
-        reuse, farms: farmPins(kept), warnings: placed,
-      },
-      power: power === null || stages === null ? null : {
-        cable: power.build.cable?.name ?? 'cable', blocks: power.build.blocks.length, amps: stages.supplyAmps, tier: supplyTier,
-        arrivingVolts: power.build.arrivingVolts, ...(power.build.blocked === null ? {} : { upgrade: { cable: power.build.blocked.cable } }),
-      },
-      supplyTier: stages === null ? null : supplyTier,
-      logistics: logistics === null || line.mode.hookup === null ? null
-        : { kindName: networkName(logistics.network.kind), part: parts[line.mode.hookup.part].name, blocks: logistics.build.blocks.length },
+    const blocks = [...lineBlocks, ...(hooked?.blocks ?? [])].sort(compareBlocks);
+    const idle = ae2IdleEUt(blocks, parts);
+    const need = withIdleDraw(plan.power, idle);
+    // the supply run's own loss counts from where the hookup lands on it (the worst cell without a hookup)
+    const supplyRun = supplyRunLoss(line.internal.supply, landingIndex(line, frame, hooked?.power?.build.hookup));
+    // the need counts the banks' emitter loss, the line's own cables and the hookup (spec §3.5)
+    const lossEUt = (stages?.lossEUt ?? 0) + line.internal.lossEUt + supplyRun.lossEUt + (hooked?.power?.build.lossEUt ?? 0);
+    // the loss tier by tier (RUK-116, design G2): the supply run's entry counts from the hookup's landing cell and is the
+    // highest tier, so the list stays tier descending
+    const tiers: TierLoss[] = [...(supplyRun.tier === null ? [] : [supplyRun.tier]), ...line.internal.tiers];
+    const hookupEUt = hooked?.power?.build.lossEUt ?? 0;
+    const banksEUt = stages?.lossEUt ?? 0;
+    // the machines whose wiring leaves them too few volts to run (RUK-351); counted only when there are any
+    const unpowered = line.internal.machines.filter((m) => !m.powered).length;
+    const loss: LayoutLoss = { tiers, hookupEUt, banksEUt, totalEUt: lossEUt, ...(unpowered > 0 ? { unpowered } : {}) };
+    const fit = base === null ? null : fitPower({ power: need, ctx: fitCtx, extraLossEUt: lossEUt, pack, tier: supplyTier });
+
+    // stages 10–11 (parts and warnings first: the warning pins come from them)
+    // the casings of layers the layout added to an exported structure are parts too: Plan 2 lists the exported one
+    const bom = bomFromBlocks(blocks, [...line.mode.extraParts, ...parallelRunParts(line.internal.cables),
+      ...(hooked?.power == null ? [] : parallelHookupParts(hooked.power.build)), ...addedBlocks(units), ...(fit?.optional ?? [])]);
+    // without a base the warning that says to pick one comes first (Review Focus 1)
+    // the static feeding rules read the line as laid out (architecture §11 entry 51)
+    const warnings = dedupeWarnings([
+      ...(base === null ? siteWarnings : []), ...unitWarnings, ...line.warnings, ...(shut === null ? [] : [shut.warning]), ...(supplyRun.warning === null ? [] : [supplyRun.warning]),
+      ...(base === null ? [] : siteWarnings), ...supplyWarnings, ...(hooked?.warnings ?? []), ...unknownParts(pack, parts, blocks, bom, nameOf),
+      ...feedingWarnings({ pack, plan, layout: { mode, blocks } }),
+    ]);
+
+    // stage 9
+    let finish: Finish;
+    if (base === null || chosen === null || hooked === null) {
+      finish = { status: 'no-world', pins: null, reuse: [], site: null, power: null, supplyTier: null, logistics: null };
+    } else {
+      const centre: Vec3 = [lineBox.min[0] + Math.floor(lineSize[0] / 2), frame.origin[1], lineBox.min[2] + Math.floor(lineSize[2] / 2)];
+      const reuse = findReuse(pack, plan, scan, base, centre, mode);
+      const placed = warnings.flatMap((w) => {
+        if (SITE_PINNED.has(w.code)) return [{ code: w.code, text: w.text, pos: centre }];
+        if (w.code === 'machine_unreachable') return shut === null ? [] : [{ code: w.code, text: w.text, pos: worldPos(shut.first, frame) }];
+        const at = w.code === 'no_path' ? hooked.noPathAt.get(w.text) ?? centre : null;
+        return at === null ? [] : [{ code: w.code, text: w.text, pos: at }];
+      });
+      const { power, logistics } = hooked;
+      finish = {
+        status: 'ok', reuse, site: { dig: chosen.site.dig, fill: chosen.site.fill },
+        pins: {
+          dim, site: { center: centre, text: siteText(lineSize) },
+          power: power === null || stages === null ? null : { pos: [...power.tap.pos], text: powerText(power.tap, stages.supplyAmps) },
+          logistics: logistics === null ? null : { pos: [...logistics.tap.pos], text: logisticsText(logistics.network.kind) },
+          reuse, farms: farmPins(kept), warnings: placed,
+        },
+        power: power === null || stages === null ? null : {
+          cable: power.build.cable?.name ?? 'cable', blocks: power.build.blocks.length, amps: stages.supplyAmps, tier: supplyTier,
+          arrivingVolts: power.build.arrivingVolts, ...(power.build.blocked === null ? {} : { upgrade: { cable: power.build.blocked.cable } }),
+        },
+        supplyTier: stages === null ? null : supplyTier,
+        logistics: logistics === null || line.mode.hookup === null ? null
+          : { kindName: networkName(logistics.network.kind), part: parts[line.mode.hookup.part].name, blocks: logistics.build.blocks.length },
+      };
+    }
+    const pins = finish.pins === null ? [] : makePins(finish.pins);
+    const reserved = pinnedAreas(kept, pins);
+
+    // stage 10: steps, then each block's owning step (ruling R7); the line's blocks are named from its own min corner, so
+    // their step ids stay when farms come and go
+    const stepsInput: StepsInput = {
+      status: finish.status, pins, size: lineSize, ...(areas.length === 0 ? {} : { siteSize: worldSize }), site: finish.site,
+      units: line.placement.units, stages: stages?.stages ?? [], transformerName,
+      cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
+      satellites: line.internal.satellites.map((s, i) => ({ fromTier: s.fromTier, toTier: s.toTier, count: s.count, machines: s.machines.length,
+        transformer: line.internal.blocks.find((b) => b.satellite === i)?.label ?? transformerName(s.toTier), hiAmp: s.hiAmp })),
+      power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
+      fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
+      logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...lineBox.min], rotation: frame.rotation, nameOf, stepName,
+      ...(line.placement.packed === true ? { packed: true } : {}),
+      ...farmStepsInput(plan, areas, reserved),
     };
+    const buildSteps = layoutSteps(stepsInput);
+    const hookups = hooked?.hookups ?? [];
+
+    return {
+      dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: assignBuildSteps(blocks, buildSteps, stepsInput, hookups),
+      hookups, pins, buildSteps, bom, warnings, status: finish.status,
+      power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
+      loss,
+      search,
+      ...(dry === null ? {} : { dryBiomes: dry }),
+      ...(replaced.length === 0 ? {} : { replaced }),
+      ...(reserved.length === 0 ? {} : { reserved }),
+    };
+  };
+  const { lines, search, finalists } = buildLocal({
+    pack, plan, parts, mode, units, stages: provisional, network: logisticsNet,
+    satellites: deps.satellites !== false, stacking: deps.stacking !== false, packing: deps.packing !== false, roof: dry === null,
+  });
+  // the search scores a line without its hookup, so a winner there can lose once the hookup is laid (RUK-2877): the
+  // baseline and every finalist are finished, and the best finished finalist that replaces the finished baseline is
+  // kept; the search record then names the kept line `chosen` and, when that is not the search's best, the best `rejected`
+  const baselineLine = lines[search.baseline]!;
+  let keptLine = baselineLine;
+  let kept = await finishLine(baselineLine, finalists.length === 0 ? search : { ...search, chosen: search.baseline, rejected: finalists[0]! });
+  const finishedBaseline = finalMeasure(kept, baselineLine.score.unreachable);
+  let best: FinalMeasure | null = null;
+  for (const i of finalists) {
+    const layout = await finishLine(lines[i]!, { ...search, chosen: i, ...(i === finalists[0] ? {} : { rejected: finalists[0]! }) });
+    const measure = finalMeasure(layout, lines[i]!.score.unreachable);
+    if (!finalReplaces(measure, finishedBaseline) || (best !== null && compareFinal(measure, best) >= 0)) continue;
+    best = measure; kept = layout; keptLine = lines[i]!;
   }
-  const pins = finish.pins === null ? [] : makePins(finish.pins);
-  const reserved = pinnedAreas(kept, pins);
-
-  // stage 10: steps, then each block's owning step (ruling R7); the line's blocks are named from its own min corner, so
-  // their step ids stay when farms come and go
-  const stepsInput: StepsInput = {
-    status: finish.status, pins, size: lineSize, ...(areas.length === 0 ? {} : { siteSize: worldSize }), site: finish.site,
-    units: line.placement.units, stages: stages?.stages ?? [], transformerName,
-    cables: line.internal.cables.map((c) => ({ tier: c.tier, cable: c.cable.name, cells: c.cells })),
-    satellites: line.internal.satellites.map((s, i) => ({ fromTier: s.fromTier, toTier: s.toTier, count: s.count, machines: s.machines.length,
-      transformer: line.internal.blocks.find((b) => b.satellite === i)?.label ?? transformerName(s.toTier), hiAmp: s.hiAmp })),
-    power: finish.power, supplyTier: finish.supplyTier, drafts: line.mode.drafts,
-    fluids: line.internal.fluidPipes.map((f) => ({ key: f.key, name: f.name, pipe: f.pipe.name, cells: f.cells })),
-    logistics: finish.logistics, reuse: finish.reuse, blocks, origin: [...lineBox.min], rotation: frame.rotation, nameOf, stepName,
-    ...farmStepsInput(plan, areas, reserved),
-  };
-  const buildSteps = layoutSteps(stepsInput);
-  const hookups = hooked?.hookups ?? [];
-
-  return {
-    dim, origin: [...frame.origin], size: worldSize, rotation: frame.rotation, mode, blocks: assignBuildSteps(blocks, buildSteps, stepsInput, hookups),
-    hookups, pins, buildSteps, bom, warnings, status: finish.status,
-    power: lossDetail(fit === null ? need : idleDetail(fit.power, idle), loss.totalEUt),
-    loss,
-    search,
-    ...(replaced.length === 0 ? {} : { replaced }),
-    ...(reserved.length === 0 ? {} : { reserved }),
-  };
+  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal, shift: [...keptLine.shift] });
+  return kept;
 }
