@@ -229,6 +229,8 @@ export interface Layout {
   power?: PowerSummary;
   /** What the line's cables lose, tier by tier, and the total that counts into `power` (RUK-116). */
   loss?: LayoutLoss;
+  /** The biomes the line stands among, when none of them rains (GT's rain gate, gt-mechanics §3.4a): the line lays no rain roof. Absent when it does, or when the pack or the world cannot tell. */
+  dryBiomes?: string[];
   /** Structure casings that hatches replace. */
   replaced?: BomLine[];
   // optional addition
