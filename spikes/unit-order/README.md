@@ -137,8 +137,8 @@ Do not merge as-is — this is a spike. Adopting reorder candidates needs, at mi
 `mixed-14` / `fluid-09` / `fluid-02` regressions so the layout-bench guardrail holds, and (b) bounding the
 reorder search's cost on 1,200-block lines so the feeding performance tests pass. On the measured evidence:
 
-- **O3 pair-swap at B=8** is the variant to pursue: it is the only one with large structural wins (a 6-block
-  shorter, ~50 EU/t-lossier `mixed-01`; `mixed-18` reachability) and pays them for ~+33% bench time.
+- **O3 pair-swap at B=8** is the variant to pursue: it is the only one with large structural wins (
+  shorter, ~50 EU/t less lossy `mixed-01` (41→35 blocks, 387→335 EU/t); `mixed-18` reachability) and pays them for ~+33% bench time.
 - **O1 hungriest-first** is a cheap (loss-only, +15%) fallback if the pair-swap search's cost cannot be bounded;
   it needs the same `mixed-14` regression handled.
 - **O2 fluid-groups** should be dropped — it is never better than M3 and regresses two rows.
