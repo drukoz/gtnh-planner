@@ -1,0 +1,112 @@
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index 43013aad3..fb6decbdf 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -44,6 +44,7 @@ import type { PathBounds } from './path.ts';
+ import { findReuse, logisticsText, makePins, networkName, powerText, siteText, type PinInput, type ReuseFind } from './pins.ts';
+ import { fitPower, hookupAllowanceVolts, tierGroups, transformerStages, type Stages } from './power.ts';
+ import { compareFinal, compareScore, finalMeasure, finalReplaces, replacesBaseline, scoreLine, type FinalMeasure } from './score.ts';
++import { RoofRule, rainChecked, rainExposures, roofCells } from './rain.ts';
+ import { baseFloorY, checkPlacement, fallbackSite, findSite, MAX_SITE_SPAN, siteSearchBox, type Site, type SiteRequest } from './site.ts';
+ import { assignBuildSteps, bomFromBlocks, layoutSteps, type StepsInput } from './steps.ts';
+ 
+@@ -65,7 +66,7 @@ export interface LayoutDeps {
+    * chose them (RUK-121), the kept finalist's or the baseline's once the finished layouts are judged (RUK-2877) —
+    * so a test reads the line the layout was built from instead of laying it again by hand.
+    */
+-  localLine?: (line: { placement: Placement; internal: InternalResult }) => void;
++  localLine?: (line: { placement: Placement; internal: InternalResult; blocks: LocalBlock[]; size: Vec3 }) => void;
+ }
+ 
+ /** Where a line without a scan or base is drawn. */
+@@ -260,6 +261,13 @@ interface LocalInput {
+  */
+ const MIDDLE_HEAD_MIN_CUT = 0.1;
+ 
++/**
++ * RUK-3026 spike (roof in the score): `SPR_ROOF` `1` = `Flat`, `2` = `Lowest`; unset = no roof (no behavior change).
++ * A roof casing (a synthetic reference: the spike measures length, not which casing).
++ */
++const SPR_ROOF = Number(process.env.SPR_ROOF ?? 0);
++const ROOF_REF = { id: 'roof.casing', meta: 0 };
++
+ /**
+  * How many units to try west of a power head in the middle of a line whose `units` units are placed by feed tier
+  * (RUK-121): a quarter, a third, two fifths and half of them, each rounded down to an even count so the two rows end
+@@ -292,6 +300,19 @@ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transforme
+   return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
+ }
+ 
++/**
++ * RUK-3026 spike: lay the roof the rule asks for over `line` (as casings) and re-score it, so the roof's blocks count in
++ * the length the search ranks by. No-op when `SPR_ROOF` is unset. The roof cells never land on a block or a reserved
++ * cell, and a casing one above the tallest block never walls a machine in (design goal 3 reach is unchanged).
++ */
++function applyRoof(line: LocalLine): void {
++  if (!(SPR_ROOF === RoofRule.Flat || SPR_ROOF === RoofRule.Lowest)) return;
++  const cells = roofCells(line.blocks, rainExposures(line.blocks, rainChecked(line.blocks, line.placement.units)), line.placement.reserved, line.size[1], SPR_ROOF);
++  for (const pos of cells) line.blocks.push({ pos, block: ROOF_REF, role: 'casing', label: 'roof' });
++  const hand = handWork(line);
++  line.score = scoreLine({ blocks: line.blocks, warnings: line.warnings, machines: line.internal.machines, handTransformers: hand.transformers, lossEUt: lineLoss(line), size: line.size });
++}
++
+ /**
+  * The line in its own grid, its power head where the line loses least (RUK-121), and the search that chose it (RUK-2571).
+  * The line is laid with the head at its west end and, given the stages, again with each of `headSplits` of its units west
+@@ -364,6 +385,7 @@ function buildLocal(input: LocalInput): { lines: LocalLine[]; search: LayoutSear
+     lines.push(buildLocalAt(input, 0, false, 'open'));
+     kinds.push({ kind: CandidateKind.PackedOpen, westUnits: 0 });
+   }
++  if (SPR_ROOF === RoofRule.Flat || SPR_ROOF === RoofRule.Lowest) for (const line of lines) applyRoof(line);
+   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+   // only a candidate that replaces the baseline (Assumption 4) may take its place: the FINALISTS best such, earliest on a
+   // tie, and the chosen line is the first of them, or the baseline when there are none
+@@ -1098,6 +1120,6 @@ export async function layoutLine(pack: Pack, plan: Plan, scan: WorldScan, projec
+     if (!finalReplaces(measure, finishedBaseline) || (best !== null && compareFinal(measure, best) >= 0)) continue;
+     best = measure; kept = layout; keptLine = lines[i]!;
+   }
+-  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal });
++  deps.localLine?.({ placement: keptLine.placement, internal: keptLine.internal, blocks: keptLine.blocks, size: keptLine.size });
+   return kept;
+ }
+diff --git a/tests/helpers/layout-bench.ts b/tests/helpers/layout-bench.ts
+index f46395e27..98ac118c1 100644
+--- a/tests/helpers/layout-bench.ts
++++ b/tests/helpers/layout-bench.ts
+@@ -20,6 +20,9 @@ import { lossGround, lossPlan, lossScan } from './power-loss.ts';
+ /** The four logistics modes, in the order every benchmark line is laid in. */
+ const MODES: readonly LogisticsMode[] = ['direct', 'routed', 'ae2', 'enderio'];
+ 
++/** RUK-3026 spike: `SPR_ROOF` `1` = Flat, `2` = Lowest; unset = no roof. When set, a roof's casings join `total`. */
++const SPR_ROOF = Number(process.env.SPR_ROOF ?? 0);
++
+ /** One laid-out line's cost: its footprint, its placed blocks by role, its loss, its weak tiers and its route failures. */
+ export interface LengthReport {
+   /** The benchmark line's name, e.g. `loss-10`, `mixed-07`, `fluid-03`. */
+@@ -41,6 +44,8 @@ export interface LengthReport {
+   transformer: number;
+   /** The line's own chests: reported, not counted in `total`. */
+   chest: number;
++  /** RUK-3026 spike: the roof casings laid over the line (`SPR_ROOF`), counted in `total` only when the flag is set. */
++  roof: number;
+   /** Every block belonging to a hookup (its power run and its logistics runs), ghosts excluded. */
+   hookup: number;
+   /** EU/t the power need counts, read off `Layout.loss.totalEUt` (0 when the layout reports no loss). */
+@@ -76,14 +81,16 @@ export function lengthOf(layout: Layout): LengthMeasure {
+   const pipe = countRole(own, 'pipe');
+   const iface = countRole(own, 'interface');
+   const chip = countRole(own, 'chip_pipe');
++  const roof = countRole(own, 'casing');
+   const tiers = (layout.loss?.tiers ?? []).map((t) => ({ tier: t.tier, worstBlocks: t.worstBlocks, worstVolts: t.worstVolts }));
+   return {
+     mode: layout.mode,
+     size: layout.size,
+-    total: cable + pipe + iface + chip + hookup,
++    total: cable + pipe + iface + chip + hookup + (SPR_ROOF > 0 ? roof : 0),
+     cable, pipe, iface, chip,
+     transformer: countRole(own, 'transformer'),
+     chest: countRole(own, 'chest'),
++    roof,
+     hookup,
+     lossEUt: layout.loss?.totalEUt ?? 0,
+     tiers,
