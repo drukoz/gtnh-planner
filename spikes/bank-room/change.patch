@@ -1,0 +1,340 @@
+diff --git a/src/server/layout/internal.ts b/src/server/layout/internal.ts
+index b20a3f2f3..51edfe73e 100644
+--- a/src/server/layout/internal.ts
++++ b/src/server/layout/internal.ts
+@@ -131,6 +131,12 @@ const DOWN = 0, UP = 1, WEST = 4;
+ /** Sizing rounds at most: the amps only grow, so they settle; this only bounds a pathological pack. */
+ const MAX_SIZING_ROUNDS = 8;
+ 
++/**
++ * RUK-2976 spike, read in one place: 0 off; 1 = H1, lay the bank with Hi-Amp Transformers when the standard ones do
++ * not fit; 2 = H2 on top of H1, stack the bank as many levels high as the transformers need (west-end heads).
++ */
++const SPIKE_BANK = process.env.SPIKE_BANK === '2' ? 2 : process.env.SPIKE_BANK === '1' ? 1 : 0;
++
+ function compareText(a: string, b: string): number {
+   return a < b ? -1 : a > b ? 1 : 0;
+ }
+@@ -242,7 +248,7 @@ export function fluidNets(pack: Pack, plan: Plan, placement: Placement): FluidNe
+ /** A cable run of the head, at column `x`; `rated`: the pack has a cable for its volts (else it is never laid). */
+ interface Run { tier: number; x: number; cells: Vec3[]; rated: boolean }
+ /** The column of the step-down bank of `stage`, between the runs of its two tiers. */
+-interface Bank { stage: number; fromTier: number; toTier: number; x: number }
++interface Bank { stage: number; fromTier: number; toTier: number; x: number; levels: number }
+ interface Port { pos: Vec3; unit: PlacedUnit }
+ /** One feed tier's tree from its run to its machines' power ports, before its cable is chosen. */
+ interface Tree { tier: number; cells: Vec3[]; links: Array<[Vec3, Vec3]>; ports: Port[]; unreached: ReadonlySet<string> }
+@@ -326,7 +332,24 @@ function planHead(input: InternalInput, stages: Stages, grid: Grid): { runs: Run
+     for (const c of cells) grid.take(c);
+     return { tier, x, cells, rated: pickCable(pack, { volts: voltsOf(tier), amps: 1 }) !== null };
+   });
+-  const banks = stages.stages.map((s, stage): Bank => ({ stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(supply, s.toTier, headX) - 1 }));
++  const banks = stages.stages.map((s, stage): Bank => ({
++    stage, fromTier: s.fromTier, toTier: s.toTier, x: runX(supply, s.toTier, headX) - 1,
++    levels: SPIKE_BANK >= 2 && headX === 0 ? stageRows(pack, s, length, spineZ, false).levels : 1,
++  }));
++  // H2 (RUK-2976): a bank stacked `levels` high needs each run's cell at the same (y, z) beside every transformer it
++  // stacks, so each transformer's front touches the higher run and its east face the lower one; a cell already taken
++  // (a machine, a mode block) leaves that row of the stack unbuilt
++  for (const b of banks) {
++    const s = stages.stages[b.stage]!;
++    for (let y = 1; y < b.levels; y++) {
++      const { first, placed } = stageRows(pack, s, length, spineZ, false);
++      for (let j = 0; j < placed; j++) for (const tier of [s.fromTier, s.toTier]) {
++        const run = runs.find((r) => r.tier === tier)!;
++        const c: Vec3 = [runX(supply, tier, headX), y, first + j];
++        if (!grid.isTaken(c)) { grid.take(c); run.cells.push(c); }
++      }
++    }
++  }
+   return { runs, banks, headX };
+ }
+ 
+@@ -380,8 +403,8 @@ function growTrees(input: InternalInput, stages: Stages, head: { runs: readonly
+   const onBank = new Map<string, number>();                                            // the cell on top of a bank → the tier it sends
+   for (const b of head.banks) {
+     for (let z = 0; z < l; z++) {
+-      bankCells.add(posKey([b.x, 0, z]));
+-      onBank.set(posKey([b.x, 1, z]), b.toTier);
++      for (let y = 0; y < b.levels; y++) bankCells.add(posKey([b.x, y, z]));
++      onBank.set(posKey([b.x, b.levels, z]), b.toTier);
+     }
+   }
+   // a head in the middle of the line is crossed by the trees west of it (RUK-121); one at the west end keeps the old search
+@@ -509,6 +532,38 @@ function bankRows(count: number, length: number, spineZ: number, crossing: boole
+   return east ? { first: spineZ + 1, placed } : { first: spineZ - placed, placed };
+ }
+ 
++/** The rows a bank lays, with what the RUK-2976 spike made of them: the laid count, its transformer kind and its height. */
++interface BankRows { first: number; placed: number; count: number; hiAmp: boolean; levels: number }
++
++/**
++ * The rows `stage`'s bank lays (RUK-2976): `bankRows` for the standard transformers, and — with `SPIKE_BANK` ≥ 1 —
++ * when those do not fit (`count > placed`) and the export has a Hi-Amp Transformer for the stage's tier, the rows of
++ * the Hi-Amp count instead (H1: the larger of `ceil(ampsOut ÷ 16)` and `ceil(ampsIn ÷ 6)`, gt-mechanics §3.6).
++ * `SPIKE_BANK` = 2 stacks the bank as many levels high as the laid count needs on top of that (H2), west-end heads only.
++ */
++function stageRows(pack: Pack, stage: Stage, length: number, spineZ: number, crossing: boolean): BankRows {
++  let count = stage.count;
++  let rows = bankRows(count, length, spineZ, crossing);
++  let hiAmp = false;
++  if (SPIKE_BANK >= 1 && count > rows.placed && pickHiAmpTransformer(pack, stage.toTier) !== null) {
++    const hi = Math.max(Math.ceil(stage.ampsOut / HIAMP_AMPS_OUT), Math.ceil(stage.ampsIn / HIAMP_AMPS_IN));
++    if (hi >= 1 && hi < count) { count = hi; rows = bankRows(count, length, spineZ, crossing); hiAmp = true; }
++  }
++  const levels = SPIKE_BANK >= 2 && !crossing && rows.placed > 0 ? Math.ceil(count / rows.placed) : 1;
++  return { ...rows, count, hiAmp, levels };
++}
++
++/** Face-adjacent links along a run's cells: consecutive along z and stacked upward (the H2 bank feeds, RUK-2976). */
++function runLinks(cells: readonly Vec3[]): Array<[Vec3, Vec3]> {
++  const at = new Map(cells.map((c) => [posKey(c), c]));
++  const links: Array<[Vec3, Vec3]> = [];
++  for (const c of cells) for (const d of [[0, 0, 1], [0, 1, 0]] as const) {
++    const b = at.get(posKey([c[0] + d[0], c[1] + d[1], c[2] + d[2]]));
++    if (b !== undefined) links.push([c, b]);
++  }
++  return links;
++}
++
+ /** Breadth-first edge counts over one tier's linked cable cells from `source`. */
+ function edgesFrom(adjacent: ReadonlyMap<string, readonly string[]>, source: Vec3): Map<string, number> {
+   const start = posKey(source);
+@@ -534,7 +589,7 @@ function tierGraph(run: Run, tree: Tree | undefined): Map<string, string[]> {
+     adjacent.set(ka, [...(adjacent.get(ka) ?? []), kb]);
+     adjacent.set(kb, [...(adjacent.get(kb) ?? []), ka]);
+   };
+-  for (let z = 0; z + 1 < run.cells.length; z++) join(run.cells[z]!, run.cells[z + 1]!);
++  for (const [a, b] of runLinks(run.cells)) join(a, b);
+   for (const [a, b] of tree?.links ?? []) join(a, b);
+   return adjacent;
+ }
+@@ -544,7 +599,7 @@ interface Sizing {
+   /** The cable of each rated run's tier, whether it is short of amps (parallel runs needed) and the runs that needs. */
+   cables: Map<number, { cable: Machine; ampsShort: boolean; runs: number; amps: number }>;
+   /** Transformer rows per bank, by stage index. */
+-  rows: Array<{ first: number; placed: number }>;
++  rows: BankRows[];
+   /** Volts each unit's packets lose inside the line (not counting the hookup's allowance), by electric unit index. */
+   unitLoss: number[];
+   /** The amps each unit counts at the volts it gets, by electric unit index. */
+@@ -638,7 +693,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly
+   const treeOf = new Map(trees.map((t) => [t.tier, t]));
+   const runOf = new Map(head.runs.map((r) => [r.tier, r]));
+   const graphs = new Map(head.runs.map((r) => [r.tier, tierGraph(r, treeOf.get(r.tier))]));
+-  const runCell = (tier: number, z: number): Vec3 => [runX(supply, tier, head.headX), 0, z];
++  const runCell = (tier: number, z: number, y = 0): Vec3 => [runX(supply, tier, head.headX), y, z];
+   // RUK-2677: a satellite's machines count at their satellite's output cell, and the satellite itself draws from the
+   // tier it hangs on; the head's banks are sized for the machines its own trees feed
+   const satOf = new Map<number, Satellite>();
+@@ -666,14 +721,18 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly
+   let cables = pick(current);
+   let result: Sizing | null = null;
+   for (let round = 0; round < MAX_SIZING_ROUNDS; round++) {
+-    const rows = current.stages.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0));
++    const rows = current.stages.map((s) => stageRows(pack, s, length, placement.spineZ, placement.headX > 0));
+     const lossPerBlock = (tier: number): number => cables.get(tier)?.cable.cable?.lossPerBlock ?? 0;
+-    // where the power enters each run: the supply run's two ends, else the outermost rows of the bank feeding it
++    // where the power enters each run: the supply run's two ends, else the outermost rows of the bank feeding it,
++    // at every level of a bank stacked high (H2, RUK-2976)
+     const sources = (tier: number): Vec3[] => {
+       if (tier === supply) return length === 1 ? [runCell(tier, 0)] : [runCell(tier, 0), runCell(tier, length - 1)];
+       const i = current.stages.findIndex((s) => s.toTier === tier);
+       const r = rows[i]!;
+-      return r.placed <= 1 ? [runCell(tier, r.first)] : [runCell(tier, r.first), runCell(tier, r.first + r.placed - 1)];
++      const zs = r.placed <= 1 ? [r.first] : [r.first, r.first + r.placed - 1];
++      const out: Vec3[] = [];
++      for (let y = 0; y < r.levels; y++) for (const z of zs) out.push(runCell(tier, z, y));
++      return out;
+     };
+     const reach = new Map(head.runs.map((r) => [r.tier, sources(r.tier).map((s) => edgesFrom(graphs.get(r.tier)!, s))]));
+     /** The cables a packet crosses from the farthest entry to `p` on `tier`'s network; undefined when not linked. */
+@@ -710,7 +769,9 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly
+     const bankBlocks = current.stages.map((s, i) => {
+       const r = rows[i]!;
+       let worst = 1;
+-      for (let z = r.first; z < r.first + r.placed; z++) worst = Math.max(worst, blocksTo(s.fromTier, runCell(s.fromTier, z)) ?? 1);
++      for (let y = 0; y < r.levels; y++) {
++        for (let z = r.first; z < r.first + r.placed; z++) worst = Math.max(worst, blocksTo(s.fromTier, runCell(s.fromTier, z, y)) ?? 1);
++      }
+       return worst;
+     });
+     const bankLoss = current.stages.map((s, i) => lossPerBlock(s.fromTier) * bankBlocks[i]!);
+@@ -749,7 +810,10 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly
+       const n = next.stages.find((x) => x.toTier === s.toTier) ?? s;
+       return { ...s, count: Math.max(s.count, n.count), ampsIn: Math.max(s.ampsIn, n.ampsIn), ampsOut: Math.max(s.ampsOut, n.ampsOut) };
+     });
+-    const sized: Stages = { ...current, stages: merged, supplyAmps: Math.max(current.supplyAmps, next.supplyAmps + satIn),
++    const bankRowsOf = merged.map((s) => stageRows(pack, s, length, placement.spineZ, placement.headX > 0));
++    const sized: Stages = { ...current,
++      stages: merged.map((s, i) => ({ ...s, layCount: bankRowsOf[i]!.count, ...(bankRowsOf[i]!.hiAmp ? { hiAmp: true } : {}) })),
++      supplyAmps: Math.max(current.supplyAmps, next.supplyAmps + satIn),
+       lossEUt: bankLossEUt(merged) + satLoss };
+     const nextCables = pick(sized);
+     const same = sized.supplyAmps === current.supplyAmps && merged.every((s, i) => s.count === current.stages[i]!.count && s.ampsIn === current.stages[i]!.ampsIn
+@@ -759,7 +823,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly
+       && [...nextCables].every(([tier, c]) => cables.get(tier)?.cable.mteId === c.cable.mteId);
+     satPrev = satAmps;
+     result = {
+-      stages: sized, cables: nextCables, rows: merged.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0)), unitLoss, unitAmps, unitBlocks,
++      stages: sized, cables: nextCables, rows: bankRowsOf, unitLoss, unitAmps, unitBlocks,
+       bankLoss, bankBlocks, supply: null,
+     };
+     current = sized;
+@@ -795,8 +859,12 @@ function supplyConsumers(pack: Pack, sizing: Sizing, supply: number, units: read
+   });
+   const top = sizing.stages.stages.findIndex((s) => s.fromTier === supply);
+   if (top !== -1) {
+-    const { first, placed } = sizing.rows[top]!;
+-    const rows = Array.from({ length: placed }, (_, j) => blocksAt([run.x, 0, first + j])).filter((b): b is number[] => b !== undefined);
++    const { first, placed, levels } = sizing.rows[top]!;
++    const rows: number[][] = [];
++    for (let y = 0; y < levels; y++) for (let j = 0; j < placed; j++) {
++      const b = blocksAt([run.x, y, first + j]);
++      if (b !== undefined) rows.push(b);
++    }
+     if (rows.length > 0) consumers.push({ amps: sizing.stages.stages[top]!.ampsIn, blocks: candidates.map((_, i) => Math.max(...rows.map((b) => b[i]!))) });
+   }
+   // RUK-2677: every satellite on the supply tier stands as its consumer, at its input cell
+@@ -833,24 +901,31 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
+         text: `No cable carries ${fmtInt(amps)} A at ${tierName(run.tier)}: run ${fmtInt(runs)} parallel ${cable.name} lines` });
+     }
+     for (const c of run.cells) grid.lay(c, cable, 'cable', cable.name);
+-    for (let z = 0; z + 1 < run.cells.length; z++) grid.links.push([run.cells[z]!, run.cells[z + 1]!]);
++    grid.links.push(...runLinks(run.cells));
+   }
+   for (const bank of head.banks) {
+     const stage = stages.stages[bank.stage]!;
+-    const transformer = pickTransformer(pack, stage.toTier);
++    const { first, placed, count, hiAmp, levels } = sizing.rows[bank.stage]!;
++    const transformer = (hiAmp ? pickHiAmpTransformer(pack, stage.toTier) : null) ?? pickTransformer(pack, stage.toTier);
+     if (transformer === null) {
+       headWarnings.add({ code: 'no_transformer', text: `No ${tierName(stage.toTier)} transformer in this export` });
+       continue;
+     }
+-    const { first, placed } = sizing.rows[bank.stage]!;
+-    if (stage.count > placed) headWarnings.add({ code: 'transformer_bank', text: `Put ${stage.count - placed} more ${transformer.name} beside the bank` });
+-    for (let j = 0; j < placed; j++) {
+-      const pos: Vec3 = [bank.x, 0, first + j];
++    // H2 (RUK-2976): a stacked row is laid only where `planHead` gave both runs a cell at its (y, z); the rest is hand work
++    const fromCells = new Set((head.runs.find((r) => r.tier === stage.fromTier)?.cells ?? []).map(posKey));
++    const toCells = new Set((head.runs.find((r) => r.tier === stage.toTier)?.cells ?? []).map(posKey));
++    let laid = 0;
++    for (let y = 0; y < levels && laid < count; y++) for (let j = 0; j < placed && laid < count; j++) {
++      const z = first + j;
++      if (y > 0 && !(fromCells.has(posKey([bank.x - 1, y, z])) && toCells.has(posKey([bank.x + 1, y, z])))) continue;
++      const pos: Vec3 = [bank.x, y, z];
+       // facing west: the front (step-down input) touches the higher run, the east face feeds the lower one
+       grid.lay(pos, transformer, 'transformer', transformer.name, WEST);
+-      if (cables.has(stage.fromTier)) grid.links.push([pos, [bank.x - 1, 0, pos[2]]]);
+-      if (cables.has(stage.toTier)) grid.links.push([pos, [bank.x + 1, 0, pos[2]]]);
++      laid++;
++      if (cables.has(stage.fromTier)) grid.links.push([pos, [bank.x - 1, y, z]]);
++      if (cables.has(stage.toTier)) grid.links.push([pos, [bank.x + 1, y, z]]);
+     }
++    if (count > laid) headWarnings.add({ code: 'transformer_bank', text: `Put ${count - laid} more ${transformer.name} beside the bank` });
+   }
+   const cells = new Map<number, number>();
+   for (const run of head.runs) {
+diff --git a/src/server/layout/layout.ts b/src/server/layout/layout.ts
+index cd99d95f5..6b340806b 100644
+--- a/src/server/layout/layout.ts
++++ b/src/server/layout/layout.ts
+@@ -30,7 +30,7 @@ import { emptyContext } from '../planner/plan.ts';
+ import { contextFromScan } from '../world/context.ts';
+ import { ENERGY_HATCH_RE, simpleClassName } from '../world/facts.ts';
+ import { RAIN_OUTAGE_SECONDS } from '../world/power.ts';
+-import { addedBlocks, attachCovers, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
++import { addedBlocks, attachCovers, packedLine, placePacked, placeUnits, replacedCasings, stackable, unitsFromPlan, type LocalBlock, type Placement, type Unit } from './arrange.ts';
+ import { farmAreas, farmBuildText, farmExtent, farmPinPos, reservedArea, type FarmArea } from './farms.ts';
+ import { feedingWarnings } from './feed-rules.ts';
+ import {
+@@ -284,7 +284,7 @@ function lineLoss(line: Omit<LocalLine, 'score'>): number {
+  * block, so its `count` joins `needed` too (RUK-2679), and only the extra beyond the one block it lays is hand work.
+  */
+ function handWork(line: Omit<LocalLine, 'score'>): { unwired: number; transformers: number } {
+-  const needed = (line.stages?.stages.reduce((n, s) => n + s.count, 0) ?? 0) + line.internal.satellites.reduce((n, s) => n + s.count, 0);
++  const needed = (line.stages?.stages.reduce((n, s) => n + (s.layCount ?? s.count), 0) ?? 0) + line.internal.satellites.reduce((n, s) => n + s.count, 0);
+   const placed = line.internal.blocks.filter((b) => b.role === 'transformer').length;
+   return { unwired: line.warnings.filter((w) => w.code === 'route_failed').length, transformers: needed - placed };
+ }
+@@ -344,6 +344,14 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+       kinds.push({ kind: CandidateKind.Stacked, westUnits: kinds[i]!.westUnits });
+     }
+   }
++  if (process.env.PROBE_PACKED !== '0' && (input.mode === 'direct' || input.mode === 'enderio') && packedLine(input.units)) {
++    const sup = input.stages?.supplyTier;
++    const tiers = new Set(input.units.filter((u) => u.electric).map((u) => (sup === undefined ? -1 : Math.min(u.tier, sup))));
++    if (tiers.size <= 1) {
++      lines.push(buildLocalAt(input, 0, false, true));
++      kinds.push({ kind: CandidateKind.Packed, westUnits: 0 });
++    }
++  }
+   const candidates: LayoutCandidate[] = lines.map((line, i) => ({ ...kinds[i]!, ...line.score }));
+   // the chosen line is the baseline; only a candidate that replaces it (Assumption 4) takes its place, the best such, earliest on a tie
+   let chosen = baseline;
+@@ -363,9 +371,9 @@ function buildLocal(input: LocalInput): { line: LocalLine; baselineLine: LocalLi
+  * `westUnits` of the units stand west of a power head in the middle of the line (`placeUnits`); 0 stands the head at the west end.
+  * `stack` lays stackable machines two high (`placeUnits`, RUK-2877).
+  */
+-function buildLocalAt(input: LocalInput, westUnits: number, stack = false): LocalLine {
++function buildLocalAt(input: LocalInput, westUnits: number, stack = false, packed = false): LocalLine {
+   const { pack, plan, parts, mode, units, stages, network } = input;
+-  const placement = placeUnits(units, {
++  const placement = packed ? placePacked(units, { headWidth: headWidthFor(stages), ...(stages === null ? {} : { supplyTier: stages.supplyTier }) }) : placeUnits(units, {
+     headWidth: headWidthFor(stages), portSpacing: PORT_SPACING[mode], ...(stages === null ? {} : { supplyTier: stages.supplyTier }), westUnits, stack,
+   });
+   const modeResult = buildMode(mode, { pack, plan, parts, placement, network });
+diff --git a/src/server/layout/power.ts b/src/server/layout/power.ts
+index 9cd005c80..50a992ac3 100644
+--- a/src/server/layout/power.ts
++++ b/src/server/layout/power.ts
+@@ -74,8 +74,12 @@ export function tierGroups(units: ReadonlyArray<{ tier: number; euPerTick: numbe
+   return [...byTier.values()].sort((a, b) => b.tier - a.tier);
+ }
+ 
+-/** A bank of `count` step-down transformers from `fromTier` to `toTier` = `fromTier − 1`. */
+-export interface Stage { fromTier: number; toTier: number; count: number; ampsIn: number; ampsOut: number }
++/**
++ * A bank of `count` step-down transformers from `fromTier` to `toTier` = `fromTier − 1`. The RUK-2976 spike adds,
++ * on the sized stages, `layCount`: the transformers the bank lays when Hi-Amps do the job (H1) — the count `count`
++ * standard ones would need is kept for amp sizing — and `hiAmp`: that the bank lays Hi-Amp Transformers.
++ */
++export interface Stage { fromTier: number; toTier: number; count: number; ampsIn: number; ampsOut: number; layCount?: number; hiAmp?: boolean }
+ /** `under`: groups above the supply tier, fed the supply voltage (the caller warns). */
+ export interface Stages { supplyTier: number; stages: Stage[] /* from the supply downwards */; supplyAmps: number; lossEUt: number; under: TierGroup[] }
+ 
+diff --git a/src/shared/types/layout.ts b/src/shared/types/layout.ts
+index 3e50bc441..c832ae1af 100644
+--- a/src/shared/types/layout.ts
++++ b/src/shared/types/layout.ts
+@@ -182,7 +182,7 @@ export interface LayoutLoss {
+  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
+  * takes the next number.
+  */
+-export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2 } as const;
++export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3 } as const;
+ export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
+ 
+ /**
+diff --git a/tests/unit/layout/layout.test.ts b/tests/unit/layout/layout.test.ts
+index 775f691c2..7fe07a717 100644
+--- a/tests/unit/layout/layout.test.ts
++++ b/tests/unit/layout/layout.test.ts
+@@ -393,9 +393,14 @@ describe('layoutLine: mixed-tier lines', () => {
+     const out = layout.warnings.filter((w) => w.code === 'route_failed' && w.text.startsWith('Could not wire')).map((w) => w.text);
+     for (const m of placed) {
+       if (m.role !== 'machine' || m.mainFacing === undefined) continue;
+-      const port = at.get(key(step(m.pos, OPPOSITE[m.facing!]!)));
+       const feed = Math.min(stepTier.get(m.stepId!)!, supply);
+-      if (port?.role !== 'cable' || tierOf(layout, port) !== feed || ((port.connections ?? 0) & (1 << m.facing!)) === 0) {
++      // GT takes energy through any face but the front (gt-mechanics §…: isInputFacing): a cable of the feed tier on such a face, linked into the machine
++      const fed = [0, 1, 2, 3, 4, 5].some((side) => {
++        if (side === m.mainFacing) return false;
++        const port = at.get(key(step(m.pos, side)));
++        return port?.role === 'cable' && tierOf(layout, port) === feed && ((port.connections ?? 0) & (1 << OPPOSITE[side]!)) !== 0;
++      });
++      if (!fed) {
+         out.push(`${m.label} at ${key(m.pos)} has no ${tierName(feed)} cable at its power input`);
+       }
+     }
