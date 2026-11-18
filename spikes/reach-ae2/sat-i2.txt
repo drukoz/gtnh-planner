@@ -2,5 +2,5 @@
 kept=packed total=74 lossEUt=966
 bench: total=82 lossEUt=1062 weak=[1] unpowered=0 size=5x3x19
 satelliteBlocks=0 satelliteSteps=[]
-transformerBlocks=5 depsSatellites=undefined
+transformerBlocks=5
 satelliteCells=

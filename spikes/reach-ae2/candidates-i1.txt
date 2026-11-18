@@ -1,6 +1,5 @@
 # AE2 packed candidates, reach variant i1
 
-
 ## loss-10 ae2  chosen=3(stacked) baseline=0(west) rejected=undefined
 | i | kind | w | unwired | unreach | hand | unpow | total | lossEUt | volume |
 | 0 | west | 0 | 0 | 0 | 0 | 0 | 40 | 248 | 70 |
@@ -52,3 +51,4 @@ bench: total=232 lossEUt=2052 weak=[] unpowered=0 size=5x4x44
 | 5 | stacked | 4 | 0 | 0 | 0 | 4 | 29 | 119 | 80 |
 | 6 | packed | 0 | 0 | 0 | 0 | 4 | 19 | 74 | 54 |
 bench: total=38 lossEUt=587 weak=[] unpowered=4 size=6x3x3
+
