@@ -5,13 +5,14 @@
 // furnace) → machines → structures → the optional crop table; then the electric furnace and microwave recipes are
 // derived from the smelting list, the supply recipes of the free inputs from the rock breaker's display recipes, the
 // pumps and the compressor (supply.ts), the Auto Workbench's GGFab single-use variants of tool recipes from the crafting
-// recipes (bench-tools.ts), and the indices built; then GT materials and ore materials; and last the nine
-// worldgen files, because capability yields need the items' materials. Files are never read into one string;
-// `readJsonl` streams them line by line. Structural damage (bad gzip, bad JSON, a line count that differs from the
-// manifest, an index that points nowhere) fails with the file and line instead of returning a half-loaded pack;
-// recoverable oddities become `pack.warnings`, and so does an item the crop table names but the loader cannot resolve
-// (crops.ts). The crop table's inline items join `pack.items` after every item line, as crop items that no wildcard,
-// ore name, circuit stand-in or recipe of the export ever sees (crops.ts).
+// recipes (bench-tools.ts), and the indices built; then GT materials and ore materials; then the nine worldgen
+// files, because capability yields need the items' materials; and last the optional biome table. Files are never
+// read into one string; `readJsonl` streams them line by line. Structural damage (bad gzip, bad JSON, a line count
+// that differs from the manifest, an index that points nowhere) fails with the file and line instead of returning a
+// half-loaded pack; recoverable oddities become `pack.warnings`, and so does an item the crop table names but the
+// loader cannot resolve (crops.ts) or a biome line whose fields are not the raw BiomeGenBase fields. The crop
+// table's inline items join `pack.items` after every item line, as crop items that no wildcard, ore name, circuit
+// stand-in or recipe of the export ever sees (crops.ts).
 
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -21,11 +22,11 @@ import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { gtMachineId, machineIdOfLegacy, makeId } from '../../shared/ids.ts';
 import { fluidKey, itemKey, type FluidKey, type ItemKey } from '../../shared/keys.ts';
-import type { Fluid, Item, Pack, PackManifest, RecipeMapInfo } from '../../shared/types/pack.ts';
+import type { BiomeInfo, Fluid, Item, Pack, PackManifest, RecipeMapInfo } from '../../shared/types/pack.ts';
 import { cropTable } from './crops.ts';
 import {
   EXPORT_FILES, EXPORT_FORMAT, EXPORT_FORMAT_V1, OPTIONAL_EXPORT_FILES,
-  type ExportFileKey, type ExportLineTypes, type ItemLine, type ManifestFile, type RecipeMapLine,
+  type BiomeLine, type ExportFileKey, type ExportLineTypes, type ItemLine, type ManifestFile, type RecipeMapLine,
 } from './format.ts';
 import { buildIndices, buildMachinesByMap, deriveFurnaceRecipes } from './indices.ts';
 import { PSEUDO_MACHINE_ENTRIES, toMachine, toStructure } from './machines.ts';
@@ -634,6 +635,41 @@ async function readWorldgen({ src, pack, ctx }: LoadState, nameOfKey: ReadonlyMa
   pack.worldgen = buildWorldgen(input, ctx, { materials: pack.materials, nameOfKey, items: pack.items });
 }
 
+/** Why a biome line is not one (format.ts's "Biome table" rule), or null when it is. */
+function biomeProblem(line: BiomeLine): string | null {
+  const { id, name, rainfall, snow, lightning } = line as unknown as Record<string, unknown>;
+  if (typeof id !== 'number' || !Number.isInteger(id) || id < 0) return `${JSON.stringify(id)} is not a biome id, which is an integer >= 0`;
+  if (typeof name !== 'string') return 'the name is not a string';
+  if (typeof rainfall !== 'number' || !Number.isFinite(rainfall)) return 'the rainfall is not a finite number';
+  if (typeof snow !== 'boolean') return 'snow is not a boolean';
+  if (typeof lightning !== 'boolean') return 'lightning is not a boolean';
+  return null;
+}
+
+/**
+ * The biome table becomes `pack.biomes`, sorted by id, when the export has one: a line whose fields are not the raw
+ * BiomeGenBase fields, and a second line of an id already read, are skipped with a warning. `rain` is GT's own rain
+ * gate, `rainfall > 0 && (lightning || snow)`, so every biome GT never weather-checks has it false (gt-mechanics §3.4a).
+ */
+async function readBiomes({ src, pack, ctx }: LoadState): Promise<void> {
+  if (!src.has('biomes')) return;
+  const biomes = new Map<number, BiomeInfo>();
+  await eachLine(src, 'biomes', (line, n) => {
+    const problem = biomeProblem(line);
+    if (problem !== null) {
+      ctx.warn(`biome line ${n}: ${problem}, the line is skipped`);
+      return;
+    }
+    const { id, name, rainfall, snow, lightning } = line;
+    if (biomes.has(id)) {
+      ctx.warn(`biome ${id}: duplicate, the first one wins`);
+      return;
+    }
+    biomes.set(id, { id, name: name === '' ? `Biome ${id}` : name, rain: rainfall > 0 && (lightning || snow) });
+  });
+  pack.biomes = [...biomes.values()].sort((a, b) => a.id - b.id);
+}
+
 /** Reads `src` into a Pack, file by file in the order of the header comment. */
 export async function buildPack(src: ExportSource): Promise<Pack> {
   const state = newLoadState(src);
@@ -652,6 +688,7 @@ export async function buildPack(src: ExportSource): Promise<Pack> {
   setIndices(state);
   const nameOfKey = await readMaterials(state);
   await readWorldgen(state, nameOfKey);
+  await readBiomes(state);
   return state.pack;
 }
 
