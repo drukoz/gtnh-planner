@@ -60,18 +60,36 @@ a machine, the design-goal-3 direction.
 
 ## Timing (step 7)
 
-`runBench()` median of 3 (whole 132-row bench). Largest mixed line = `mixed-10` (10 machines, one tier): O3 lays
-no reorder there (`laid` stays 6 = M3), so the O3 cost is bounded and **concentrated on the lines where swaps
-actually improve** (mixed-01/02/07/18), not paid everywhere.
+`runBench()` median of 3 (whole 132-row bench). The per-size loss columns are the recorded probe's `layoutLine`
+**best-of-3** (loss-10..80 × `direct`/`ae2`, from `time-*.json`); `laid` = `search.candidates.length` (the
+candidates the search keeps), `ms` the best of 3 lays. Largest mixed line = `mixed-10` (10 machines, one tier).
 
-| variant | runBench median | mixed-10 lines laid | mixed-10 layoutLine (direct/ae2 ms) | loss-80 ae2 (laid/ms) |
-| --- | --: | --: | --: | --: |
-| M3 | 2339 ms | 6 | 16.9 / 19.8 | 12 / 531 |
-| O1 | 2685 ms | 7 | 18.2 / 21.8 | 13 / 574 |
-| O2 | 2563 ms | 7 | 21.2 / 25.1 | 13 / 560 |
-| O3 B=8 | 3116 ms | 6 | 22.8 / 28.0 | 12 / 583 |
-| O3 B=16 | 3434 ms | 6 | 25.8 / 32.5 | 12 / 604 |
-| O3 B=32 | 4092 ms | 6 | 25.3 / 30.7 | 12 / 588 |
+| variant | runBench median | mixed-10 lines laid | mixed-10 layoutLine (direct/ae2 ms) |
+| --- | --: | --: | --: |
+| M3 | 2339 ms | 6 | 16.9 / 19.8 |
+| O1 | 2685 ms | 7 | 18.2 / 21.8 |
+| O2 | 2563 ms | 7 | 21.2 / 25.1 |
+| O3 B=8 | 3116 ms | 6 | 22.8 / 28.0 |
+| O3 B=16 | 3434 ms | 6 | 25.8 / 32.5 |
+| O3 B=32 | 4092 ms | 6 | 25.3 / 30.7 |
+
+`lossLine(n, mode)` — **lines laid / `layoutLine` ms**, M3 against each variant, per size (d = direct):
+
+| variant | 10 d | 10 ae2 | 20 d | 20 ae2 | 40 d | 40 ae2 | 60 d | 60 ae2 | 80 d | 80 ae2 |
+| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| M3 | 7 / 32.4 | 8 / 50.8 | 11 / 52.0 | 12 / 89.6 | 11 / 78.4 | 12 / 202.2 | 11 / 117.3 | 12 / 335.5 | 11 / 187.5 | 12 / 531.3 |
+| O1 | 8 / 36.2 | 9 / 52.1 | 12 / 52.2 | 13 / 87.4 | 12 / 87.7 | 13 / 206.0 | 12 / 126.5 | 13 / 361.8 | 12 / 197.1 | 13 / 522.3 |
+| O2 | 8 / 34.6 | 9 / 54.0 | 12 / 53.5 | 13 / 89.9 | 12 / 87.7 | 13 / 210.2 | 12 / 127.0 | 13 / 354.0 | 12 / 199.7 | 13 / 550.7 |
+| O3 B=8 | 7 / 37.8 | 8 / 57.5 | 11 / 60.2 | 12 / 97.7 | 11 / 99.1 | 12 / 228.7 | 11 / 178.6 | 12 / 522.2 | 11 / 285.8 | 12 / 825.8 |
+| O3 B=16 | 7 / 43.4 | 8 / 64.3 | 11 / 63.4 | 12 / 103.1 | 11 / 120.1 | 12 / 276.6 | 11 / 248.6 | 12 / 749.9 | 11 / 412.2 | 12 / 1144.5 |
+| O3 B=32 | 7 / 54.5 | 8 / 78.3 | 11 / 78.8 | 12 / 122.3 | 11 / 166.8 | 12 / 358.7 | 11 / 407.1 | 12 / 1158.9 | 11 / 650.4 | 12 / 1844.4 |
+
+O1/O2 add exactly one reorder candidate on every line (`laid` +1) and cost a few ms. On the loss lines all
+machines are identical, so O3 keeps **no** swap (`laid` = M3, mixed-10 `laid` = 6) — no reorder is *retained*.
+The added ms is the pair-swap search laying and scoring swap candidates it then discards, and that cost is **not**
+bounded: it grows with line size and B. `loss-80 ae2` goes 531 ms (M3) → 826 (B=8) → 1144 (B=16) → **1844 ms**
+(B=32). This is the large-line performance cost the recommendation flags — the reorder search is paid on every
+line it explores, not only where a swap wins, so a merge needs a size/effort bound on the search.
 
 ## Whole-suite run — best variant (O3 B=8), 6 failures
 
@@ -106,9 +124,9 @@ Failures 2–4 are the frozen expectations of a spike's new candidate kind / the
   biome lays none) passes with `o3.patch` applied. On changed rows the `roof` column drops or holds
   (`mixed-01` 5→3, `mixed-02` 16→13, `mixed-07` 8→7); it grows only on the two regressed `fluid-09` rows
   (9→10, 10→11), where the chosen line itself got 2 blocks longer — more line, more roof, still full cover.
-- **No new warning code** — across all 105 changed rows in the five `compare-*.md` files, `codes Δ` adds no code
-  anywhere; its single non-empty entry is `-machine_unreachable` on `mixed-18 ae2` at B=32, a code *removed* by
-  the reachability win. The only warning-related test failures are a changed *count* inside frozen text
+- **No new warning code** — across all 106 changed rows in the five `compare-*.md` files (16+2+30+29+29), `codes Δ`
+  adds no code anywhere; of those 106, 105 are `-` and the single non-empty entry is `-machine_unreachable` on
+  `mixed-18 ae2` at B=32, a code *removed* by the reachability win. The only warning-related test failures are a changed *count* inside frozen text
   (`mixed-02 ae2` now warns "1 machine" where `AE2_TEXT` says "2 machines"), not a new code.
 - **No machine front on its output side** — `m3-verify` promise 3 (front ≠ output side on >100 GT singleblocks,
   no cable-tier contacts, no starved machines) passes with `o3.patch` applied.
