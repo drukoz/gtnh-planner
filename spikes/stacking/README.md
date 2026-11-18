@@ -346,3 +346,33 @@ perl -e 'alarm shift; exec @ARGV' 900 npm test
 npx tsc -b
 git checkout -- src
 ```
+
+## Addendum (CTO, RUK-2877): stacking as a scored candidate
+
+`candidate-probe.patch` (apply it alone on `fdc97a867`'s successor `f3a9b3edf`; it contains this spike's
+`change.patch`) measures stacking the way M3 adopts it: as an extra candidate in `buildLocal`, never forced.
+
+- `placeUnits` takes `stack?: boolean`; `buildLocal` lays a stacked twin of every head candidate it laid
+  (`CandidateKind` 2 in the probe), so `replacesBaseline` picks one only where it wins.
+- **Judged by the in-line score alone, 14 rows get worse in the final layout** (`loss-10 direct/enderio`,
+  `mixed-09/17/18/19`, `fluid-09`): the search cannot see the hookup. A stacked line is shorter but its supply landing
+  moves, so the hookup grows (`mixed-17`: hookup 17 → 21, total 50 → 54) or the final loss rises (`mixed-09 routed`:
+  381 → 391 EU/t).
+- **The fix: finish both finalists.** When the search keeps a line other than the baseline, `layoutLine` also
+  finishes the baseline (site, hookups, loss) and keeps the chosen line only if its final layout is no worse: no more
+  `route_failed`, and fewer unpowered machines, or as many and no longer (`lengthOf`'s `total`) and no lossier
+  (`loss.totalEUt`). In the probe, `deps.localLine` was called twice; it must be called once, for the kept line.
+
+Measured on the 132 benchmark rows (`runBench()`, median of 3 runs on this Mac):
+
+| variant | rows changed | rows worse | direct total / loss | routed | ae2 | enderio | runBench |
+|---|---:|---:|---|---|---|---|---:|
+| baseline | 0 | 0 | 1 813 / 10 724 | 2 293 / 12 244 | 2 187 / 12 244 | 1 760 / 10 724 | 638 ms |
+| finalist rule only | 0 | 0 | identical | identical | identical | identical | 646 ms |
+| stacked candidate, in-line score only | 66 | 14 | 1 810 / 10 476 | 2 245 / 11 707 | 2 138 / 11 707 | 1 763 / 10 476 | — |
+| stacked candidate + finalist rule | 52 | **0** | 1 806 / 10 521 | 2 245 / 11 843 | 2 138 / 11 843 | 1 755 / 10 521 | 1 120 ms |
+
+With the finalist rule, footprint length drops 269 → 260 (direct), 319 → 292 (routed, ae2), 273 → 264 (enderio);
+unpowered and `routeFailed` are unchanged on every row, and no row gains or loses a warning code (all 132 rows'
+`layout.warnings` codes compared). With satellites switched off (`lossLine`'s default), the stacked candidate also powers
+machines today's rows starve (20 routed/ae2: 8 → 0; 40 routed/ae2: 22 → 10; 40 direct/enderio: 7 → 0).
