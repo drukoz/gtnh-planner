@@ -202,8 +202,12 @@ describe.each(MODES)('primitive machines in %s mode', (mode) => {
   it('roofs the line above every steam machine, whose top stays open', async () => {
     // the line is as tall as the furnace (4 blocks); the block above the steam macerator is its vent, under the roof
     const layout = await laid(mode);
-    expect(layout.buildSteps.find((s) => s.id === 'layout:roof')?.text).toBe('Roof the line over its 4-high space: GT machines left in the rain '
-      + 'can catch fire or explode, and each steam machine vents its steam through its top: keep the block above it open and roof above it');
+    // the roof goes on last, just before the test step (RUK-2877); it shelters the LV macerator, the steam machines need none
+    expect(layout.buildSteps.at(-2)?.id).toBe('layout:roof');
+    expect(layout.buildSteps.find((s) => s.id === 'layout:roof')?.text).toBe('Roof the line last, once everything under it is placed and set: '
+      + 'lay 5× Glass in one layer one block above its 4-high space, where the view marks them, to keep the rain off its machines, transformers '
+      + 'and energy hatches (GT machines left in the rain can catch fire or explode); keep the block above each steam machine open: it vents its '
+      + 'steam through its top');
   });
 
   it('sends the projector the same output side and nothing on the vent', async () => {

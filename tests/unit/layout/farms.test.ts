@@ -157,14 +157,13 @@ describe('farm areas', () => {
       nameOf: (k) => k, ...over });
     const farms = [{ stepId: 'crop', text: 'Lay out A', pin: 3 }, { stepId: 'crop', text: 'Lay out B', pin: 4 }, { stepId: 'tgs', text: 'Build C' }];
     const ok = layoutSteps(input({ farms, siteSize: [20, 7, 13] }));
-    expect(ok.map((s) => s.id)).toEqual(['layout:site', 'layout:roof', 'layout:farm:crop', 'layout:farm:crop:2', 'layout:farm:tgs',
+    expect(ok.map((s) => s.id)).toEqual(['layout:site', 'layout:farm:crop', 'layout:farm:crop:2', 'layout:farm:tgs',
       'layout:reuse:m', 'layout:test']);
     expect(ok.filter((s) => s.id.startsWith('layout:farm:')).map((s) => [s.kind, s.pin, s.text]))
       .toEqual([['place', 3, 'Lay out A'], ['place', 4, 'Lay out B'], ['place', undefined, 'Build C']]);
     // the clear step names the box the site search found clear, the line's and its farm areas' (the site pin stays in
-    // the middle of the line's own box: the final review's T8-a); the roof stays the line's own
+    // the middle of the line's own box: the final review's T8-a); no roof blocks in the input, so no roof step (RUK-2877)
     expect(ok[0]!.text).toBe('Clear a 20×13 spot for the line and its farm areas (7 high) and keep a 1-block path around it');
-    expect(ok[1]!.text).toBe('Roof the line: GT machines left in the rain can catch fire or explode');
     // with pins, from the line at its pin to the farm areas at theirs
     const site = { n: 1, dim: 0, pos: [3, 64, 2] as Vec3, kind: 'site' as const, text: 'Build the line here' };
     const pinned = farms.map((f, i) => ({ ...f, pin: 3 + i }));
