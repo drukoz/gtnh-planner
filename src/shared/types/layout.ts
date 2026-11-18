@@ -182,7 +182,7 @@ export interface LayoutLoss {
  * Which kind of line a layout search candidate is (RUK-2571). The numbers are stable: never renumber one; a new kind
  * takes the next number.
  */
-export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3, PackedOpen: 4 } as const;
+export const CandidateKind = { WestHead: 0, MiddleHead: 1, Stacked: 2, Packed: 3, PackedOpen: 4, Reordered: 5 } as const;
 export type CandidateKind = (typeof CandidateKind)[keyof typeof CandidateKind];
 
 /**
@@ -203,7 +203,9 @@ export interface LineScore {
  * units west of it) laid with single-block machines stacked two high (RUK-2877). A `Packed` candidate is the line laid
  * by `placePacked` with the power head at the west end (`westUnits` 0), in direct, EnderIO and AE2 (RUK-2877). A
  * `PackedOpen` candidate is AE2's packed line laid open (`placePacked` with `open`, spike SP-I, RUK-3016), right after
- * its `Packed` one: the interfaces stand on the box's outer faces, so no machine is walled in.
+ * its `Packed` one: the interfaces stand on the box's outer faces, so no machine is walled in. A `Reordered` candidate
+ * (spike SP-M, RUK-3058) is the best line laid again with its machines reordered within a feed tier, with the same
+ * `westUnits`, `stack` and `packed` as the line it was reordered from.
  */
 export interface LayoutCandidate extends LineScore { kind: CandidateKind; westUnits: number }
 

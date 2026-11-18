@@ -53,8 +53,8 @@ describe('unreachableWarning (RUK-3028)', () => {
 });
 
 describe('layoutLine machine_unreachable (RUK-3028)', () => {
-  const AE2_TEXT = '2 machines are closed in by the blocks around them, so you cannot reach them once the line is built: '
-    + '2× Electric Blast Furnace. Set up each one (circuit, covers, wrench) before you place the blocks beside it.';
+  const AE2_TEXT = '1 machine is closed in by the blocks around it, so you cannot reach it once the line is built: '
+    + '1× Electric Blast Furnace. Set up each one (circuit, covers, wrench) before you place the blocks beside it.';
 
   it('warns once for mixed-02 in AE2, pinned at the first shut-in controller', async () => {
     const line = benchLines().find((l) => l.name === 'mixed-02')!;
@@ -62,8 +62,8 @@ describe('layoutLine machine_unreachable (RUK-3028)', () => {
     const mu = layout.warnings.filter((w) => w.code === 'machine_unreachable');
     expect(mu).toHaveLength(1);
     expect(mu[0]!.text).toBe(AE2_TEXT);
-    // the first shut-in controller's world position: the warning is pinned there
-    expect(layout.pins.some((p) => p.kind === 'warning' && p.text === AE2_TEXT && p.pos[0] === 34 && p.pos[1] === 64 && p.pos[2] === 19)).toBe(true);
+    // the reordered line shuts in one controller where M3's line shut in two; the warning is pinned at its world position
+    expect(layout.pins.some((p) => p.kind === 'warning' && p.text === AE2_TEXT && p.pos[0] === 35 && p.pos[1] === 64 && p.pos[2] === 21)).toBe(true);
   }, 30_000);
 
   it('says nothing for mixed-02 in direct', async () => {

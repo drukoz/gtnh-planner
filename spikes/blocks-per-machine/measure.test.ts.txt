@@ -1,0 +1,53 @@
+// SP-N (RUK-3059) measurement probe: lays every benchmark line in all four logistics modes, plus the 60- and
+// 80-machine loss lines, and writes one row per layout to the file named by `BPM_OUT` (default `/tmp/bpm-rows.txt`).
+// It asserts nothing: it measures. Temporary by design — it is kept as
+// `spikes/blocks-per-machine/measure.test.ts.txt` and never committed as a `.test.ts`.
+
+import { describe, it, expect } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { layoutLine } from '../../../src/server/layout/layout.ts';
+import type { Layout } from '../../../src/shared/types/layout.ts';
+import type { LogisticsMode, Plan } from '../../../src/shared/types/plan.ts';
+import { layoutPack, makeProject } from '../../helpers/layout-fixtures.ts';
+import { benchLines, lengthOf } from '../../helpers/layout-bench.ts';
+import { lossLine } from '../../helpers/power-loss.ts';
+
+const MODES: readonly LogisticsMode[] = ['direct', 'routed', 'ae2', 'enderio'];
+
+const OUT = process.env.BPM_OUT ?? '/tmp/bpm-rows.txt';
+
+const HEADER = '# name\tmode\tmachines\tkind\ttotal\tcable\tpipe\tiface\tchip\ttransformer\tchest\troof\thookup\t'
+  + 'lossEUt\trouteFailed\tunpowered\tunreachable\tweakTiers';
+
+/** Machines of a plan: the sum of its steps' `count` (a multiblock is one machine, whatever it costs in blocks). */
+const machinesOf = (plan: Plan): number => plan.steps.reduce((acc, s) => acc + s.count, 0);
+
+/** The chosen candidate's kind (`CandidateKind`), -1 when the layout carries no search. */
+const kindOf = (layout: Layout): number => layout.search?.candidates[layout.search.chosen]?.kind ?? -1;
+
+const row = (name: string, layout: Layout, machines: number): string => {
+  const m = lengthOf(layout);
+  return [name, m.mode, machines, kindOf(layout), m.total, m.cable, m.pipe, m.iface, m.chip, m.transformer, m.chest,
+    m.roof, m.hookup, m.lossEUt, m.routeFailed, m.unpowered, m.unreachable,
+    m.weakTiers.length === 0 ? '-' : m.weakTiers.join(',')].join('\t');
+};
+
+describe('SP-N blocks-per-machine probe', () => {
+  it('lays the 33 benchmark lines in 4 modes and the 60/80-machine loss lines, and writes 140 rows', async () => {
+    const rows: string[] = [HEADER];
+    for (const line of benchLines()) {
+      for (const mode of MODES) {
+        const layout = await layoutLine(layoutPack(), line.plan, line.scan(mode), makeProject({ logistics: mode }), line.deps);
+        rows.push(row(line.name, layout, machinesOf(line.plan)));
+      }
+    }
+    for (const n of [60, 80]) {
+      for (const mode of MODES) {
+        const { layout, plan } = await lossLine(n, mode);
+        rows.push(row(`loss-${n}`, layout, machinesOf(plan)));
+      }
+    }
+    writeFileSync(OUT, `${rows.join('\n')}\n`, 'utf8');
+    expect(rows.length).toBe(141);
+  }, 600_000);
+});

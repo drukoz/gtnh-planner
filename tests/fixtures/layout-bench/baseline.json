@@ -583,20 +583,20 @@
     "name": "mixed-01",
     "mode": "direct",
     "size": [
-      7,
+      5,
       6,
       7
     ],
-    "total": 41,
-    "cable": 14,
-    "pipe": 6,
+    "total": 35,
+    "cable": 12,
+    "pipe": 4,
     "iface": 0,
     "chip": 0,
     "transformer": 0,
     "chest": 2,
-    "roof": 5,
+    "roof": 3,
     "hookup": 16,
-    "lossEUt": 387,
+    "lossEUt": 335,
     "tiers": [
       {
         "tier": 2,
@@ -673,20 +673,20 @@
     "name": "mixed-01",
     "mode": "enderio",
     "size": [
-      7,
+      5,
       6,
       7
     ],
-    "total": 41,
-    "cable": 14,
-    "pipe": 6,
+    "total": 35,
+    "cable": 12,
+    "pipe": 4,
     "iface": 0,
     "chip": 0,
     "transformer": 0,
     "chest": 2,
-    "roof": 5,
+    "roof": 3,
     "hookup": 16,
-    "lossEUt": 387,
+    "lossEUt": 335,
     "tiers": [
       {
         "tier": 2,
@@ -703,20 +703,20 @@
     "name": "mixed-02",
     "mode": "direct",
     "size": [
-      13,
+      14,
       6,
       9
     ],
-    "total": 102,
-    "cable": 59,
-    "pipe": 8,
+    "total": 95,
+    "cable": 54,
+    "pipe": 9,
     "iface": 0,
     "chip": 0,
     "transformer": 4,
     "chest": 2,
-    "roof": 16,
+    "roof": 13,
     "hookup": 19,
-    "lossEUt": 241,
+    "lossEUt": 229,
     "tiers": [
       {
         "tier": 3,
@@ -725,8 +725,8 @@
       },
       {
         "tier": 2,
-        "worstBlocks": 21,
-        "worstVolts": 107
+        "worstBlocks": 22,
+        "worstVolts": 106
       },
       {
         "tier": 1,
@@ -743,20 +743,20 @@
     "name": "mixed-02",
     "mode": "routed",
     "size": [
-      14,
+      15,
       6,
       9
     ],
-    "total": 110,
-    "cable": 61,
-    "pipe": 2,
+    "total": 102,
+    "cable": 55,
+    "pipe": 3,
     "iface": 0,
     "chip": 10,
     "transformer": 4,
     "chest": 2,
-    "roof": 18,
+    "roof": 15,
     "hookup": 19,
-    "lossEUt": 246,
+    "lossEUt": 232,
     "tiers": [
       {
         "tier": 3,
@@ -765,8 +765,8 @@
       },
       {
         "tier": 2,
-        "worstBlocks": 22,
-        "worstVolts": 106
+        "worstBlocks": 21,
+        "worstVolts": 107
       },
       {
         "tier": 1,
@@ -783,60 +783,20 @@
     "name": "mixed-02",
     "mode": "ae2",
     "size": [
-      14,
+      15,
       6,
       9
     ],
-    "total": 108,
-    "cable": 61,
-    "pipe": 1,
+    "total": 99,
+    "cable": 55,
+    "pipe": 2,
     "iface": 8,
     "chip": 0,
     "transformer": 4,
     "chest": 0,
-    "roof": 19,
+    "roof": 15,
     "hookup": 19,
-    "lossEUt": 246,
-    "tiers": [
-      {
-        "tier": 3,
-        "worstBlocks": 2,
-        "worstVolts": 510
-      },
-      {
-        "tier": 2,
-        "worstBlocks": 22,
-        "worstVolts": 106
-      },
-      {
-        "tier": 1,
-        "worstBlocks": 5,
-        "worstVolts": 27
-      }
-    ],
-    "weakTiers": [],
-    "routeFailed": 0,
-    "unpowered": 0,
-    "unreachable": 2
-  },
-  {
-    "name": "mixed-02",
-    "mode": "enderio",
-    "size": [
-      13,
-      6,
-      9
-    ],
-    "total": 102,
-    "cable": 59,
-    "pipe": 8,
-    "iface": 0,
-    "chip": 0,
-    "transformer": 4,
-    "chest": 2,
-    "roof": 16,
-    "hookup": 19,
-    "lossEUt": 241,
+    "lossEUt": 232,
     "tiers": [
       {
         "tier": 3,
@@ -847,6 +807,46 @@
         "tier": 2,
         "worstBlocks": 21,
         "worstVolts": 107
+      },
+      {
+        "tier": 1,
+        "worstBlocks": 5,
+        "worstVolts": 27
+      }
+    ],
+    "weakTiers": [],
+    "routeFailed": 0,
+    "unpowered": 0,
+    "unreachable": 1
+  },
+  {
+    "name": "mixed-02",
+    "mode": "enderio",
+    "size": [
+      14,
+      6,
+      9
+    ],
+    "total": 95,
+    "cable": 54,
+    "pipe": 9,
+    "iface": 0,
+    "chip": 0,
+    "transformer": 4,
+    "chest": 2,
+    "roof": 13,
+    "hookup": 19,
+    "lossEUt": 229,
+    "tiers": [
+      {
+        "tier": 3,
+        "worstBlocks": 2,
+        "worstVolts": 510
+      },
+      {
+        "tier": 2,
+        "worstBlocks": 22,
+        "worstVolts": 106
       },
       {
         "tier": 1,
@@ -876,7 +876,7 @@
     "chest": 2,
     "roof": 7,
     "hookup": 15,
-    "lossEUt": 192,
+    "lossEUt": 191,
     "tiers": [
       {
         "tier": 3,
@@ -911,7 +911,7 @@
     "chest": 2,
     "roof": 6,
     "hookup": 15,
-    "lossEUt": 196,
+    "lossEUt": 195,
     "tiers": [
       {
         "tier": 3,
@@ -946,7 +946,7 @@
     "chest": 0,
     "roof": 7,
     "hookup": 15,
-    "lossEUt": 196,
+    "lossEUt": 195,
     "tiers": [
       {
         "tier": 3,
@@ -981,7 +981,7 @@
     "chest": 2,
     "roof": 7,
     "hookup": 15,
-    "lossEUt": 192,
+    "lossEUt": 191,
     "tiers": [
       {
         "tier": 3,
@@ -1423,20 +1423,20 @@
     "name": "mixed-07",
     "mode": "direct",
     "size": [
-      10,
+      9,
       6,
       7
     ],
-    "total": 70,
+    "total": 68,
     "cable": 34,
-    "pipe": 8,
+    "pipe": 7,
     "iface": 0,
     "chip": 0,
     "transformer": 1,
     "chest": 2,
-    "roof": 8,
+    "roof": 7,
     "hookup": 20,
-    "lossEUt": 245,
+    "lossEUt": 237,
     "tiers": [
       {
         "tier": 2,
@@ -1458,20 +1458,20 @@
     "name": "mixed-07",
     "mode": "routed",
     "size": [
-      10,
+      9,
       6,
       7
     ],
     "total": 73,
-    "cable": 34,
-    "pipe": 3,
+    "cable": 35,
+    "pipe": 2,
     "iface": 0,
     "chip": 8,
     "transformer": 1,
     "chest": 2,
     "roof": 8,
     "hookup": 20,
-    "lossEUt": 245,
+    "lossEUt": 239,
     "tiers": [
       {
         "tier": 2,
@@ -1528,20 +1528,20 @@
     "name": "mixed-07",
     "mode": "enderio",
     "size": [
-      10,
+      9,
       6,
       7
     ],
-    "total": 70,
+    "total": 68,
     "cable": 34,
-    "pipe": 8,
+    "pipe": 7,
     "iface": 0,
     "chip": 0,
     "transformer": 1,
     "chest": 2,
-    "roof": 8,
+    "roof": 7,
     "hookup": 20,
-    "lossEUt": 245,
+    "lossEUt": 237,
     "tiers": [
       {
         "tier": 2,
@@ -1736,7 +1736,7 @@
     "chest": 2,
     "roof": 4,
     "hookup": 17,
-    "lossEUt": 361,
+    "lossEUt": 358,
     "tiers": [
       {
         "tier": 2,
@@ -1796,7 +1796,7 @@
     "chest": 0,
     "roof": 4,
     "hookup": 19,
-    "lossEUt": 362,
+    "lossEUt": 359,
     "tiers": [
       {
         "tier": 2,
@@ -1826,7 +1826,7 @@
     "chest": 2,
     "roof": 4,
     "hookup": 17,
-    "lossEUt": 361,
+    "lossEUt": 358,
     "tiers": [
       {
         "tier": 2,
@@ -2351,7 +2351,7 @@
     "chest": 2,
     "roof": 11,
     "hookup": 19,
-    "lossEUt": 109,
+    "lossEUt": 107,
     "tiers": [
       {
         "tier": 2,
@@ -2486,7 +2486,7 @@
     "chest": 2,
     "roof": 7,
     "hookup": 17,
-    "lossEUt": 297,
+    "lossEUt": 277,
     "tiers": [
       {
         "tier": 2,
@@ -2516,7 +2516,7 @@
     "chest": 0,
     "roof": 5,
     "hookup": 19,
-    "lossEUt": 283,
+    "lossEUt": 275,
     "tiers": [
       {
         "tier": 2,
@@ -2891,7 +2891,7 @@
     "chest": 2,
     "roof": 9,
     "hookup": 21,
-    "lossEUt": 339,
+    "lossEUt": 335,
     "tiers": [
       {
         "tier": 2,
@@ -2926,7 +2926,7 @@
     "chest": 0,
     "roof": 10,
     "hookup": 21,
-    "lossEUt": 339,
+    "lossEUt": 335,
     "tiers": [
       {
         "tier": 2,
@@ -3047,16 +3047,16 @@
       6,
       9
     ],
-    "total": 58,
-    "cable": 23,
-    "pipe": 2,
+    "total": 56,
+    "cable": 22,
+    "pipe": 3,
     "iface": 8,
     "chip": 0,
     "transformer": 0,
     "chest": 0,
-    "roof": 9,
+    "roof": 7,
     "hookup": 16,
-    "lossEUt": 477,
+    "lossEUt": 453,
     "tiers": [
       {
         "tier": 2,
@@ -3067,7 +3067,7 @@
     "weakTiers": [],
     "routeFailed": 0,
     "unpowered": 2,
-    "unreachable": 2
+    "unreachable": 1
   },
   {
     "name": "mixed-18",

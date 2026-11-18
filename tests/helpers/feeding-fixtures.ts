@@ -842,14 +842,31 @@ function bigPlan(steps: number): { pack: Pack; plan: Plan } {
 }
 
 /**
- * A line of at least 1,200 blocks laid out in `mode` (Task 11's timing case): `bigPlan`'s chain grown one step at a time
- * until `layFeed(pack, plan, mode)` places at least 1,200 blocks.
+ * How many `bigPlan` steps lay at least `BIG_LINE_BLOCKS` blocks in each mode: the smallest such count, found by laying
+ * the chain one step longer at a time (24 / 18 / 24 / 19 steps lay 1315 / 1202 / 1315 / 1234 blocks, RUK-3057). Pinned
+ * so `bigLine` lays one line, not every chain up to it; when a layout change moves a mode under `BIG_LINE_BLOCKS`,
+ * `bigLine` says so and the count is raised here.
  */
-export async function bigLine(mode: LogisticsMode): Promise<{ pack: Pack; plan: Plan; layout: Layout }> {
-  for (let steps = 1; steps <= 200; steps++) {
-    const { pack, plan } = bigPlan(steps);
-    const layout = await layFeed(pack, plan, mode);
-    if (layout.blocks.length >= BIG_LINE_BLOCKS) return { pack, plan, layout };
+const BIG_LINE_STEPS: Record<LogisticsMode, number> = { direct: 24, routed: 18, enderio: 24, ae2: 19 };
+const bigLines = new Map<LogisticsMode, Promise<{ pack: Pack; plan: Plan; layout: Layout }>>();
+
+/**
+ * A line of at least 1,200 blocks laid out in `mode` (Task 11's timing case): `bigPlan`'s chain of
+ * `BIG_LINE_STEPS[mode]` steps, laid once per mode per test file and shared by every caller (nothing mutates it).
+ */
+export function bigLine(mode: LogisticsMode): Promise<{ pack: Pack; plan: Plan; layout: Layout }> {
+  let line = bigLines.get(mode);
+  if (line === undefined) {
+    line = (async () => {
+      const steps = BIG_LINE_STEPS[mode];
+      const { pack, plan } = bigPlan(steps);
+      const layout = await layFeed(pack, plan, mode);
+      if (layout.blocks.length < BIG_LINE_BLOCKS) {
+        throw new Error(`a chain of ${steps} steps lays ${layout.blocks.length} blocks in ${mode} mode, fewer than ${BIG_LINE_BLOCKS}: raise BIG_LINE_STEPS.${mode}`);
+      }
+      return { pack, plan, layout };
+    })();
+    bigLines.set(mode, line);
   }
-  throw new Error(`a chain of 200 steps lays fewer than ${BIG_LINE_BLOCKS} blocks in ${mode} mode`);
+  return line;
 }
