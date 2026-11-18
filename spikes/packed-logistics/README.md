@@ -13,7 +13,8 @@ switch) and applies to a clean tree on its own. `src/` in the committed tree is 
 
 **Promote.** Over the 14 qualifying rows (7 lines × `direct` + `enderio`) the laid packed logistics cut total
 block count **695 → 526 (−24.3%)** — `loss-40` alone goes 117 → 55 (`direct`) and 131 → 59 (`enderio`). Every row
-connects with **zero connection offenders and zero tier contacts**, and no row gains a logistics warning code. Three
+connects with **zero connection offenders and zero tier contacts**, and no row gains a warning code except
+`transformer_bank` on `loss-10` — a power code the packed lane brings, explained under "What the spike found". Three
 conditions carry over from the spike:
 
 1. **The logistics port must sit on the box's face.** A logistics hookup goes *round* the line's box and never enters
@@ -30,10 +31,11 @@ conditions carry over from the spike:
 ## What was measured
 
 A temporary harness (`tests/unit/layout/tmp-spike.test.ts`, not committed) lays all 33 `benchLines()` lines in
-`direct` and `enderio` through `layoutLine` — 66 rows — with `lengthOf(layout)` per row (cable + pipe + chest +
-hookup blocks). BEFORE is the SP-E patch only (`SPIKE_PACKED` unset: normal placement, the modes' own logistics);
-AFTER is `SPIKE_PACKED=1`: the packed placement with the lanes laid. A row qualifies when `packedLine(placement.units)`
-holds and all its electric units share one feed tier (`Math.min(u.tier, stages.supplyTier)`). 14 rows qualify:
+`direct` and `enderio` through `layoutLine` — 66 rows — with `lengthOf(layout)` per row (`total` = cable + pipe +
+interface + chip + hookup blocks; chest and transformer are reported alongside, never counted). BEFORE is the SP-E
+patch only (`SPIKE_PACKED` unset: normal placement, the modes' own logistics); AFTER is `SPIKE_PACKED=1`: the packed
+placement with the lanes laid. A row qualifies when `packedLine(placement.units)` holds and all its electric units
+share one feed tier (`Math.min(u.tier, stages.supplyTier)`). 14 rows qualify:
 
 `loss-10, loss-20, loss-40, mixed-05, mixed-09, mixed-13, mixed-14` — in `direct` and `enderio`
 
@@ -66,9 +68,72 @@ Each AFTER row is checked three ways, all **0 on every qualifying row**:
 | mixed-14 | direct | 31 → 31 | 10 → 5 | 4 → 7 | 2 → 2 | 17 → 19 | 5x1x5 → 5x2x3 |
 | mixed-14 | enderio | 31 → 31 | 10 → 5 | 4 → 7 | 2 → 2 | 17 → 19 | 5x1x5 → 5x2x3 |
 
-Sums over the 14 qualifying rows: **695 → 526 (−24.3%)**; over all 66 rows **3,573 → 3,404 (−4.7%)** (the other rows
-are unchanged, the gate leaving them on the committed path). Pipes rise 108 → 178 on qualifying rows — the lanes
-cover every column — while cable (the SP-E lane) and the modes' per-unit risers and long hookups fall far more.
+### Power, warnings, and the replace rule
+
+`lossEUt`, `unpowered` and `routeFailed` are mode-independent on these rows — the packed logistics touch no power
+block — so one row per line covers both modes. Replace rule: AFTER has no more `routeFailed`, and fewer `unpowered`,
+or as many with `total` and `lossEUt` both no higher.
+
+| line | lossEUt | unpowered | routeFailed | replaces BEFORE |
+|---|---|---|---|---|
+| loss-10 | 252 → 170 | 0 → 0 | 0 → 0 | yes |
+| loss-20 | 580 → 394 | 0 → 0 | 0 → 0 | yes |
+| loss-40 | 1224 → 958 | 0 → 0 | 0 → 0 | yes |
+| mixed-05 | 614 → 585 | 4 → 4 | 0 → 0 | yes |
+| mixed-09 | 361 → 362 | 3 → 3 | 0 → 0 | **NO** (total +2, lossEUt +1) |
+| mixed-13 | 106 → 93 | 0 → 0 | 0 → 0 | yes |
+| mixed-14 | 291 → 283 | 2 → 2 | 0 → 0 | yes |
+
+`mixed-09` is the only row the rule rejects, and it fails on both counts — the packed line is not a drop-in for a
+5-unit line under the rule as written (see Regressions).
+
+### Sums over the 14 qualifying rows, per mode
+
+| mode | total | cable | pipe | chest | hook |
+|---|---|---|---|---|---|
+| direct | 333 → 253 (−24.0%) | 191 → 67 | 54 → 89 | 14 → 14 | 88 → 97 |
+| enderio | 362 → 273 (−24.6%) | 191 → 67 | 54 → 89 | 14 → 14 | 117 → 117 |
+
+The columns deliberately do not add to `total`: `lengthOf` counts `cable + pipe + interface + chip + hookup`, with
+`chest` and `transformer` reported alongside (`tests/helpers/layout-bench.ts:69-83`).
+
+Combined **695 → 526 (−24.3%)**; over all 66 rows **3,573 → 3,404 (−4.7%)** (the other rows are unchanged, the gate
+leaving them on the committed path). Pipes rise 108 → 178 on qualifying rows — the lanes cover every column — while
+cable (the SP-E lane) and the modes' per-unit risers and long hookups fall far more.
+
+## The laid line: `loss-10 direct` (AFTER)
+
+The line exports at `origin 19,64,16`, `rotation 270`, so world cells are rotated; cells below are the placement's
+**local** cells, and a block's `connections` bits are the rotated (world) bits.
+`tail={"cell":[7,1,2],"inputSide":0,"outputSide":5}`,
+`spine` = `[3,1,0]…[7,1,0]`, `[7,1,1]`, `[7,1,2]`, `[7,1,2]…[3,1,2]`.
+
+First two columns (local x 3…4):
+
+```
+local 3,0,0  machine Basic Macerator   facing UP/NORTH   step s1
+local 3,0,1  cable   4x Tin Cable
+local 3,0,2  machine Basic Macerator   facing UP/SOUTH   step s1
+local 3,1,0  pipe    Tin Item Pipe
+local 3,1,1  machine Basic Macerator   facing SOUTH/NORTH step s1
+local 3,1,2  pipe    Tin Item Pipe
+local 4,0,0  machine Basic Macerator   facing UP/NORTH   step s2
+local 4,0,1  cable   4x Tin Cable
+local 4,0,2  machine Basic Macerator   facing UP/SOUTH   step s2
+local 4,1,0  pipe    Tin Item Pipe
+local 4,1,1  machine Basic Macerator   facing SOUTH/NORTH step s2
+local 4,1,2  pipe    Tin Item Pipe
+```
+
+The tail (local x ≥ `tailX` = 7):
+
+```
+local 7,1,0  pipe  Tin Item Pipe
+local 7,1,1  pipe  Tin Item Pipe        (the join)
+local 7,1,2  pipe  Tin Item Pipe        (tail cell, on the box's face)
+local 7,0,2  chest Chest (input)        (below the tail cell, tail:input)
+local 8,1,2  chest Chest (output)       (east of the tail cell, tail:output)
+```
 
 ## What the spike found
 
@@ -92,8 +157,10 @@ cover every column — while cable (the SP-E lane) and the modes' per-unit riser
 
 ## Regressions
 
-- `mixed-09` (5 units): +2 blocks — 3 short risers were cheaper than 7 lane cells. Small lines should stay unpacked
-  (the promotion gate is the packed line's own, so a 5-unit packed line is already the promoter's choice).
+- `mixed-09` (5 units): +2 blocks and lossEUt +1 (361 → 362) — the replace rule rejects this row on both counts
+  (see the table): the packed line is not a drop-in for a 5-unit line under the rule as written. 3 short risers were
+  cheaper than 7 lane cells. Small lines should stay unpacked (the promotion gate is the packed line's own, so a
+  5-unit packed line is already the promoter's choice).
 - No connection offenders, tier contacts, `no_path`, `route_failed` or unpowered regressions on any qualifying row.
 
 ## Reproducing
@@ -109,7 +176,8 @@ git checkout -- src/                                                        # dr
 
 The harness is temporary and not committed. It keeps `lengthOf` per row, the qualifying gate, the three connection
 and tier checks above, and prints the qualifying rows as a table; with `SPIKE_PACKED=1` it asserts both checks are
-empty on every qualifying row. The full suite (`npx vitest run`, 4,412 tests) passes with the prototype applied:
+empty on every qualifying row. The full suite (`npx vitest run`) passes with the prototype applied — 4,412 tests, of
+which the committed baseline is 4,411 and the 4,412th is this spike's own temporary harness:
 the packed path is env-gated (`SPIKE_PACKED=1`, `westUnits === 0`, `packedLine`, one feed tier, `direct`/`enderio`)
 and the new `Placement` fields are inert otherwise.
 
