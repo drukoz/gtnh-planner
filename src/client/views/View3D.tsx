@@ -216,6 +216,7 @@ export function candidateLabel(c: LayoutCandidate): string {
     return c.westUnits === 0 ? 'Machines stacked two high, power head at the west end'
       : `Machines stacked two high, power head in the middle, ${fmtInt(c.westUnits)} machines west of it`;
   }
+  if (c.kind === CandidateKind.Packed) return 'Machines packed three to a cable, power head at the west end';
   return 'Other layout';
 }
 

@@ -3,7 +3,7 @@
 Kind: **Program** (placement and wiring searched together; touches placement, internal routing, all four logistics
 modes, the build steps and their tests; well over 15 subtasks).
 
-Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: SP-D and SP-E measured, M3-1, M3-2 and SP-F started**, 2026-11-18. Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
+Status: **M1 done (merged `7d0eac9a0`), M2 done (merged `dab26f5f7`), M3 running: M3-1, M3-2, SP-F, M3-3, M3-4, M3-5 and M3-P1 merged; M3-P2, SP-G and SP-H started**, 2026-11-18. Phase 2 plan written from the system map, the reuse ledger, R1–R4 (RUK-2581 to RUK-2585) and
 the S1 benchmark (RUK-2580). Nothing here waits for approval: correct any assumption in a comment on PR #18.
 
 ## Assumptions (my reading of the request)
@@ -138,8 +138,9 @@ The packed shape follows Assumption 7.
 | M3-4 RUK-2946 | the direct mode lays along `spine`/`tail`, no packed branch. Changes no row | M3-3 |
 | M3-5 RUK-2947 | EnderIO's `itemLine` lays along `spine`/`tail`, no packed branch. Changes no row | M3-3 |
 | M3-P1 RUK-2948 | `packedLine` and `placePacked` (SP-E/SP-F geometry, tail on the box's south face), not yet called | M3-3 |
-| M3-P2 | the packed line as a scored candidate in direct and EnderIO (`CandidateKind.Packed = 3`), one feed tier, west head only; baseline lowered; a two-output tail column laid and tested. Specced after its blockers merge, from a probe of which tests it re-pins | M3-4, M3-5, M3-P1 |
-| SP-G | spike: a packed column for routed and AE2 with a cell per port (T's port on top) | M3-P1 |
+| M3-P2 RUK-2974 | the packed line as a scored candidate in direct and EnderIO (`CandidateKind.Packed = 3`, `LayoutDeps.packing`), one feed tier, west head only; baseline lowered on 6 rows; the power checks read `powerSide`; a two-product tail column tested. From the CTO probe (`spikes/packed-candidate/`) | M3-4, M3-5, M3-P1 |
+| SP-G RUK-2975 | spike: a packed column for AE2 with one ME Interface per machine, each wrenched at its own (T turned to output up, its interface on top). Routed waits: no research says whether a Project Red interface pipe may touch two machines | M3-P1 |
+| SP-H RUK-2976 | spike: room in the head bank for a shallow line's transformers (H1 Hi-Amp Transformers where standard ones do not fit; H2 a bank two or more high). The probe found `loss-20`/`loss-40` reject the packed line only on `handTransformers` (`bankRows` lays at most one per row of the box's depth: 3 when packed; `loss-40` needs 20) | — |
 | later in M3 | build-step words from each unit's own facing (`steps.ts`); reach and rain cover counted in the score (goals 3, 7) | the shapes they describe |
 | M3-V | QA verification of the milestone branch | all above |
 
