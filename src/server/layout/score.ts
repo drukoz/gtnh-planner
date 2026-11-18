@@ -31,20 +31,27 @@ export function scoreLine(line: {
   };
 }
 
-/** Compare two scores as the search ranks candidates (Assumption 3): the first field that differs decides, lower first; 0 when all are equal. */
+/**
+ * Compare two scores as the search ranks candidates (Assumption 3): the first field that differs decides, lower first;
+ * 0 when all are equal. Buildable comes first, and a bank short of room makes a line unbuildable whatever its count, so
+ * `handTransformers` ranks once as "any at all", then again after `unpowered` (RUK-2976): placing two more transformers
+ * by hand is easier than feeding a starved machine.
+ */
 export function compareScore(a: LineScore, b: LineScore): number {
-  return a.unwired - b.unwired || a.handTransformers - b.handTransformers || a.unpowered - b.unpowered
-    || a.total - b.total || a.lossEUt - b.lossEUt || a.volume - b.volume;
+  return a.unwired - b.unwired || Number(a.handTransformers > 0) - Number(b.handTransformers > 0) || a.unpowered - b.unpowered
+    || a.handTransformers - b.handTransformers || a.total - b.total || a.lossEUt - b.lossEUt || a.volume - b.volume;
 }
 
 /**
  * True when `candidate` may replace today's line (plan Assumption 4): it scores better, leaves no more connections
- * unwired and no more transformers for its banks, and either powers more machines or is both no longer and no lossier.
+ * unwired, leaves its banks short of room only where today's are too, leaves no more transformers for its banks unless
+ * it powers more machines (RUK-2976), and either powers more machines or is both no longer and no lossier.
  * A line therefore gets longer or lossier only to power a machine that today gets nothing usable.
  */
 export function replacesBaseline(candidate: LineScore, baseline: LineScore): boolean {
   if (compareScore(candidate, baseline) >= 0) return false;
-  if (candidate.unwired > baseline.unwired || candidate.handTransformers > baseline.handTransformers) return false;
+  if (candidate.unwired > baseline.unwired || (candidate.handTransformers > 0 && baseline.handTransformers === 0)) return false;
+  if (candidate.unpowered === baseline.unpowered && candidate.handTransformers > baseline.handTransformers) return false;
   return candidate.unpowered < baseline.unpowered
     || (candidate.unpowered === baseline.unpowered && candidate.total <= baseline.total && candidate.lossEUt <= baseline.lossEUt);
 }

@@ -3,29 +3,29 @@
     "name": "loss-10",
     "mode": "direct",
     "size": [
-      5,
-      1,
+      3,
+      2,
       9
     ],
-    "total": 35,
-    "cable": 20,
-    "pipe": 6,
+    "total": 29,
+    "cable": 10,
+    "pipe": 11,
     "iface": 0,
     "chip": 0,
-    "transformer": 5,
+    "transformer": 2,
     "chest": 2,
-    "hookup": 9,
-    "lossEUt": 252,
+    "hookup": 8,
+    "lossEUt": 164,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 3,
-        "worstVolts": 125
+        "worstBlocks": 2,
+        "worstVolts": 126
       },
       {
         "tier": 1,
-        "worstBlocks": 10,
-        "worstVolts": 22
+        "worstBlocks": 6,
+        "worstVolts": 26
       }
     ],
     "weakTiers": [],
@@ -69,29 +69,29 @@
     "name": "loss-10",
     "mode": "ae2",
     "size": [
-      5,
-      2,
-      10
+      3,
+      3,
+      9
     ],
-    "total": 53,
-    "cable": 25,
-    "pipe": 1,
+    "total": 44,
+    "cable": 10,
+    "pipe": 6,
     "iface": 10,
     "chip": 0,
-    "transformer": 5,
+    "transformer": 2,
     "chest": 0,
-    "hookup": 17,
-    "lossEUt": 262,
+    "hookup": 18,
+    "lossEUt": 164,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 3,
-        "worstVolts": 125
+        "worstBlocks": 2,
+        "worstVolts": 126
       },
       {
         "tier": 1,
-        "worstBlocks": 11,
-        "worstVolts": 21
+        "worstBlocks": 6,
+        "worstVolts": 26
       }
     ],
     "weakTiers": [],
@@ -102,29 +102,29 @@
     "name": "loss-10",
     "mode": "enderio",
     "size": [
-      9,
-      1,
-      5
+      3,
+      2,
+      9
     ],
-    "total": 41,
-    "cable": 20,
-    "pipe": 6,
+    "total": 38,
+    "cable": 10,
+    "pipe": 11,
     "iface": 0,
     "chip": 0,
-    "transformer": 5,
+    "transformer": 2,
     "chest": 2,
-    "hookup": 15,
-    "lossEUt": 252,
+    "hookup": 17,
+    "lossEUt": 164,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 5,
-        "worstVolts": 123
+        "worstBlocks": 2,
+        "worstVolts": 126
       },
       {
         "tier": 1,
-        "worstBlocks": 10,
-        "worstVolts": 22
+        "worstBlocks": 6,
+        "worstVolts": 26
       }
     ],
     "weakTiers": [],
@@ -135,29 +135,29 @@
     "name": "loss-20",
     "mode": "direct",
     "size": [
-      5,
-      1,
-      14
+      3,
+      2,
+      12
     ],
-    "total": 48,
-    "cable": 30,
-    "pipe": 11,
+    "total": 38,
+    "cable": 13,
+    "pipe": 17,
     "iface": 0,
     "chip": 0,
-    "transformer": 5,
+    "transformer": 3,
     "chest": 2,
-    "hookup": 7,
-    "lossEUt": 580,
+    "hookup": 8,
+    "lossEUt": 394,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 3,
-        "worstVolts": 125
+        "worstBlocks": 2,
+        "worstVolts": 126
       },
       {
         "tier": 1,
-        "worstBlocks": 15,
-        "worstVolts": 17
+        "worstBlocks": 9,
+        "worstVolts": 23
       }
     ],
     "weakTiers": [],
@@ -169,23 +169,23 @@
     "mode": "routed",
     "size": [
       5,
-      4,
-      24
+      2,
+      15
     ],
-    "total": 122,
-    "cable": 85,
+    "total": 76,
+    "cable": 40,
     "pipe": 2,
     "iface": 0,
     "chip": 22,
-    "transformer": 7,
+    "transformer": 3,
     "chest": 2,
-    "hookup": 13,
-    "lossEUt": 636,
+    "hookup": 12,
+    "lossEUt": 536,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 28,
-        "worstVolts": 100
+        "worstBlocks": 2,
+        "worstVolts": 126
       },
       {
         "tier": 1,
@@ -201,29 +201,29 @@
     "name": "loss-20",
     "mode": "ae2",
     "size": [
-      5,
-      4,
-      24
+      3,
+      3,
+      12
     ],
-    "total": 119,
-    "cable": 85,
-    "pipe": 1,
+    "total": 54,
+    "cable": 13,
+    "pipe": 5,
     "iface": 20,
     "chip": 0,
-    "transformer": 7,
+    "transformer": 3,
     "chest": 0,
-    "hookup": 13,
-    "lossEUt": 636,
+    "hookup": 16,
+    "lossEUt": 394,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 28,
-        "worstVolts": 100
+        "worstBlocks": 2,
+        "worstVolts": 126
       },
       {
         "tier": 1,
-        "worstBlocks": 15,
-        "worstVolts": 17
+        "worstBlocks": 9,
+        "worstVolts": 23
       }
     ],
     "weakTiers": [],
@@ -234,29 +234,29 @@
     "name": "loss-20",
     "mode": "enderio",
     "size": [
-      5,
-      1,
-      14
+      3,
+      2,
+      12
     ],
-    "total": 57,
-    "cable": 30,
-    "pipe": 11,
+    "total": 45,
+    "cable": 13,
+    "pipe": 17,
     "iface": 0,
     "chip": 0,
-    "transformer": 5,
+    "transformer": 3,
     "chest": 2,
-    "hookup": 16,
-    "lossEUt": 580,
+    "hookup": 15,
+    "lossEUt": 394,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 3,
-        "worstVolts": 125
+        "worstBlocks": 2,
+        "worstVolts": 126
       },
       {
         "tier": 1,
-        "worstBlocks": 15,
-        "worstVolts": 17
+        "worstBlocks": 9,
+        "worstVolts": 23
       }
     ],
     "weakTiers": [],
@@ -268,23 +268,23 @@
     "mode": "direct",
     "size": [
       5,
-      4,
-      24
+      3,
+      15
     ],
-    "total": 117,
-    "cable": 94,
-    "pipe": 21,
+    "total": 97,
+    "cable": 69,
+    "pipe": 22,
     "iface": 0,
     "chip": 0,
-    "transformer": 8,
+    "transformer": 6,
     "chest": 2,
-    "hookup": 2,
-    "lossEUt": 1224,
+    "hookup": 6,
+    "lossEUt": 1167,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 28,
-        "worstVolts": 100
+        "worstBlocks": 16,
+        "worstVolts": 112
       },
       {
         "tier": 1,
@@ -367,23 +367,23 @@
     "mode": "enderio",
     "size": [
       5,
-      4,
-      24
+      3,
+      15
     ],
-    "total": 131,
-    "cable": 94,
-    "pipe": 21,
+    "total": 106,
+    "cable": 69,
+    "pipe": 22,
     "iface": 0,
     "chip": 0,
-    "transformer": 8,
+    "transformer": 6,
     "chest": 2,
-    "hookup": 16,
-    "lossEUt": 1224,
+    "hookup": 15,
+    "lossEUt": 1167,
     "tiers": [
       {
         "tier": 2,
-        "worstBlocks": 28,
-        "worstVolts": 100
+        "worstBlocks": 16,
+        "worstVolts": 112
       },
       {
         "tier": 1,

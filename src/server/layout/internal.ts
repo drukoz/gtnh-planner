@@ -509,6 +509,24 @@ function bankRows(count: number, length: number, spineZ: number, crossing: boole
   return east ? { first: spineZ + 1, placed } : { first: spineZ - placed, placed };
 }
 
+/** The rows a bank lays, the transformers it lays there, and whether they are Hi-Amp Transformers (RUK-2976). */
+interface BankRows { first: number; placed: number; count: number; hiAmp: boolean }
+
+/**
+ * The rows `stage`'s bank lays: `bankRows` for its standard transformers, or, when those do not fit (`count > placed`)
+ * and the export has a Hi-Amp Transformer for the stage's tier, the rows of the Hi-Amp count instead: the larger of
+ * `ceil(ampsOut ÷ 16)` and `ceil(ampsIn ÷ 6)` (`HIAMP_AMPS_OUT`, `HIAMP_AMPS_IN`, gt-mechanics §3.6). The Hi-Amps are
+ * used only when they lay fewer blocks than the standard count.
+ */
+function stageRows(pack: Pack, stage: Stage, length: number, spineZ: number, crossing: boolean): BankRows {
+  const rows = bankRows(stage.count, length, spineZ, crossing);
+  if (stage.count > rows.placed && pickHiAmpTransformer(pack, stage.toTier) !== null) {
+    const hi = Math.max(Math.ceil(stage.ampsOut / HIAMP_AMPS_OUT), Math.ceil(stage.ampsIn / HIAMP_AMPS_IN));
+    if (hi >= 1 && hi < stage.count) return { ...bankRows(hi, length, spineZ, crossing), count: hi, hiAmp: true };
+  }
+  return { ...rows, count: stage.count, hiAmp: false };
+}
+
 /** Breadth-first edge counts over one tier's linked cable cells from `source`. */
 function edgesFrom(adjacent: ReadonlyMap<string, readonly string[]>, source: Vec3): Map<string, number> {
   const start = posKey(source);
@@ -544,7 +562,7 @@ interface Sizing {
   /** The cable of each rated run's tier, whether it is short of amps (parallel runs needed) and the runs that needs. */
   cables: Map<number, { cable: Machine; ampsShort: boolean; runs: number; amps: number }>;
   /** Transformer rows per bank, by stage index. */
-  rows: Array<{ first: number; placed: number }>;
+  rows: BankRows[];
   /** Volts each unit's packets lose inside the line (not counting the hookup's allowance), by electric unit index. */
   unitLoss: number[];
   /** The amps each unit counts at the volts it gets, by electric unit index. */
@@ -666,7 +684,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
   let cables = pick(current);
   let result: Sizing | null = null;
   for (let round = 0; round < MAX_SIZING_ROUNDS; round++) {
-    const rows = current.stages.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0));
+    const rows = current.stages.map((s) => stageRows(pack, s, length, placement.spineZ, placement.headX > 0));
     const lossPerBlock = (tier: number): number => cables.get(tier)?.cable.cable?.lossPerBlock ?? 0;
     // where the power enters each run: the supply run's two ends, else the outermost rows of the bank feeding it
     const sources = (tier: number): Vec3[] => {
@@ -749,7 +767,10 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
       const n = next.stages.find((x) => x.toTier === s.toTier) ?? s;
       return { ...s, count: Math.max(s.count, n.count), ampsIn: Math.max(s.ampsIn, n.ampsIn), ampsOut: Math.max(s.ampsOut, n.ampsOut) };
     });
-    const sized: Stages = { ...current, stages: merged, supplyAmps: Math.max(current.supplyAmps, next.supplyAmps + satIn),
+    const bankRowsOf = merged.map((s) => stageRows(pack, s, length, placement.spineZ, placement.headX > 0));
+    const sized: Stages = { ...current,
+      stages: merged.map((s, i) => ({ ...s, layCount: bankRowsOf[i]!.count, ...(bankRowsOf[i]!.hiAmp ? { hiAmp: true } : {}) })),
+      supplyAmps: Math.max(current.supplyAmps, next.supplyAmps + satIn),
       lossEUt: bankLossEUt(merged) + satLoss };
     const nextCables = pick(sized);
     const same = sized.supplyAmps === current.supplyAmps && merged.every((s, i) => s.count === current.stages[i]!.count && s.ampsIn === current.stages[i]!.ampsIn
@@ -759,7 +780,7 @@ function sizePower(input: InternalInput, stages: Stages, head: { runs: readonly 
       && [...nextCables].every(([tier, c]) => cables.get(tier)?.cable.mteId === c.cable.mteId);
     satPrev = satAmps;
     result = {
-      stages: sized, cables: nextCables, rows: merged.map((s) => bankRows(s.count, length, placement.spineZ, placement.headX > 0)), unitLoss, unitAmps, unitBlocks,
+      stages: sized, cables: nextCables, rows: bankRowsOf, unitLoss, unitAmps, unitBlocks,
       bankLoss, bankBlocks, supply: null,
     };
     current = sized;
@@ -837,13 +858,13 @@ function layPower(input: InternalInput, head: { runs: readonly Run[]; banks: rea
   }
   for (const bank of head.banks) {
     const stage = stages.stages[bank.stage]!;
-    const transformer = pickTransformer(pack, stage.toTier);
+    const { first, placed, count, hiAmp } = sizing.rows[bank.stage]!;
+    const transformer = (hiAmp ? pickHiAmpTransformer(pack, stage.toTier) : null) ?? pickTransformer(pack, stage.toTier);
     if (transformer === null) {
       headWarnings.add({ code: 'no_transformer', text: `No ${tierName(stage.toTier)} transformer in this export` });
       continue;
     }
-    const { first, placed } = sizing.rows[bank.stage]!;
-    if (stage.count > placed) headWarnings.add({ code: 'transformer_bank', text: `Put ${stage.count - placed} more ${transformer.name} beside the bank` });
+    if (count > placed) headWarnings.add({ code: 'transformer_bank', text: `Put ${count - placed} more ${transformer.name} beside the bank` });
     for (let j = 0; j < placed; j++) {
       const pos: Vec3 = [bank.x, 0, first + j];
       // facing west: the front (step-down input) touches the higher run, the east face feeds the lower one

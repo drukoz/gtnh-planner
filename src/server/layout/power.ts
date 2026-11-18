@@ -74,8 +74,12 @@ export function tierGroups(units: ReadonlyArray<{ tier: number; euPerTick: numbe
   return [...byTier.values()].sort((a, b) => b.tier - a.tier);
 }
 
-/** A bank of `count` step-down transformers from `fromTier` to `toTier` = `fromTier − 1`. */
-export interface Stage { fromTier: number; toTier: number; count: number; ampsIn: number; ampsOut: number }
+/**
+ * A bank of `count` step-down transformers from `fromTier` to `toTier` = `fromTier − 1`. On the sized stages,
+ * `layCount` is the transformers the bank lays, fewer than `count` when Hi-Amp Transformers do the job (RUK-2976);
+ * `count`, the standard transformers the amps need, still sizes the amps. `hiAmp`: the bank lays Hi-Amp Transformers.
+ */
+export interface Stage { fromTier: number; toTier: number; count: number; ampsIn: number; ampsOut: number; layCount?: number; hiAmp?: boolean }
 /** `under`: groups above the supply tier, fed the supply voltage (the caller warns). */
 export interface Stages { supplyTier: number; stages: Stage[] /* from the supply downwards */; supplyAmps: number; lossEUt: number; under: TierGroup[] }
 

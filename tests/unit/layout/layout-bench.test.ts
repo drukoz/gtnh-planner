@@ -18,7 +18,7 @@ describe('layout benchmark', () => {
   it('measures the 10-machine direct loss line', async () => {
     const { layout } = await lossLine(10, 'direct');
     const report = lengthOf(layout);
-    expect([report.total, report.cable, report.pipe, report.hookup, report.weakTiers]).toEqual([35, 20, 6, 9, []]);
+    expect([report.total, report.cable, report.pipe, report.hookup, report.weakTiers]).toEqual([29, 10, 11, 8, []]);
   }, 30_000);
 
   it("flags the 40-machine AE2 line's LV wiring as weak", async () => {
