@@ -18,7 +18,9 @@ because the sizer sizes per run and never looks at a cell. The two conditions co
    back `route_failed` ("connect it by hand"). A multi-tier packed line needs one lane per tier offset in z.
 2. **Cap the lane length at its cable's volt drop.** `loss-60` (60 macerators, 24 columns on one LV lane) leaves 15
    machines unpowered at 14 V arriving; a 30 EU/t macerator at LV dies below 15 V. `loss-40` (14 columns, 16 V) is
-   the longest line that stays powered.
+   the longest line that stays powered. Capping it also carries a `transformer_bank` cost: packing three machines onto
+   one lane cell concentrates their draw on one transformer stage, so the longer lines add transformer banks the
+   committed spread-out layout spreads over many short runs (see Regressions).
 
 ## What was measured
 
@@ -65,51 +67,52 @@ column x=6: 1 machine block(s)
 
 ## Cable and loss per qualifying row
 
-BEFORE → AFTER. `worst path` is the row's lowest feed tier: blocks from supply to the furthest machine and the volts
+BEFORE → AFTER. `cable + logi` is the row's `cable` plus its `logistics` (the per-row version of the cable + logistics
+sum below). `worst path` is the row's lowest feed tier: blocks from supply to the furthest machine and the volts
 arriving there. Rows with `0/Vmax` in AFTER have no reached machine at that tier — the packed layout left those
 unwired (see Regressions).
 
-| line | mode | cable | logistics | loss EU/t | unpowered | starved by wiring | worst path (blocks/V) | size |
-|---|---|---|---|---|---|---|---|---|
-| loss-10 | direct | 20 → 10 | 6 → 11 | 252 → 176 | 0 → 0 | 0 → 0 | T1 10/22 → 6/26 | 5x1x9 → 3x2x8 |
-| loss-10 | enderio | 20 → 10 | 6 → 11 | 252 → 176 | 0 → 0 | 0 → 0 | T1 10/22 → 6/26 | 9x1x5 → 3x2x8 |
-| loss-20 | direct | 30 → 13 | 11 → 17 | 580 → 394 | 0 → 0 | 0 → 0 | T1 15/17 → 9/23 | 5x1x14 → 3x2x11 |
-| loss-20 | enderio | 30 → 13 | 11 → 17 | 580 → 394 | 0 → 0 | 0 → 0 | T1 15/17 → 9/23 | 5x1x14 → 3x2x11 |
-| loss-40 | direct | 94 → 20 | 21 → 31 | 1224 → 982 | 0 → 0 | 0 → 0 | T1 15/17 → 16/16 | 5x4x24 → 3x2x18 |
-| loss-40 | enderio | 94 → 20 | 21 → 31 | 1224 → 982 | 0 → 0 | 0 → 0 | T1 15/17 → 16/16 | 5x4x24 → 3x2x18 |
-| mixed-00 | direct | 39 → 24 | 7 → 13 | 268 → 242 | 0 → 0 | 0 → 0 | T1 7/25 → 4/28 | 12x3x5 → 11x3x3 |
-| mixed-00 | enderio | 39 → 24 | 7 → 13 | 268 → 242 | 0 → 0 | 0 → 0 | T1 7/25 → 4/28 | 12x3x5 → 11x3x3 |
-| mixed-04 | direct | 19 → 6 | 3 → 5 | 78 → 62 | 0 → 0 | 0 → 0 | T2 4/124 → 0/128 | 6x3x5 → 5x1x3 |
-| mixed-04 | enderio | 19 → 6 | 3 → 5 | 78 → 62 | 0 → 0 | 0 → 0 | T2 4/124 → 0/128 | 6x3x5 → 5x1x3 |
-| mixed-05 | direct | 13 → 6 | 5 → 9 | 614 → 585 | 4 → 4 | 4 → 4 | T2 9/119 → 4/124 | 6x1x5 → 5x2x3 |
-| mixed-05 | enderio | 13 → 6 | 5 → 9 | 614 → 585 | 4 → 4 | 4 → 4 | T2 9/119 → 4/124 | 6x1x5 → 5x2x3 |
-| mixed-06 | direct | 33 → 19 | 4 → 7 | 118 → 94 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 8x3x3 |
-| mixed-06 | enderio | 33 → 19 | 4 → 7 | 118 → 94 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 8x3x3 |
-| mixed-08 | direct | 58 → 22 | 8 → 11 | 368 → 248 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 13x4x5 → 10x3x3 |
-| mixed-08 | enderio | 58 → 22 | 8 → 11 | 368 → 248 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 13x4x5 → 10x3x3 |
-| mixed-09 | direct | 9 → 5 | 3 → 7 | 361 → 362 | 3 → 3 | 3 → 3 | T2 7/121 → 3/125 | 4x1x5 → 4x2x3 |
-| mixed-09 | enderio | 9 → 5 | 3 → 7 | 361 → 362 | 3 → 3 | 3 → 3 | T2 7/121 → 3/125 | 4x1x5 → 4x2x3 |
-| mixed-10 | direct | 34 → 18 | 7 → 11 | 858 → 754 | 5 → 5 | 5 → 4 | T1 6/26 → 0/32 | 10x3x5 → 8x3x3 |
-| mixed-10 | enderio | 34 → 18 | 7 → 11 | 858 → 754 | 5 → 5 | 5 → 4 | T1 6/26 → 0/32 | 10x3x5 → 8x3x3 |
-| mixed-11 | direct | 32 → 17 | 5 → 7 | 100 → 86 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 10x3x5 → 8x3x3 |
-| mixed-11 | enderio | 32 → 17 | 5 → 7 | 100 → 86 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 10x3x5 → 8x3x3 |
-| mixed-12 | direct | 28 → 9 | 4 → 5 | 104 → 74 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 7x2x3 |
-| mixed-12 | enderio | 28 → 9 | 4 → 5 | 104 → 74 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 7x2x3 |
-| mixed-13 | direct | 15 → 8 | 4 → 7 | 106 → 93 | 0 → 0 | 0 → 0 | T1 6/26 → 4/28 | 7x1x5 → 6x2x3 |
-| mixed-13 | enderio | 15 → 8 | 4 → 7 | 106 → 93 | 0 → 0 | 0 → 0 | T1 6/26 → 4/28 | 7x1x5 → 6x2x3 |
-| mixed-14 | direct | 10 → 5 | 4 → 7 | 291 → 283 | 2 → 2 | 2 → 2 | T2 8/120 → 3/125 | 5x1x5 → 4x2x3 |
-| mixed-14 | enderio | 10 → 5 | 4 → 7 | 291 → 283 | 2 → 2 | 2 → 2 | T2 8/120 → 3/125 | 5x1x5 → 4x2x3 |
-| mixed-16 | direct | 25 → 6 | 4 → 5 | 234 → 169 | 2 → 2 | 2 → 0 | T1 4/28 → 0/32 | 7x3x5 → 5x2x3 |
-| mixed-16 | enderio | 25 → 6 | 4 → 5 | 234 → 169 | 2 → 2 | 2 → 0 | T1 4/28 → 0/32 | 7x3x5 → 5x2x3 |
-| mixed-17 | direct | 28 → 16 | 5 → 7 | 381 → 337 | 1 → 1 | 1 → 1 | T1 4/28 → 0/32 | 8x3x5 → 6x3x3 |
-| mixed-17 | enderio | 28 → 16 | 5 → 7 | 381 → 337 | 1 → 1 | 1 → 1 | T1 4/28 → 0/32 | 8x3x5 → 6x3x3 |
-| mixed-19 | direct | 32 → 16 | 6 → 9 | 610 → 513 | 3 → 3 | 3 → 2 | T1 7/25 → 0/32 | 9x3x5 → 7x3x3 |
-| mixed-19 | enderio | 32 → 16 | 6 → 9 | 610 → 513 | 3 → 3 | 3 → 2 | T1 7/25 → 0/32 | 9x3x5 → 7x3x3 |
-| fluid-01 | direct | 26 → 9 | 3 → 5 | 56 → 46 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 8x3x5 → 7x1x3 |
-| fluid-01 | enderio | 26 → 9 | 3 → 5 | 56 → 46 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 8x3x5 → 7x1x3 |
-| fluid-03 | direct | 30 → 9 | 5 → 7 | 74 → 59 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 10x3x5 → 8x2x3 |
-| fluid-03 | enderio | 30 → 9 | 5 → 7 | 74 → 59 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 10x3x5 → 8x2x3 |
-| loss-60 | direct | 142 → 26 | 31 → 43 | 2318 → 2175 | 0 → 15 | 0 → 15 | T1 15/17 → 22/10 | 5x4x34 → 3x2x24 |
+| line | mode | cable | logistics | cable + logi | loss EU/t | unpowered | starved by wiring | worst path (blocks/V) | size |
+|---|---|---|---|---|---|---|---|---|---|
+| loss-10 | direct | 20 → 10 | 6 → 11 | 26 → 21 | 252 → 176 | 0 → 0 | 0 → 0 | T1 10/22 → 6/26 | 5x1x9 → 3x2x8 |
+| loss-10 | enderio | 20 → 10 | 6 → 11 | 26 → 21 | 252 → 176 | 0 → 0 | 0 → 0 | T1 10/22 → 6/26 | 9x1x5 → 3x2x8 |
+| loss-20 | direct | 30 → 13 | 11 → 17 | 41 → 30 | 580 → 394 | 0 → 0 | 0 → 0 | T1 15/17 → 9/23 | 5x1x14 → 3x2x11 |
+| loss-20 | enderio | 30 → 13 | 11 → 17 | 41 → 30 | 580 → 394 | 0 → 0 | 0 → 0 | T1 15/17 → 9/23 | 5x1x14 → 3x2x11 |
+| loss-40 | direct | 94 → 20 | 21 → 31 | 115 → 51 | 1224 → 982 | 0 → 0 | 0 → 0 | T1 15/17 → 16/16 | 5x4x24 → 3x2x18 |
+| loss-40 | enderio | 94 → 20 | 21 → 31 | 115 → 51 | 1224 → 982 | 0 → 0 | 0 → 0 | T1 15/17 → 16/16 | 5x4x24 → 3x2x18 |
+| mixed-00 | direct | 39 → 24 | 7 → 13 | 46 → 37 | 268 → 242 | 0 → 0 | 0 → 0 | T1 7/25 → 4/28 | 12x3x5 → 11x3x3 |
+| mixed-00 | enderio | 39 → 24 | 7 → 13 | 46 → 37 | 268 → 242 | 0 → 0 | 0 → 0 | T1 7/25 → 4/28 | 12x3x5 → 11x3x3 |
+| mixed-04 | direct | 19 → 6 | 3 → 5 | 22 → 11 | 78 → 62 | 0 → 0 | 0 → 0 | T2 4/124 → 0/128 | 6x3x5 → 5x1x3 |
+| mixed-04 | enderio | 19 → 6 | 3 → 5 | 22 → 11 | 78 → 62 | 0 → 0 | 0 → 0 | T2 4/124 → 0/128 | 6x3x5 → 5x1x3 |
+| mixed-05 | direct | 13 → 6 | 5 → 9 | 18 → 15 | 614 → 585 | 4 → 4 | 4 → 4 | T2 9/119 → 4/124 | 6x1x5 → 5x2x3 |
+| mixed-05 | enderio | 13 → 6 | 5 → 9 | 18 → 15 | 614 → 585 | 4 → 4 | 4 → 4 | T2 9/119 → 4/124 | 6x1x5 → 5x2x3 |
+| mixed-06 | direct | 33 → 19 | 4 → 7 | 37 → 26 | 118 → 94 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 8x3x3 |
+| mixed-06 | enderio | 33 → 19 | 4 → 7 | 37 → 26 | 118 → 94 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 8x3x3 |
+| mixed-08 | direct | 58 → 22 | 8 → 11 | 66 → 33 | 368 → 248 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 13x4x5 → 10x3x3 |
+| mixed-08 | enderio | 58 → 22 | 8 → 11 | 66 → 33 | 368 → 248 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 13x4x5 → 10x3x3 |
+| mixed-09 | direct | 9 → 5 | 3 → 7 | 12 → 12 | 361 → 362 | 3 → 3 | 3 → 3 | T2 7/121 → 3/125 | 4x1x5 → 4x2x3 |
+| mixed-09 | enderio | 9 → 5 | 3 → 7 | 12 → 12 | 361 → 362 | 3 → 3 | 3 → 3 | T2 7/121 → 3/125 | 4x1x5 → 4x2x3 |
+| mixed-10 | direct | 34 → 18 | 7 → 11 | 41 → 29 | 858 → 754 | 5 → 5 | 5 → 4 | T1 6/26 → 0/32 | 10x3x5 → 8x3x3 |
+| mixed-10 | enderio | 34 → 18 | 7 → 11 | 41 → 29 | 858 → 754 | 5 → 5 | 5 → 4 | T1 6/26 → 0/32 | 10x3x5 → 8x3x3 |
+| mixed-11 | direct | 32 → 17 | 5 → 7 | 37 → 24 | 100 → 86 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 10x3x5 → 8x3x3 |
+| mixed-11 | enderio | 32 → 17 | 5 → 7 | 37 → 24 | 100 → 86 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 10x3x5 → 8x3x3 |
+| mixed-12 | direct | 28 → 9 | 4 → 5 | 32 → 14 | 104 → 74 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 7x2x3 |
+| mixed-12 | enderio | 28 → 9 | 4 → 5 | 32 → 14 | 104 → 74 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 9x3x5 → 7x2x3 |
+| mixed-13 | direct | 15 → 8 | 4 → 7 | 19 → 15 | 106 → 93 | 0 → 0 | 0 → 0 | T1 6/26 → 4/28 | 7x1x5 → 6x2x3 |
+| mixed-13 | enderio | 15 → 8 | 4 → 7 | 19 → 15 | 106 → 93 | 0 → 0 | 0 → 0 | T1 6/26 → 4/28 | 7x1x5 → 6x2x3 |
+| mixed-14 | direct | 10 → 5 | 4 → 7 | 14 → 12 | 291 → 283 | 2 → 2 | 2 → 2 | T2 8/120 → 3/125 | 5x1x5 → 4x2x3 |
+| mixed-14 | enderio | 10 → 5 | 4 → 7 | 14 → 12 | 291 → 283 | 2 → 2 | 2 → 2 | T2 8/120 → 3/125 | 5x1x5 → 4x2x3 |
+| mixed-16 | direct | 25 → 6 | 4 → 5 | 29 → 11 | 234 → 169 | 2 → 2 | 2 → 0 | T1 4/28 → 0/32 | 7x3x5 → 5x2x3 |
+| mixed-16 | enderio | 25 → 6 | 4 → 5 | 29 → 11 | 234 → 169 | 2 → 2 | 2 → 0 | T1 4/28 → 0/32 | 7x3x5 → 5x2x3 |
+| mixed-17 | direct | 28 → 16 | 5 → 7 | 33 → 23 | 381 → 337 | 1 → 1 | 1 → 1 | T1 4/28 → 0/32 | 8x3x5 → 6x3x3 |
+| mixed-17 | enderio | 28 → 16 | 5 → 7 | 33 → 23 | 381 → 337 | 1 → 1 | 1 → 1 | T1 4/28 → 0/32 | 8x3x5 → 6x3x3 |
+| mixed-19 | direct | 32 → 16 | 6 → 9 | 38 → 25 | 610 → 513 | 3 → 3 | 3 → 2 | T1 7/25 → 0/32 | 9x3x5 → 7x3x3 |
+| mixed-19 | enderio | 32 → 16 | 6 → 9 | 38 → 25 | 610 → 513 | 3 → 3 | 3 → 2 | T1 7/25 → 0/32 | 9x3x5 → 7x3x3 |
+| fluid-01 | direct | 26 → 9 | 3 → 5 | 29 → 14 | 56 → 46 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 8x3x5 → 7x1x3 |
+| fluid-01 | enderio | 26 → 9 | 3 → 5 | 29 → 14 | 56 → 46 | 0 → 0 | 0 → 0 | T1 4/28 → 0/32 | 8x3x5 → 7x1x3 |
+| fluid-03 | direct | 30 → 9 | 5 → 7 | 35 → 16 | 74 → 59 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 10x3x5 → 8x2x3 |
+| fluid-03 | enderio | 30 → 9 | 5 → 7 | 35 → 16 | 74 → 59 | 0 → 0 | 0 → 0 | T1 6/26 → 0/32 | 10x3x5 → 8x2x3 |
+| loss-60 | direct | 142 → 26 | 31 → 43 | 173 → 69 | 2318 → 2175 | 0 → 15 | 0 → 15 | T1 15/17 → 22/10 | 5x4x34 → 3x2x24 |
 
 Sums over the qualifying rows: `direct` cable 717 → 264 (−63.2%), cable + logistics 863 → 488 (−43.5%), loss
 8,995 → 7,734 (−14.0%); `enderio` cable 575 → 238 (−58.6%), loss 6,677 → 5,559 (−16.7%).
@@ -293,6 +296,22 @@ settle the open question exactly.
   packed line that stays powered.
 - Everything else holds: unpowered and route failures unchanged (0 → 0) on every other qualifying row, and
   `mixed-09`'s three starved long-line reactors are unchanged (112.2 V arriving against 109.2 V before).
+
+### Warning codes new in AFTER
+
+The warning codes a packed row raises that its BEFORE row did not (code → rows → modes), over the 20 qualifying lines:
+
+- **`transformer_bank`** — `loss-10` in **all four** modes (direct, routed, ae2, enderio), and `loss-20` / `loss-40` in
+  **routed** and **ae2** only. Packing three machines onto one lane cell concentrates their draw on a single
+  transformer stage; the sizer adds a bank the committed layout spread over many short runs. On the `direct`/`enderio`
+  `loss-20`/`loss-40` rows the head already carries the bank, so no new code appears.
+- **`feed_no_route`** — **every** qualifying `routed` row (all 19 laid in routed: `loss-10/20/40`, every `mixed-*`,
+  `fluid-01`/`fluid-03`), and **none** in `direct`, `ae2` or `enderio`. This is the spike's own artifact: a packed row
+  skips `buildMode`, so the routed mode never lays the item lanes its feed rules expect, and the feed check reports no
+  route. It is not a power regression.
+- **`machine_unpowered`** — `loss-60` **direct** only: the row's 15 starved macerators (the 15-unpowered row above,
+  14 V arriving).
+- **`route_failed`** — the 11 multi-tier rows in all four modes, listed as the first bullet above.
 
 ## Face and placement notes for promotion
 
