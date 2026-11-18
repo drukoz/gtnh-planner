@@ -28,9 +28,10 @@ what our scan and layout already hold for each gate. No code was changed.
   first of their names, falling back to `Overworld` / `DIM<id>` (`src/server/world/dims.ts:124`, doc comment
   `src/server/world/dims.ts:98-101`; the same fallback in the scan worker's namer,
   `src/server/world/scan.worker.ts:308-311`).
-- The layout code itself never reads `scan.dims`: the only occurrence of `dims` under `src/server/layout/` is the
-  empty-scan constructor (`src/server/layout/layout.ts:79`). So a layout has the id, and the name/keys table exists
-  in the scan it is given, but nothing on the layout path consults it.
+- The layout code itself never reads `scan.dims`: the only code occurrence of `dims` under `src/server/layout/` is the
+  empty-scan constructor (`src/server/layout/layout.ts:79`), the one other hit of the same grep being that function's
+  doc comment (`src/server/layout/layout.ts:76`). So a layout has the id, and the name/keys table exists in the scan it
+  is given, but nothing on the layout path consults it.
 
 **Does any of our code or data say whether a dimension has weather or a sky? Not found.**
 
@@ -55,7 +56,18 @@ what our scan and layout already hold for each gate. No code was changed.
   (`src/server/world/power.ts:34-37`, used at `src/server/layout/layout.ts:166`). They are not per-dimension.
 - Searches run: `grep -rn -i biome src`;
   `grep -rn -iE '\b(rain|rainfall|precip|weather|thunder|sky|snow)\b|hasNoSky|isSurfaceWorld|rainTime|isRaining' src`
-  (every hit is the roof/power code, the farm humidity comment, or the word "constraints");
+  → 70 hits, and every one of them is in a category that says nothing about a dimension: the rain roof and its rule
+  (`src/server/layout/rain.ts:1-6`, `src/server/layout/parts.ts:58`, `src/server/layout/steps.ts:224`), the rain
+  outage in the power estimate (`src/server/world/power.ts:32`, `src/server/layout/power.ts:145`,
+  `src/server/cli/scan.ts:62`), the farm planner's crop "open sky" flag, its comment on the biome's float rainfall
+  (§2; `src/server/planner/farms/crops.ts:53`) and the same flag's UI label
+  (`src/shared/types/farm.ts:34`, `src/shared/project/apply-op.ts:320`, `src/client/views/SettingsPanel.tsx:790`), the
+  resource table's `minecraft:snow`/`minecraft:snowball` overworld keys (`src/server/planner/availability.ts:143`) and
+  the word "sky" in a CSS comment (`src/client/styles.css:1790`);
+  `grep -rn -i 'rain' src` → 92 hits: those 70 plus 12 that match inside the word "constraints" — a substring artefact
+  of the looser grep, not a weather fact (`src/client/views/flow-model.ts:256`,
+  `src/client/connections/model.ts:500`, `src/server/db/db.ts:148`, `src/server/layout/feeding/read.ts:14`,
+  `src/server/planner/machine-options.ts:189`);
   `grep -rn -i 'hasNoSky\|isSurfaceWorld\|rainTime\|thunderTime\|raining' src tests` → no hits.
 
 **`DimSummary.name` / `keys` in the test fixtures.**
@@ -185,9 +197,17 @@ a biome (`src/server/planner/farms/crops.ts:29-30`, the rainfall bonus it ignore
   frame (`src/server/layout/layout.ts:1002`) and `dim` (`src/server/layout/layout.ts:932`) are all in hand, and the
   line's local blocks — roof included — are mapped to world positions one statement later at
   `src/server/layout/layout.ts:1009` (`const lineBlocks = line.blocks.map((b) => worldBlock(b, frame))`).
-  Filtering roof-role blocks there (with the BOM, build steps and `Layout.size` recomputed downstream from
-  `blocks`, `src/server/layout/layout.ts:1037-1038`, `src/server/layout/layout.ts:1095`,
-  `src/server/layout/layout.ts:1099`) is where a "no roof needed" rule would hook in. Named, not changed.
+  Filtering roof-role blocks there is where a "no roof needed" rule would hook in, and the BOM and the build steps do
+  recompute from the filtered `blocks` downstream: `bomFromBlocks(blocks, ...)` (`src/server/layout/layout.ts:1037`)
+  and `layoutSteps(stepsInput)` (`src/server/layout/layout.ts:1095`) with `blocks` inside `stepsInput`
+  (`src/server/layout/layout.ts:1091`). The size does not — it is footprint-derived, not block-derived: `Layout.size`
+  is `worldSize` (`src/server/layout/layout.ts:1099`, field at `src/shared/types/layout.ts:224`), where
+  `worldSize = rotatedSize(extent, frame.rotation)` (`src/server/layout/layout.ts:1005`) and
+  `extent = farmExtent(line.size, boxAreas)` (`src/server/layout/layout.ts:992`) is the line's own footprint grown to
+  every farm area (`src/server/layout/farms.ts:69-70`); `stepsInput.size` is the footprint alone
+  (`lineSize = rotatedSize(line.size, frame.rotation)`, `src/server/layout/layout.ts:1008`) and `siteSize` is the same
+  `worldSize` (`src/server/layout/layout.ts:1084`). So filtering roof-role blocks leaves `Layout.size` and `siteSize`
+  untouched: a no-roof rule does not shrink the layout box for free. Named, not changed.
 
 ## 5. Summary table
 
